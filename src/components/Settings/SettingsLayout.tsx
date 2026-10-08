@@ -1,5 +1,7 @@
 'use client'
 
+import { TimeInput } from '@/src/components/Schedule/TimeInput'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { CheckCircle2, Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
@@ -29,6 +31,8 @@ export function TimeField({ value, onChange, label, disabled, className }: {
   disabled?: boolean
   className?: string
 }) {
+  const timeFormat = useTimeFormat()
+  if (timeFormat === '24h') return <div className={className}><TimeInput label={label} value={value} onChange={onChange} disabled={disabled} hideLabel /></div>
   return (
     <input
       type="time"

@@ -1,3 +1,4 @@
+import { type TimeFormat, formatClock as formatDisplayClock } from '@/src/lib/timeFormat'
 /**
  * View-model for System → Scheduler: plain job labels, the one-line job
  * summary, and bucketing every occurrence into nights for the timeline.
@@ -116,8 +117,8 @@ export function jobText(job: Pick<TimelineOccurrence, 'type' | 'side' | 'targetT
 
 // ── Time ─────────────────────────────────────────────────────────────────────
 
-export function fmtTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+export function fmtTime(ms: number, timeFormat: TimeFormat = '12h'): string {
+  return formatDisplayClock(new Date(ms), timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
 function sameLocalDay(a: number, b: number): boolean {
@@ -127,9 +128,9 @@ function sameLocalDay(a: number, b: number): boolean {
 }
 
 /** "11:15 PM" today, "Tue 11:15 PM" on another day. */
-export function fmtWhen(ms: number, now: number): string {
-  if (sameLocalDay(ms, now)) return fmtTime(ms)
-  return `${new Date(ms).toLocaleDateString([], { weekday: 'short' })} ${fmtTime(ms)}`
+export function fmtWhen(ms: number, now: number, timeFormat: TimeFormat = '12h'): string {
+  if (sameLocalDay(ms, now)) return fmtTime(ms, timeFormat)
+  return `${new Date(ms).toLocaleDateString([], { weekday: 'short' })} ${fmtTime(ms, timeFormat)}`
 }
 
 /** "in 5h 41m", "in 3d 2h", "now". */
@@ -148,17 +149,17 @@ const CRON_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
  * A job's repeat rule in words: "Daily 3:00 AM", "Mon, Wed 11:15 PM", or the
  * date for one-shot jobs. Falls back to the raw expression for anything else.
  */
-export function describeSchedule(job: Pick<TimelineJob, 'schedule' | 'oneTime'>): string {
+export function describeSchedule(job: Pick<TimelineJob, 'schedule' | 'oneTime'>, timeFormat: TimeFormat = '12h'): string {
   if (job.oneTime) {
     const at = new Date(job.schedule).getTime()
     return Number.isFinite(at)
-      ? `Once · ${new Date(at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${fmtTime(at)}`
+      ? `Once · ${new Date(at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${fmtTime(at, timeFormat)}`
       : job.schedule
   }
   const parts = job.schedule.trim().split(/\s+/)
   if (parts.length !== 5 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1]) || parts[2] !== '*' || parts[3] !== '*') return job.schedule
   const d = new Date(2000, 0, 1, Number(parts[1]), Number(parts[0]))
-  const time = fmtTime(d.getTime())
+  const time = fmtTime(d.getTime(), timeFormat)
   if (parts[4] === '*') return `Daily ${time}`
   const days = parts[4].split(',').map(Number)
   if (days.some(n => !Number.isInteger(n) || n < 0 || n > 7)) return job.schedule

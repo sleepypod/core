@@ -23,7 +23,7 @@ import {
   timeStringToMinutes,
 } from '@/src/lib/sleepCurve/generate'
 import { rebaseSetPoints } from '@/src/lib/sleepCurve/rebase'
-import { sortChronological } from '@/src/lib/scheduleGrouping'
+import { type ScheduleEndAction, sortChronological } from '@/src/lib/scheduleGrouping'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 
@@ -31,6 +31,7 @@ interface CurveEditorProps {
   onClose: () => void
   /** When provided, editor opens in edit mode for the existing curve. */
   initialDays?: DayOfWeek[]
+  initialEndAction?: ScheduleEndAction
   /** Initial set points. Empty array = create mode with empty list. */
   initialSetPoints?: Array<{ time: string, temperature: number }>
 }
@@ -79,6 +80,7 @@ export function CurveEditor({
   onClose,
   initialDays = [],
   initialSetPoints = [],
+  initialEndAction = 'turn_off',
 }: CurveEditorProps) {
   const { saveCurve, detectCurveConflicts, isMutating, allSchedules } = useSchedule()
   const { unit } = useTemperatureUnit()
@@ -104,6 +106,7 @@ export function CurveEditor({
   const [points, setPoints] = useState<EditorSetPoint[]>(() =>
     initialSetPoints.map((p, i) => ({ id: -(i + 1), time: p.time, temperature: p.temperature })),
   )
+  const [endAction, setEndAction] = useState(initialEndAction)
   const [bedtime, setBedtime] = useState(initial.bedtime)
   const [wakeTime, setWakeTime] = useState(initial.wake)
   const [minTemp, setMinTemp] = useState(initial.min)
@@ -129,7 +132,7 @@ export function CurveEditor({
   }, [points])
 
   const autoOnId = orderedPoints[0]?.id ?? null
-  const autoOffId = orderedPoints.length > 1 ? orderedPoints[orderedPoints.length - 1].id : null
+  const autoOffId = endAction === 'turn_off' && orderedPoints.length > 1 ? orderedPoints[orderedPoints.length - 1].id : null
 
   // Days outside this curve that another curve already schedules.
   const otherCurveDays = useMemo(() => {
@@ -239,6 +242,7 @@ export function CurveEditor({
         targetDays,
         setPoints: points.map(p => ({ time: p.time, temperature: p.temperature })),
         originalDays: initialDays,
+        endAction,
       })
       setPendingConflict(null)
       onClose()
@@ -247,7 +251,7 @@ export function CurveEditor({
       setPendingConflict(null)
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [days, points, initialDays, detectCurveConflicts, saveCurve, onClose])
+  }, [days, points, initialDays, endAction, detectCurveConflicts, saveCurve, onClose])
 
   const editingPoint = editingId !== null ? points.find(p => p.id === editingId) ?? null : null
   const title = isEdit ? 'Edit curve' : 'New curve'
@@ -329,6 +333,24 @@ export function CurveEditor({
               <TimeInput label="Bedtime" value={bedtime} onChange={handleBedtimeChange} />
               <TimeInput label="Wake up" value={wakeTime} onChange={handleWakeTimeChange} />
             </div>
+          </Card>
+
+          <Card className="order-3 min-[900px]:order-none">
+            <label htmlFor="schedule-end-action" className="text-sm">After schedule ends</label>
+            <select
+              id="schedule-end-action"
+              className="rounded-ctl border border-line bg-surface p-2 text-sm"
+              value={endAction}
+              onChange={e => setEndAction(e.target.value as ScheduleEndAction)}
+            >
+              <option value="turn_off">Turn off</option>
+              <option value="maintain">Maintain final temperature</option>
+            </select>
+            <p className="text-xs text-fg-2">
+              {endAction === 'maintain'
+                ? 'Keeps the final temperature until you turn it off or another schedule or automation takes over. Auto-off limits still apply.'
+                : 'Turns the Pod off at the final set point.'}
+            </p>
           </Card>
 
           <Card className="order-5 min-[900px]:order-none">

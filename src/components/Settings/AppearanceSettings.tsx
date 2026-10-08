@@ -59,6 +59,26 @@ export function ThemeControl() {
   )
 }
 
+/** Pod-wide clock display, saved in device settings like the temperature unit. */
+export function TimeFormatControl({ format }: { format: string }) {
+  const utils = trpc.useUtils()
+  const mutation = trpc.settings.updateDevice.useMutation({
+    onSuccess: () => utils.settings.getAll.invalidate(),
+  })
+  const value = (mutation.isPending ? mutation.variables?.timeFormat : undefined) ?? (format === '24h' ? '24h' : '12h')
+  return (
+    <>
+      <SegmentedControl
+        ariaLabel="Time format"
+        value={value}
+        options={[{ value: '12h', label: '12-hour' }, { value: '24h', label: '24-hour' }]}
+        onChange={f => mutation.mutate({ timeFormat: f })}
+      />
+      {mutation.error && <InlineError className="sr-only">{mutation.error.message}</InlineError>}
+    </>
+  )
+}
+
 /** When the stage's six zone readings glow through the cover. */
 export function StageZonesControl() {
   const [zones, setZones] = useStageZones()

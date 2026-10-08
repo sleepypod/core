@@ -1,5 +1,16 @@
 import { DAYS_OF_WEEK, type DayOfWeek } from '@/src/lib/scheduleTime'
 
+export type ScheduleEndAction = 'turn_off' | 'maintain'
+export interface SchedulePowerRow {
+  dayOfWeek: string
+  endAction?: ScheduleEndAction
+}
+
+export function endActionForDay(power: SchedulePowerRow[], day: string): ScheduleEndAction {
+  const rows = power.filter(p => p.dayOfWeek === day)
+  return rows.length > 0 && rows.every(p => p.endAction === 'maintain') ? 'maintain' : 'turn_off'
+}
+
 export interface SetPoint {
   time: string
   temperature: number
@@ -14,6 +25,7 @@ export interface ScheduleGroup {
   setPoints: SetPoint[]
   /** True when the day has schedules but all are disabled */
   allDisabled?: boolean
+  endAction?: ScheduleEndAction
 }
 
 const ALL_DAYS: DayOfWeek[] = [...DAYS_OF_WEEK]
@@ -90,6 +102,7 @@ export function groupDaysBySharedCurve(
     temperature: number
     enabled: boolean
   }>,
+  powerSchedules?: SchedulePowerRow[],
 ): ScheduleGroup[] {
   // Collect enabled set points per day (used for the rendered curve)
   const enabledByDay = new Map<DayOfWeek, SetPoint[]>()
@@ -110,14 +123,16 @@ export function groupDaysBySharedCurve(
   // Group days by fingerprint. Paused days fingerprint by their saved curve
   // prefixed with a marker, so two days that "share" being paused only group
   // together when their saved set points actually match.
-  const groups = new Map<string, { days: DayOfWeek[], setPoints: SetPoint[], allDisabled?: boolean }>()
+  const groups = new Map<string, { days: DayOfWeek[], setPoints: SetPoint[], allDisabled?: boolean, endAction?: ScheduleEndAction }>()
 
   for (const day of ALL_DAYS) {
     const enabled = enabledByDay.get(day) ?? []
     const all = allByDay.get(day) ?? []
     const isPaused = enabled.length === 0 && all.length > 0
 
-    const fp = isPaused ? `__disabled__:${fingerprint(all)}` : fingerprint(enabled)
+    const endAction = endActionForDay(powerSchedules ?? [], day)
+    const actionKey = powerSchedules && all.length > 0 ? `:${endAction}` : ''
+    const fp = actionKey + (isPaused ? `__disabled__:${fingerprint(all)}` : fingerprint(enabled))
     // For paused days, render the saved curve (sorted) so the user still
     // sees what's defined; we just mark it as disabled.
     const sourcePoints = isPaused ? all : enabled
@@ -130,6 +145,7 @@ export function groupDaysBySharedCurve(
       const sorted = sortChronological(sourcePoints)
       groups.set(fp, {
         days: [day],
+        ...(powerSchedules ? { endAction } : {}),
         setPoints: sorted,
         ...(isPaused ? { allDisabled: true } : {}),
       })
@@ -140,6 +156,7 @@ export function groupDaysBySharedCurve(
   return Array.from(groups.entries())
     .map(([key, group]) => ({
       key,
+      ...(group.endAction ? { endAction: group.endAction } : {}),
       days: group.days,
       setPoints: group.setPoints,
       ...(group.allDisabled ? { allDisabled: true } : {}),

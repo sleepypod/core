@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { RotateCcw, SlidersHorizontal } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
@@ -111,6 +114,7 @@ function useLiveBuffers() {
  * samples and how much of the validity window is left alongside.
  */
 export function CalibrationPanel() {
+  const timeFormat = useTimeFormat()
   const { side, setSide } = useSide()
   const { leftName, rightName } = useSideNames()
   const utils = trpc.useUtils()
@@ -153,7 +157,7 @@ export function CalibrationPanel() {
         {lastCalibrated != null && (
           <span className="font-mono text-xs text-fg-2">
             {'calibrated '}
-            {new Date(lastCalibrated).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+            {formatClock(new Date(lastCalibrated), timeFormat, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
           </span>
         )}
         <Button

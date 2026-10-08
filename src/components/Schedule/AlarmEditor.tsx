@@ -1,5 +1,8 @@
 'use client'
 
+import { TimeInput } from './TimeInput'
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, Loader2, Play, Square, Trash2 } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
@@ -8,7 +11,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { useSingleSleeperSide, type SideSelection } from '@/src/providers/SideProvider'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 import { FIXED_INTENSITY, FIXED_PATTERN } from '@/src/lib/vibrationPatterns'
 import type { AlarmGroup } from './AlarmCard'
@@ -78,6 +81,7 @@ export function AlarmEditor({
   onSaved,
   onRequestDelete,
 }: AlarmEditorProps) {
+  const { formatTime, timeFormat } = useTimeFormatter()
   const isEdit = existingGroup !== null
   const { unit } = useTemperatureUnit()
   const { leftName, rightName } = useSideNames()
@@ -198,7 +202,7 @@ export function AlarmEditor({
     }
   }, [days, sides, time, intensity, pattern, duration, displayTemperature, wakeWindow, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
 
-  const clock = formatTime12h(time)
+  const clock = formatTime(time)
   const [clockDigits, clockPeriod] = clock.split(' ')
 
   return (
@@ -234,24 +238,28 @@ export function AlarmEditor({
       )}
     >
       <div className="flex flex-wrap items-end gap-3.5">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs text-fg-2">Wake at</span>
-          {/* Big mono readout; an invisible native time input on top opens the OS picker. */}
-          <span className="relative rounded-ctl focus-within:outline focus-within:outline-1 focus-within:outline-offset-4 focus-within:outline-fg-3">
-            <span className="font-mono text-[44px] font-light leading-none" aria-hidden>
-              {clockDigits}
-              <span className="text-xl text-fg-2">{` ${clockPeriod ?? ''}`}</span>
-            </span>
-            <input
-              type="time"
-              aria-label="Wake at"
-              value={time}
-              onChange={e => e.target.value && setTime(e.target.value)}
-              disabled={isMutating}
-              className="absolute inset-0 m-0 w-full min-w-0 cursor-pointer appearance-none opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:p-0"
-            />
-          </span>
-        </label>
+        {timeFormat === '24h'
+          ? <TimeInput label="Wake at" value={time} onChange={setTime} disabled={isMutating} />
+          : (
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs text-fg-2">Wake at</span>
+                {/* Big mono readout; an invisible native time input on top opens the OS picker. */}
+                <span className="relative rounded-ctl focus-within:outline focus-within:outline-1 focus-within:outline-offset-4 focus-within:outline-fg-3">
+                  <span className="font-mono text-[44px] font-light leading-none" aria-hidden>
+                    {clockDigits}
+                    <span className="text-xl text-fg-2">{` ${clockPeriod ?? ''}`}</span>
+                  </span>
+                  <input
+                    type="time"
+                    aria-label="Wake at"
+                    value={time}
+                    onChange={e => e.target.value && setTime(e.target.value)}
+                    disabled={isMutating}
+                    className="absolute inset-0 m-0 w-full min-w-0 cursor-pointer appearance-none opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:p-0"
+                  />
+                </span>
+              </label>
+            )}
         {!singleSleeperSide && (
           <SegmentedControl
             className="ml-auto"
@@ -297,7 +305,7 @@ export function AlarmEditor({
         </div>
         <span className="text-xs leading-[1.4] text-fg-3">
           {wakeWindow > 0
-            ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime12h(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
+            ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
             : 'Goes off at the set time.'}
         </span>
       </div>

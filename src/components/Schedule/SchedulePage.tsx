@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { useCallback, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
@@ -13,7 +15,7 @@ import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF } from '@/src/lib/tempUtils'
 import { groupDaysBySharedCurve } from '@/src/lib/scheduleGrouping'
 import type { ScheduleGroup } from '@/src/lib/scheduleGrouping'
-import { formatTime12h, getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
+import { getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
 import { BothNightView, PersonCurveList } from './BothNightView'
 import { bedTrace, lastNightLabel, lastNightMidnight, lastNightRange } from './bedTrace'
 import { nextSetPoint, type TempRow } from './bothNight'
@@ -27,6 +29,7 @@ import { AlarmSection } from './AlarmSection'
 
 interface EditingCurve {
   days: DayOfWeek[]
+  endAction?: 'turn_off' | 'maintain'
   setPoints: Array<{ time: string, temperature: number }>
 }
 
@@ -52,12 +55,14 @@ export function SchedulePage() {
     isLoading: hookLoading,
   } = useSchedule()
 
+  const { data: settings } = trpc.settings.getAll.useQuery({})
   const { nextEvent } = useScheduleActive()
   const { leftName, rightName } = useSideNames()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
   const both = selectedSide === 'both'
   const otherSide: Side = side === 'left' ? 'right' : 'left'
   const other = trpc.schedules.getAll.useQuery({ side: otherSide }, { enabled: both })
+  const bothPower = { [side]: data?.power, [otherSide]: other.data?.power }
   const bothTemps = { [side]: data?.temperature, [otherSide]: other.data?.temperature } as Record<Side, TempRow[] | undefined>
   const names: Record<Side, string> = { left: leftName, right: rightName }
   const nowMinute = useNowMinute()
@@ -87,7 +92,7 @@ export function SchedulePage() {
   // because it can't match the manual memo to its own plan. The
   // computation is cheap relative to the tRPC fetch that precedes it.
   const groups: ScheduleGroup[] = data?.temperature
-    ? groupDaysBySharedCurve(data.temperature)
+    ? groupDaysBySharedCurve(data.temperature, data.power)
     : []
 
   // Curves to render: ones with set points OR explicitly paused
@@ -115,13 +120,13 @@ export function SchedulePage() {
   }, [])
 
   const handleEdit = useCallback((group: ScheduleGroup) => {
-    openEditor({ days: group.days, setPoints: group.setPoints })
+    openEditor({ days: group.days, setPoints: group.setPoints, endAction: group.endAction })
     setSelectedDays(new Set(group.days))
   }, [openEditor, setSelectedDays])
 
   const handleCreate = useCallback(() => {
-    openEditor({ days: [], setPoints: [] })
-  }, [openEditor])
+    openEditor({ days: [], setPoints: [], endAction: settings?.device.defaultScheduleEndAction ?? 'turn_off' })
+  }, [openEditor, settings?.device.defaultScheduleEndAction])
 
   const handleDelete = useCallback((group: ScheduleGroup) => {
     setPendingDelete({ days: group.days, label: deleteLabel(group.days) })
@@ -157,6 +162,7 @@ export function SchedulePage() {
           setEditor(null)
           restoreBoth()
         }}
+        initialEndAction={editor.endAction}
         initialDays={editor.days}
         initialSetPoints={editor.setPoints}
       />
@@ -251,8 +257,8 @@ export function SchedulePage() {
 
           {both && hasAnyCurves && (
             <>
-              <BothNightView temps={bothTemps} names={names} />
-              <PersonCurveList temps={bothTemps} names={names} onEdit={editFor} onDelete={deleteFor} />
+              <BothNightView temps={bothTemps} power={bothPower} names={names} />
+              <PersonCurveList temps={bothTemps} power={bothPower} names={names} onEdit={editFor} onDelete={deleteFor} />
             </>
           )}
 
@@ -319,6 +325,7 @@ function deleteLabel(days: DayOfWeek[]): string {
 
 /** Footer: scheduler drift status from health.system (shared with the sidebar's query). */
 function SchedulerStatus({ sideLabel, next }: { sideLabel: string, next?: { name: string, time: string, temperature: number } | null }) {
+  const { formatTime } = useTimeFormatter()
   const { data } = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
   const { unit } = useTemperatureUnit()
   const scheduler = data?.scheduler
@@ -340,7 +347,7 @@ function SchedulerStatus({ sideLabel, next }: { sideLabel: string, next?: { name
           <span className="text-fg">{next.name}</span>
           {' → '}
           <span className="text-fg">{formatSetpointF(next.temperature, unit)}</span>
-          {` at ${formatTime12h(next.time)}`}
+          {` at ${formatTime(next.time)}`}
         </div>
       )}
       <div>{`Applies to ${sideLabel} · edits apply on save`}</div>

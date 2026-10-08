@@ -6,7 +6,9 @@ const mocks = vi.hoisted(() => ({
   drift: { dbScheduleCount: 4, schedulerJobCount: 4, drifted: false } as unknown,
   params: new URLSearchParams(),
   replace: vi.fn(),
+  timeFormat: '12h' as '12h' | '24h',
 }))
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => mocks.timeFormat }))
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/en/system',
@@ -35,6 +37,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(NOW)
   mocks.params = new URLSearchParams()
+  mocks.timeFormat = '12h'
   mocks.replace.mockReset()
   const job = (id: string, type: string, extra: Record<string, unknown> = {}) => ({
     id, type, schedule: '0 3 * * *', oneTime: false, nextRun: null, targetTempF: null, brightness: null, ...extra,
@@ -91,6 +94,19 @@ describe('SchedulerPanel', () => {
     expect(screen.getByTestId('timeline-hover').textContent).toMatch(/^1:00\sAM \u00b7 Jon 80\u00b0 \u00b7 Right \u2014$/)
     fireEvent.pointerLeave(svg)
     expect(screen.queryByTestId('timeline-hover')).toBeNull()
+  })
+
+  it.each([
+    ['12h', [/^1\sAM$/, /^now 5:34\sPM$/, /^earlier: Reboot 1:15\sPM$/, /^later: Reboot 11:30\sAM$/]],
+    ['24h', [/^01:00$/, /^now 17:34$/, /^earlier: Reboot 13:15$/, /^later: Reboot 11:30$/]],
+  ] as const)('labels the night axis and pod jobs past it in the %s clock', (format, labels) => {
+    mocks.timeFormat = format
+    const timeline = mocks.timeline as { occurrences: unknown[] }
+    timeline.occurrences.unshift({ id: 'early-reboot', type: 'reboot', at: at(28, 13, 15), targetTempF: null, brightness: null })
+    timeline.occurrences.push({ id: 'late-reboot', type: 'reboot', at: at(29, 11, 30), targetTempF: null, brightness: null })
+    const { container } = render(<SchedulerPanel />)
+    const texts = [...container.querySelectorAll('svg text')].map(t => t.textContent ?? '')
+    for (const label of labels) expect(texts.some(t => label.test(t))).toBe(true)
   })
 
   it('lists the next five with plain labels and muted ids', () => {

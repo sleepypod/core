@@ -7,8 +7,10 @@ import { Button, Card, CardHeader, InlineError, SegmentedControl, SelectValue, S
 import { NumberField, SaveToast, SectionColumns, TimeField } from './SettingsLayout'
 
 interface DeviceSettings {
+  defaultScheduleEndAction?: 'turn_off' | 'maintain'
   timezone: string
   temperatureUnit: string
+  timeFormat: string
   rebootDaily: boolean
   rebootTime: string | null
   primePodDaily: boolean
@@ -53,7 +55,7 @@ export const TIMEZONES = [
 ]
 
 /**
- * Device-level settings: timezone, unit, power cap, pump protection,
+ * Device-level settings: timezone, unit, time format, power cap, pump protection,
  * reconnect/restart, daily maintenance, LED, and a vibration test.
  * Every control auto-saves through settings.updateDevice.
  */
@@ -62,6 +64,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
 
   const [timezone, setTimezone] = useState(device.timezone)
   const [tempUnit, setTempUnit] = useState(device.temperatureUnit)
+  const [timeFormat, setTimeFormat] = useState(device.timeFormat)
   const [rebootDaily, setRebootDaily] = useState(device.rebootDaily)
   const [rebootTime, setRebootTime] = useState(device.rebootTime ?? '03:00')
   const [primePodDaily, setPrimePodDaily] = useState(device.primePodDaily)
@@ -91,6 +94,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     lastSyncedDevice.current = fingerprint
     setTimezone(device.timezone)
     setTempUnit(device.temperatureUnit)
+    setTimeFormat(device.timeFormat)
     setRebootDaily(device.rebootDaily)
     setRebootTime(device.rebootTime ?? '03:00')
     setPrimePodDaily(device.primePodDaily)
@@ -129,8 +133,10 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   const isPending = mutation.isPending
 
   function save(updates: Partial<{
+    defaultScheduleEndAction: 'turn_off' | 'maintain'
     timezone: string
     temperatureUnit: 'F' | 'C'
+    timeFormat: '12h' | '24h'
     rebootDaily: boolean
     rebootTime: string
     primePodDaily: boolean
@@ -159,6 +165,12 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   function handleTempUnitChange(unit: 'F' | 'C') {
     setTempUnit(unit)
     save({ temperatureUnit: unit })
+  }
+
+  function handleTimeFormatChange(format: '12h' | '24h') {
+    const previous = timeFormat
+    setTimeFormat(format)
+    mutation.mutate({ timeFormat: format }, { onError: () => setTimeFormat(previous) })
   }
 
   function handleRebootToggle() {
@@ -318,10 +330,27 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
             onChange={handleTempUnitChange}
           />
         </SettingRow>
+        <SettingRow label="Time format" sub="Clocks across the app; scheduled times are unchanged">
+          <SegmentedControl
+            ariaLabel="Time format"
+            value={timeFormat === '24h' ? '24h' : '12h'}
+            options={[{ value: '12h', label: '12-hour' }, { value: '24h', label: '24-hour' }]}
+            onChange={handleTimeFormatChange}
+          />
+        </SettingRow>
       </Card>
 
       <Card>
         <CardHeader title="Power" />
+        <SettingRow label="After schedule ends" sub="Default for new curves. Existing schedules keep their own setting.">
+          <SelectValue
+            label="Default after schedule ends"
+            value={device.defaultScheduleEndAction ?? 'turn_off'}
+            options={[{ value: 'turn_off', label: 'Turn off' }, { value: 'maintain', label: 'Maintain final temperature' }]}
+            onChange={value => save({ defaultScheduleEndAction: value as 'turn_off' | 'maintain' })}
+            disabled={isPending}
+          />
+        </SettingRow>
         <SettingRow
           label="Auto power-off cap"
           sub="Turns a side off after it has been on this long. Always-on sides and run-once sessions are exempt."

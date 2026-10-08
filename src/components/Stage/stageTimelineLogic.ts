@@ -7,6 +7,7 @@ import { tonightWindow } from '@/src/components/diagnostics/dashboardLogic'
 import { formatCountdown } from '@/src/components/Schedule/bothNight'
 import type { TempRow } from '@/src/components/Schedule/bothNight'
 import { tempTone } from '@/src/components/Schedule/scheduleFormat'
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
 import type { StageSide } from './stageColors'
 
 export const HOUR = 3_600_000
@@ -131,5 +132,5 @@ export function formatUntil(ms: number): string {
   return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
 }
 
-export const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-export const hourLabel = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric' })
+export const clock = (t: number, format: TimeFormat = '12h') => formatClock(t, format)
+export const hourLabel = (t: number, format: TimeFormat = '12h') => formatClock(t, format, { hour: 'numeric' })

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { HEAT, heatKey, paintHeat, resetKnit, sideRows, xToColumn, zToRow } from '../heatTexture'
+import { HEAT, heatKey, paintHeat, resetKnit, sideRows, xToColumn, zToRow, zoneColor } from '../heatTexture'
+import { tempColor } from '../stageColors'
 import type { HeatInput } from '../heatTexture'
 
 const input = (over: Partial<Record<'left' | 'right', Partial<HeatInput['left']>>> = {}): HeatInput => ({
@@ -69,6 +70,10 @@ describe('heat key', () => {
     expect(heatKey(input({ right: { highlight: 0.08 } }))).not.toBe(base)
     expect(heatKey(input({ left: { shownF: 72.1 } }))).toBe(base)
   })
+  it('keys a missing reading apart from any number', () => {
+    expect(heatKey(input({ left: { shownF: null } }))).toMatch(/^x\|/)
+    expect(heatKey(input({ left: { zoneVisibility: 1, zonesF: [null, 70, null] } }))).toMatch(/^72\|x,70,x\|/)
+  })
 })
 
 describe('painting', () => {
@@ -115,5 +120,22 @@ describe('painting', () => {
     expect(fills).toContain('rgba(255,255,255,0.14)')
     const rightRect = calls.filter(c => c.name === 'fillRect')[3]
     expect(rightRect.args).toEqual([0, 140, HEAT.width, 140])
+  })
+  it('skips the knit when the tile has no 2D context, and remembers that', () => {
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockClear().mockReturnValue(null)
+    const { context, calls } = fakeContext()
+    paintHeat(context, input())
+    paintHeat(context, input())
+    const rects = calls.filter(c => c.name === 'fillRect')
+    // Cover + two washes per paint, no knit layer.
+    expect(rects).toHaveLength(6)
+    expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('zone colour', () => {
+  it('uses the stage ramp, gray for a missing reading', () => {
+    expect(zoneColor(72)).toBe(tempColor(72))
+    expect(zoneColor(null)).toBe(tempColor(null))
   })
 })

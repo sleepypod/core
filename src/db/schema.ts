@@ -9,10 +9,14 @@ export const deviceSettings = sqliteTable('device_settings', {
   id: integer('id').primaryKey().$defaultFn(() => 1), // Singleton
   bedMode: text('bed_mode', { enum: ['two', 'solo-left', 'solo-right'] }).notNull().default('two'),
   unusedZoneMode: text('unused_zone_mode', { enum: ['follow', 'off', 'independent'] }).notNull().default('off'),
+  defaultScheduleEndAction: text('default_schedule_end_action', { enum: ['turn_off', 'maintain'] }).notNull().default('turn_off'),
   timezone: text('timezone').notNull().default('America/Los_Angeles'),
   temperatureUnit: text('temperature_unit', { enum: ['F', 'C'] })
     .notNull()
     .default('F'),
+  timeFormat: text('time_format', { enum: ['12h', '24h'] })
+    .notNull()
+    .default('12h'),
   rebootDaily: integer('reboot_daily', { mode: 'boolean' })
     .notNull()
     .default(false),
@@ -173,7 +177,8 @@ export const powerSchedules = sqliteTable('power_schedules', {
     ],
   }).notNull(),
   onTime: text('on_time').notNull(), // HH:mm format
-  offTime: text('off_time').notNull(), // HH:mm format
+  offTime: text('off_time').notNull(), // Curve end time; retained when maintaining temperature
+  endAction: text('end_action', { enum: ['turn_off', 'maintain'] }).notNull().default('turn_off'),
   onTemperature: real('on_temperature').notNull(), // Temperature when powered on
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   createdAt: integer('created_at', { mode: 'timestamp' })

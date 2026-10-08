@@ -5,6 +5,7 @@
  * Context cards and the phone switcher are stubbed — they have their own data.
  */
 
+import type * as PrefsModule from '@/src/providers/PrefsProvider'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -44,7 +45,10 @@ vi.mock('@/src/providers/SideProvider', () => ({
   useSide: () => ({ ...m.side, toggleLink: m.toggleLink, selectedSide: m.side.isLinked ? 'both' : m.side.primarySide }),
   useShownSides: () => (m.side.singleSleeperSide ? [m.side.singleSleeperSide] : ['left', 'right']),
 }))
-vi.mock('@/src/providers/PrefsProvider', () => ({ usePrefs: () => ({ control: m.control, tempDisplay: m.display }) }))
+vi.mock('@/src/providers/PrefsProvider', async importOriginal => ({
+  ...await importOriginal<typeof PrefsModule>(),
+  usePrefs: () => ({ control: m.control, tempDisplay: m.display }),
+}))
 vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ sideName: (s: string) => (s === 'left' ? 'Jon' : 'Heidi') }),
 }))
@@ -412,3 +416,22 @@ it('exposes solo setup without linking temperature controls', () => {
   expect(screen.getByRole('button', { name: 'Link sides' })).toBeTruthy()
   expect(card(screen, 'Heidi (right)').getAllByText(/Independent schedule/).length).toBeGreaterThan(0)
 })
+
+describe('sleeper line and view switches', () => {
+  it.each([
+    [{ device: { bedMode: 'solo-right' }, sides: { left: { awayMode: true }, right: { awayMode: true } } }, 'Solo sleeper · Heidi · Away'],
+    [{ device: {}, sides: { left: { awayMode: false }, right: { awayMode: false } } }, 'Two sleepers'],
+    [{ device: {}, sides: { left: { awayMode: true }, right: { awayMode: true } } }, 'Jon & Heidi away'],
+  ])('summarises the sleepers (%#)', (settings, label) => {
+    m.settings = settings
+    const screen = render(<TempScreen />)
+    expect(screen.getByRole('link', { name: `Manage sleepers: ${label}` })).toBeTruthy()
+  })
+
+  it('names the return date when exactly one away side has one', () => {
+    m.settings = { device: { timezone: 'UTC' }, sides: { left: { awayMode: false }, right: { awayMode: true, awayReturn: '2026-10-12T12:00:00Z' } } }
+    const screen = render(<TempScreen />)
+    expect(screen.getByRole('link', { name: /^Manage sleepers: Heidi away · Until \S/ })).toBeTruthy()
+  })
+})
+

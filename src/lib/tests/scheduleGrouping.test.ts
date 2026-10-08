@@ -222,3 +222,16 @@ describe('groupDaysBySharedCurve', () => {
     ])
   })
 })
+
+test('keeps identical curves with different end actions separate, including paused curves', () => {
+  for (const enabled of [true, false]) {
+    const temps = ['monday', 'tuesday'].map(dayOfWeek => ({ dayOfWeek, time: '22:00', temperature: 75, enabled }))
+    const groups = groupDaysBySharedCurve(temps, [
+      { dayOfWeek: 'monday', endAction: 'maintain' },
+      { dayOfWeek: 'tuesday', endAction: 'turn_off' },
+    ]).filter(g => g.setPoints.length > 0)
+    expect(groups).toHaveLength(2)
+    expect(groups.find(g => g.days.includes('monday'))?.endAction).toBe('maintain')
+    expect(groups.find(g => g.days.includes('tuesday'))?.endAction).toBe('turn_off')
+  }
+})

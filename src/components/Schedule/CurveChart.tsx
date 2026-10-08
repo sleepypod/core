@@ -1,9 +1,12 @@
 'use client'
 
+import type { TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
-import { formatTime12h } from '@/src/lib/scheduleTime'
+
 import { formatSetpointF } from '@/src/lib/tempUtils'
 import { NEUTRAL_TEMP_F, TONE_VAR, tempTone } from './scheduleFormat'
 
@@ -105,8 +108,9 @@ export function chartDomain(timeline: Array<{ minutes: number, temperature: numb
   return { start, end, step, lo, hi }
 }
 
-export function formatHourLabel(minutes: number): string {
+export function formatHourLabel(minutes: number, timeFormat: TimeFormat = '12h'): string {
   const h = Math.floor((((minutes % DAY) + DAY) % DAY) / 60)
+  if (timeFormat === '24h') return `${String(h).padStart(2, '0')}:00`
   const period = h >= 12 ? 'PM' : 'AM'
   const display = h % 12 === 0 ? 12 : h % 12
   return `${display} ${period}`
@@ -253,6 +257,7 @@ export function CurveChart<T extends CurveSetPoint>({
   hoverMarks = true,
   className,
 }: CurveChartProps<T>) {
+  const { formatTime, timeFormat } = useTimeFormatter()
   const { unit } = useTemperatureUnit()
   const wrapRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -313,7 +318,7 @@ export function CurveChart<T extends CurveSetPoint>({
     const fmt = (v: number | null, decimals = 0) => (v === null ? '—' : formatSetpointF(v, unit, { includeUnit: false, decimals }))
     readout = {
       x: X(hoverAt),
-      label: `${formatTime12h(minutesToTime(hoverAt))} · ${fmt(target)}${samples.length > 0 ? ` / ${fmt(sample?.temperature ?? null, 1)}` : ''}`,
+      label: `${formatTime(minutesToTime(hoverAt))} · ${fmt(target)}${samples.length > 0 ? ` / ${fmt(sample?.temperature ?? null, 1)}` : ''}`,
     }
   }
 
@@ -325,7 +330,7 @@ export function CurveChart<T extends CurveSetPoint>({
     const m = [clock, clock + DAY, clock - DAY].find(c => c >= start && c <= end)
     if (m !== undefined) {
       nowX = X(m)
-      nowLabel = `NOW ${formatTime12h(minutesToTime(clock)).replace(/ [AP]M$/, '')}`
+      nowLabel = `NOW ${formatTime(minutesToTime(clock)).replace(/ [AP]M$/, '')}`
     }
   }
 
@@ -451,11 +456,11 @@ export function CurveChart<T extends CurveSetPoint>({
                   strokeWidth={off || !large ? 2 : 3}
                   tabIndex={0}
                   role="slider"
-                  aria-label={`Set point ${formatTime12h(p.item.time)}`}
+                  aria-label={`Set point ${formatTime(p.item.time)}`}
                   aria-valuenow={p.temperature}
                   aria-valuemin={TEMP_MIN_F}
                   aria-valuemax={TEMP_MAX_F}
-                  aria-valuetext={`${formatTime12h(p.item.time)}, ${formatSetpointF(p.temperature, unit)}`}
+                  aria-valuetext={`${formatTime(p.item.time)}, ${formatSetpointF(p.temperature, unit)}`}
                   style={{ cursor: drag ? 'grabbing' : 'grab', touchAction: 'none', outline: 'none' }}
                   onPointerDown={(e: PointerEvent<SVGCircleElement>) => {
                     e.preventDefault()
@@ -480,7 +485,7 @@ export function CurveChart<T extends CurveSetPoint>({
                 transform: i === 0 ? undefined : i === ticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)',
               }}
             >
-              {formatHourLabel(t)}
+              {formatHourLabel(t, timeFormat)}
             </span>
           ))}
         </div>

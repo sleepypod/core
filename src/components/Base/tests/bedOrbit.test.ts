@@ -160,4 +160,16 @@ describe('bed orbit', () => {
     expect(wheel({ deltaY: 10, ctrlKey: true })).toBe(false)
     expect(changed).not.toHaveBeenCalled()
   })
+
+  it('ignores pointers it never saw go down, and does not zoom from a zero spread', () => {
+    pointer('pointermove', 9, 50, 50)
+    pointer('pointerup', 9, 50, 50)
+    expect(changed).not.toHaveBeenCalled()
+    pointer('pointerdown', 1, 100, 100)
+    pointer('pointerdown', 2, 100, 100)
+    pointer('pointermove', 2, 140, 100)
+    expect(orbit.state.distance).toBe(ORBIT.distance)
+    expect(changed).toHaveBeenCalledOnce()
+  })
 })
+

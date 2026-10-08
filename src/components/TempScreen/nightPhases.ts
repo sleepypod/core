@@ -1,6 +1,7 @@
 import { TEMP_NEUTRAL, TEMP_RANGE } from '@/src/hardware/types'
 import { curveToScheduleTemperatures, generateSleepCurve } from '@/src/lib/sleepCurve/generate'
 import { DAYS_OF_WEEK, getCurrentDay, hhmmToMinutes, type DayOfWeek } from '@/src/lib/scheduleTime'
+import { endActionForDay, type SchedulePowerRow } from '@/src/lib/scheduleGrouping'
 import { TEMP } from '@/src/lib/tempColors'
 import { setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import type { TempDisplay } from '@/src/providers/PrefsProvider'
@@ -128,7 +129,7 @@ function phaseOf(points: { time: string, temperature: number, m: number }[], end
  * Dawn is the set points in the last quarter of the night (always including
  * the final one), Night is everything before. One set point → Night only.
  */
-export function nightPhases(rows: ScheduleTempRow[], now: Date): NightPhases | null {
+export function nightPhases(rows: ScheduleTempRow[], now: Date, power: SchedulePowerRow[] = []): NightPhases | null {
   const day = getCurrentDay(now)
   const tonight = rows.filter(r => r.enabled && r.dayOfWeek === day)
   const points = nightOrdered(tonight)
@@ -136,7 +137,8 @@ export function nightPhases(rows: ScheduleTempRow[], now: Date): NightPhases | n
 
   const key = fingerprint(tonight)
   const days = DAYS_OF_WEEK.filter(d =>
-    d === day || fingerprint(rows.filter(r => r.enabled && r.dayOfWeek === d)) === key,
+    d === day || (fingerprint(rows.filter(r => r.enabled && r.dayOfWeek === d)) === key
+      && endActionForDay(power, d) === endActionForDay(power, day)),
   )
 
   const first = points[0].m
@@ -229,6 +231,7 @@ export function templateBatch(
   template: ScheduleTempRow[],
   phases: NightPhases,
   targets: Partial<Record<NightPhaseKey, number>>,
+  endAction: 'turn_off' | 'maintain' = 'turn_off',
 ) {
   const temps = new Map(template.map(r => [r.id, r.temperature]))
   for (const phase of ['night', 'dawn'] as const) {
@@ -247,7 +250,7 @@ export function templateBatch(
     const last = ordered[ordered.length - 1]
     if (!first || first.time === last.time) return []
     const onTemperature = temps.get(dayRows.find(r => r.time === first.time)?.id ?? 0) ?? first.temperature
-    return [{ side, dayOfWeek, onTime: first.time, offTime: last.time, onTemperature, enabled: true }]
+    return [{ side, dayOfWeek, onTime: first.time, offTime: last.time, onTemperature, endAction, enabled: true }]
   })
 
   return {

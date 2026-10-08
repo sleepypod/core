@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOUR, fractionOf, formatUntil, nextChange, scheduledAt, sideActivity, stageCurves, stageRange, stageTicks, stageWindow, timeAtFraction } from '../stageTimelineLogic'
+import { HOUR, clock, fractionOf, formatUntil, hourLabel, nextChange, scheduledAt, sideActivity, stageCurves, stageRange, stageTicks, stageWindow, timeAtFraction } from '../stageTimelineLogic'
 
 // Monday 28 Sep 2026, 9 PM local.
 const now = new Date(2026, 8, 28, 21, 0)
@@ -86,5 +86,16 @@ describe('side activity', () => {
       .toEqual([{ start: at(28, 22), end: at(28, 23), label: 'bed empty while warming · 1h 0m' }])
     const onTime = [{ enteredBedAt: new Date(at(28, 22)), leftBedAt: new Date(at(29, 6)), presentIntervals: [] }]
     expect(sideActivity({ curve, records: onTime, history: undefined, side: 'left', win, now: now.getTime() }).mismatches).toEqual([])
+  })
+})
+
+describe('clock labels', () => {
+  it('follow the pod time format, keeping midnight at 00:00 in 24-hour mode', () => {
+    const late = new Date(2026, 8, 28, 23, 30).getTime()
+    const midnight = new Date(2026, 8, 29, 0, 0).getTime()
+    expect(clock(late)).toBe('11:30 PM')
+    expect(clock(late, '24h')).toBe('23:30')
+    expect(hourLabel(midnight)).toBe('12 AM')
+    expect(hourLabel(midnight, '24h')).toBe('00:00')
   })
 })

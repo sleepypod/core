@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   schedules: {} as Record<string, unknown>,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   summary: undefined as unknown,
+  timeFormat: '12h' as '12h' | '24h',
   // 8 PM local on a Monday: inside tonight's 5 PM → 9 AM window.
   nowMinute: Math.floor(new Date(2026, 8, 28, 20, 0).getTime() / 60_000),
 }))
@@ -44,6 +45,7 @@ vi.mock('@/src/hooks/useSideNames', () => ({
   useSideNames: () => ({ leftName: 'Jon', rightName: 'Right', sideName: (s: 'left' | 'right') => (s === 'left' ? 'Jon' : 'Right') }),
 }))
 vi.mock('@/src/hooks/useWeekNavigator', () => ({ useWeekNavigator: () => ({ weekStart: new Date(0), weekEnd: new Date(1) }) }))
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => mocks.timeFormat }))
 vi.mock('@/src/hooks/useTrendBuffer', () => ({ useTrendBuffer: () => [] }))
 vi.mock('@/src/components/status/SystemInfoCard', () => ({ SystemInfoCard: () => null }))
 vi.mock('@/src/components/status/InternetToggleCard', () => ({ InternetToggleCard: () => null }))
@@ -101,6 +103,7 @@ vi.mock('@/src/providers/SideProvider', async (importOriginal) => {
 })
 
 beforeEach(() => {
+  mocks.timeFormat = '12h'
   mocks.dataPath = undefined
   single.sides = null
   mocks.thermal = {
@@ -405,6 +408,15 @@ describe('DiagnosticsConsole thermal history', () => {
     fireEvent.pointerMove(plot, { clientX: 1100 })
     expect(screen.getByTestId('thermal-crosshair')).toBeTruthy()
     expect(screen.getAllByText('0').length).toBeGreaterThan(0)
+  })
+
+  it('shows when a side powered on, to the second, in the pod clock format', () => {
+    mocks.thermal = { ...(mocks.thermal as object), sides: [side('left', { poweredOnAt: new Date(2026, 8, 28, 21, 5, 7).toISOString() }), side('right')] }
+    const { rerender } = render(<DiagnosticsConsole section="thermal" onJump={vi.fn()} />)
+    expect(screen.getByText('on since 9:05:07 PM')).toBeTruthy()
+    mocks.timeFormat = '24h'
+    rerender(<DiagnosticsConsole section="thermal" onJump={vi.fn()} />)
+    expect(screen.getByText('on since 21:05:07')).toBeTruthy()
   })
 
   it('says why a panel is empty instead of drawing it', () => {

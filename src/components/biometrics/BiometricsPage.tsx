@@ -7,6 +7,8 @@
  */
 'use client'
 
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -344,6 +346,7 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
   onSelect: (s: Session) => void
   footer: ReactNode
 }) {
+  const timeFormat = useTimeFormat()
   const rows = [...sessions].reverse()
   const movements = (s: Session) => movement
     .filter(b => new Date(b.bucketStart).getTime() >= s.start - 5 * 60_000 && new Date(b.bucketStart).getTime() <= s.end)
@@ -367,7 +370,7 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
           {rows.map((s) => {
             const isOngoing = s === ongoing && (stale || now - s.end < SESSION_GAP_MS)
             const date = new Date(s.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).replace(',', '')
-            const endLabel = isOngoing ? 'now' : clock(s.end)
+            const endLabel = isOngoing ? 'now' : clock(s.end, timeFormat)
             const stalled = isOngoing && stale
             return (
               <button
@@ -380,13 +383,13 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
                 <div className="flex min-w-0 flex-col gap-1">
                   <span className="text-[15px]">
                     {date}
-                    <span className="ml-1.5 font-mono text-fg-2">{`${clock(s.start)} → ${endLabel}`}</span>
+                    <span className="ml-1.5 font-mono text-fg-2">{`${clock(s.start, timeFormat)} → ${endLabel}`}</span>
                   </span>
                   {stalled
                     ? (
                         <span className="flex items-start gap-1.5 font-mono text-[11px] text-warn">
                           <span className="mt-[5px] size-1.5 shrink-0 rounded-full bg-current" />
-                          {`in bed ${fmtDuration(now - s.start)} · no vitals since ${lastVitalAt != null ? clock(lastVitalAt) : '—'}`}
+                          {`in bed ${fmtDuration(now - s.start)} · no vitals since ${lastVitalAt != null ? clock(lastVitalAt, timeFormat) : '—'}`}
                         </span>
                       )
                     : (

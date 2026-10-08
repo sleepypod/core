@@ -15,9 +15,11 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   params: new URLSearchParams('tab=health'),
   width: 900,
+  timeFormat: '12h' as '12h' | '24h',
 }))
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/en/system', useRouter: () => ({ push: mocks.push, replace: mocks.replace }), useSearchParams: () => mocks.params }))
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => mocks.timeFormat }))
 vi.mock('@/src/hooks/useSide', () => ({ useSide: () => ({ side: 'left' }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Left', rightName: 'Right', sideName: (s: string) => (s === 'left' ? 'Left' : 'Right') }) }))
 vi.mock('@/src/utils/trpc', () => {
@@ -76,6 +78,7 @@ beforeEach(() => {
   } as unknown as typeof ResizeObserver
   window.matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })) as unknown as typeof window.matchMedia
   mocks.width = 900
+  mocks.timeFormat = '12h'
   mocks.params = new URLSearchParams('tab=health')
   mocks.dataPath = evaluateDataPath(inputs())
   mocks.history = {
@@ -197,6 +200,20 @@ describe('HealthPanel', () => {
     expect(list.textContent).toContain('Not recorded')
     expect(screen.getByTestId('history-piezo-processor').textContent).toContain('1×')
     expect(screen.getByTestId('health-history').textContent).toContain('Each check sampled once a minute. Recording started')
+  })
+
+  it.each([
+    ['12h', '6:10 AM – 2:14 AM', '2:14 AM – now'],
+    ['24h', '06:10 – 02:14', '02:14 – now'],
+  ] as const)('reads out a hovered history run in the %s clock', (format, first, last) => {
+    mocks.timeFormat = format
+    render(<HealthPanel onJump={vi.fn()} />)
+    const [ok, stale] = screen.getByTestId('history-piezo-processor').querySelectorAll<HTMLElement>('span.absolute')
+    const readout = screen.getByTestId('health-history').querySelector('[aria-live="polite"]') as HTMLElement
+    fireEvent.mouseEnter(ok)
+    expect(readout.textContent).toMatch(new RegExp(`^Piezo processor · .+ · ${first}$`))
+    fireEvent.mouseEnter(stale)
+    expect(readout.textContent).toMatch(new RegExp(`^Piezo processor · .+ · ${last}$`))
   })
 
   it('condenses the day: identical checks share a row, quiet ones fold away, incidents merge', () => {

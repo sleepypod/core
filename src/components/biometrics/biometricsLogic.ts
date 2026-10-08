@@ -1,3 +1,4 @@
+import { type TimeFormat, formatClock as formatDisplayClock } from '@/src/lib/timeFormat'
 /**
  * View-model for Sleep → Biometrics: range windows, splitting per-minute
  * vitals into in-bed sessions, the 9-minute smoothing and p25–p75 baseline
@@ -189,7 +190,7 @@ export function fmtGap(ms: number): string {
   return `${Math.round(ms / MINUTE)} min`
 }
 
-export const clock = (t: number) => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+export const clock = (t: number, timeFormat: TimeFormat = '12h') => formatDisplayClock(new Date(t), timeFormat, { hour: 'numeric', minute: '2-digit' })
 
 /** `SUN SEP 27 · 4h 17m` */
 export function sessionHeader(s: { start: number, end: number }): string {
@@ -258,7 +259,7 @@ const TICK_STEPS_H = [1, 2, 3, 6, 12, 24]
  * Ticks for one session segment: on the hour (thinned so labels stay ≥ `minPx`
  * apart), plus the session start when it isn't crowding the first hour.
  */
-export function segmentTicks(seg: { start: number, end: number, w: number }, minPx = 46): Array<{ t: number, label: string }> {
+export function segmentTicks(seg: { start: number, end: number, w: number }, minPx = 46, timeFormat: TimeFormat = '12h'): Array<{ t: number, label: string }> {
   const span = Math.max(MINUTE, seg.end - seg.start)
   const pxPerHour = seg.w / (span / HOUR)
   const step = TICK_STEPS_H.find(h => h * pxPerHour >= minPx) ?? 24
@@ -267,14 +268,14 @@ export function segmentTicks(seg: { start: number, end: number, w: number }, min
   let t = first.getTime() + HOUR
   while (new Date(t).getHours() % step !== 0) t += HOUR
   const out: Array<{ t: number, label: string }> = []
-  const startLabel = clock(seg.start).replace(/ [AP]M$/, '')
+  const startLabel = clock(seg.start, timeFormat).replace(/ [AP]M$/, '')
   const firstGapPx = ((t - seg.start) / HOUR) * pxPerHour
   if (firstGapPx >= minPx * 0.8 || t > seg.end) out.push({ t: seg.start, label: startLabel })
   for (; t <= seg.end; t += step * HOUR) {
     const d = new Date(t)
     const label = step >= 24
       ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      : clock(t).replace(':00', '')
+      : timeFormat === '24h' ? clock(t, timeFormat) : clock(t, timeFormat).replace(':00', '')
     out.push({ t, label })
   }
   return out

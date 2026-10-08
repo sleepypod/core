@@ -148,7 +148,7 @@ beforeEach(() => {
 describe('settings.getAll', () => {
   it('returns existing rows for device, sides, and gestures', async () => {
     const device = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: '03:00',
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -218,11 +218,20 @@ describe('settings.getAll', () => {
 })
 
 describe('settings.updateDevice', () => {
+  it('persists the default end action without rescheduling existing curves', async () => {
+    const current = { ...baseDevice, defaultScheduleEndAction: 'turn_off' }
+    const updated = { ...current, defaultScheduleEndAction: 'maintain' }
+    dbState.txRowsQueue.push([current], [updated])
+    const result = await caller.updateDevice({ defaultScheduleEndAction: 'maintain' })
+    expect(result.defaultScheduleEndAction).toBe('maintain')
+    expect(schedulerMock.getJobManager).not.toHaveBeenCalled()
+  })
+
   it('updates timezone and triggers updateTimezone reload', async () => {
     // For 'homekitEnabled' check: not present, so no prior-row select.
     // Tx: select(current) returns 1 row, update().returning().all() returns updated row.
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: '03:00',
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -244,7 +253,7 @@ describe('settings.updateDevice', () => {
 
   it('upserts the prime job incrementally for non-timezone scheduling fields', async () => {
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: '03:00',
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -409,7 +418,7 @@ describe('settings.updateDevice', () => {
 
   it('rejects rebootDaily=true without a rebootTime', async () => {
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: null,
       primePodDaily: false, primePodTime: '14:00',
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -431,7 +440,7 @@ describe('settings.updateDevice', () => {
     // Top-level update().set().where() for revert (await thenable resolves to anything)
 
     const current = {
-      id: 1, timezone: 'UTC', temperatureUnit: 'F',
+      id: 1, timezone: 'UTC', temperatureUnit: 'F', timeFormat: '12h',
       rebootDaily: false, rebootTime: null,
       primePodDaily: false, primePodTime: null,
       ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -588,7 +597,7 @@ describe('settings.setGesture / deleteGesture', () => {
 
 // Shared device row fixture for branches that don't care about specific values.
 const baseDevice = {
-  id: 1, timezone: 'UTC', temperatureUnit: 'F' as const,
+  id: 1, timezone: 'UTC', temperatureUnit: 'F' as const, timeFormat: '12h' as const,
   rebootDaily: false, rebootTime: '03:00',
   primePodDaily: false, primePodTime: '14:00',
   ledNightModeEnabled: false, ledDayBrightness: 100, ledNightBrightness: 0,
@@ -853,6 +862,7 @@ describe('settings.getAll — defaults and partitioning', () => {
       id: 1,
       timezone: 'America/Los_Angeles',
       temperatureUnit: 'F',
+      timeFormat: '12h',
       rebootDaily: false,
       rebootTime: '03:00',
       primePodDaily: false,
@@ -962,6 +972,18 @@ describe('settings.updateDevice — scheduler key detection', () => {
     expect(homekitMock.enable).not.toHaveBeenCalled()
     expect(homekitMock.disable).not.toHaveBeenCalled()
     expect(dbState.txSetCalls).toEqual([{ temperatureUnit: 'C', updatedAt: expect.any(Date) }])
+  })
+
+  it('persists the pod-wide time format without scheduler side effects and rejects unknown formats', async () => {
+    const current = { ...baseDevice }
+    dbState.txRowsQueue.push([current], [{ ...current, timeFormat: '24h' }])
+
+    const result = await caller.updateDevice({ timeFormat: '24h' })
+    expect(result.timeFormat).toBe('24h')
+    expect(dbState.txSetCalls).toEqual([{ timeFormat: '24h', updatedAt: expect.any(Date) }])
+    expect(schedulerMock.getJobManager).not.toHaveBeenCalled()
+    // @ts-expect-error -- exercising runtime validation
+    await expect(caller.updateDevice({ timeFormat: '24-hour' })).rejects.toThrow()
   })
 
   it('bails out quietly when the post-commit re-read finds no row', async () => {

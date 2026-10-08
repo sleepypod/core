@@ -7,6 +7,7 @@ import { NEUTRAL_TEMP_F, tempTone } from '@/src/components/Schedule/scheduleForm
 import type { TempTone } from '@/src/components/Schedule/scheduleFormat'
 import type { Interval } from '@/src/components/TempScreen/timelineLogic'
 import type { TempUnit } from '@/src/lib/tempUtils'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import type { TempDisplay } from '@/src/providers/PrefsProvider'
 import { STAGE, STAGE_SIDES, formatStageTemp } from './stageColors'
 import type { StageSide } from './stageColors'
@@ -51,6 +52,7 @@ function yOf(temperature: number, range: { lo: number, hi: number }): number {
  * until Back to live.
  */
 export function StageTimeline({ win, now, curves, activity, names, unit, display, previewAt, onScrub, loading }: StageTimelineProps) {
+  const timeFormat = useTimeFormat()
   const gradientId = `stage-tl-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const range = stageRange(curves)
   const ticks = stageTicks(win)
@@ -129,7 +131,7 @@ export function StageTimeline({ win, now, curves, activity, names, unit, display
           aria-valuemin={win.start}
           aria-valuemax={win.end}
           aria-valuenow={previewAt ?? now}
-          aria-valuetext={clock(previewAt ?? now)}
+          aria-valuetext={clock(previewAt ?? now, timeFormat)}
           tabIndex={-1}
           data-testid="stage-lane"
           className="relative min-w-0 flex-1 cursor-ew-resize touch-none select-none"
@@ -175,12 +177,12 @@ export function StageTimeline({ win, now, curves, activity, names, unit, display
             <div key={side} className="relative" style={{ height: ROW_H }} data-testid={`stage-activity-${side}`}>
               <div className="absolute inset-x-0 top-[3px] h-[3px] rounded-full bg-[#1a1a1d]">
                 {activity[side].power.map(iv => (
-                  <span key={iv.start} title={`${names[side]} powered ${clock(iv.start)} → ${clock(iv.end)}`} className="absolute inset-y-0 min-w-0.5 rounded-full" style={{ left: pct(iv.start), width: width(iv), background: POWER_COLOR }} />
+                  <span key={iv.start} title={`${names[side]} powered ${clock(iv.start, timeFormat)} → ${clock(iv.end, timeFormat)}`} className="absolute inset-y-0 min-w-0.5 rounded-full" style={{ left: pct(iv.start), width: width(iv), background: POWER_COLOR }} />
                 ))}
               </div>
               <div className="absolute inset-x-0 top-[8px] h-[3px] rounded-full bg-[#1a1a1d]">
                 {activity[side].presence.map(iv => (
-                  <span key={iv.start} title={`${names[side]} in bed ${clock(iv.start)} → ${clock(iv.end)}`} className="absolute inset-y-0 min-w-0.5 rounded-full" style={{ left: pct(iv.start), width: width(iv), background: STAGE.live }} />
+                  <span key={iv.start} title={`${names[side]} in bed ${clock(iv.start, timeFormat)} → ${clock(iv.end, timeFormat)}`} className="absolute inset-y-0 min-w-0.5 rounded-full" style={{ left: pct(iv.start), width: width(iv), background: STAGE.live }} />
                 ))}
               </div>
               {activity[side].mismatches.map(mm => (
@@ -197,12 +199,12 @@ export function StageTimeline({ win, now, curves, activity, names, unit, display
             </div>
           ))}
           <div aria-hidden data-testid="stage-now" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(now), background: STAGE.text2 }}>
-            <span className="absolute -top-0.5 left-1.5 whitespace-nowrap font-mono text-[10px] leading-none" style={{ color: STAGE.text2 }}>{`now ${clock(now)}`}</span>
+            <span className="absolute -top-0.5 left-1.5 whitespace-nowrap font-mono text-[10px] leading-none" style={{ color: STAGE.text2 }}>{`now ${clock(now, timeFormat)}`}</span>
           </div>
           {previewAt != null && (
             <div aria-hidden data-testid="stage-preview-marker" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(previewAt), background: STAGE.preview }}>
               <span className="absolute -top-0.5 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium leading-none text-[#0b0b0c]" style={{ background: STAGE.preview }}>
-                {clock(previewAt)}
+                {clock(previewAt, timeFormat)}
               </span>
             </div>
           )}
@@ -211,7 +213,7 @@ export function StageTimeline({ win, now, curves, activity, names, unit, display
       <div className="flex gap-3" aria-hidden>
         <span className="w-14 shrink-0" />
         <div className="flex min-w-0 flex-1 justify-between font-mono text-[10px] text-[#5d5d63]">
-          {ticks.map(t => <span key={t}>{hourLabel(t)}</span>)}
+          {ticks.map(t => <span key={t}>{hourLabel(t, timeFormat)}</span>)}
         </div>
       </div>
     </div>

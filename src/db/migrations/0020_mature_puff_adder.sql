@@ -1,0 +1,2 @@
+ALTER TABLE `device_settings` ADD `default_schedule_end_action` text DEFAULT 'turn_off' NOT NULL;--> statement-breakpoint
+ALTER TABLE `power_schedules` ADD `end_action` text DEFAULT 'turn_off' NOT NULL;

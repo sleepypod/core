@@ -1,3 +1,4 @@
+import { type TimeFormat, formatClock as formatDisplayClock } from '@/src/lib/timeFormat'
 /**
  * Pure view-model logic for the diagnostics console — formatting, the
  * scheduler job shape, and the biometrics/thermal derivations. Kept free of React
@@ -35,8 +36,8 @@ export function minutesSince(ms: number): number {
   return Math.max(0, Math.floor((Date.now() - ms) / 60000))
 }
 
-export function fmtClock(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'
+export function fmtClock(iso: string | null, timeFormat: TimeFormat = '12h'): string {
+  return iso ? formatDisplayClock(new Date(iso), timeFormat, { hour: 'numeric', minute: '2-digit' }) : '—'
 }
 
 export const VERDICT_STYLES: Record<string, { label: string, className: string }> = {

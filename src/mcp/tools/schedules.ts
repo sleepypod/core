@@ -63,7 +63,8 @@ export function registerScheduleTools(server: McpServer) {
       dayOfWeek: dayOfWeek.optional(),
       time: timeOfDay.optional().describe('Fire time for temperature and alarm schedules.'),
       onTime: timeOfDay.optional().describe('Power schedules: when to turn on.'),
-      offTime: timeOfDay.optional().describe('Power schedules: when to turn off.'),
+      offTime: timeOfDay.optional().describe('Power schedules: schedule end time.'),
+      endAction: z.enum(['turn_off', 'maintain']).optional().describe('Power schedules: turn off (default) or maintain the final temperature after the schedule ends.'),
       temperature: temperature.optional(),
       unit,
       intensity: vibrationIntensity.optional(),
@@ -103,6 +104,7 @@ export function registerScheduleTools(server: McpServer) {
           ...base,
           onTime: need(input.onTime, 'onTime'),
           offTime: need(input.offTime, 'offTime'),
+          endAction: input.endAction,
           onTemperature: need(temp, 'temperature'),
         }))
       }
@@ -127,7 +129,7 @@ export function registerScheduleTools(server: McpServer) {
     }
     if (kind === 'power') {
       return jsonResult(await caller.schedules.updatePowerSchedule({
-        id: target, onTime: input.onTime, offTime: input.offTime, onTemperature: temp, enabled: input.enabled,
+        id: target, onTime: input.onTime, offTime: input.offTime, endAction: input.endAction, onTemperature: temp, enabled: input.enabled,
       }))
     }
     return jsonResult(await caller.schedules.updateAlarmSchedule({

@@ -51,6 +51,7 @@ export function registerSettingsTools(server: McpServer) {
     inputSchema: {
       timezone: z.string().optional().describe('IANA timezone, e.g. "America/Los_Angeles".'),
       temperatureUnit: z.enum(['F', 'C']).optional(),
+      defaultScheduleEndAction: z.enum(['turn_off', 'maintain']).optional().describe('Default for new curves in the apps; existing schedules are unchanged.'),
       rebootDaily: z.boolean().optional(),
       rebootTime: timeOfDay.optional(),
       primePodDaily: z.boolean().optional(),

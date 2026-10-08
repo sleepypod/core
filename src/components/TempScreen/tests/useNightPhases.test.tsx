@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     useUtils: () => ({ schedules: { getAll: { invalidate: m.invalidate } } }),
+    settings: { getAll: { useQuery: () => ({ data: { device: { defaultScheduleEndAction: 'turn_off' } } }) } },
     schedules: {
       getAll: { useQuery: () => ({ data: m.data, isLoading: m.isLoading, error: m.error }) },
       batchUpdate: { useMutation: () => ({ mutate: m.mutate, isPending: m.isPending }) },

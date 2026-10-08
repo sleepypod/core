@@ -208,6 +208,7 @@ it.each([
 
 it('formats minute precision and noon/midnight window boundaries', () => {
   expect(reasonText({ code: 'outside-window', temp: null, sides: [] }, { conditions: { kind: 'timeBetween', start: '00:05', end: '12:30' } }, [], fmt)).toBe('outside 12:05 AM–12:30 PM')
+  expect(reasonText({ code: 'outside-window', temp: null, sides: [] }, { conditions: { kind: 'timeBetween', start: '00:05', end: '12:30' } }, [], fmt, '24h')).toBe('outside 00:05–12:30')
   expect(matchesFilter('skipped', 'skipped')).toBe(true)
   expect(matchesFilter('fired', 'skipped')).toBe(false)
 })

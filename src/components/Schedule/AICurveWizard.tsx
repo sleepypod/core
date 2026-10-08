@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+import { TimeInput } from './TimeInput'
 import { useCallback, useEffect, useState } from 'react'
 import {
   X,
@@ -518,6 +520,7 @@ function StepPreview({
   onAddPoint: () => void
   onRemovePoint: (idx: number) => void
 }) {
+  const timeFormat = useTimeFormat()
   const { unit } = useTemperatureUnit()
   return (
     <div className="flex flex-col gap-4">
@@ -546,13 +549,17 @@ function StepPreview({
                 className="block size-2 shrink-0 rounded-full"
                 style={{ background: TONE_VAR[tempTone(point.tempF)] }}
               />
-              <input
-                type="time"
-                value={point.time}
-                aria-label={`Set point ${idx + 1} time`}
-                onChange={e => onUpdatePoint(idx, 'time', e.target.value)}
-                className="w-[110px] rounded-ctl border border-line-2 bg-field px-2 py-1 font-mono text-xs text-fg"
-              />
+              {timeFormat === '24h'
+                ? <TimeInput label={`Set point ${idx + 1} time`} value={point.time} onChange={v => onUpdatePoint(idx, 'time', v)} hideLabel />
+                : (
+                    <input
+                      type="time"
+                      value={point.time}
+                      aria-label={`Set point ${idx + 1} time`}
+                      onChange={e => onUpdatePoint(idx, 'time', e.target.value)}
+                      className="w-[110px] rounded-ctl border border-line-2 bg-field px-2 py-1 font-mono text-xs text-fg"
+                    />
+                  )}
               <span className="flex-1" />
               <Stepper
                 value={Math.round(setpointFToDisplay(point.tempF, unit) ?? point.tempF)}

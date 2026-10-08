@@ -1,5 +1,7 @@
 'use client'
 
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
+
 import { useMemo } from 'react'
 import { Activity, Heart, Wind } from 'lucide-react'
 import {
@@ -20,7 +22,6 @@ import { SleepRecordActions } from '@/src/components/biometrics/SleepRecordActio
 import {
   average,
   downsample,
-  formatClock,
   formatDuration,
   formatNightLong,
   formatNightShort,
@@ -49,6 +50,7 @@ interface NightViewProps {
 }
 
 export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNight }: NightViewProps) {
+  const { formatClock, timeFormat } = useTimeFormatter()
   const recordsQuery = useWeekRecords(side, weekStart)
   const records = useMemo(() => (recordsQuery.data ?? []) as SleepRecordRow[], [recordsQuery.data])
   const byNight = useMemo(() => groupByNight(records), [records])
@@ -84,7 +86,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       epochs,
       hasStages: epochs.length > 0,
       blocks: start != null && end != null ? toHypnoBlocks(stages?.blocks ?? [], start, end) : [],
-      ticks: start != null && end != null ? hypnoTicks(start, end) : [],
+      ticks: start != null && end != null ? hypnoTicks(start, end, 2, timeFormat) : [],
       durations,
       asleepSeconds: asleepMs > 0 ? asleepMs / 1000 : record?.sleepDurationSeconds ?? null,
       exits: record?.timesExitedBed ?? records.find(r => r.id === id)?.timesExitedBed ?? null,
@@ -98,7 +100,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       avgHrv: average(epochs.map(e => e.hrv)),
       avgBr: average(epochs.map(e => e.breathingRate)),
     }
-  }, [stages, record, records, key])
+  }, [stages, record, records, key, timeFormat])
 
   const selectedKey = key ?? (night.start != null ? toNightKey(new Date(night.start)) : null)
   const round = (v: number | null) => (v == null ? '—' : Math.round(v))
@@ -134,7 +136,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
                   <LineChart
                     series={[{ data: night.hr, color: 'var(--chart-hr)', fill: true, width: 1.5 }]}
                     height={96}
-                    xLabel={i => (night.hrTimes[i] != null ? new Date(night.hrTimes[i]).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '')}
+                    xLabel={i => (night.hrTimes[i] != null ? formatClock(new Date(night.hrTimes[i]), { hour: 'numeric', minute: '2-digit' }) : '')}
                     format={v => `${Math.round(v)} bpm`}
                   />
                 )
@@ -201,6 +203,7 @@ interface Night {
 }
 
 function NightCard({ night, error, empty }: { night: Night, error: string | null, empty: boolean }) {
+  const { formatClock } = useTimeFormatter()
   if (error) {
     return (
       <Card className="p-5">

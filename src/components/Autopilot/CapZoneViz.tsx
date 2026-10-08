@@ -1,3 +1,7 @@
+'use client'
+
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 /**
  * Capacitive-zone visualization for the rule editor.
  *
@@ -13,7 +17,6 @@
  *    `cap_sense_frames` for the backtested night, scrubbable (and auto-playable)
  *    so a recent night can be inspected zone-by-zone alongside the backtest.
  */
-'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOnSensorFrame, useSensorFrame } from '@/src/hooks/useSensorStream'
@@ -38,9 +41,9 @@ function zoneActivity(channelVar: number[], zone: number): number {
   return Math.max(channelVar[zone * 2] ?? 0, channelVar[zone * 2 + 1] ?? 0)
 }
 
-function fmtClock(ts: number | undefined): string {
+function fmtClock(ts: number | undefined, timeFormat: TimeFormat = '12h'): string {
   if (!ts) return '--'
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return formatClock(new Date(ts), timeFormat, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 /** Three stacked zone bars; `pct[i]` is 0..1 fill, `peak` outlines the modal zone. */
@@ -68,6 +71,7 @@ function ZoneBars({ pct, vals, peak }: { pct: number[], vals: number[], peak: nu
 }
 
 function LiveZones({ side }: { side: 'left' | 'right' | 'both' }) {
+  const timeFormat = useTimeFormat()
   const capSense = useSensorFrame('capSense')
   const capSense2 = useSensorFrame('capSense2')
   const frame = capSense2 ?? capSense
@@ -96,7 +100,7 @@ function LiveZones({ side }: { side: 'left' | 'right' | 'both' }) {
   return (
     <>
       <div className="mb-2 flex justify-end">
-        {frame && <span className="font-mono text-[11px] text-fg-3">{frame.ts ? fmtClock(frame.ts * 1000) : '--'}</span>}
+        {frame && <span className="font-mono text-[11px] text-fg-3">{frame.ts ? fmtClock(frame.ts * 1000, timeFormat) : '--'}</span>}
       </div>
       {!frame
         ? <div className="grid h-24 place-items-center text-[12px] text-fg-3">Waiting for live capacitive data…</div>
@@ -122,6 +126,7 @@ function LiveZones({ side }: { side: 'left' | 'right' | 'both' }) {
 }
 
 function ReplayZones({ side, nightId }: { side: 'left' | 'right', nightId: number | null }) {
+  const timeFormat = useTimeFormat()
   const q = trpc.automations.capZoneReplay.useQuery(
     { side, sleepRecordId: nightId ?? undefined },
     { enabled: nightId != null, placeholderData: prev => prev },
@@ -172,7 +177,7 @@ function ReplayZones({ side, nightId }: { side: 'left' | 'right', nightId: numbe
         >
           {playing ? <Icon.Pause size={13} /> : <Icon.Play size={13} />}
         </button>
-        <span className="font-mono text-[11px] text-fg-3">{`${fmtClock(cur.tMs)} · ${clamped + 1}/${frames.length}`}</span>
+        <span className="font-mono text-[11px] text-fg-3">{`${fmtClock(cur.tMs, timeFormat)} · ${clamped + 1}/${frames.length}`}</span>
       </div>
       <input
         type="range"

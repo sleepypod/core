@@ -1,5 +1,8 @@
 'use client'
 
+import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSensorStream, type PiezoDualFrame } from '@/src/hooks/useSensorStream'
 import { Card, HoverMark, SectionLabel, Slider } from '@/src/components/ds'
@@ -290,9 +293,9 @@ function sweepGeometry(hz: number) {
 // ---------------------------------------------------------------------------
 
 /** Format an epoch-seconds timestamp as a short time string (e.g. "2:34 AM"). */
-function formatTime(epochSeconds: number): string {
+function formatTime(epochSeconds: number, timeFormat: TimeFormat = '12h'): string {
   const d = new Date(epochSeconds * 1000)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return formatClock(d, timeFormat, { hour: 'numeric', minute: '2-digit' })
 }
 
 /**
@@ -308,6 +311,7 @@ function formatTime(epochSeconds: number): string {
  * bucket-averaged, Catmull-Rom interpolated traces (matching iOS PiezoWaveformView).
  */
 export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean, className?: string }) {
+  const timeFormat = useTimeFormat()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -629,7 +633,7 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
       {/* Timeline scrubber */}
       {timeRange && (
         <div className="flex items-center gap-2.5 font-mono text-[11px] text-fg-3">
-          <span className="shrink-0">{formatTime(timeRange.min)}</span>
+          <span className="shrink-0">{formatTime(timeRange.min, timeFormat)}</span>
           <Slider
             label="Piezo replay position"
             min={timeRange.min}
@@ -637,7 +641,7 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
             value={isLive ? timeRange.max : Math.max(timeRange.min, Math.min(scrubValue ?? timeRange.max, timeRange.max))}
             onChange={handleScrub}
           />
-          <span className="shrink-0">{formatTime(timeRange.max)}</span>
+          <span className="shrink-0">{formatTime(timeRange.max, timeFormat)}</span>
           {isLive
             ? <span className="shrink-0 text-fg-3">{enabled ? 'Latest' : 'Paused'}</span>
             : (
