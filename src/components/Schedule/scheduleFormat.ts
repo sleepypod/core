@@ -77,3 +77,16 @@ export const TONE_TEXT: Record<TempTone, string> = {
   warm: 'text-warm',
   neutral: 'text-hold',
 }
+
+/** URL segment for a curve: its days, Mon-first ("mon-tue-wed"). */
+export function curveSlug(days: Iterable<DayOfWeek>): string {
+  const set = new Set(days)
+  return DAY_ORDER.filter(d => set.has(d)).map(d => DAY_SHORT[d].toLowerCase()).join('-')
+}
+
+/** Days named by a curve slug, or null when any part isn't a day. */
+export function parseCurveSlug(slug: string): DayOfWeek[] | null {
+  const days = slug.toLowerCase().split('-').map(part => DAY_ORDER.find(d => DAY_SHORT[d].toLowerCase() === part))
+  if (days.length === 0 || days.some(d => d === undefined)) return null
+  return DAY_ORDER.filter(d => days.includes(d))
+}

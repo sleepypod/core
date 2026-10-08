@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
 import { expect, it, vi } from 'vitest'
-const mocks = vi.hoisted(() => ({ redirect: vi.fn(), rule: vi.fn() }))
+const mocks = vi.hoisted(() => ({ redirect: vi.fn(), rule: vi.fn(), schedule: vi.fn() }))
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }))
 vi.mock('next/font/google', () => ({ IBM_Plex_Mono: () => ({ variable: 'mono' }), IBM_Plex_Sans: () => ({ variable: 'sans' }) }))
 vi.mock('next/script', () => ({ default: ({ children }: { children: ReactNode }) => <script>{children}</script> }))
@@ -18,6 +18,10 @@ vi.mock('@/src/components/Autopilot/AutopilotConsole', () => ({ AutopilotConsole
 vi.mock('@/src/components/Autopilot/RulePage', () => ({ RulePage: (props: unknown) => {
   mocks.rule(props)
   return <div>Rule page</div>
+} }))
+vi.mock('@/src/components/Schedule/SchedulePage', () => ({ SchedulePage: (props: unknown) => {
+  mocks.schedule(props)
+  return <div>Schedule page</div>
 } }))
 vi.mock('@/src/components/Sleep/SleepSections', () => ({ SleepSections: () => <div>Sleep page</div> }))
 vi.mock('@/src/components/System/SystemScreen', () => ({ SystemScreen: () => <div>System page</div> }))
@@ -39,6 +43,14 @@ it('renders redesigned entry pages and passes rule route parameters', async () =
   expect(screen.getByText('Sleep page')).toBeTruthy()
   expect(screen.getByText('System page')).toBeTruthy()
   expect(mocks.rule).toHaveBeenCalledWith(expect.objectContaining({ id: 'new', template: 'restless' }))
+})
+
+it('passes a curve link to the schedule page, keeping only a known side', async () => {
+  const { default: Curve } = await import('../schedule/[curve]/page')
+  render(await Curve({ params: Promise.resolve({ curve: 'sat-sun' }), searchParams: Promise.resolve({ side: 'right', from: 'both' }) }))
+  expect(mocks.schedule).toHaveBeenLastCalledWith({ curve: 'sat-sun', curveSide: 'right', fromBoth: true })
+  render(await Curve({ params: Promise.resolve({ curve: 'new' }), searchParams: Promise.resolve({ side: ['left', 'right'] }) }))
+  expect(mocks.schedule).toHaveBeenLastCalledWith({ curve: 'new', curveSide: undefined, fromBoth: false })
 })
 
 it.each([

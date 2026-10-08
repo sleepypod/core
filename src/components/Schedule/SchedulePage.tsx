@@ -2,7 +2,8 @@
 
 import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, Card, InlineError, PageHeader, SectionLabel, SegmentedControl, Skeleton, StatusDot } from '@/src/components/ds'
@@ -26,6 +27,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { ScheduleToggle } from './ScheduleToggle'
 import { SchedulerConfirmation } from './SchedulerConfirmation'
 import { AlarmSection } from './AlarmSection'
+import { curveSlug, formatDayRange, parseCurveSlug, sameDays } from './scheduleFormat'
 
 interface EditingCurve {
   days: DayOfWeek[]
@@ -33,12 +35,23 @@ interface EditingCurve {
   setPoints: Array<{ time: string, temperature: number }>
 }
 
+interface SchedulePageProps {
+  /** /schedule/<curve>: 'new' or a curve's days ('mon-tue-wed'); opens the editor. */
+  curve?: string
+  /** ?side= on a curve link: the side (or both) the curve belongs to. */
+  curveSide?: SideSelection
+  /** ?from=both: the editor was opened from the Both view and returns to it. */
+  fromBoth?: boolean
+}
+
 /**
  * Schedule screen: the curve running today as a large chart, the other
  * curves (groups of days sharing a temperature schedule) below, and alarms
- * in the context column. Creating/editing a curve swaps in `CurveEditor`.
+ * in the context column. Creating/editing a curve swaps in `CurveEditor`
+ * at its own URL (/schedule/new, /schedule/mon-tue-wed?side=left), so a
+ * curve can be linked to directly.
  */
-export function SchedulePage() {
+export function SchedulePage({ curve, curveSide, fromBoth = false }: SchedulePageProps = {}) {
   // Focus one source only when the unused zone has no independent schedule.
   const { primarySide, selectedSide: chosenSide, selectSide, singleScheduleSide } = useSide()
   const side = singleScheduleSide ?? primarySide
@@ -55,7 +68,7 @@ export function SchedulePage() {
     isLoading: hookLoading,
   } = useSchedule()
 
-  const { data: settings } = trpc.settings.getAll.useQuery({})
+  const { data: settings, isLoading: settingsLoading } = trpc.settings.getAll.useQuery({})
   const { nextEvent } = useScheduleActive()
   const { leftName, rightName } = useSideNames()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
@@ -77,10 +90,18 @@ export function SchedulePage() {
     ? { samples: bedTrace(history.data?.points, side, lastNightMidnight(now)), label: lastNightLabel(now) }
     : undefined
 
-  const [editor, setEditor] = useState<EditingCurve | null>(null)
+  const router = useRouter()
+  const pathname = usePathname()
+  const schedulePath = `/${pathname?.split('/')[1] || 'en'}/schedule`
+  // A curve link names its side; select it before the editor reads that side's rows.
+  const wantSide = curve && !singleScheduleSide ? curveSide : undefined
+  useEffect(() => {
+    if (wantSide && chosenSide !== wantSide) selectSide(wantSide)
+  }, [wantSide, chosenSide, selectSide])
+
   const [pendingDelete, setPendingDelete] = useState<{ days: DayOfWeek[], label: string } | null>(null)
-  // Editing or deleting one person's curve from the Both view narrows to that
-  // side (edits in Both write to both sides), then returns to Both afterwards.
+  // Deleting one person's curve from the Both view narrows to that side
+  // (edits in Both write to both sides), then returns to Both afterwards.
   const [returnToBoth, setReturnToBoth] = useState(false)
   const restoreBoth = () => {
     if (returnToBoth) selectSide('both')
@@ -114,19 +135,22 @@ export function SchedulePage() {
     ?? null
   const others = visibleGroups.filter(g => g !== featured)
 
-  const openEditor = useCallback((next: EditingCurve) => {
-    setEditor(next)
-    window.scrollTo?.({ top: 0 })
-  }, [])
+  const curveHref = useCallback((slug: string, linkSide: SideSelection | null, from?: 'both') => {
+    const params = new URLSearchParams()
+    if (linkSide) params.set('side', linkSide)
+    if (from) params.set('from', from)
+    const qs = params.toString()
+    return `${schedulePath}/${slug}${qs ? `?${qs}` : ''}`
+  }, [schedulePath])
 
   const handleEdit = useCallback((group: ScheduleGroup) => {
-    openEditor({ days: group.days, setPoints: group.setPoints, endAction: group.endAction })
     setSelectedDays(new Set(group.days))
-  }, [openEditor, setSelectedDays])
+    router.push(curveHref(curveSlug(group.days), singleScheduleSide ? null : side))
+  }, [router, curveHref, setSelectedDays, singleScheduleSide, side])
 
   const handleCreate = useCallback(() => {
-    openEditor({ days: [], setPoints: [], endAction: settings?.device.defaultScheduleEndAction ?? 'turn_off' })
-  }, [openEditor, settings?.device.defaultScheduleEndAction])
+    router.push(curveHref('new', singleScheduleSide ? null : selectedSide))
+  }, [router, curveHref, singleScheduleSide, selectedSide])
 
   const handleDelete = useCallback((group: ScheduleGroup) => {
     setPendingDelete({ days: group.days, label: deleteLabel(group.days) })
@@ -144,9 +168,7 @@ export function SchedulePage() {
   }
 
   const editFor = (s: Side, group: ScheduleGroup) => {
-    setReturnToBoth(true)
-    selectSide(s)
-    handleEdit(group)
+    router.push(curveHref(curveSlug(group.days), s, 'both'))
   }
 
   const deleteFor = (s: Side, group: ScheduleGroup) => {
@@ -155,13 +177,40 @@ export function SchedulePage() {
     setPendingDelete({ days: group.days, label: `${names[s]}'s ${deleteLabel(group.days)}` })
   }
 
-  if (editor) {
+  if (curve) {
+    const closeEditor = () => {
+      if (fromBoth) selectSide('both')
+      router.push(schedulePath)
+    }
+    const linkedDays = curve === 'new' ? null : parseCurveSlug(curve)
+    const group = linkedDays ? visibleGroups.find(g => sameDays(g.days, linkedDays)) : undefined
+    const editor: EditingCurve | null = curve === 'new'
+      ? { days: [], setPoints: [], endAction: settings?.device.defaultScheduleEndAction ?? 'turn_off' }
+      : group ? { days: group.days, setPoints: group.setPoints, endAction: group.endAction } : null
+    const sideReady = !wantSide || chosenSide === wantSide
+    if (!sideReady || (curve === 'new' ? settingsLoading : isLoading && !data)) {
+      return <Skeleton className="h-[520px]" />
+    }
+    if (!editor) {
+      return (
+        <>
+          <PageHeader back="Schedule" onBack={closeEditor} title="Curve not found" />
+          <Card>
+            <InlineError>
+              {error
+                ? `Failed to load schedules: ${error.message}`
+                : linkedDays
+                  ? `No curve runs on exactly ${formatDayRange(linkedDays)}. It may have been changed or deleted.`
+                  : `"${curve}" isn't a curve.`}
+            </InlineError>
+          </Card>
+        </>
+      )
+    }
     return (
       <CurveEditor
-        onClose={() => {
-          setEditor(null)
-          restoreBoth()
-        }}
+        key={`${curve}:${side}`}
+        onClose={closeEditor}
         initialEndAction={editor.endAction}
         initialDays={editor.days}
         initialSetPoints={editor.setPoints}

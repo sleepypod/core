@@ -22,7 +22,9 @@ const m = vi.hoisted(() => ({
   health: { data: undefined as unknown },
   thermalHistory: { data: undefined as unknown },
   thermalHistoryInput: [] as unknown[],
+  push: vi.fn(),
 }))
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: m.push }), usePathname: () => '/en/schedule' }))
 vi.mock('@/src/providers/SideProvider', () => ({ useSide: () => m.side }))
 vi.mock('@/src/hooks/useSchedule', () => ({ useSchedule: () => m.schedule }))
 vi.mock('@/src/hooks/useScheduleActive', () => ({ useScheduleActive: () => ({ nextEvent: { time: '12:30 AM', temperature: 79 } }) }))
@@ -71,6 +73,7 @@ beforeEach(() => {
   m.side.selectedSide = 'left'
   m.side.singleScheduleSide = null
   m.side.selectSide.mockReset()
+  m.push.mockReset()
   m.schedule.isPowerEnabled = true
   m.schedule.confirmMessage = null
   m.schedule.isGlobalEnabled = true
@@ -158,15 +161,53 @@ describe('SchedulePage', () => {
     }
   })
 
-  it('opens the editor for a curve and returns to the list on close', () => {
+  it('links each curve to its own route', () => {
     const s = render(<SchedulePage />)
     fireEvent.click(s.getByRole('button', { name: 'Edit Sat, Sun' }))
-    expect(s.getByTestId('editor').textContent).toContain('sunday,saturday')
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/sat-sun?side=left')
     expect(m.schedule.setSelectedDays).toHaveBeenCalledWith(new Set(['sunday', 'saturday']))
-    fireEvent.click(s.getByRole('button', { name: 'close editor' }))
-    expect(s.queryByTestId('editor')).toBeNull()
     fireEvent.click(s.getByRole('button', { name: 'New curve' }))
-    expect(s.getByTestId('editor').textContent).toContain('new')
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/new?side=left')
+    expect(s.queryByTestId('editor')).toBeNull()
+  })
+
+  it('opens the linked curve in the editor and returns to the list on close', () => {
+    const s = render(<SchedulePage curve="sat-sun" curveSide="left" />)
+    expect(s.getByTestId('editor').textContent).toContain('sunday,saturday')
+    fireEvent.click(s.getByRole('button', { name: 'close editor' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule')
+    expect(m.side.selectSide).not.toHaveBeenCalled()
+    cleanup()
+    expect(render(<SchedulePage curve="new" />).getByTestId('editor').textContent).toContain('new')
+  })
+
+  it('selects the linked side before opening its curve', () => {
+    const s = render(<SchedulePage curve="sat-sun" curveSide="right" />)
+    expect(m.side.selectSide).toHaveBeenCalledWith('right')
+    expect(s.queryByTestId('editor')).toBeNull()
+    expect(s.container.querySelector('.animate-pulse')).not.toBeNull()
+  })
+
+  it('leaves the side alone on a link when only one side is scheduled', () => {
+    m.side.singleScheduleSide = 'left'
+    const s = render(<SchedulePage curve="sat-sun" curveSide="right" />)
+    expect(m.side.selectSide).not.toHaveBeenCalled()
+    expect(s.getByTestId('editor')).toBeTruthy()
+    cleanup()
+    fireEvent.click(render(<SchedulePage />).getByRole('button', { name: 'Edit Mon–Fri' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/mon-tue-wed-thu-fri')
+  })
+
+  it('explains a link to a curve that no longer exists', () => {
+    const s = render(<SchedulePage curve="mon-sat" curveSide="left" />)
+    expect(s.getByText(/No curve runs on exactly Mon, Sat/)).toBeTruthy()
+    fireEvent.click(s.getByRole('button', { name: /Schedule/ }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule')
+    cleanup()
+    expect(render(<SchedulePage curve="tomorrow" />).getByText('"tomorrow" isn\'t a curve.')).toBeTruthy()
+    cleanup()
+    m.query = { data: undefined, isLoading: false, error: new Error('db down') }
+    expect(render(<SchedulePage curve="sat-sun" />).getByText(/Failed to load schedules: db down/)).toBeTruthy()
   })
 
   it('deletes a curve after confirmation', async () => {
@@ -201,17 +242,22 @@ describe('SchedulePage', () => {
     m.side.selectedSide = 'both'
     const s = render(<SchedulePage />)
     fireEvent.click(s.getByRole('button', { name: 'Edit Heidi Sat, Sun' }))
-    expect(m.side.selectSide).toHaveBeenLastCalledWith('right')
-    expect(s.getByTestId('editor').textContent).toContain('sunday,saturday')
-    fireEvent.click(s.getByRole('button', { name: 'close editor' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/sat-sun?side=right&from=both')
+    cleanup()
+
+    m.side.selectedSide = 'right'
+    const editing = render(<SchedulePage curve="sat-sun" curveSide="right" fromBoth />)
+    expect(editing.getByTestId('editor').textContent).toContain('sunday,saturday')
+    fireEvent.click(editing.getByRole('button', { name: 'close editor' }))
     expect(m.side.selectSide).toHaveBeenLastCalledWith('both')
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule')
   })
 
   it('shows the empty state, loading skeleton and load errors', () => {
     m.query = { data: { temperature: [] }, isLoading: false, error: null }
     const s = render(<SchedulePage />)
     fireEvent.click(s.getByRole('button', { name: 'Create sleep curve' }))
-    expect(s.getByTestId('editor').textContent).toContain('new')
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/new?side=left')
     cleanup()
 
     m.query = { data: undefined, isLoading: true, error: null }
@@ -247,24 +293,19 @@ it('deletes a nonfeatured curve and opens the featured curve for editing', () =>
   expect(s.getByRole('dialog')).toBeTruthy()
   fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
   fireEvent.click(s.getByRole('button', { name: 'Edit Mon–Fri' }))
-  expect(s.getByTestId('editor')).toBeTruthy()
+  expect(m.push).toHaveBeenLastCalledWith('/en/schedule/mon-tue-wed-thu-fri?side=left')
 })
 
 it('uses the global default for new curves and the saved action when editing', () => {
   m.defaultAction = 'maintain'
-  const s = render(<SchedulePage />)
-  fireEvent.click(s.getAllByRole('button', { name: 'New curve' })[0])
-  expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('maintain')
-  fireEvent.click(s.getByRole('button', { name: 'close editor' }))
-  fireEvent.click(s.getAllByRole('button', { name: /Edit Mon/ })[0])
-  expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
+  expect(render(<SchedulePage curve="new" />).getByTestId('editor').getAttribute('data-end-action')).toBe('maintain')
+  cleanup()
+  expect(render(<SchedulePage curve="mon-tue-wed-thu-fri" />).getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
   m.defaultAction = 'turn_off'
 })
 
 it('falls back to turning off for new curves before the default setting loads', () => {
   m.defaultAction = undefined
-  const s = render(<SchedulePage />)
-  fireEvent.click(s.getAllByRole('button', { name: 'New curve' })[0])
-  expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
+  expect(render(<SchedulePage curve="new" />).getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
   m.defaultAction = 'turn_off'
 })

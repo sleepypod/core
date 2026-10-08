@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  curveSlug,
   daysToIndexes,
   formatDayRange,
   indexesToDays,
+  parseCurveSlug,
   sameDays,
   tempTone,
 } from '../scheduleFormat'
@@ -30,6 +32,24 @@ describe('formatDayRange', () => {
     expect(formatDayRange(['sunday', 'saturday'], { named: true })).toBe('Weekends')
     expect(formatDayRange(['monday', 'tuesday', 'wednesday', 'thursday'], { named: true })).toBe('Mon–Thu')
     expect(formatDayRange(['saturday', 'sunday', 'monday'], { named: true })).toBe('Mon, Sat, Sun')
+  })
+})
+
+describe('curve slugs', () => {
+  it('names a curve by its days, Mon-first', () => {
+    expect(curveSlug(['sunday', 'monday', 'friday'])).toBe('mon-fri-sun')
+    expect(curveSlug(new Set(['saturday'] as const))).toBe('sat')
+  })
+
+  it('reads a slug back in any order and case', () => {
+    expect(parseCurveSlug('mon-fri-sun')).toEqual(['monday', 'friday', 'sunday'])
+    expect(parseCurveSlug('Sun-Mon')).toEqual(['monday', 'sunday'])
+  })
+
+  it('rejects anything that is not a list of days', () => {
+    expect(parseCurveSlug('new')).toBeNull()
+    expect(parseCurveSlug('mon-')).toBeNull()
+    expect(parseCurveSlug('')).toBeNull()
   })
 })
 
