@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BedTempFrame } from '@/src/hooks/useSensorStream'
-const m = vi.hoisted(() => ({ frame: undefined as BedTempFrame | undefined, query: vi.fn(), canvas: vi.fn() }))
+const m = vi.hoisted(() => ({ frame: undefined as BedTempFrame | undefined, stored: null as unknown, query: vi.fn(), canvas: vi.fn() }))
 vi.mock('next/navigation', () => ({ usePathname: () => '/en' }))
 vi.mock('next/dynamic', () => ({ default: () => (props: unknown) => {
   m.canvas(props)
@@ -10,7 +10,7 @@ vi.mock('next/dynamic', () => ({ default: () => (props: unknown) => {
 vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorStream: vi.fn(), useSensorFrame: (type: string) => type === 'bedTemp' ? m.frame : undefined }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: { environment: { getLatestBedTemp: { useQuery: (...args: unknown[]) => {
   m.query(...args)
-  return { data: null }
+  return { data: m.stored }
 } } } } }))
 import ThermalBedCard from '../ThermalBedCard'
 const props = {
@@ -21,6 +21,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(1_000_000)
   m.frame = { type: 'bedTemp', ts: 1000, ambientTemp: null, mcuTemp: null, humidity: null, leftOuterTemp: 20, leftCenterTemp: 22, leftInnerTemp: 24, rightOuterTemp: 30, rightCenterTemp: 28, rightInnerTemp: 26 }
+  m.stored = null
   m.query.mockClear()
   m.canvas.mockClear()
 })
@@ -60,5 +61,19 @@ describe('ThermalBedCard', () => {
     const screen = render(<ThermalBedCard {...props} controls={controls} />)
     expect(screen.getByText('→ -- target')).toBeTruthy()
     expect(screen.getAllByText('control off')).toHaveLength(1)
+  })
+  it('labels a stored surface, shows a heating side and toggles the inspected side off again', () => {
+    m.frame = { ...(m.frame as BedTempFrame), ts: 900 }
+    m.stored = { leftOuterTemp: 20, leftCenterTemp: 22, leftInnerTemp: 24, rightOuterTemp: 20, rightCenterTemp: 20, rightInnerTemp: 20, timestamp: new Date(990_000) }
+    const controls = { ...props.controls, right: { currentTemperature: 70, targetTemperature: 90, targetLevel: 5 } }
+    const screen = render(<ThermalBedCard {...props} controls={controls} />)
+    expect(screen.getByText('Stored surface')).toBeTruthy()
+    expect(screen.getByText('Warming').className).toBe('text-warm')
+    const right = screen.getByRole('button', { name: 'Inspect Right temperatures' })
+    fireEvent.click(right)
+    expect(right.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(right)
+    expect(right.getAttribute('aria-pressed')).toBe('false')
+    expect(m.canvas.mock.lastCall?.[0].focus).toBeNull()
   })
 })

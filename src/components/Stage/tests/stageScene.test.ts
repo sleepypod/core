@@ -430,4 +430,51 @@ describe('stage scene', () => {
     t.resize?.()
     expect(t.frames.size).toBe(0)
   })
+
+  it('lights both halves when hovering a linked bed and keeps the cursor on a hovered side after a tap', () => {
+    const { scene, canvas, refs, screen } = setup()
+    scene.update(state({ linked: true }))
+    flush()
+    const left = screen(0, 0.77, SCENE.sideZ)
+    fire(canvas, 'pointermove', left)
+    flush()
+    expect(refs.zones.right[0]?.style.opacity).toBe('1')
+    fire(canvas, 'pointerdown', left)
+    fire(canvas, 'pointerup', left)
+    expect(canvas.style.cursor).toBe('ns-resize')
+  })
+
+  it('skips missing label refs, hides labels behind the camera and ignores a zero-sized canvas', () => {
+    vi.stubGlobal('devicePixelRatio', 0)
+    const { scene, canvas, camera, callbacks, refs } = setup()
+    refs.side.left = null
+    refs.linked = null
+    scene.update(state({ zones: 'always' }))
+    flush()
+    expect(refs.side.right?.style.visibility).toBe('')
+    // Everything past the far plane projects "behind".
+    camera.far = 0.2
+    camera.updateProjectionMatrix()
+    scene.update(state({ zones: 'always', selected: 'right' }))
+    flush(1)
+    expect(refs.side.right?.style.visibility).toBe('hidden')
+    expect(refs.zones.left[0]?.style.opacity).toBe('0')
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON() {} }) as DOMRect
+    fire(canvas, 'pointermove', { clientX: 500, clientY: 400 })
+    expect(callbacks.onHover).not.toHaveBeenCalled()
+  })
+
+  it('does not draw a frame that fires after dispose or a visibility change while hidden', () => {
+    const { scene, renderer } = setup()
+    flush()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(t.frames.size).toBe(0)
+    scene.update(state())
+    const [[, pending]] = t.frames
+    renderer.render.mockClear()
+    scene.dispose()
+    pending(0)
+    expect(renderer.render).not.toHaveBeenCalled()
+  })
 })

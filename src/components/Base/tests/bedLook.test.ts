@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import type { Three } from '../loadThree'
-import { DAY_ROOM, NIGHT_ROOM, ROOM, roomBackdrop } from '../bedLook'
+import { DAY_ROOM, NIGHT_ROOM, ROOM, contactShadow, filletPolygon, roomBackdrop } from '../bedLook'
 
 const renderer = () => ({ setClearColor: vi.fn() }) as unknown as THREE.WebGLRenderer
 
@@ -44,3 +44,33 @@ describe('room backdrop', () => {
     disposed.forEach(spy => expect(spy).toHaveBeenCalledOnce())
   })
 })
+
+describe('fillet polygon', () => {
+  const square = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]
+  it.each([['counter-clockwise', square], ['clockwise', [...square].reverse()]])('rounds every corner of a %s square inside its bounds', (_, points) => {
+    const out = filletPolygon(points, 2, 4)
+    expect(out).toHaveLength(4 * 5)
+    for (const p of out) {
+      expect(p.x).toBeGreaterThanOrEqual(-1e-9)
+      expect(p.x).toBeLessThanOrEqual(10 + 1e-9)
+      expect(p.y).toBeGreaterThanOrEqual(-1e-9)
+      expect(p.y).toBeLessThanOrEqual(10 + 1e-9)
+    }
+  })
+  it('survives a repeated point without producing NaN', () => {
+    const out = filletPolygon([{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], 2)
+    expect(out.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))).toBe(true)
+  })
+})
+
+describe('contact shadow', () => {
+  it('still builds a plane when the canvas has no 2D context', () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    const shadow = contactShadow(THREE as unknown as Three, 4, 3, 0.4)
+    expect(shadow.mesh.geometry).toBeInstanceOf(THREE.PlaneGeometry)
+    shadow.setOpacity(0.2)
+    expect((shadow.mesh.material as THREE.MeshBasicMaterial).opacity).toBe(0.2)
+    getContext.mockRestore()
+  })
+})
+

@@ -6,18 +6,26 @@ const mock = vi.hoisted(() => ({
   status: {} as BaseStatus, pending: false, error: null as { message: string } | null,
   position: vi.fn(), stop: vi.fn(), reconnect: vi.fn(),
   failure: null as null | ((error: { message: string }) => void),
+  moved: null as null | (() => void),
+  stopped: null as null | (() => void),
+  settings: { sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } } as unknown,
+  loading: false,
 }))
 vi.mock('next/navigation', () => ({ usePathname: () => '/en/base' }))
 vi.mock('../BaseSchedules', () => ({ BaseSchedules: () => <div>Schedules</div> }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
-  settings: { getAll: { useQuery: () => ({ data: { sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } } }) } },
+  settings: { getAll: { useQuery: () => ({ data: mock.settings }) } },
   base: {
-    getStatus: { useQuery: () => ({ data: mock.status, isLoading: false, isError: !!mock.error, error: mock.error, refetch: vi.fn() }) },
-    setPosition: { useMutation: (opts: { onError: (error: { message: string }) => void }) => {
+    getStatus: { useQuery: () => ({ data: mock.status, isLoading: mock.loading, isError: !!mock.error, error: mock.error, refetch: vi.fn() }) },
+    setPosition: { useMutation: (opts: { onSuccess: () => void, onError: (error: { message: string }) => void }) => {
       mock.failure = opts.onError
+      mock.moved = opts.onSuccess
       return { mutate: mock.position, isPending: mock.pending }
     } },
-    stop: { useMutation: () => ({ mutate: mock.stop }) },
+    stop: { useMutation: (opts: { onSuccess: () => void }) => {
+      mock.stopped = opts.onSuccess
+      return { mutate: mock.stop }
+    } },
     reconnect: { useMutation: () => ({ mutate: mock.reconnect }) },
   },
 } }))
@@ -27,6 +35,8 @@ beforeEach(() => {
   localStorage.clear()
   mock.pending = false
   mock.error = null
+  mock.loading = false
+  mock.settings = { sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } }
   mock.status = { state: 'connected', splitBase: true, independentControl: true, movingBySide: { left: false, right: false }, position: { left: { head: 1, feet: 5 }, right: { head: 30, feet: 15 } }, stale: false, moving: false, lastUpdate: Date.now(), busy: false, error: null }
 })
 afterEach(() => {
@@ -190,4 +200,50 @@ describe('per-side base controls', () => {
     act(() => mock.failure?.({ message: 'Bluetooth write failed' }))
     expect(screen.getByRole('alert').textContent).toBe('Bluetooth write failed')
   })
+  it('confirms sent moves and stops, clearing an earlier failure', () => {
+    render(<BasePage />)
+    act(() => mock.failure?.({ message: 'Bluetooth write failed' }))
+    fireEvent.click(left().getByRole('button', { name: 'read 40° / 0°' }))
+    fireEvent.click(left().getByRole('button', { name: 'Move to 40° / 0°' }))
+    expect(screen.queryByText('Bluetooth write failed')).toBeNull()
+    act(() => mock.moved?.())
+    expect(screen.getByText('Move sent. Measured angles update as the bed moves.')).toBeTruthy()
+    act(() => mock.stopped?.())
+    expect(screen.getByText('Stop sent to both sides.')).toBeTruthy()
+  })
+  it('does not send an instant preset while a command is pending', () => {
+    mock.pending = true
+    render(<BasePage />)
+    fireEvent.click(instant())
+    fireEvent.click(left().getByRole('button', { name: 'read 40° / 0°' }))
+    expect(mock.position).not.toHaveBeenCalled()
+    expect(left().getByLabelText('Jon head target').textContent).toBe('40°')
+  })
+  it('names unnamed sides, explains an unconfigured base and reads a missing position as unknown', () => {
+    mock.settings = { sides: { left: { name: '' }, right: { name: '' } } }
+    mock.status = { ...mock.status, state: 'unconfigured', position: undefined } as unknown as BaseStatus
+    render(<BasePage />)
+    expect(screen.getByText('NOT CONFIGURED', { selector: 'p' })).toBeTruthy()
+    expect(screen.getByText('Complete the base setup in the stock app, then reconnect.')).toBeTruthy()
+    expect(screen.getAllByTestId('bed-readout').map(node => node.textContent)).toEqual(['Left — / —', 'Right — / —'])
+    cleanup()
+    mock.settings = undefined
+    mock.loading = true
+    mock.status = undefined as unknown as BaseStatus
+    render(<BasePage />)
+    expect(screen.getByText('CONNECTING')).toBeTruthy()
+    expect(screen.getByText('Waiting for live position updates.')).toBeTruthy()
+    expect(screen.getAllByText('IDLE').length).toBeGreaterThan(0)
+  })
+  it('clears the view preferences again', () => {
+    render(<BasePage />)
+    for (const name of ['Move immediately when selecting a preset', 'Show mattress', 'Simple bed view']) {
+      const box = screen.getByRole('checkbox', { name }) as HTMLInputElement
+      fireEvent.click(box)
+      expect(box.checked).toBe(true)
+      fireEvent.click(box)
+      expect(box.checked).toBe(false)
+    }
+  })
 })
+

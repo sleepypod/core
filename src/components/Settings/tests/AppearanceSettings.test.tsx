@@ -81,3 +81,13 @@ it('shows the saved 24-hour setting and falls back to it while a pending save ca
   rerender(<TimeFormatControl format="12h" />)
   expect(screen.getByRole('tab', { name: '12-hour' }).getAttribute('aria-selected')).toBe('true')
 })
+
+it('turns the stage camera return off and on again', () => {
+  render(<PrefsProvider><AppearanceSettings temperatureUnit="F" /></PrefsProvider>)
+  const toggle = screen.getByLabelText('Return the camera after a pause')
+  expect(toggle.getAttribute('aria-checked')).toBe('true')
+  fireEvent.click(toggle)
+  expect(screen.getByLabelText('Return the camera after a pause').getAttribute('aria-checked')).toBe('false')
+  fireEvent.click(screen.getByLabelText('Return the camera after a pause'))
+  expect(screen.getByLabelText('Return the camera after a pause').getAttribute('aria-checked')).toBe('true')
+})

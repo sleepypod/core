@@ -80,4 +80,19 @@ describe('ThermalCanvas lifecycle', () => {
     await act(async () => resolve({}))
     expect(m.mount).not.toHaveBeenCalled()
   })
+  it('falls back when mounting the scene throws, and ignores a context loss after unmount', async () => {
+    m.mount.mockImplementationOnce(() => {
+      throw new Error('no context')
+    })
+    const view = render(<ThermalCanvas unit="F" states={states} focus={null} />)
+    await act(async () => {})
+    expect(view.getByText('Surface overview')).toBeTruthy()
+    view.unmount()
+    const again = render(<ThermalCanvas unit="F" states={states} focus={null} />)
+    await act(async () => {})
+    const onFail = m.mount.mock.lastCall?.[2] as () => void
+    again.unmount()
+    expect(() => onFail()).not.toThrow()
+  })
 })
+

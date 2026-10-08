@@ -267,4 +267,25 @@ describe('BedView3D', () => {
     expect(onFail).toHaveBeenCalledOnce()
     expect(host.childElementCount).toBe(0)
   })
+
+  it('waits for a sized host, eases a swing over several frames and ignores visibility while hidden', () => {
+    vi.stubGlobal('devicePixelRatio', 0)
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ width: 0, height: 0 } as DOMRect)
+    const { renderer, rerender, camera } = mount()
+    expect(renderer().setSize).not.toHaveBeenCalled()
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({ width: 600, height: 330 } as DOMRect)
+    flush()
+    rerender({ focus: 'right' })
+    // A frame early in the swing leaves the camera part way and asks for another.
+    const [[id, step]] = t.frames
+    t.frames.delete(id)
+    act(() => step(performance.now()))
+    expect(t.frames.size).toBeGreaterThan(0)
+    flush()
+    expect(camera().position.z).toBeLessThan(0)
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(t.frames.size).toBe(0)
+  })
 })
+

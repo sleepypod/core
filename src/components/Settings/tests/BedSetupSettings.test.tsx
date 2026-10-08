@@ -2,13 +2,17 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { BedSetupSettings } from '../BedSetupSettings'
 
-const m = vi.hoisted(() => ({ mutate: vi.fn(), invalidate: vi.fn(), error: null as Error | null }))
+const m = vi.hoisted(() => ({ mutate: vi.fn(), invalidate: vi.fn(), error: null as Error | null, onSuccess: undefined as (() => void) | undefined }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ settings: { getAll: { invalidate: m.invalidate } } }),
-  settings: { updateDevice: { useMutation: () => ({ mutate: m.mutate, isPending: false, error: m.error }) } },
+  settings: { updateDevice: { useMutation: (opts: { onSuccess: () => void }) => {
+    m.onSuccess = opts.onSuccess
+    return { mutate: m.mutate, isPending: false, error: m.error }
+  } } },
 } }))
 beforeEach(() => {
   m.mutate.mockClear()
+  m.invalidate.mockClear()
   m.error = null
 })
 
@@ -28,4 +32,10 @@ it('shows a save failure', () => {
   m.error = new Error('Unable to save bed setup')
   render(<BedSetupSettings device={{}} names={{ left: 'Alex', right: 'Sam' }} />)
   expect(screen.getByText('Unable to save bed setup')).toBeTruthy()
+})
+
+it('refreshes settings after a save', () => {
+  render(<BedSetupSettings device={{ bedMode: 'two' }} names={{ left: 'Alex', right: 'Sam' }} />)
+  m.onSuccess?.()
+  expect(m.invalidate).toHaveBeenCalledOnce()
 })

@@ -219,4 +219,91 @@ describe('thermal scene lifecycle', () => {
     expect(frames.size).toBe(0)
     delete document.documentElement.dataset.theme
   })
+
+  it('places the overview pills, follows a drag, and relights only when the theme really changes', async () => {
+    const frames = new Map<number, FrameRequestCallback>()
+    let next = 1
+    const flush = () => {
+      for (let i = 0; i < 5 && frames.size; i++) {
+        const [[id, callback]] = frames
+        frames.delete(id)
+        callback(i * 100)
+      }
+    }
+    vi.stubGlobal('devicePixelRatio', 0)
+    vi.stubGlobal('ResizeObserver', Observer)
+    vi.stubGlobal('IntersectionObserver', Observer)
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      frames.set(next, callback)
+      return next++
+    }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => frames.delete(id)))
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    const renderer = { render: vi.fn(), setSize: vi.fn() }
+    const environments: { dispose: ReturnType<typeof vi.fn> }[] = []
+    const library = {
+      ...THREE,
+      WebGLRenderer: class {
+        domElement = document.createElement('canvas')
+        render = renderer.render
+        setSize = renderer.setSize
+        setPixelRatio() {}
+        setClearColor() {}
+        dispose() {}
+        forceContextLoss() {}
+      },
+      PMREMGenerator: class {
+        fromScene() {
+          const environment = { texture: new THREE.Texture(), dispose: vi.fn() }
+          environments.push(environment)
+          return environment
+        }
+
+        dispose() {}
+      },
+    } as unknown as Three
+    const host = document.createElement('div')
+    host.getBoundingClientRect = () => ({ width: 1000, height: 400 }) as DOMRect
+    Object.defineProperty(host, 'clientWidth', { value: 1000 })
+    Object.defineProperty(host, 'clientHeight', { value: 400 })
+    const scene = mountThermalScene(library, host, vi.fn(), 'overview')
+    const camera = () => renderer.render.mock.lastCall?.[1] as THREE.PerspectiveCamera
+    // Wide: the regular lens.
+    flush()
+    expect(camera().fov).toBeLessThan(30)
+    const pill = host.querySelector<HTMLElement>('[data-thermal-pill="left"]') as HTMLElement
+    expect(pill.style.left).toMatch(/px$/)
+    expect(pill.style.top).toMatch(/px$/)
+    // A theme flip before any reading still redraws.
+    document.documentElement.dataset.theme = 'light'
+    await Promise.resolve()
+    expect(environments).toHaveLength(2)
+    expect(frames.size).toBe(1)
+    flush()
+    // A class change that keeps the theme does not rebuild the studio.
+    document.documentElement.classList.add('unrelated')
+    await Promise.resolve()
+    expect(environments).toHaveLength(2)
+    // A mouse drag orbits and redraws.
+    const canvas = host.querySelector('canvas') as HTMLCanvasElement
+    const pointer = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { clientX, clientY: 0, button: 0, bubbles: true })
+      Object.defineProperty(event, 'pointerId', { value: 1 })
+      Object.defineProperty(event, 'pointerType', { value: 'mouse' })
+      canvas.dispatchEvent(event)
+    }
+    const before = pill.style.left
+    renderer.render.mockClear()
+    pointer('pointerdown', 500)
+    pointer('pointermove', 600)
+    expect(frames.size).toBe(1)
+    flush()
+    expect(renderer.render).toHaveBeenCalled()
+    expect(pill.style.left).not.toBe(before)
+    pointer('pointerup', 600)
+    scene.dispose()
+    document.documentElement.classList.remove('unrelated')
+    delete document.documentElement.dataset.theme
+  })
 })
+
