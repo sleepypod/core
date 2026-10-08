@@ -5,7 +5,7 @@ import { getCurrentDay } from '@/src/components/Schedule/DaySelector'
 import { trpc } from '@/src/utils/trpc'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSide } from '@/src/providers/SideProvider'
-import { sortChronological } from '@/src/lib/scheduleGrouping'
+import { simplifySetPoints } from '@/src/lib/scheduleGrouping'
 
 type Side = 'left' | 'right'
 
@@ -529,8 +529,9 @@ export function useSchedule() {
       const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
       const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, endAction?: 'turn_off' | 'maintain', onTemperature: number, enabled: boolean }> = []
 
-      // Derive on/off times from set points (chronological with overnight wrap)
-      const sortedPoints = sortChronological(setPoints)
+      // Derive on/off times from set points (chronological with overnight wrap).
+      // Rows inside a flat hold are dropped; they never change what the Pod does.
+      const sortedPoints = simplifySetPoints(setPoints)
       const onTime = sortedPoints[0]?.time
       const offTime = sortedPoints[sortedPoints.length - 1]?.time
       const onTemperature = sortedPoints[0]?.temperature
@@ -538,7 +539,7 @@ export function useSchedule() {
 
       for (const writeSide of activeSides) {
         for (const day of targetDays) {
-          for (const sp of setPoints) {
+          for (const sp of sortedPoints) {
             tempCreates.push({
               side: writeSide,
               dayOfWeek: day,

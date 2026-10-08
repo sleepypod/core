@@ -23,7 +23,7 @@ import {
   timeStringToMinutes,
 } from '@/src/lib/sleepCurve/generate'
 import { rebaseSetPoints } from '@/src/lib/sleepCurve/rebase'
-import { type ScheduleEndAction, sortChronological } from '@/src/lib/scheduleGrouping'
+import { type ScheduleEndAction, simplifySetPoints, sortChronological } from '@/src/lib/scheduleGrouping'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 
@@ -103,8 +103,9 @@ export function CurveEditor({
   })
 
   const [days, setDays] = useState<Set<DayOfWeek>>(() => new Set(initialDays))
+  // Rows inside a flat hold are dropped on open; saving writes the lean list.
   const [points, setPoints] = useState<EditorSetPoint[]>(() =>
-    initialSetPoints.map((p, i) => ({ id: -(i + 1), time: p.time, temperature: p.temperature })),
+    simplifySetPoints(initialSetPoints).map((p, i) => ({ id: -(i + 1), time: p.time, temperature: p.temperature })),
   )
   const [endAction, setEndAction] = useState(initialEndAction)
   const [bedtime, setBedtime] = useState(initial.bedtime)
@@ -172,7 +173,8 @@ export function CurveEditor({
     bedtime: string
     wakeTime: string
   }) => {
-    const next = config.setPoints.map((sp, i) => ({ id: -(i + 1), time: sp.time, temperature: clampTemp(sp.temperature) }))
+    const next = simplifySetPoints(config.setPoints.map(sp => ({ time: sp.time, temperature: clampTemp(sp.temperature) })))
+      .map((sp, i) => ({ id: -(i + 1), ...sp }))
     setPoints(next)
     setActivePreset(null)
     setBedtime(config.bedtime)
@@ -210,11 +212,8 @@ export function CurveEditor({
       maxTempF: maxTemp,
     })
     const scheduleTemps = curveToScheduleTemperatures(curvePoints, bedtimeMinutes)
-    setPoints(Object.entries(scheduleTemps).map(([time, temperature], i) => ({
-      id: -(i + 1),
-      time,
-      temperature: clampTemp(temperature),
-    })))
+    const generated = Object.entries(scheduleTemps).map(([time, temperature]) => ({ time, temperature: clampTemp(temperature) }))
+    setPoints(simplifySetPoints(generated).map((sp, i) => ({ id: -(i + 1), ...sp })))
     setActivePreset(preset.id)
   }, [bedtime, wakeTime, minTemp, maxTemp])
 

@@ -90,6 +90,23 @@ export function sortChronological(points: SetPoint[]): SetPoint[] {
 }
 
 /**
+ * Chronological order, then drop set points inside a flat run (the same
+ * temperature as both neighbours). The scheduler holds each temperature until
+ * the next set point fires, so those rows change nothing; each run keeps its
+ * first and last point so the curve keeps its shape.
+ */
+export function simplifySetPoints<P extends SetPoint>(points: P[]): P[] {
+  const pool = [...points]
+  const ordered = sortChronological(points).map((sp) => {
+    const i = pool.findIndex(p => p.time === sp.time && p.temperature === sp.temperature)
+    return pool.splice(i, 1)[0]
+  })
+  return ordered.filter((p, i) => i === 0 || i === ordered.length - 1
+    || p.temperature !== ordered[i - 1].temperature
+    || p.temperature !== ordered[i + 1].temperature)
+}
+
+/**
  * Group the 7 days of the week by identical temperature set point lists.
  *
  * @param temperatureSchedules - all temperature schedules for one side (from getAll)

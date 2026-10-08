@@ -72,6 +72,8 @@ const dayMock = vi.hoisted(() => ({ current: 'monday' as const }))
 const scheduleGroupingMock = vi.hoisted(() => ({
   sortChronological: vi.fn((points: any[]) =>
     [...points].sort((a, b) => a.time.localeCompare(b.time))),
+  simplifySetPoints: vi.fn((points: any[]) =>
+    [...points].sort((a, b) => a.time.localeCompare(b.time))),
 }))
 
 vi.mock('@/src/providers/SideProvider', () => ({
@@ -98,6 +100,7 @@ afterEach(() => {
   trpcMock.utils.schedules.getAll.invalidate.mockReset()
   trpcMock.utils.schedules.getByDay.invalidate.mockReset()
   scheduleGroupingMock.sortChronological.mockClear()
+  scheduleGroupingMock.simplifySetPoints.mockClear()
   sideMock.state.primarySide = 'left'
   sideMock.state.activeSides = ['left']
   sideMock.state.singleScheduleSide = null
@@ -279,6 +282,24 @@ describe('useSchedule — curves', () => {
     expect(arg.creates.power).toEqual([
       expect.objectContaining({ side: 'left', dayOfWeek: 'monday', onTime: '07:00', offTime: '22:00', onTemperature: 68 }),
     ])
+  })
+
+  it('saveCurve writes the simplified set points, not the raw list', async () => {
+    sideMock.state.activeSides = ['left']
+    const raw = [
+      { time: '22:00', temperature: 76 },
+      { time: '23:00', temperature: 76 },
+      { time: '23:30', temperature: 76 },
+    ]
+    scheduleGroupingMock.simplifySetPoints.mockReturnValueOnce([raw[0], raw[2]])
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.saveCurve({ targetDays: ['monday'], setPoints: raw })
+    })
+    expect(scheduleGroupingMock.simplifySetPoints).toHaveBeenCalledWith(raw)
+    const arg = trpcMock.batchMutate.mock.calls[0][0]
+    expect(arg.creates.temperature.map((t: { time: string }) => t.time)).toEqual(['22:00', '23:30'])
+    expect(arg.creates.power).toEqual([expect.objectContaining({ onTime: '22:00', offTime: '23:30' })])
   })
 
   it('saveCurve skips power create when only one set point is provided', async () => {

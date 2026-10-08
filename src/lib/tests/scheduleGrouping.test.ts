@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { groupDaysBySharedCurve, sortChronological } from '../scheduleGrouping'
+import { groupDaysBySharedCurve, simplifySetPoints, sortChronological } from '../scheduleGrouping'
 
 describe('sortChronological', () => {
   test('returns a copy (does not mutate input) when length <= 1', () => {
@@ -68,6 +68,46 @@ describe('sortChronological', () => {
       { time: '00:00', temperature: 72 },
       { time: '12:00', temperature: 68 },
     ])
+  })
+})
+
+describe('simplifySetPoints', () => {
+  // The Pod 5 curve that prompted this: a 79° hold written as nine rows.
+  const curve = [
+    ['23:15', 80], ['23:29', 81], ['23:43', 81], ['23:57', 82], ['00:12', 81], ['00:27', 80],
+    ['00:41', 79], ['00:56', 79], ['01:16', 79], ['01:36', 79], ['02:15', 79], ['02:55', 79],
+    ['03:09', 79], ['03:23', 79], ['03:37', 79], ['04:44', 79], ['05:50', 79],
+    ['06:04', 81], ['06:18', 83], ['06:32', 85], ['06:41', 83], ['06:51', 82], ['07:00', 80],
+  ].map(([time, temperature]) => ({ time: time as string, temperature: temperature as number }))
+
+  test('keeps only the first and last point of each flat run', () => {
+    const out = simplifySetPoints(curve)
+    expect(out.map(p => p.time)).toEqual([
+      '23:15', '23:29', '23:43', '23:57', '00:12', '00:27', '00:41', '05:50',
+      '06:04', '06:18', '06:32', '06:41', '06:51', '07:00',
+    ])
+  })
+
+  test('returns points in overnight chronological order and keeps their extra fields', () => {
+    const points = [
+      { id: 1, time: '06:00', temperature: 80 },
+      { id: 2, time: '22:00', temperature: 75 },
+      { id: 3, time: '02:00', temperature: 75 },
+      { id: 4, time: '00:00', temperature: 75 },
+    ]
+    expect(simplifySetPoints(points).map(p => p.id)).toEqual([2, 3, 1])
+  })
+
+  test('always keeps the power-on and power-off points', () => {
+    const flat = [{ time: '22:00', temperature: 78 }, { time: '23:00', temperature: 78 }, { time: '06:00', temperature: 78 }]
+    expect(simplifySetPoints(flat).map(p => p.time)).toEqual(['22:00', '06:00'])
+    expect(simplifySetPoints([flat[0]])).toEqual([flat[0]])
+    expect(simplifySetPoints([])).toEqual([])
+  })
+
+  test('keeps sloped points, which the scheduler sends as steps', () => {
+    const ramp = [{ time: '06:00', temperature: 80 }, { time: '06:15', temperature: 82 }, { time: '06:30', temperature: 84 }]
+    expect(simplifySetPoints(ramp)).toEqual(ramp)
   })
 })
 

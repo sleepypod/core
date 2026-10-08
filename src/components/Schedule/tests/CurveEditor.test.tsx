@@ -84,10 +84,24 @@ describe('CurveEditor', () => {
     await waitFor(() => expect(m.saveCurve).toHaveBeenCalled())
     expect(m.saveCurve.mock.calls[0][0]).toEqual({
       targetDays: ['monday'],
-      setPoints: [{ time: '07:00', temperature: 84 }, { time: '23:15', temperature: 84 }],
+      setPoints: [{ time: '23:15', temperature: 84 }, { time: '07:00', temperature: 84 }],
       originalDays: ['monday'],
       endAction: 'turn_off',
     })
+  })
+
+  it('opens without the rows inside a flat hold', () => {
+    const held = [
+      { time: '23:00', temperature: 80 },
+      { time: '00:00', temperature: 77 },
+      { time: '01:00', temperature: 77 },
+      { time: '02:00', temperature: 77 },
+      { time: '06:00', temperature: 77 },
+      { time: '07:00', temperature: 82 },
+    ]
+    const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={held} />)
+    expect(rows(s).map(r => within(r).getByRole('button', { name: /Edit set point/ }).textContent))
+      .toEqual(['11:00 PM', '12:00 AM', '6:00 AM', '7:00 AM'])
   })
 
   it('adds a set point through the set-point dialog', () => {
