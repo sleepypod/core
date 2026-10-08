@@ -1357,6 +1357,9 @@ class _Mode:
     def home_side(self):
         return self.home
 
+    def active_sides(self):
+        return (self.home,) if self.home else ("left", "right")
+
 
 class _Clock:
     def __init__(self):
@@ -1391,6 +1394,16 @@ class TestSingleSleeperVitals:
         return conn.execute(
             "SELECT v.side, v.heart_rate, q.quality_score FROM vitals v "
             "JOIN vitals_quality q ON q.vitals_id = v.id ORDER BY v.id").fetchall()
+
+    def test_no_active_sleepers_discards_pending_and_new_vitals(self):
+        router, conn, clock = self._router()
+        router.submit(self._cand("left", 63.0, 0.3))
+        router._mode.active_sides = lambda: ()
+        clock.t += 60
+        router.tick()
+        assert router.submit(self._cand("right", 62.0, 0.7)) is True
+        router.flush()
+        assert self._rows(conn) == []
 
     def test_pair_writes_best_quality_under_home(self):
         router, conn, clock = self._router()

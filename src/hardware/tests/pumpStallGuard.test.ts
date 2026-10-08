@@ -64,6 +64,9 @@ function resetSchema(): void {
     DROP TABLE IF EXISTS device_state;
     CREATE TABLE device_settings (
       id INTEGER PRIMARY KEY,
+      bed_mode TEXT NOT NULL DEFAULT 'two',
+      unused_zone_mode TEXT NOT NULL DEFAULT 'off',
+      default_schedule_end_action TEXT NOT NULL DEFAULT 'turn_off',
       timezone TEXT NOT NULL DEFAULT 'America/Los_Angeles',
       temperature_unit TEXT NOT NULL DEFAULT 'F',
       time_format TEXT NOT NULL DEFAULT '12h',

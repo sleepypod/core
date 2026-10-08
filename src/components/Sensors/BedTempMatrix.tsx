@@ -2,13 +2,16 @@
 
 import { SensorAge } from './SensorAge'
 
-import { useMemo } from 'react'
+import dynamic from 'next/dynamic'
+import { useEffect, useState } from 'react'
+import { latestThermalReading, thermalColor, thermalState, THERMAL_STALE_SECONDS } from '@/src/components/ThermalBed/thermalData'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
-import type { BedTempFrame, BedTemp2Frame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatDisplayTemp, sensorCToDisplay } from '@/src/lib/tempUtils'
 import { Card, SectionLabel, Skeleton } from '@/src/components/ds'
+
+const ThermalCanvas = dynamic(() => import('@/src/components/ThermalBed/ThermalCanvas'), { ssr: false, loading: () => <div className="h-[300px] min-[600px]:h-[360px]" /> })
 
 const CELL_LABELS = ['L out', 'L ctr', 'L in', 'R in', 'R ctr', 'R out'] as const
 
@@ -26,7 +29,7 @@ export function cellTint(value: number | null, mean: number | null): string {
 
 /**
  * Bed temperature matrix: the six surface sensors laid out across the bed
- * (left outer → right outer), tinted cool/warm around the bed's mean.
+ * (left outer → right outer), with a shared 3D view on a fixed Celsius scale.
  *
  * Combines live WebSocket frames with tRPC fallback from
  * environment.getLatestBedTemp for initial data before WS connects.
@@ -36,70 +39,58 @@ export function BedTempMatrix() {
   const bedTemp2 = useSensorFrame('bedTemp2')
   const { unit } = useTemperatureUnit()
 
-  // Prefer bedTemp2 (newer pods)
-  const liveFrame: BedTempFrame | BedTemp2Frame | undefined = bedTemp2 ?? bedTemp
-
-  // tRPC fallback: latest bed temp from database (request in user's unit)
+  const [now, setNow] = useState(() => Date.now() / 1000)
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now() / 1000), 5000)
+    return () => clearInterval(timer)
+  }, [])
+  const live = latestThermalReading(bedTemp, bedTemp2)
   const latestBedTemp = trpc.environment.getLatestBedTemp.useQuery(
-    { unit },
-    {
-      refetchInterval: 30_000,
-      staleTime: 15_000,
-      // Only used as fallback; stop refetching once live data is flowing
-      enabled: !liveFrame,
-    },
+    { unit: 'C' },
+    { refetchInterval: 30_000, staleTime: 15_000, enabled: !live || now - live.ts >= THERMAL_STALE_SECONDS },
   )
-
-  // Unified source in the user's display unit: live frames are Celsius,
-  // stored rows are already converted by the endpoint.
-  const data = useMemo(() => {
-    if (liveFrame) {
-      const c = (v: number | null) => sensorCToDisplay(v, unit)
-      return {
-        source: 'live' as const,
-        cells: [
-          liveFrame.leftOuterTemp, liveFrame.leftCenterTemp, liveFrame.leftInnerTemp,
-          liveFrame.rightInnerTemp, liveFrame.rightCenterTemp, liveFrame.rightOuterTemp,
-        ].map(c),
-        ambient: c(liveFrame.ambientTemp),
-        mcu: c(liveFrame.mcuTemp),
-        humidity: liveFrame.humidity,
+  const reading = latestThermalReading(bedTemp, bedTemp2, latestBedTemp.data)
+  const stale = !reading || now - reading.ts >= THERMAL_STALE_SECONDS
+  const source = reading?.source === 'stored' ? latestBedTemp.data : bedTemp?.ts === reading?.ts ? bedTemp : bedTemp2
+  const c = (value: number | null | undefined) => sensorCToDisplay(value ?? null, unit)
+  const cells = reading ? [...reading.left, ...[...reading.right].reverse()] : []
+  const data = reading
+    ? {
+        source: reading.source,
+        cells: cells.map(c),
+        ambient: c(source?.ambientTemp),
+        mcu: c(source?.mcuTemp),
+        humidity: source?.humidity,
       }
-    }
-    const stored = latestBedTemp.data
-    if (!stored) return null
-    return {
-      source: 'stored' as const,
-      cells: [
-        stored.leftOuterTemp, stored.leftCenterTemp, stored.leftInnerTemp,
-        stored.rightInnerTemp, stored.rightCenterTemp, stored.rightOuterTemp,
-      ],
-      ambient: stored.ambientTemp,
-      mcu: stored.mcuTemp,
-      humidity: stored.humidity,
-    }
-  }, [liveFrame, latestBedTemp.data, unit])
-
-  const mean = useMemo(() => {
-    const vals = data?.cells.filter((v): v is number => v !== null) ?? []
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
-  }, [data])
+    : null
+  const states = {
+    left: thermalState(reading?.left ?? [null, null, null], undefined, stale),
+    right: thermalState(reading?.right ?? [null, null, null], undefined, stale),
+  }
 
   const fmt = (v: number | null) => formatDisplayTemp(v, unit, { decimals: 1, includeUnit: false, nullDisplay: '--' })
 
   return (
-    <Card className="gap-2.5 px-4 py-3.5">
+    <Card className="col-span-full gap-2.5 overflow-hidden px-4 py-3.5">
       <SectionLabel right={(
         <span className="flex items-center gap-2">
-          <SensorAge timestamp={liveFrame?.ts} />
+          <SensorAge timestamp={reading?.ts} />
           °
           {unit}
         </span>
       )}
       >
         Bed temp matrix
+        {data && stale && <span className="normal-case tracking-normal text-fg-3">Stale readings</span>}
         {data?.source === 'stored' && <span className="normal-case tracking-normal text-fg-3">stored</span>}
       </SectionLabel>
+
+      <ThermalCanvas states={states} focus={null} unit={unit} view="regions" />
+      <div className="mx-auto flex w-full max-w-72 items-center gap-3 font-mono text-[10px] text-fg-2">
+        <span>{fmt(c(18))}</span>
+        <div className="h-1.5 flex-1 rounded-full" style={{ background: 'var(--thermal-ramp)' }} />
+        <span>{fmt(c(36))}</span>
+      </div>
 
       {!data
         ? (
@@ -117,7 +108,7 @@ export function BedTempMatrix() {
                 <div
                   key={CELL_LABELS[i]}
                   className="rounded-[5px] py-[9px] min-[900px]:py-2.5"
-                  style={{ background: cellTint(v, mean) }}
+                  style={{ background: `color-mix(in srgb, ${thermalColor(stale ? null : cells[i])} 30%, var(--surface-card))` }}
                   title={CELL_LABELS[i]}
                 >
                   {fmt(v)}
@@ -129,6 +120,10 @@ export function BedTempMatrix() {
       <div className="grid grid-cols-6 text-center text-[10px] text-fg-3">
         {CELL_LABELS.map(l => <span key={l}>{l}</span>)}
       </div>
+
+      <p className="text-[11px] leading-relaxed text-fg-3">
+        Six measured regions: outer, center and inner on each side. Colors use a fixed temperature scale; gray means missing or stale data. Regions are schematic; head-to-foot detail is not measured.
+      </p>
 
       {data && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-2.5 font-mono text-xs text-fg-2">

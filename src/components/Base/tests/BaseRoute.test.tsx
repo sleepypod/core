@@ -7,7 +7,12 @@ vi.mock('@/src/providers/TRPCProvider', () => ({ TRPCProvider: ({ children, base
   provider(baseDebug)
   return <div data-testid="isolated-provider">{children}</div>
 } }))
-vi.mock('../BasePage', () => ({ BasePage: () => <h1>Base</h1> }))
+vi.mock('../BasePage', () => ({ BasePage: ({ demoHref }: { demoHref?: string }) => (
+  <>
+    <h1>Base</h1>
+    {demoHref && <a href={demoHref}>Demo mode</a>}
+  </>
+) }))
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -18,11 +23,13 @@ describe('base debug route', () => {
     expect(provider).toHaveBeenCalledWith(true)
     expect(screen.getByRole('status').textContent).toContain('No base commands are sent to hardware')
     expect(screen.getByRole('link', { name: 'Exit debug' }).getAttribute('href')).toBe('/fr/base')
+    expect(screen.queryByRole('link', { name: 'Demo mode' })).toBeNull()
   })
   it.each([undefined, '0', 'true', ['1', '0']])('leaves direct access in real mode for debug=%s', async (debug) => {
     render(await Base({ params: Promise.resolve({ lang: 'en' }), searchParams: Promise.resolve({ debug }) }))
     expect(screen.getByRole('heading', { name: 'Base' })).toBeTruthy()
     expect(provider).not.toHaveBeenCalled()
     expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Demo mode' }).getAttribute('href')).toBe('/en/base?debug=1')
   })
 })

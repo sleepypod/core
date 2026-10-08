@@ -72,6 +72,8 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           use_oidc: true
+          # Avoid the cli.codecov.io binary CDN, which fails TLS on fork runners.
+          use_pypi: true
           fail_ci_if_error: false
           slug: sleepypod/core
           flags: javascript
@@ -82,6 +84,8 @@ jobs:
         with:
           report_type: test_results
           use_oidc: true
+          # Avoid the cli.codecov.io binary CDN, which fails TLS on fork runners.
+          use_pypi: true
           fail_ci_if_error: false
           slug: sleepypod/core
           files: test-results/junit.xml

@@ -862,6 +862,18 @@ class TestSingleSleeper:
         ts = self._run(left, right, ts, 600, 0, 0, merged)          # up
         return left, right, ts
 
+    def test_no_active_sleepers_closes_session_and_suppresses_new_records(self):
+        from types import SimpleNamespace
+        left, right = self._pair()
+        ts = self._run(left, right, self.T0, 600, 0, 0)
+        ts = self._run(left, right, ts, 3600, 600, 0)
+        mode = SimpleNamespace(home_side=lambda: None, active_sides=lambda: ())
+        for offset in range(0, 600, 5):
+            main.process_sleeper_frame(left, right, ts + offset, self._frame(600, 600), mode)
+        assert left._session_start is None
+        assert right._session_start is None
+        assert len(self._sessions(left)) == 1
+
     def test_without_away_mode_the_rollover_opens_a_right_session(self):
         left, _right, _ = self._night(merged=False)
         assert {row[0] for row in self._sessions(left)} == {"left", "right"}

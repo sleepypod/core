@@ -1,3 +1,4 @@
+import { recordedBedTemperature } from '../bedTemperatureSamples'
 import { normalizeFrame } from '@/src/streaming/normalizeFrame'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDemoSocket } from '../socket'
@@ -49,7 +50,7 @@ describe('demo sensor socket', () => {
     const bed = normalizeFrame(ofType('bedTemp2')[0]) as { leftCenterTemp: number | null, rightInnerTemp: number | null, ambientTemp: number | null }
     expect(bed.leftCenterTemp).toBeGreaterThan(10)
     expect(bed.leftCenterTemp).toBeLessThan(45)
-    expect(bed.ambientTemp).toBeCloseTo(21.4)
+    expect(bed.ambientTemp).toBeCloseTo(recordedBedTemperature(ofType('bedTemp2')[0].ts as number).ambientTemp)
 
     const cap = normalizeFrame(ofType('capSense2')[0]) as { left: number[], status: string }
     expect(cap.left).toHaveLength(8)

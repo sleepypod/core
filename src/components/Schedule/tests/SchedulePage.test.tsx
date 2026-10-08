@@ -4,7 +4,8 @@ import type * as ScheduleTime from '@/src/lib/scheduleTime'
 import { SchedulePage } from '../SchedulePage'
 
 const m = vi.hoisted(() => ({
-  side: { primarySide: 'left', selectedSide: 'left', selectSide: vi.fn() },
+  defaultAction: 'turn_off' as string | undefined,
+  side: { primarySide: 'left', selectedSide: 'left', selectSide: vi.fn(), singleScheduleSide: null as string | null },
   schedule: {
     confirmMessage: null as string | null,
     isPowerEnabled: true,
@@ -29,6 +30,7 @@ vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'J
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
+    settings: { getAll: { useQuery: () => ({ data: { device: { defaultScheduleEndAction: m.defaultAction } } }) } },
     schedules: { getAll: { useQuery: () => m.query } },
     health: {
       system: { useQuery: () => m.health },
@@ -47,8 +49,8 @@ vi.mock('../AlarmSection', () => ({
   AlarmSection: ({ side, selectedSide }: { side: string, selectedSide: string }) => <div data-testid="alarms">{`${side}/${selectedSide}`}</div>,
 }))
 vi.mock('../CurveEditor', () => ({
-  CurveEditor: ({ onClose, initialDays }: { onClose: () => void, initialDays: string[] }) => (
-    <div data-testid="editor">
+  CurveEditor: ({ onClose, initialDays, initialEndAction }: { onClose: () => void, initialDays: string[], initialEndAction?: string }) => (
+    <div data-testid="editor" data-end-action={initialEndAction}>
       {initialDays.join(',') || 'new'}
       <button type="button" onClick={onClose}>close editor</button>
     </div>
@@ -58,6 +60,7 @@ vi.mock('../CurveEditor', () => ({
 const temp = (dayOfWeek: string, time: string, temperature: number, enabled = true) => ({ dayOfWeek, time, temperature, enabled })
 const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
 const DATA = {
+  power: [],
   temperature: [
     ...WEEKDAYS.flatMap(d => [temp(d, '23:15', 83), temp(d, '07:00', 84)]),
     ...['saturday', 'sunday'].flatMap(d => [temp(d, '23:45', 78), temp(d, '08:30', 84)]),
@@ -66,6 +69,7 @@ const DATA = {
 
 beforeEach(() => {
   m.side.selectedSide = 'left'
+  m.side.singleScheduleSide = null
   m.side.selectSide.mockReset()
   m.schedule.isPowerEnabled = true
   m.schedule.confirmMessage = null
@@ -134,6 +138,15 @@ describe('SchedulePage', () => {
     fireEvent.click(toggle)
     expect(m.schedule.toggleGlobalSchedules).toHaveBeenCalledOnce()
     expect(m.schedule.toggleAllSchedules).not.toHaveBeenCalled()
+  })
+
+  it('hides the side switch when one side is away', () => {
+    // The Temp screen may have the selection on 'both' (linked).
+    m.side.selectedSide = 'both'
+    m.side.singleScheduleSide = 'right'
+    const s = render(<SchedulePage />)
+    expect(s.queryAllByRole('tablist', { name: 'Side' })).toHaveLength(0)
+    expect(s.getByTestId('alarms').textContent).toBe('right/right')
   })
 
   it('reflects the global enabled state, not just today’s power schedule', () => {
@@ -235,4 +248,23 @@ it('deletes a nonfeatured curve and opens the featured curve for editing', () =>
   fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
   fireEvent.click(s.getByRole('button', { name: 'Edit Mon–Fri' }))
   expect(s.getByTestId('editor')).toBeTruthy()
+})
+
+it('uses the global default for new curves and the saved action when editing', () => {
+  m.defaultAction = 'maintain'
+  const s = render(<SchedulePage />)
+  fireEvent.click(s.getAllByRole('button', { name: 'New curve' })[0])
+  expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('maintain')
+  fireEvent.click(s.getByRole('button', { name: 'close editor' }))
+  fireEvent.click(s.getAllByRole('button', { name: /Edit Mon/ })[0])
+  expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
+  m.defaultAction = 'turn_off'
+})
+
+it('falls back to turning off for new curves before the default setting loads', () => {
+  m.defaultAction = undefined
+  const s = render(<SchedulePage />)
+  fireEvent.click(s.getAllByRole('button', { name: 'New curve' })[0])
+  expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
+  m.defaultAction = 'turn_off'
 })

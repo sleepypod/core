@@ -5,10 +5,10 @@ import type { BaseScope } from '@/src/hardware/base/types'
 
 const deg = Math.PI / 180
 const LOOK_Y = 0.2
-// The product shot: foot end, on the left sleeper's side, pulled back far enough
-// that the near legs clear the bottom of the frame.
-const DEFAULT_HORIZONTAL = 9.2
-const DEFAULT_HEIGHT = 3.7
+// The product shot: foot end, on the left sleeper's side, from about 32° up with a long
+// lens, pulled back far enough that the near plinth clears the bottom of the frame.
+const DEFAULT_HORIZONTAL = 10.8
+const DEFAULT_HEIGHT = 6.9
 export const ORBIT = {
   azimuth: 0.62,
   elevation: Math.atan2(DEFAULT_HEIGHT - LOOK_Y, DEFAULT_HORIZONTAL),
@@ -18,10 +18,10 @@ export const ORBIT = {
   minElevation: 8 * deg,
   maxElevation: 65 * deg,
   // Close enough to inspect a hinge (the ends crop); far enough out that fog stays off the bed.
-  minDistance: 5.5,
-  maxDistance: 12,
+  minDistance: 6,
+  maxDistance: 15,
   rotateRate: 0.008,
-  swingMs: 450,
+  swingMs: 600,
   tiltRate: 0.006,
   wheelRate: 0.002,
   lookY: LOOK_Y,

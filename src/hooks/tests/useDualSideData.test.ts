@@ -13,7 +13,7 @@ import { renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const sideMock = vi.hoisted(() => {
-  const state: { activeSides: Array<'left' | 'right'> } = { activeSides: ['left', 'right'] }
+  const state: { activeSides: Array<'left' | 'right'>, singleSleeperSide: 'left' | 'right' | null } = { activeSides: ['left', 'right'], singleSleeperSide: null }
   return { state }
 })
 
@@ -56,7 +56,7 @@ const trpcMock = vi.hoisted(() => {
 })
 
 vi.mock('@/src/providers/SideProvider', () => ({
-  useSide: () => ({ activeSides: sideMock.state.activeSides }),
+  useSide: () => sideMock.state,
 }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: trpcMock.trpc }))
 
@@ -74,9 +74,24 @@ afterEach(() => {
   trpcMock.refetch.mockReset()
   Object.values(trpcMock.biometrics).forEach((m: any) => m.useQuery.mockClear())
   sideMock.state.activeSides = ['left', 'right']
+  sideMock.state.singleSleeperSide = null
 })
 
 describe('useDualSideData', () => {
+  it.each(['left', 'right'] as const)('queries and merges only the %s sleeper even with both controls selected', (sleeper) => {
+    sideMock.state.singleSleeperSide = sleeper
+    for (const side of ['left', 'right']) {
+      trpcMock.overrides.set(`getVitals:${side}`, { data: [{ timestamp: new Date(), heartRate: 60 }] })
+    }
+    const { result } = renderHook(() => useDualSideData({ includeSleepStages: true }))
+    expect(result.current.activeSides).toEqual([sleeper])
+    expect(result.current.vitals.map(v => v.side)).toEqual([sleeper])
+    for (const method of Object.values(trpcMock.biometrics) as any[]) {
+      expect(method.useQuery).toHaveBeenCalledWith(expect.objectContaining({ side: sleeper }), { enabled: true })
+      expect(method.useQuery).toHaveBeenCalledWith(expect.objectContaining({ side: sleeper === 'left' ? 'right' : 'left' }), { enabled: false })
+    }
+  })
+
   it('returns empty arrays when both sides have no data', () => {
     const { result } = renderHook(() => useDualSideData())
     expect(result.current.vitals).toEqual([])

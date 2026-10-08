@@ -154,3 +154,11 @@ describe('template', () => {
     expect(Math.round(phasesOf(created, new Date(2026, 8, 29, 14, 0)).night.temperatureF)).toBe(night - 3)
   })
 })
+
+it('keeps quick temperature edits scoped to curves with the same end action', () => {
+  const phases = nightPhases([...curve('monday', 1), ...curve('tuesday', 10)], new Date(2026, 8, 28, 14), [
+    { dayOfWeek: 'monday', endAction: 'maintain' },
+    { dayOfWeek: 'tuesday', endAction: 'turn_off' },
+  ])
+  expect(phases?.days).toEqual(['monday'])
+})

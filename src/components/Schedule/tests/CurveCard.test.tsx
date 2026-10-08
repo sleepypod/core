@@ -119,3 +119,11 @@ describe('curvePhases', () => {
     expect(curvePhases([])).toEqual([])
   })
 })
+
+it('shows the final target instead of off for a maintained curve', () => {
+  const phases = curvePhases(weekday.setPoints, 'maintain')
+  expect(phases.at(-1)).toEqual({ time: '07:00', caption: 'Maintain temperature', to: 84 })
+  const s = render(<CurveCard featured group={{ ...weekday, endAction: 'maintain' }} onEdit={vi.fn()} onDelete={vi.fn()} />)
+  expect(s.getByText('Maintain temperature')).toBeTruthy()
+  expect(s.queryByText('Power off')).toBeNull()
+})

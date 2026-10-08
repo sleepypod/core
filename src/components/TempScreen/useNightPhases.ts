@@ -42,6 +42,7 @@ export interface SideNightPhases {
 export function useNightPhases(side: Side, now: Date, unit: TempUnit, display: TempDisplay, enabled: boolean): SideNightPhases {
   const utils = trpc.useUtils()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side }, { enabled })
+  const { data: settings } = trpc.settings.getAll.useQuery({}, { enabled })
   const batch = trpc.schedules.batchUpdate.useMutation()
   const [pending, setPending] = useState<Pending>({})
   // Draft commits read every nudged phase at fire time, not at schedule time.
@@ -50,7 +51,7 @@ export function useNightPhases(side: Side, now: Date, unit: TempUnit, display: T
   const expiry = useRef<Partial<Record<NightPhaseKey, ReturnType<typeof setTimeout>>>>({})
 
   const rows = data?.temperature
-  const real = rows ? nightPhases(rows, now) : null
+  const real = rows ? nightPhases(rows, now, data?.power) : null
   const template = rows && !real ? templateRows(rows) : null
   const templatePhases = template ? nightPhases(template, now) : null
   const phases = real ?? templatePhases
@@ -110,8 +111,8 @@ export function useNightPhases(side: Side, now: Date, unit: TempUnit, display: T
     if (!data || !template || !templatePhases) return
     const targets = pendingRef.current
     pendingRef.current = {}
-    mutate(templateBatch(side, data, template, templatePhases, targets), settle(['night', 'dawn']))
-  }, [data, template, templatePhases, side, mutate, settle])
+    mutate(templateBatch(side, data, template, templatePhases, targets, settings?.device.defaultScheduleEndAction), settle(['night', 'dawn']))
+  }, [data, template, templatePhases, side, mutate, settle, settings?.device.defaultScheduleEndAction])
 
   const nudge = useCallback((phase: NightPhaseKey, delta: number) => {
     const base = pending[phase] ?? serverF(phase)

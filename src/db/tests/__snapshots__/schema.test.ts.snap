@@ -458,6 +458,9 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
     "checks": 0,
     "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:fn:1 | primary-key | not-unique | not-autoincrement | enum:none",
+      "bed_mode | sql:text | logical:string/SQLiteText | not-null | default:two | not-primary-key | not-unique | not-autoincrement | enum:two,solo-left,solo-right",
+      "unused_zone_mode | sql:text | logical:string/SQLiteText | not-null | default:off | not-primary-key | not-unique | not-autoincrement | enum:follow,off,independent",
+      "default_schedule_end_action | sql:text | logical:string/SQLiteText | not-null | default:turn_off | not-primary-key | not-unique | not-autoincrement | enum:turn_off,maintain",
       "timezone | sql:text | logical:string/SQLiteText | not-null | default:America/Los_Angeles | not-primary-key | not-unique | not-autoincrement | enum:none",
       "temperature_unit | sql:text | logical:string/SQLiteText | not-null | default:F | not-primary-key | not-unique | not-autoincrement | enum:F,C",
       "time_format | sql:text | logical:string/SQLiteText | not-null | default:12h | not-primary-key | not-unique | not-autoincrement | enum:12h,24h",
@@ -525,6 +528,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "day_of_week | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:sunday,monday,tuesday,wednesday,thursday,friday,saturday",
       "on_time | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "off_time | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "end_action | sql:text | logical:string/SQLiteText | not-null | default:turn_off | not-primary-key | not-unique | not-autoincrement | enum:turn_off,maintain",
       "on_temperature | sql:real | logical:number/SQLiteReal | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "enabled | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:true | not-primary-key | not-unique | not-autoincrement | enum:none",
       "created_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",

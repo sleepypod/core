@@ -33,12 +33,12 @@ beforeEach(() => {
 })
 
 describe('bed orbit', () => {
-  it('starts at the product shot: foot end, 9.2 out and 3.7 up', () => {
+  it('starts at the product shot: foot end, 10.8 out and 6.9 up', () => {
     const { x, y, z } = createOrbit().position(0)
-    expect(Math.hypot(x, z)).toBeCloseTo(9.2)
-    expect(y).toBeCloseTo(3.7)
+    expect(Math.hypot(x, z)).toBeCloseTo(10.8)
+    expect(y).toBeCloseTo(6.9)
     expect(Math.atan2(z, x)).toBeCloseTo(0.62)
-    expect(createOrbit().position(-0.97).z).toBeCloseTo(z - 0.97)
+    expect(createOrbit().position(-1.22).z).toBeCloseTo(z - 1.22)
   })
 
   it('frames each sleeper from their own side and resets to the current home', () => {
@@ -67,12 +67,12 @@ describe('bed orbit', () => {
     expect(o.state.elevation).toBeCloseTo(8 * deg)
     expect(o.position(0).y).toBeGreaterThan(0.2)
     o.zoom(100)
-    expect(o.state.distance).toBe(5.5)
+    expect(o.state.distance).toBe(6)
     o.zoom(0.01)
-    expect(o.state.distance).toBe(12)
+    expect(o.state.distance).toBe(15)
     o.zoom(0)
     o.zoom(Number.NaN)
-    expect(o.state.distance).toBe(12)
+    expect(o.state.distance).toBe(15)
     o.reset()
     expect(o.state).toEqual({ azimuth: ORBIT.azimuth, elevation: ORBIT.elevation, distance: ORBIT.distance })
   })

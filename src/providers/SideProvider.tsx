@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { singleSleeperSideFor } from '@/src/lib/singleSleeper'
+import { singleSleeperSideFor, singleScheduleSideFor } from '@/src/lib/singleSleeper'
 import { trpc } from '@/src/utils/trpc'
 
 export type Side = 'left' | 'right'
@@ -20,12 +20,10 @@ interface SideContextValue {
   activeSides: Side[]
   /** The primary side used for display when both are selected */
   primarySide: Side
-  /**
-   * The single sleeper's side when exactly one side is in away mode, else
-   * null. Biometrics views show only this side (useBiometricsSide). Control
-   * screens are unaffected beyond defaulting to 'both' when the mode starts.
-   */
+  /** Active biometric profile, independent of the thermal-zone selection. */
   singleSleeperSide: Side | null
+  /** Single thermal source, or null when both zones have independent schedules. */
+  singleScheduleSide: Side | null
 }
 
 const SideContext = createContext<SideContextValue | null>(null)
@@ -34,10 +32,6 @@ const STORAGE_KEY_SIDE = 'sleepypod-selected-side'
 const STORAGE_KEY_LINKED = 'sleepypod-is-linked'
 const COOKIE_KEY_SIDE = 'sleepypod-side'
 const COOKIE_MAX_AGE = 365 * 24 * 60 * 60 // 1 year in seconds
-// Single-sleeper default: which home side it was applied for, and the
-// selection it replaced (restored when away mode is turned off).
-const STORAGE_KEY_SINGLE_SLEEPER = 'sleepypod-single-sleeper-side'
-const STORAGE_KEY_PRE_SINGLE = 'sleepypod-pre-single-sleeper-selection'
 
 /** Read a cookie value by name */
 function getCookie(name: string): string | null {
@@ -57,8 +51,8 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
   const [isLinked, setIsLinked] = useState(false)
   const [hydrated, setHydrated] = useState(false)
   const { data: settings } = trpc.settings.getAll.useQuery({}, { staleTime: 30_000 })
-  const singleSleeperSide = singleSleeperSideFor(settings?.sides)
-  const settingsLoaded = settings?.sides != null
+  const singleSleeperSide = singleSleeperSideFor({ ...settings?.sides, ...settings?.device })
+  const singleScheduleSide = singleScheduleSideFor({ ...settings?.sides, ...settings?.device })
 
   // Hydrate from localStorage (primary) or cookie (fallback) on mount
   useEffect(() => {
@@ -106,44 +100,6 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
     setCookie(COOKIE_KEY_SIDE, selectedSide)
   }, [selectedSide, isLinked, hydrated])
 
-  // When one side goes into away mode, default the control screens to 'both'
-  // (linked) once — the sleeper may drift across the bed — while leaving the
-  // user free to change it. The prior selection comes back when away mode is
-  // turned off. Keyed in storage so a reload doesn't re-apply the default
-  // over a choice the user made while in the mode.
-  useEffect(() => {
-    if (!hydrated || !settingsLoaded) return
-    try {
-      const appliedFor = localStorage.getItem(STORAGE_KEY_SINGLE_SLEEPER)
-      /* eslint-disable react-hooks/set-state-in-effect */
-      if (singleSleeperSide && appliedFor !== singleSleeperSide) {
-        if (appliedFor === null) {
-          localStorage.setItem(STORAGE_KEY_PRE_SINGLE, JSON.stringify({ side: selectedSide, linked: isLinked }))
-        }
-        localStorage.setItem(STORAGE_KEY_SINGLE_SLEEPER, singleSleeperSide)
-        setSelectedSide('both')
-        setIsLinked(true)
-      }
-      else if (!singleSleeperSide && appliedFor !== null) {
-        const prior = JSON.parse(localStorage.getItem(STORAGE_KEY_PRE_SINGLE) ?? 'null') as
-          { side?: SideSelection, linked?: boolean } | null
-        localStorage.removeItem(STORAGE_KEY_SINGLE_SLEEPER)
-        localStorage.removeItem(STORAGE_KEY_PRE_SINGLE)
-        if (prior?.side && ['left', 'right', 'both'].includes(prior.side)) {
-          setSelectedSide(prior.side)
-          setIsLinked(Boolean(prior.linked))
-        }
-      }
-      /* eslint-enable react-hooks/set-state-in-effect */
-    }
-    catch {
-      // localStorage unavailable or corrupt — leave the selection alone
-    }
-    // selectedSide/isLinked are read only to snapshot the prior selection at
-    // the transition; re-running on their changes would fight the user.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, settingsLoaded, singleSleeperSide])
-
   const selectSide = useCallback((side: SideSelection) => {
     setSelectedSide(side)
     // If selecting a specific side while linked, unlink
@@ -184,6 +140,7 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
         activeSides,
         primarySide,
         singleSleeperSide,
+        singleScheduleSide,
       }}
     >
       {/* Suppress side-dependent UI flash during hydration */}
@@ -194,6 +151,24 @@ export const SideProvider = ({ children }: { children: React.ReactNode }) => {
           )}
     </SideContext.Provider>
   )
+}
+
+/**
+ * The active solo sleeper's side, or null — also null
+ * outside a SideProvider, for components that only adapt to the mode.
+ */
+export const useSingleSleeperSide = (): Side | null => useContext(SideContext)?.singleSleeperSide ?? null
+
+const BOTH_SIDES: readonly Side[] = ['left', 'right']
+const ONLY: Record<Side, readonly Side[]> = { left: ['left'], right: ['right'] }
+
+/**
+ * The sides a per-side view lists: just the single sleeper's side while the
+ * other is away, else both. Stable arrays, safe as effect dependencies.
+ */
+export const useShownSides = (): readonly Side[] => {
+  const single = useSingleSleeperSide()
+  return single ? ONLY[single] : BOTH_SIDES
 }
 
 export const useSide = () => {

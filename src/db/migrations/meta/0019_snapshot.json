@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ec31d35e-e629-49d2-98cf-dfbf90bf41fd",
+  "id": "b5d4e008-bbb1-4552-adb2-724829ebfca9",
   "prevId": "590b9819-e95e-4926-8164-8c828da0af16",
   "tables": {
     "alarm_schedules": {
@@ -385,6 +385,22 @@
           "notNull": true,
           "autoincrement": false
         },
+        "bed_mode": {
+          "name": "bed_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'two'"
+        },
+        "unused_zone_mode": {
+          "name": "unused_zone_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'off'"
+        },
         "timezone": {
           "name": "timezone",
           "type": "text",
@@ -400,14 +416,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'F'"
-        },
-        "time_format": {
-          "name": "time_format",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'12h'"
         },
         "reboot_daily": {
           "name": "reboot_daily",

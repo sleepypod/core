@@ -6,6 +6,7 @@ import { BASE_SIDES } from '@/src/hardware/base/types'
 import type { BaseScope, BaseSide } from '@/src/hardware/base/types'
 import type { Pose } from './bedGeometry'
 import type { BedModel } from './bedModel3D'
+import { BedSkeleton } from './BedSkeleton'
 import { BedView2D } from './BedView2D'
 import { labelStyle, usePreference } from './controls'
 import type { Names } from './controls'
@@ -98,7 +99,9 @@ export function BedView({ left, right, leftTarget, rightTarget, moving, names, s
         {/* Keep the same surface while 3D starts; 2D is a selected/failed mode only. */}
         {!want3D && <BedView2D {...renderer} />}
         {want3D && !(use3D && ready) && (
-          <div role="status" aria-label="Loading bed view" className="absolute inset-0 bg-surface" />
+          <div className="bed-backdrop absolute inset-0">
+            <BedSkeleton label="Loading bed view" className="inset-0" />
+          </div>
         )}
         {use3D && <BedView3D three={three} onReady={onReady} onFail={onFail} {...renderer} />}
       </div>

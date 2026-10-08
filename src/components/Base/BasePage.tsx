@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Link2, Square, RefreshCw } from 'lucide-react'
+import { FlaskConical, Link2, Square, RefreshCw } from 'lucide-react'
 import { PageHeader } from '@/src/components/ds'
 import { BASE_SIDES, scopeSides } from '@/src/hardware/base/types'
 import type { BaseScope } from '@/src/hardware/base/types'
@@ -11,7 +11,8 @@ import { BedView, useBedModel, useSimpleBedView } from './BedView'
 import { Presets, Speed, Steppers, buttonStyle, labelStyle, panelStyle, samePosition, usePreference } from './controls'
 import type { Angles, Targets } from './controls'
 
-export function BasePage() {
+/** `demoHref` links to the simulated base; omitted when already in the demo. */
+export function BasePage({ demoHref }: { demoHref?: string } = {}) {
   const query = trpc.base.getStatus.useQuery({}, { refetchInterval: 1000 })
   const settings = trpc.settings.getAll.useQuery({})
   const names = { left: settings.data?.sides.left.name || 'Left', right: settings.data?.sides.right.name || 'Right' }
@@ -94,6 +95,12 @@ export function BasePage() {
         )}
         right={(
           <>
+            {demoHref && (
+              <a href={demoHref} title="Simulated movement and schedules. No commands are sent to the base." className={`${buttonStyle} flex min-h-[38px] items-center gap-2 whitespace-nowrap`}>
+                <FlaskConical size={14} />
+                Demo mode
+              </a>
+            )}
             <button
               type="button"
               onClick={() => {

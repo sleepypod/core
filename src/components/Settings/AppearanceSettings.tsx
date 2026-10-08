@@ -4,7 +4,8 @@ import { Circle, CircleCheck } from 'lucide-react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { trpc } from '@/src/utils/trpc'
-import { Card, CardHeader, InlineError, SegmentedControl, SettingRow, TempBackdrop } from '@/src/components/ds'
+import { Card, CardHeader, InlineError, SegmentedControl, SettingRow, TempBackdrop, Toggle } from '@/src/components/ds'
+import { ZONE_MODE_LABELS, ZONE_MODES, useStageAutoReturn, useStageZones } from '@/src/components/Stage/stagePrefs'
 import { TempControl } from '@/src/components/TempControl/TempControl'
 import { nightPhases, type NightPhaseKey, type ScheduleTempRow } from '@/src/components/TempScreen/nightPhases'
 import { TempStepper, stepperBackdrop } from '@/src/components/TempScreen/TempStepper'
@@ -76,6 +77,19 @@ export function TimeFormatControl({ format }: { format: string }) {
       {mutation.error && <InlineError className="sr-only">{mutation.error.message}</InlineError>}
     </>
   )
+}
+
+/** When the stage's six zone readings glow through the cover. */
+export function StageZonesControl() {
+  const [zones, setZones] = useStageZones()
+  return (
+    <SegmentedControl ariaLabel="Zone readings" value={zones} options={ZONE_MODES.map(value => ({ value, label: ZONE_MODE_LABELS[value] }))} onChange={setZones} />
+  )
+}
+
+export function StageAutoReturnControl() {
+  const [autoReturn, setAutoReturn] = useStageAutoReturn()
+  return <Toggle label="Return the camera after a pause" on={autoReturn === 'true'} onChange={next => setAutoReturn(next ? 'true' : 'false')} />
 }
 
 /** Tiny dial / slider glyphs for the phone option cards. */
@@ -219,6 +233,15 @@ export function AppearanceSettings({ temperatureUnit }: { temperatureUnit: strin
         <TempControlPicker />
         <SettingRow label="Show as" sub="Offset counts whole degrees from 80°F (0), like the old dial. Eight Sleep uses its −10…+10 levels.">
           <TempDisplayControl />
+        </SettingRow>
+      </Card>
+      <Card>
+        <CardHeader title="3D stage" subtitle="The full-screen bed on the Temp screen. Its control and units follow the settings above." />
+        <SettingRow label="Zone readings" sub="Six surface sensors shown as heat inside the cover, with a readout beside the bed.">
+          <StageZonesControl />
+        </SettingRow>
+        <SettingRow label="Auto-return" sub="With nothing selected, the camera drifts back to the default view after eight seconds.">
+          <StageAutoReturnControl />
         </SettingRow>
       </Card>
       <Card>

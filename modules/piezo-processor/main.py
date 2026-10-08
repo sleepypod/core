@@ -260,6 +260,9 @@ class SingleSleeperVitals:
         if self._retry is not None and not self.flush():
             return False
         home = self._mode.home_side()
+        if not self._mode.active_sides():
+            self._pending = self._retry = None
+            return True
         if home is None:
             if not self.flush():
                 return False
@@ -280,6 +283,9 @@ class SingleSleeperVitals:
 
     def tick(self) -> None:
         """Write a held candidate whose partner didn't arrive in time."""
+        if not self._mode.active_sides():
+            self._pending = self._retry = None
+            return
         held = self._pending is not None or self._retry is not None
         if held and self._clock() - self._pending_at >= VITALS_INTERVAL_S:
             self.flush()

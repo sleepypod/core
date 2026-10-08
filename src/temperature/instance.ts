@@ -8,6 +8,7 @@ import { hasFirmwareSynced } from '@/src/hardware/sideMutations'
 import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
+import { activeSleeperSides, scheduleSourceSide, type BedConfiguration } from '@/src/lib/singleSleeper'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { alarmTemperatureTargets, recurringTarget, sessionTarget, type AlarmOccurrenceCache, type RecurringOccurrenceCache, type WeeklyTarget } from './baseline'
 import { TemperatureController, type TemperatureRequest } from './controller'
@@ -49,14 +50,17 @@ interface WeeklyRow { id: number, dayOfWeek: WeeklyTarget['dayOfWeek'], time: st
 interface SessionRow { id: number, setPoints: string, startedAt: number, expiresAt: number }
 
 function readBaseline(side: Side, now: number): TemperatureRequest[] {
-  const settings = statement('select timezone from device_settings').get() as { timezone: string | null } | undefined
+  const settings = statement('select timezone, bed_mode as bedMode, unused_zone_mode as unusedZoneMode from device_settings').get() as ({ timezone: string | null } & BedConfiguration) | undefined
   const timezone = settings?.timezone || 'America/Los_Angeles'
-  const away = (statement('select away_mode as awayMode from side_settings where side = ?').get(side) as { awayMode: number } | undefined)?.awayMode
+  const away = Object.fromEntries((statement('select side, away_mode as awayMode from side_settings').all() as { side: Side, awayMode: number }[])
+    .map(r => [r.side, { awayMode: r.awayMode }]))
+  const modes = { ...away, ...settings }
+  const source = scheduleSourceSide(side, modes)
   const requests: TemperatureRequest[] = []
-  if (!away) {
-    const alarms = statement('select id, day_of_week as dayOfWeek, time, alarm_temperature as temperature, wake_window as wakeWindow, duration from alarm_schedules where side = ? and enabled = 1').all(side) as (WeeklyRow & { wakeWindow: number, duration: number })[]
-    const temps = statement('select id, day_of_week as dayOfWeek, time, temperature from temperature_schedules where side = ? and enabled = 1').all(side) as WeeklyRow[]
-    const powers = statement('select id, day_of_week as dayOfWeek, on_time as time, on_temperature as temperature from power_schedules where side = ? and enabled = 1').all(side) as WeeklyRow[]
+  if (source) {
+    const alarms = statement('select id, day_of_week as dayOfWeek, time, alarm_temperature as temperature, wake_window as wakeWindow, duration from alarm_schedules where side = ? and enabled = 1').all(source) as (WeeklyRow & { wakeWindow: number, duration: number })[]
+    const temps = statement('select id, day_of_week as dayOfWeek, time, temperature from temperature_schedules where side = ? and enabled = 1').all(source) as WeeklyRow[]
+    const powers = statement('select id, day_of_week as dayOfWeek, on_time as time, on_temperature as temperature from power_schedules where side = ? and enabled = 1').all(source) as WeeklyRow[]
     // Alarm temperatures have their own bounded warm-up/hold spans.
     const rows: WeeklyTarget[] = [
       ...temps.map(r => ({ id: `temperature:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature })),
@@ -68,7 +72,7 @@ function readBaseline(side: Side, now: number): TemperatureRequest[] {
     recurringCache[side] = { key, target: baseline }
     if (baseline) requests.push(baseline)
     requests.push(...alarmTemperatureTargets(
-      alarms.map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature, wakeWindow: r.wakeWindow, duration: r.duration })),
+      (activeSleeperSides(modes).includes(source) ? alarms : []).map(r => ({ id: `alarm:${r.id}`, dayOfWeek: r.dayOfWeek, time: r.time, temperature: r.temperature, wakeWindow: r.wakeWindow, duration: r.duration })),
       timezone, now, alarmCaches[side],
     ))
   }

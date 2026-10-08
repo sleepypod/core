@@ -96,3 +96,11 @@ describe('SideSettingsForm', () => {
     expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', awayMode: true })
   })
 })
+
+it('saves and clears an optional return date without changing the bed setup', () => {
+  render(<SideSettingsForm side="left" sideData={{ ...base, awayMode: true }} presenceAvailable />)
+  const input = screen.getByLabelText('Return date for Left side')
+  fireEvent.change(input, { target: { value: '2026-11-01T18:00' } })
+  fireEvent.blur(input)
+  expect(trpcMock.mutate).toHaveBeenCalledWith({ side: 'left', awayReturn: new Date('2026-11-01T18:00').toISOString() })
+})

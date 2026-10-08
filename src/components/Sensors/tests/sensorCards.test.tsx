@@ -10,7 +10,11 @@ import { FirmwareLogConsole } from '../FirmwareLogConsole'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 const mock = vi.hoisted(() => ({ frames: {} as Record<string, unknown>, data: {} as Record<string, unknown>, loading: false, error: null as Error | null, frame: (_f: SensorFrame) => {
   void _f
-}, query: vi.fn() }))
+}, query: vi.fn(), canvas: vi.fn() }))
+vi.mock('next/dynamic', () => ({ default: () => (props: unknown) => {
+  mock.canvas(props)
+  return null
+} }))
 vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorFrame: (type: string) => mock.frames[type], useOnSensorFrame: (cb: typeof mock.frame) => {
   mock.frame = cb
 } }))
@@ -43,14 +47,35 @@ it('prefers live bed temperatures to stored data and handles absent readings', (
   rerender(<BedTempMatrix />)
   expect(screen.queryByText('Waiting for temperature data')).toBeNull()
   mock.loading = false
-  mock.data.bed = bed
+  mock.data.bed = { ...bed, timestamp: new Date(Date.now() - 1000) }
   rerender(<BedTempMatrix />)
   expect(screen.getByText('stored')).toBeTruthy()
   expect(screen.getByTitle('L ctr').textContent).toBe('25.0°')
-  mock.frames.bedTemp2 = { ...bed, leftCenterTemp: 31, humidity: null }
+  mock.frames.bedTemp2 = { ...bed, ts: Date.now() / 1000, leftCenterTemp: 31, humidity: null }
   rerender(<BedTempMatrix />)
   expect(screen.queryByText('stored')).toBeNull()
   expect(screen.getByTitle('L ctr').textContent).toBe('31.0°')
+})
+
+it('shares exact six sensor readings with the renderer and grays stale data', () => {
+  vi.useFakeTimers()
+  try {
+    const ts = Date.now() / 1000
+    mock.frames.bedTemp2 = { ...bed, ts: ts - 120 }
+    mock.frames.bedTemp = { ...bed, ts, leftCenterTemp: null, rightInnerTemp: 34 }
+    const { unmount } = render(<BedTempMatrix />)
+    expect(mock.canvas.mock.lastCall?.[0].states).toEqual({
+      left: { zones: [24, null, 26], direction: 0, strength: 0, mode: 'unavailable', targetF: null, currentF: null },
+      right: { zones: [27, 28, 34], direction: 0, strength: 0, mode: 'unavailable', targetF: null, currentF: null },
+    })
+    expect(screen.getByTitle('R in').textContent).toBe('34.0°')
+    expect(screen.getByTitle('L ctr').textContent).toBe('--')
+    act(() => vi.advanceTimersByTime(95_000))
+    expect(screen.getByText('Stale readings')).toBeTruthy()
+    expect(mock.canvas.mock.lastCall?.[0].states.left.zones).toEqual([null, null, null])
+    unmount()
+  }
+  finally { vi.useRealTimers() }
 })
 
 it('shows stored and live freezer readings, water warnings and pump RPM', () => {
@@ -113,7 +138,7 @@ it('switches flow units and ranges with live readings and downsampled history', 
 
 it('shows side-specific room averages and query failures', () => {
   const { rerender } = render(<EnvironmentInfoPanel side="left" unit="C" />)
-  mock.data.bed = bed
+  mock.data.bed = { ...bed, timestamp: new Date(Date.now() - 1000) }
   rerender(<EnvironmentInfoPanel side="left" unit="C" />)
   expect(screen.getByText('25.0°')).toBeTruthy()
   expect(screen.getByText('45%')).toBeTruthy()

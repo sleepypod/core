@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   vitals: vi.fn(),
   latest: [] as Array<{ timestamp: Date }>,
   timeFormat: '12h' as '12h' | '24h',
+  shown: ['left', 'right'] as Array<'left' | 'right'>,
 }))
 
 vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => state.timeFormat }))
@@ -19,6 +20,7 @@ vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => Mat
 vi.mock('next/navigation', () => ({ usePathname: () => '/en/sleep' }))
 vi.mock('@/src/providers/SideProvider', () => ({
   useSide: () => ({ selectedSide: 'left', primarySide: 'left', activeSides: ['left', 'right'], singleSleeperSide: null, selectSide: vi.fn() }),
+  useShownSides: () => state.shown,
 }))
 vi.mock('@/src/components/biometrics/RawDataButton', () => ({ RawDataButton: () => <button type="button">Raw data</button> }))
 
@@ -152,5 +154,18 @@ describe('BiometricsPage', () => {
     expect(sides.textContent).toContain('In bed')
     expect(sides.textContent).toContain('Empty')
     expect(sides.textContent).not.toContain('Occupied')
+  })
+
+  it('lists only the sleeper\'s side in the sides card when the other is away', () => {
+    state.shown = ['left']
+    try {
+      render(<BiometricsPage />)
+      const sides = screen.getByTestId('sides-card')
+      expect(sides.textContent).toContain('left')
+      expect(sides.textContent).not.toContain('right')
+    }
+    finally {
+      state.shown = ['left', 'right']
+    }
   })
 })

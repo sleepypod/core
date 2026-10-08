@@ -16,6 +16,7 @@ import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
 import { SensorSourceCard } from './SensorSourceCard'
+import { BedSetupSettings } from './BedSetupSettings'
 import { SideSettingsForm } from './SideSettingsForm'
 import { TapGestureConfig } from './TapGestureConfig'
 import { MqttSettingsForm } from './MqttSettingsForm'
@@ -209,11 +210,14 @@ function SidesSection({ data, side }: { data: SettingsData, side: Side }) {
   const presenceAvailable = occupancy?.[side].available ?? null
 
   return (
-    <SideSettingsForm
-      side={side}
-      sideData={side === 'left' ? data.sides.left : data.sides.right}
-      presenceAvailable={presenceAvailable}
-    />
+    <div className="grid gap-4">
+      <BedSetupSettings device={data.device} names={{ left: data.sides.left.name, right: data.sides.right.name }} />
+      <SideSettingsForm
+        side={side}
+        sideData={side === 'left' ? data.sides.left : data.sides.right}
+        presenceAvailable={presenceAvailable}
+      />
+    </div>
   )
 }
 

@@ -39,6 +39,13 @@ const single = () => fireEvent.click(screen.getByRole('button', { name: 'Single 
 const instant = () => screen.getByRole('checkbox', { name: 'Move immediately when selecting a preset' })
 
 describe('per-side base controls', () => {
+  it('offers demo mode only when given a link to it', () => {
+    const view = render(<BasePage demoHref="/en/base?debug=1" />)
+    expect(screen.getByRole('link', { name: 'Demo mode' }).getAttribute('href')).toBe('/en/base?debug=1')
+    view.unmount()
+    render(<BasePage />)
+    expect(screen.queryByRole('link', { name: 'Demo mode' })).toBeNull()
+  })
   it('edits targets without movement or changing measured profiles, then moves only that side', async () => {
     render(<BasePage />)
     const measured = (await screen.findByTestId('bed-left')).innerHTML
@@ -114,10 +121,12 @@ describe('per-side base controls', () => {
   })
   it('persists the mattress and simple-view preferences', () => {
     const view = render(<BasePage />)
-    expect(document.querySelector('rect[rx="8"]')).toBeNull()
+    expect(document.querySelector('path[stroke-width="8"]')).toBeNull()
     fireEvent.click(screen.getByRole('checkbox', { name: 'Show mattress' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Simple bed view' }))
-    expect(document.querySelectorAll('rect[rx="8"]')).toHaveLength(2)
+    // One mattress slab per side, and no pillows on the base view
+    expect(document.querySelectorAll('path[stroke-width="8"]')).toHaveLength(2)
+    expect(document.querySelector('rect[rx="8"]')).toBeNull()
     view.unmount()
     render(<BasePage />)
     expect((screen.getByRole('checkbox', { name: 'Show mattress' }) as HTMLInputElement).checked).toBe(true)

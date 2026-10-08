@@ -8,6 +8,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
   settings: { getAll: { useQuery: () => ({ data: mock.data, isLoading: mock.loading, error: mock.error }) } },
   biometrics: { getOccupancy: { useQuery: () => ({ data: { left: { available: true }, right: { available: false } } }) } },
 } }))
+vi.mock('../BedSetupSettings', () => ({ BedSetupSettings: () => <div>Bed setup</div> }))
 vi.mock('../DeviceSettingsForm', () => ({ DeviceSettingsForm: () => <div>Device form</div> }))
 vi.mock('../SensorSourceCard', () => ({ SensorSourceCard: () => <div>Sensor source card</div> }))
 vi.mock('../SideSettingsForm', () => ({ SideSettingsForm: ({ side, presenceAvailable }: { side: string, presenceAvailable: boolean }) => (

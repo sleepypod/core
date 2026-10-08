@@ -1494,6 +1494,23 @@ class SessionTracker:
             self._last_movement_write = ts
 
 
+def process_sleeper_frame(left: SessionTracker, right: SessionTracker,
+                          ts: float, record: dict, bed_mode: SingleSleeperMode) -> None:
+    """Route one frame by active people, leaving physical sensor zones intact."""
+    home_side = bed_mode.home_side()
+    if not bed_mode.active_sides():
+        for tracker in (left, right):
+            if tracker._session_start is not None:
+                tracker._close_session(tracker._last_present_ts or ts)
+    elif home_side is None:
+        left.process(ts, record)
+        right.process(ts, record)
+    elif home_side == "left":
+        process_single_sleeper(left, right, ts, record)
+    else:
+        process_single_sleeper(right, left, ts, record)
+
+
 def process_single_sleeper(home: SessionTracker, away: SessionTracker,
                            ts: float, record: dict) -> None:
     """One frame in single-sleeper mode (the other side is in away mode).
@@ -1593,14 +1610,7 @@ def main() -> None:
             log_capsense_status_once(record, "sleep-detector")
 
             ts = sanitize_ts(record.get("ts"))
-            home_side = bed_mode.home_side()
-            if home_side is None:
-                left.process(ts, record)
-                right.process(ts, record)
-            elif home_side == "left":
-                process_single_sleeper(left, right, ts, record)
-            else:
-                process_single_sleeper(right, left, ts, record)
+            process_sleeper_frame(left, right, ts, record, bed_mode)
 
             if (left.state_dirty or right.state_dirty
                     or time.monotonic() - last_save >= STATE_SAVE_INTERVAL_S):

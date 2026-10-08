@@ -1,25 +1,44 @@
 import type * as T from 'three'
 import type { BaseSide } from '@/src/hardware/base/types'
-import { DECK_THICKNESS, MATTRESS_THICKNESS, PIVOT_Y, liftArms, mattressBase, offset, pillow, profile, slab } from './bedGeometry'
+import { DECK_THICKNESS, MATTRESS_THICKNESS, PIVOT_Y, liftArms, mattressBase, normal as upward, offset, pillow, profile, slab } from './bedGeometry'
 import type { Point, Pose } from './bedGeometry'
+import { DARK_PALETTE, filletPolygon, pillowGeometry, roundedBoxGeometry, smoothNormals } from './bedLook'
+import type { Palette } from './bedLook'
 import type { Three } from './loadThree'
 
 const UNIT = 100
 export const to3 = (p: Point) => ({ x: (p.x - 300) / UNIT, y: (PIVOT_Y - p.y) / UNIT })
-export const SIDE_Z: Record<BaseSide, number> = { left: 0.97, right: -0.97 }
-const HALF_WIDTH = 1.9
+// Split-king proportions: each half is 38 × 80 in, so a half is 0.475 of the bed's length.
+export const SIDE_Z: Record<BaseSide, number> = { left: 1.22, right: -1.22 }
+export const HALF_WIDTH = 2.4
 const THICKNESS = DECK_THICKNESS / UNIT
-const BEVEL_SIZE = 0.035
-const BEVEL_THICKNESS = 0.045
-const CORNER = 0.14
-const SEAM_GAP = 0.006
-const MATTRESS_DEPTH = 1.88
-const MATTRESS_BEVEL = 0.03
+// Generous bevels and corners: the deck should read as an upholstered panel, not a board.
+const BEVEL_SIZE = 0.05
+const BEVEL_THICKNESS = 0.06
+const CORNER = 0.22
+const SEAM_GAP = 0.008
+const MATTRESS_DEPTH = 2.38
+/** Edge radius across the mattress (its long outer edges). */
+const MATTRESS_BEVEL = 0.09
+/** Corner radius of the mattress profile (head, foot, top and bottom edges), in profile units. */
+const MATTRESS_FILLET = 10
+export const PILLOW = { width: 0.8, height: 0.24, depth: 1.3 } as const
+/** The recessed plinth that stands in for legs: inset from the deck edge, dark, low. */
+const PLINTH = { inset: 0.38, height: 0.42, radius: 0.08 } as const
 /** Rebuild a side only when an angle moved at least this far. */
 export const REBUILD_EPSILON = 0.1
 
 export interface SideState { pose: Pose, target: Pose, moving: boolean }
 export type BedModel = 'base' | 'mattress'
+export interface BedModelOptions {
+  palette?: Palette
+  /** Draw the plinth, lift arms and control box. The thermal view sits the bed on a platform instead. */
+  frame?: boolean
+  /** Replace the mattress top material, e.g. to paint a heat field into the fabric. */
+  mattressTop?: (side: BaseSide) => T.Material
+  /** Rest a pillow at the head of each half in mattress mode. */
+  pillows?: boolean
+}
 
 interface Vec { x: number, y: number }
 const sub = (a: Vec, b: Vec) => ({ x: a.x - b.x, y: a.y - b.y })
@@ -55,19 +74,8 @@ function planShape(THREE: Three, length: number, roundStart: boolean, roundEnd: 
 
 interface Panel { mesh: T.Mesh, plan: Float32Array, planNormals: Float32Array, length: number }
 
-function roundedRect(THREE: Three, width: number, height: number) {
-  const r = height / 2
-  const shape = new THREE.Shape()
-  shape.moveTo(-width / 2 + r, -r)
-  shape.lineTo(width / 2 - r, -r)
-  shape.absarc(width / 2 - r, 0, r, -Math.PI / 2, Math.PI / 2, false)
-  shape.lineTo(-width / 2 + r, r)
-  shape.absarc(-width / 2 + r, 0, r, Math.PI / 2, Math.PI * 1.5, false)
-  return shape
-}
-
 /** The split base as three.js objects. Rendering, camera and input live in BedView3D. */
-export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
+export function createBedModel(THREE: Three, sides: readonly BaseSide[], { palette = DARK_PALETTE, frame = true, mattressTop, pillows = true }: BedModelOptions = {}) {
   const root = new THREE.Group()
   const geometries = new Set<T.BufferGeometry>()
   const materials: T.Material[] = []
@@ -85,44 +93,41 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
     m.receiveShadow = shadows
     return m
   }
-  const standard = (color: string, extra: T.MeshStandardMaterialParameters = {}) => material(new THREE.MeshStandardMaterial({ color, roughness: 0.7, ...extra }))
-  const panelMaterials = [standard('#34343a'), standard('#232327')]
-  const mattressMaterials = [standard('#2c2c31', { roughness: 0.95 }), standard('#4a4a50', { roughness: 0.95 })]
-  const pillowMaterial = standard('#cfcfd2', { roughness: 0.9 })
-  const railMaterial = standard('#2a2a2e', { metalness: 0.5, roughness: 0.5 })
-  const legMaterial = standard('#101012', { roughness: 0.6 })
-  const chrome = standard('#a8a8ae', { metalness: 0.85, roughness: 0.25 })
-  const boxMaterial = standard('#45454b')
-  const ghostMaterial = material(new THREE.MeshBasicMaterial({ color: '#ececec', transparent: true, opacity: 0.12, depthWrite: false }))
+  const standard = (color: string, extra: T.MeshStandardMaterialParameters = {}) => material(new THREE.MeshStandardMaterial({ color, roughness: 0.75, ...extra }))
+  // Fabric: fully rough with a soft sheen so edges catch the key light instead of going flat.
+  const fabric = (color: string, extra: T.MeshPhysicalMaterialParameters = {}) => material(new THREE.MeshPhysicalMaterial({ color, roughness: 0.92, sheen: 0.45, sheenRoughness: 0.85, sheenColor: new THREE.Color('#ffffff'), ...extra }))
+  const panelMaterials = [fabric(palette.deck, { sheen: 0.3 }), standard(palette.deckUnder, { roughness: 0.85 })]
+  const mattressSideMaterial = fabric(palette.mattressSide)
+  const mattressTopMaterial = fabric(palette.mattress)
+  const pillowMaterial = fabric(palette.pillow, { sheen: 0.6 })
+  const railMaterial = standard(palette.frame, { metalness: 0.4, roughness: 0.55 })
+  const plinthMaterial = standard(palette.leg, { roughness: 0.8 })
+  const chrome = standard(palette.chrome, { metalness: 0.9, roughness: 0.3 })
+  const boxMaterial = standard(palette.deckUnder)
+  const ghost = (color: string) => material(new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.18, depthWrite: false, roughness: 1 }))
+  const ghostMaterials: Record<BaseSide, T.MeshStandardMaterial> = { left: ghost(palette.ghostLeft), right: ghost(palette.ghostRight) }
+  const tinted: [T.MeshStandardMaterial, keyof Palette][] = [
+    [panelMaterials[0], 'deck'], [panelMaterials[1], 'deckUnder'], [mattressSideMaterial, 'mattressSide'], [mattressTopMaterial, 'mattress'],
+    [pillowMaterial, 'pillow'], [railMaterial, 'frame'], [plinthMaterial, 'leg'], [chrome, 'chrome'], [boxMaterial, 'deckUnder'],
+    [ghostMaterials.left, 'ghostLeft'], [ghostMaterials.right, 'ghostRight'],
+  ]
 
-  // Static frame: sub-frame rails, 3 × 3 legs and the seat control box.
-  // A single half (per-side card) keeps only its own half of the frame.
+  // Static frame: a recessed plinth under the deck and the seat control box. A single half
+  // (per-side card) keeps only its own half of the plinth.
   const sign = sides.length === 1 ? Math.sign(SIDE_Z[sides[0]]) : 0
-  const longRail = track(new THREE.BoxGeometry(4.9, 0.05, 0.05))
-  for (const z of sign ? [1.72 * sign, 0.22 * sign] : [1.72, 0.22, -0.22, -1.72]) {
-    const rail = mesh(longRail, railMaterial)
-    rail.position.set(0.05, -0.065, z)
-    root.add(rail)
-  }
-  const crossRail = track(new THREE.BoxGeometry(0.05, 0.05, sign ? 1.72 : 3.44))
-  const legGeometry = track(new THREE.CylinderGeometry(0.075, 0.075, 0.52, 20))
-  for (const x of [-2.2, 0.3, 2.3]) {
-    const rail = mesh(crossRail, railMaterial)
-    rail.position.set(x, -0.065, sign * 0.86)
-    root.add(rail)
-    for (const z of sign ? [0, 1.78 * sign] : [-1.78, 0, 1.78]) {
-      const leg = mesh(legGeometry, legMaterial)
-      leg.position.set(x, -0.35, z)
-      root.add(leg)
-    }
-  }
   const controlBox = mesh(track(new THREE.BoxGeometry(0.26, 0.03, 0.26)), boxMaterial)
   controlBox.position.set(to3({ x: 285, y: PIVOT_Y }).x, THICKNESS + 0.015, 0)
-  root.add(controlBox)
+  if (frame) {
+    const span = sign ? HALF_WIDTH : HALF_WIDTH * 2
+    const plinth = mesh(track(smoothNormals(roundedBoxGeometry(THREE, 5.2 - 2 * PLINTH.inset, PLINTH.height, span - 2 * PLINTH.inset, PLINTH.radius, 10))), plinthMaterial)
+    plinth.position.set(0, -PLINTH.height / 2 - 0.01, sign * HALF_WIDTH / 2)
+    root.add(plinth)
+    root.add(controlBox)
+  }
 
   const lengths = [200, 90, 90, 140].map(length => length / UNIT)
   const armGeometry = track(new THREE.CylinderGeometry(0.028, 0.028, 1, 10))
-  const pillowGeometry = track(new THREE.ExtrudeGeometry(roundedRect(THREE, 0.62, 0.16), { depth: 1.3, bevelEnabled: false, curveSegments: 12 }))
+  const pillowShape = pillows ? track(smoothNormals(pillowGeometry(THREE, PILLOW.width, PILLOW.height, PILLOW.depth))) : null
   const barPath = new THREE.CurvePath<T.Vector3>()
   const bar = [[0, 0, -0.42], [0, 0.11, -0.42], [0, 0.11, 0.42], [0, 0, 0.42]].map(([x, y, z]) => new THREE.Vector3(x - 0.03, y, z))
   for (let i = 0; i < 3; i++) barPath.add(new THREE.LineCurve3(bar[i], bar[i + 1]))
@@ -131,14 +136,14 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
   const halves = sides.map((side) => {
     const z = SIDE_Z[side]
     const panels: Panel[] = lengths.map((length, i) => {
-      const geometry = track(new THREE.ExtrudeGeometry(planShape(THREE, length, i === 0, i === lengths.length - 1), {
+      const geometry = track(smoothNormals(new THREE.ExtrudeGeometry(planShape(THREE, length, i === 0, i === lengths.length - 1), {
         depth: THICKNESS - 2 * BEVEL_THICKNESS,
         bevelEnabled: true,
         bevelSize: BEVEL_SIZE,
         bevelThickness: BEVEL_THICKNESS,
-        bevelSegments: 6,
-        curveSegments: 10,
-      }))
+        bevelSegments: 8,
+        curveSegments: 12,
+      })))
       const m = mesh(geometry, panelMaterials)
       root.add(m)
       return {
@@ -150,16 +155,19 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
     })
     const arms = [0, 1].map(() => {
       const arm = mesh(armGeometry, railMaterial)
+      arm.visible = frame
       root.add(arm)
       return arm
     })
     const retainer = new THREE.Group()
     retainer.add(mesh(barGeometry, chrome))
     retainer.position.z = z
+    retainer.visible = frame
     root.add(retainer)
-    const pillowMesh = mesh(pillowGeometry, pillowMaterial)
-    root.add(pillowMesh)
-    return { side, z, panels, arms, retainer, pillow: pillowMesh, mattress: null as T.Mesh | null, ghost: null as T.Mesh | null, built: undefined as Pose | undefined, ghostBuilt: undefined as Pose | undefined, model: undefined as BedModel | undefined }
+    const pillowMesh = pillowShape ? mesh(pillowShape, pillowMaterial) : null
+    if (pillowMesh) root.add(pillowMesh)
+    const mattressMaterials = [mattressSideMaterial, mattressTop ? material(mattressTop(side)) : mattressTopMaterial]
+    return { side, z, panels, arms, retainer, pillow: pillowMesh, mattressMaterials, mattress: null as T.Mesh | null, ghost: null as T.Mesh | null, built: undefined as Pose | undefined, ghostBuilt: undefined as Pose | undefined, model: undefined as BedModel | undefined }
   })
 
   const replace = (current: T.Mesh | null, next: T.Mesh | null) => {
@@ -173,10 +181,11 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
   }
   const extrudeSlab = (points: Point[], depth: number, z: number, mat: T.Material | T.Material[], bevel = 0) => {
     const shape = new THREE.Shape(points.map(p => new THREE.Vector2(to3(p).x, to3(p).y)))
-    const geometry = track(new THREE.ExtrudeGeometry(shape, bevel
-      ? { depth: depth - 2 * bevel, bevelEnabled: true, bevelSize: bevel, bevelThickness: bevel, bevelSegments: 4 }
-      : { depth, bevelEnabled: false }))
-    const m = mesh(geometry, mat, mat !== ghostMaterial)
+    const extruded = new THREE.ExtrudeGeometry(shape, bevel
+      ? { depth: depth - 2 * bevel, bevelEnabled: true, bevelSize: bevel, bevelThickness: bevel, bevelSegments: 8, curveSegments: 8 }
+      : { depth, bevelEnabled: false })
+    const geometry = track(bevel ? smoothNormals(extruded) : extruded)
+    const m = mesh(geometry, mat, !(mat as T.Material).transparent)
     // A bevel grows the extrusion by its thickness at both faces.
     m.position.z = z - depth / 2 + bevel
     return m
@@ -233,6 +242,12 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
     arm.quaternion.setFromUnitVectors(up, direction.normalize())
   }
 
+  /** A plump mattress: the slab profile with rounded corners, extruded with rounded long edges. */
+  const mattressSlab = (points: Point[]) => {
+    const inset = MATTRESS_BEVEL * UNIT
+    return filletPolygon(slab(offset(mattressBase(points), inset), MATTRESS_THICKNESS - 2 * inset), MATTRESS_FILLET)
+  }
+
   /** Returns true when anything changed and a render is needed. */
   function update(states: Partial<Record<BaseSide, SideState>>, model: BedModel) {
     let changed = false
@@ -252,13 +267,19 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
         const foot = unit(sub(to3(points[4]), to3(points[3])))
         half.retainer.position.set(top[4].x, top[4].y, half.z)
         half.retainer.rotation.z = Math.atan2(foot.y, foot.x)
-        const rest = pillow(points)
-        const center = to3(rest.center)
-        half.pillow.position.set(center.x, center.y, half.z - 0.65)
-        half.pillow.rotation.z = -rest.angle * Math.PI / 180
-        half.pillow.visible = mattress
+        if (half.pillow) {
+          const rest = pillow(points)
+          const base = mattressBase(points)
+          const lift = upward(base[0], base[1])
+          // pillow() centres a 16-unit cushion; lift ours so its underside still rests on the cover.
+          const extra = PILLOW.height * UNIT / 2 - 9
+          const center = to3({ x: rest.center.x + lift.x * extra, y: rest.center.y + lift.y * extra })
+          half.pillow.position.set(center.x, center.y, half.z)
+          half.pillow.rotation.z = -rest.angle * Math.PI / 180
+          half.pillow.visible = mattress
+        }
         half.mattress = replace(half.mattress, mattress
-          ? extrudeSlab(slab(offset(mattressBase(points), MATTRESS_BEVEL * UNIT), MATTRESS_THICKNESS - 2 * MATTRESS_BEVEL * UNIT), MATTRESS_DEPTH, half.z, mattressMaterials, MATTRESS_BEVEL)
+          ? extrudeSlab(mattressSlab(points), MATTRESS_DEPTH, half.z, half.mattressMaterials, MATTRESS_BEVEL)
           : null)
         half.built = { ...state.pose }
         changed = true
@@ -271,7 +292,7 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
       }
       else if (ghostVisible && (moved(half.ghostBuilt, state.target) || half.model !== model || !half.ghost)) {
         const points = profile(state.target)
-        const ghost = extrudeSlab(mattress ? slab(mattressBase(points), MATTRESS_THICKNESS) : slab(points, DECK_THICKNESS), HALF_WIDTH, half.z, ghostMaterial)
+        const ghost = extrudeSlab(mattress ? slab(mattressBase(points), MATTRESS_THICKNESS) : slab(points, DECK_THICKNESS), HALF_WIDTH, half.z, ghostMaterials[half.side])
         ghost.renderOrder = 1
         half.ghost = replace(half.ghost, ghost)
         half.ghostBuilt = { ...state.target }
@@ -282,6 +303,11 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
     return changed
   }
 
+  /** Swap the palette in place (theme change) without rebuilding geometry. */
+  function recolor(next: Palette) {
+    for (const [m, key] of tinted) m.color.set(next[key])
+  }
+
   function dispose() {
     for (const geometry of geometries) geometry.dispose()
     for (const m of materials) m.dispose()
@@ -289,5 +315,5 @@ export function createBedModel(THREE: Three, sides: readonly BaseSide[]) {
     root.clear()
   }
 
-  return { root, update, dispose, geometryCount: () => geometries.size }
+  return { root, update, recolor, dispose, geometryCount: () => geometries.size }
 }

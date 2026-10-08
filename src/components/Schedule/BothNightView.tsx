@@ -5,7 +5,7 @@ import { Pencil, Trash2 } from 'lucide-react'
 import { Badge, Card, GhostIcon, SegmentedControl } from '@/src/components/ds'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
-import { groupDaysBySharedCurve, type ScheduleGroup } from '@/src/lib/scheduleGrouping'
+import { endActionForDay, type SchedulePowerRow, groupDaysBySharedCurve, type ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import { getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
 import type { Side } from '@/src/providers/SideProvider'
 import { buildTimeline, chartDomain, CurveChart, useNowMinute } from './CurveChart'
@@ -17,6 +17,7 @@ const SIDES: Side[] = ['left', 'right']
 const LANE_HEIGHT = 150
 
 interface BothNightViewProps {
+  power?: Partial<Record<Side, SchedulePowerRow[]>>
   temps: Record<Side, TempRow[] | undefined>
   names: Record<Side, string>
 }
@@ -26,7 +27,7 @@ interface BothNightViewProps {
  * each lane with its own temperature scale, plus one phase row per person.
  * Curves cover sets of days, so the day picker chooses which night to show.
  */
-export function BothNightView({ temps, names }: BothNightViewProps) {
+export function BothNightView({ temps, power, names }: BothNightViewProps) {
   const { unit } = useTemperatureUnit()
   const [day, setDay] = useState<DayOfWeek>(() => getCurrentDay())
   const nowMinute = useNowMinute()
@@ -100,7 +101,7 @@ export function BothNightView({ temps, names }: BothNightViewProps) {
           {withPoints.map(({ side, setPoints }) => (
             <div key={side} className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3 border-b border-line py-3.5 last:border-b-0">
               <span className="truncate text-sm">{names[side]}</span>
-              <PhaseStrip setPoints={setPoints} />
+              <PhaseStrip endAction={endActionForDay(power?.[side] ?? [], day)} setPoints={setPoints} />
             </div>
           ))}
         </div>
@@ -115,13 +116,13 @@ const DAY_LABEL: Record<DayOfWeek, string> = {
 }
 
 /** Every curve on both sides, one row each, grouped by person. */
-export function PersonCurveList({ temps, names, onEdit, onDelete }: BothNightViewProps & {
+export function PersonCurveList({ temps, power, names, onEdit, onDelete }: BothNightViewProps & {
   onEdit: (side: Side, group: ScheduleGroup) => void
   onDelete: (side: Side, group: ScheduleGroup) => void
 }) {
   const { unit } = useTemperatureUnit()
   const { timeFormat } = useTimeFormatter()
-  const rows = SIDES.flatMap(side => groupDaysBySharedCurve(temps[side] ?? [])
+  const rows = SIDES.flatMap(side => groupDaysBySharedCurve(temps[side] ?? [], power?.[side])
     .filter(g => g.setPoints.length > 0 || g.allDisabled)
     .map(group => ({ side, group })))
   if (rows.length === 0) return null
@@ -131,7 +132,7 @@ export function PersonCurveList({ temps, names, onEdit, onDelete }: BothNightVie
       {rows.map(({ side, group }) => {
         const label = formatDayRange(group.days)
         const paused = !!group.allDisabled
-        const meta = [formatWindow(group.setPoints, timeFormat), formatTempRange(group.setPoints, unit)].filter(Boolean)
+        const meta = [formatWindow(group.setPoints, timeFormat), formatTempRange(group.setPoints, unit), group.endAction === 'maintain' ? 'Maintains final temperature' : null].filter(Boolean)
         return (
           <div key={`${side}-${group.key}`} className="flex min-w-0 items-center gap-3 border-b border-line py-2.5 last:border-b-0">
             <span className="w-[76px] shrink-0 truncate text-sm text-fg-2">{names[side]}</span>
