@@ -272,6 +272,36 @@ describe('GestureActionHandler', () => {
       expect(alarm.snooze).toHaveBeenCalledWith('right', 540, scheduled)
     })
 
+    test.each([
+      ['clear write', { clearAlarm: vi.fn().mockRejectedValue(new Error('DAC write failed')) }],
+      ['connection', { connect: vi.fn().mockRejectedValue(new Error('socket unavailable')) }],
+    ])('still snoozes and records the alarm stopped when the %s fails', async (_, failure) => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 300 }
+      const { deps, client, alarm } = makeDeps(gesture, { isAlarmVibrating: true }, makeMockClient(failure))
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+      expect(alarm.snooze).toHaveBeenCalledWith('left', 300, DEFAULT_SNOOZE_ALARM)
+      expect(client.disconnect).toHaveBeenCalledOnce()
+      expect(error).toHaveBeenCalledWith('[gestureActionHandler] clearAlarm failed for left:', expect.any(Error))
+      error.mockRestore()
+    })
+
+    test('a dismiss whose clear write fails still cancels the snooze and records the alarm stopped', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const gesture = { actionType: 'alarm', alarmBehavior: 'dismiss' }
+      const client = makeMockClient({ clearAlarm: vi.fn().mockRejectedValue(new Error('DAC write failed')) })
+      const { deps, alarm } = makeDeps(gesture, { isAlarmVibrating: true }, client)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'doubleTap'))
+
+      expect(alarm.cancelSnooze).toHaveBeenCalledWith('right')
+      expect(alarm.ended).toHaveBeenCalledWith('right')
+      error.mockRestore()
+    })
+
     test('snoozes for 300 s when no duration is configured', async () => {
       const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: null }
       const { deps, alarm } = makeDeps(gesture, { isAlarmVibrating: true })
@@ -287,7 +317,6 @@ describe('GestureActionHandler', () => {
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'quadTap'))
 
-      expect(client.connect).toHaveBeenCalledOnce()
       expect(client.clearAlarm).not.toHaveBeenCalled()
       expect(alarm.ended).toHaveBeenCalledWith('right')
       expect(alarm.snooze).not.toHaveBeenCalled()

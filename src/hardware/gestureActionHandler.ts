@@ -141,18 +141,28 @@ export class GestureActionHandler {
 
     if (isAlarmVibrating) {
       const client = this.deps.newHardwareClient(this.socketPath)
-      try {
-        await client.connect()
-
-        if (gesture.alarmBehavior === 'dismiss') {
+      // The firmware already stopped the vibration on the tap, so the clear only
+      // confirms it. A failed write must not drop the snooze or leave the alarm
+      // marked vibrating.
+      const clear = async () => {
+        try {
+          await client.connect()
           await client.clearAlarm(event.side)
+        }
+        catch (error) {
+          console.error(`[gestureActionHandler] clearAlarm failed for ${event.side}:`, error)
+        }
+      }
+      try {
+        if (gesture.alarmBehavior === 'dismiss') {
+          await clear()
           this.deps.alarm.cancelSnooze(event.side)
           await this.deps.alarm.ended(event.side)
         }
         else if (gesture.alarmBehavior === 'snooze') {
           // Read before ended() forgets it: the snoozed alarm comes back as it was.
           const config = this.deps.alarm.activeConfig(event.side) ?? DEFAULT_SNOOZE_ALARM
-          await client.clearAlarm(event.side)
+          await clear()
           await this.deps.alarm.ended(event.side)
           this.deps.alarm.snooze(event.side, gesture.alarmSnoozeDuration ?? 300, config)
         }
