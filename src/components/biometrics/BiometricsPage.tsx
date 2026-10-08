@@ -7,7 +7,7 @@
  */
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useState, type ReactNode } from 'react'
 import Link from 'next/link'

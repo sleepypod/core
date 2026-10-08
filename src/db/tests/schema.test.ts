@@ -191,6 +191,7 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'id', notNull: true, default: 'fn' },
       { name: 'timezone', notNull: true, default: 'America/Los_Angeles' },
       { name: 'temperature_unit', notNull: true, default: 'F' },
+      { name: 'time_format', notNull: true, default: '12h' },
       { name: 'reboot_daily', notNull: true, default: false },
       { name: 'reboot_time', notNull: false, default: '03:00' },
       { name: 'prime_pod_daily', notNull: true, default: false },

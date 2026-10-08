@@ -1,6 +1,6 @@
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { TimeInput } from './TimeInput'
 import { useCallback, useEffect, useState } from 'react'
 import {

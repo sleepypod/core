@@ -1,7 +1,7 @@
 'use client'
 
 import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOnSensorFrame, type LogFrame, type GestureFrame, type SensorFrame } from '@/src/hooks/useSensorStream'

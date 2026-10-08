@@ -1,6 +1,6 @@
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'

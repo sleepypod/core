@@ -1,7 +1,7 @@
 'use client'
 
 import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { CalendarDays, Hand, ShieldAlert, Sparkles, Timer } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'

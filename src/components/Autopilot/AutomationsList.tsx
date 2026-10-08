@@ -8,7 +8,7 @@
  */
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { CircleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'

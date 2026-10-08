@@ -7,7 +7,7 @@
  */
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { type TimeFormat } from '@/src/lib/timeFormat'
 
 import { cn } from '@/lib/utils'

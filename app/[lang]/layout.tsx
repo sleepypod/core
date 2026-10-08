@@ -9,6 +9,7 @@ import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
 import { PrefsProvider, THEME_INIT_SCRIPT } from '@/src/providers/PrefsProvider'
 import { SideProvider } from '@/src/providers/SideProvider'
 import { TRPCProvider } from '@/src/providers/TRPCProvider'
+import { TimeFormatProvider } from '@/src/providers/TimeFormatProvider'
 import { WeekNavigatorProvider } from '@/src/providers/WeekNavigatorProvider'
 import { setI18n } from '@lingui/react/server'
 
@@ -72,11 +73,13 @@ export default async function LangLayout({
         <TRPCProvider>
           <LinguiClientProvider initialLocale={lang} initialMessages={allMessages[lang]}>
             <PrefsProvider>
-              <SideProvider>
-                <WeekNavigatorProvider>
-                  <AppShell>{children}</AppShell>
-                </WeekNavigatorProvider>
-              </SideProvider>
+              <TimeFormatProvider>
+                <SideProvider>
+                  <WeekNavigatorProvider>
+                    <AppShell>{children}</AppShell>
+                  </WeekNavigatorProvider>
+                </SideProvider>
+              </TimeFormatProvider>
             </PrefsProvider>
           </LinguiClientProvider>
         </TRPCProvider>

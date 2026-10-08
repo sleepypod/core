@@ -1,7 +1,7 @@
 'use client'
 
 import { formatClock } from '@/src/lib/timeFormat'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useCallback, useRef, useState } from 'react'
 import { Braces, Pause, Play } from 'lucide-react'

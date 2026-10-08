@@ -1,7 +1,7 @@
 'use client'
 
 import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { trpc } from '@/src/utils/trpc'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'

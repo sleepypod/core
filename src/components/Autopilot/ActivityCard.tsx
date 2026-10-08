@@ -5,7 +5,7 @@
  */
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useState } from 'react'
 import { cn } from '@/lib/utils'

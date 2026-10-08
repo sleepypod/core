@@ -66,6 +66,7 @@ function resetSchema(): void {
       id INTEGER PRIMARY KEY,
       timezone TEXT NOT NULL DEFAULT 'America/Los_Angeles',
       temperature_unit TEXT NOT NULL DEFAULT 'F',
+      time_format TEXT NOT NULL DEFAULT '12h',
       reboot_daily INTEGER NOT NULL DEFAULT 0,
       reboot_time TEXT DEFAULT '03:00',
       prime_pod_daily INTEGER NOT NULL DEFAULT 0,

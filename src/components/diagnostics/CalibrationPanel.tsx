@@ -1,7 +1,7 @@
 'use client'
 
 import { formatClock } from '@/src/lib/timeFormat'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { RotateCcw, SlidersHorizontal } from 'lucide-react'

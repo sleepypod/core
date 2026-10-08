@@ -1,8 +1,9 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PREFS_STORAGE_KEYS } from '@/src/providers/PrefsProvider'
 import { BaseSchedules } from '../BaseSchedules'
 import type { RouterOutputs } from '@/src/demo/types'
+const fmt = vi.hoisted(() => ({ value: '12h' as '12h' | '24h' }))
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => fmt.value }))
 const m = vi.hoisted(() => ({
   rows: [] as RouterOutputs['base']['getSchedules'],
   save: vi.fn(), remove: vi.fn(), loading: false,
@@ -21,6 +22,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
 } }))
 const names = { left: 'Jon', right: 'Heidi' }
 beforeEach(() => {
+  fmt.value = '12h'
   localStorage.clear()
   vi.clearAllMocks()
   m.rows = []
@@ -40,7 +42,7 @@ describe('base schedule editor', () => {
     expect(m.save).toHaveBeenCalledWith({ head: 40, feet: 0, feedRate: 75, dayOfWeek: 'weekdays', time: '23:15', side: 'right', presetName: 'Read', enabled: true })
   })
   it.each(['12h', '24h'])('displays side, recurrence and preferred time format (%s), deletes only the selected row', (format) => {
-    localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, format)
+    fmt.value = format as '12h' | '24h'
     m.rows = [{ id: 4, dayOfWeek: 'weekdays', side: 'left', presetName: 'Relax', time: '22:00', head: 30, feet: 15, feedRate: 50, enabled: true }]
     render(<BaseSchedules names={names} independent speed={50} compact />)
     expect(screen.getByText('Weekdays · Jon')).toBeTruthy()

@@ -460,6 +460,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:fn:1 | primary-key | not-unique | not-autoincrement | enum:none",
       "timezone | sql:text | logical:string/SQLiteText | not-null | default:America/Los_Angeles | not-primary-key | not-unique | not-autoincrement | enum:none",
       "temperature_unit | sql:text | logical:string/SQLiteText | not-null | default:F | not-primary-key | not-unique | not-autoincrement | enum:F,C",
+      "time_format | sql:text | logical:string/SQLiteText | not-null | default:12h | not-primary-key | not-unique | not-autoincrement | enum:12h,24h",
       "reboot_daily | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:false | not-primary-key | not-unique | not-autoincrement | enum:none",
       "reboot_time | sql:text | logical:string/SQLiteText | nullable | default:03:00 | not-primary-key | not-unique | not-autoincrement | enum:none",
       "prime_pod_daily | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:false | not-primary-key | not-unique | not-autoincrement | enum:none",

@@ -1,7 +1,7 @@
 'use client'
 
 import { formatClock, type TimeFormat } from '@/src/lib/timeFormat'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 /**
  * Diagnostics / status panel — live Autopilot state and the audit trail. Global
  * kill-switch, then one card per rule: mode (Off / Dry-run / Live), the rule in

@@ -8,7 +8,7 @@
  */
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useState, type CSSProperties, type PointerEvent } from 'react'
 import { cn } from '@/lib/utils'

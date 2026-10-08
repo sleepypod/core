@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PREFS_STORAGE_KEYS } from '@/src/providers/PrefsProvider'
 import { SleepRecordActions } from '../SleepRecordActions'
+const fmt = vi.hoisted(() => ({ value: '12h' as '12h' | '24h' }))
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => fmt.value }))
 
 const state = vi.hoisted(() => ({
   update: vi.fn(),
@@ -41,6 +42,7 @@ const bed = new Date(2026, 8, 27, 23, 20)
 const wake = new Date(2026, 8, 28, 6, 52)
 
 beforeEach(() => {
+  fmt.value = '12h'
   localStorage.clear()
   vi.clearAllMocks()
   state.updateError = null
@@ -93,7 +95,7 @@ describe('SleepRecordActions', () => {
 })
 
 it('edits sleep times in 24-hour mode without changing the local date or closing an open session', () => {
-  localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, '24h')
+  fmt.value = '24h'
   render(<SleepRecordActions recordId={7} enteredBedAt={bed} leftBedAt={null} />)
   fireEvent.click(screen.getByRole('button', { name: 'Edit times' }))
   expect((screen.getByLabelText('Bedtime date') as HTMLInputElement).value).toBe('2026-09-27')

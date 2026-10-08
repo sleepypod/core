@@ -5,7 +5,7 @@
  */
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useEffect, useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'

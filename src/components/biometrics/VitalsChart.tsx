@@ -10,7 +10,7 @@
  */
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent } from 'react'
 import {

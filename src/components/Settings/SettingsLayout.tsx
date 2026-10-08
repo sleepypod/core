@@ -1,7 +1,7 @@
 'use client'
 
 import { TimeInput } from '@/src/components/Schedule/TimeInput'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { CheckCircle2, Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'

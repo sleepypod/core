@@ -1,11 +1,14 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { renderToString } from 'react-dom/server'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { TimeInput } from '../TimeInput'
 import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
-import { PREFS_STORAGE_KEYS, PrefsProvider, usePrefs } from '@/src/providers/PrefsProvider'
+import { TimeFormatProvider } from '@/src/providers/TimeFormatProvider'
 import { hypnoTicks } from '@/src/components/Sleep/sleepData'
 import { formatHourLabel } from '../CurveChart'
+
+const m = vi.hoisted(() => ({ data: undefined as undefined | { device: { timeFormat: string } } }))
+vi.mock('@/src/utils/trpc', () => ({ trpc: { settings: { getAll: { useQuery: () => ({ data: m.data }) } } } }))
 
 function Display() {
   const { formatTime, formatClock, timeFormat } = useTimeFormatter()
@@ -18,48 +21,33 @@ function Display() {
     </div>
   )
 }
-function Switch() {
-  const { setTimeFormat } = usePrefs()
-  return <button onClick={() => setTimeFormat('24h')}>Use 24-hour</button>
-}
-beforeEach(() => localStorage.clear())
+const tree = <TimeFormatProvider><Display /></TimeFormatProvider>
+beforeEach(() => {
+  m.data = undefined
+})
 
-it('updates labels and chart ticks immediately, then persists across remounts', () => {
-  const tree = (
-    <PrefsProvider>
-      <Switch />
-      <Display />
-    </PrefsProvider>
-  )
-  const first = render(tree)
+it('follows the device setting and updates labels and chart ticks when it changes', () => {
+  const view = render(tree)
   expect(screen.getByLabelText('Alarm').textContent).toBe('11:30 PM')
-  fireEvent.click(screen.getByRole('button', { name: 'Use 24-hour' }))
+  m.data = { device: { timeFormat: '24h' } }
+  view.rerender(<TimeFormatProvider><Display /></TimeFormatProvider>)
   expect(screen.getByLabelText('Alarm').textContent).toBe('23:30')
   expect(screen.getByLabelText('Midnight').textContent).toBe('00:00')
   expect(screen.getByLabelText('Chart').textContent).toBe('00:00')
   expect(screen.getByLabelText('Sleep ticks').textContent).toContain('23:00 /')
   expect(screen.getByLabelText('Sleep ticks').textContent).toContain('07:00')
-  expect(localStorage.getItem(PREFS_STORAGE_KEYS.timeFormat)).toBe('24h')
-  first.unmount()
-  render(tree)
-  expect(screen.getByLabelText('Alarm').textContent).toBe('23:30')
 })
-it('uses a stable server default, rejects invalid storage, and reacts to another tab', () => {
-  localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, '24h')
+it('defaults to 12-hour while settings load, without a provider, and for unknown values', () => {
+  m.data = { device: { timeFormat: '24h' } }
   expect(renderToString(<Display />)).toContain('11:30 PM')
-  localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, 'bogus')
-  render(<Display />)
+  m.data = { device: { timeFormat: 'bogus' } }
+  render(tree)
   expect(screen.getByLabelText('Alarm').textContent).toBe('11:30 PM')
-  act(() => {
-    localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, '24h')
-    window.dispatchEvent(new StorageEvent('storage'))
-  })
-  expect(screen.getByLabelText('Alarm').textContent).toBe('23:30')
 })
 it('edits 24-hour times without AM/PM and emits the existing HH:mm contract', () => {
-  localStorage.setItem(PREFS_STORAGE_KEYS.timeFormat, '24h')
+  m.data = { device: { timeFormat: '24h' } }
   const onChange = vi.fn()
-  const { rerender } = render(<TimeInput label="Wake" value="23:59" onChange={onChange} />)
+  const { rerender } = render(<TimeInput label="Wake" value="23:59" onChange={onChange} />, { wrapper: TimeFormatProvider })
   const hour = screen.getByRole('combobox', { name: 'Wake hours' }) as HTMLSelectElement
   const minute = screen.getByRole('combobox', { name: 'Wake minutes' }) as HTMLSelectElement
   expect(hour.value).toBe('23')

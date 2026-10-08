@@ -90,6 +90,11 @@ export const vibrationPatternSchema = z.enum(['double', 'rise'])
 export const temperatureUnitSchema = z.enum(['F', 'C'])
 
 /**
+ * Clock display format enum
+ */
+export const timeFormatSchema = z.enum(['12h', '24h'])
+
+/**
  * Tap type enum
  */
 export const tapTypeSchema = z.enum(['doubleTap', 'tripleTap', 'quadTap'])

@@ -1,6 +1,6 @@
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { TimeInput } from '@/src/components/Schedule/TimeInput'
 import { useCallback, useState } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'

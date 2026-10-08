@@ -11,6 +11,9 @@ export const deviceSettings = sqliteTable('device_settings', {
   temperatureUnit: text('temperature_unit', { enum: ['F', 'C'] })
     .notNull()
     .default('F'),
+  timeFormat: text('time_format', { enum: ['12h', '24h'] })
+    .notNull()
+    .default('12h'),
   rebootDaily: integer('reboot_daily', { mode: 'boolean' })
     .notNull()
     .default(false),

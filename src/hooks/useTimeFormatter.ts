@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { formatClock, formatTick, formatTime } from '@/src/lib/timeFormat'
 
 /** Stable formatters so chart memoization updates when the preference changes. */

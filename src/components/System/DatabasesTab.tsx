@@ -1,6 +1,6 @@
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Download, ShieldCheck, X } from 'lucide-react'

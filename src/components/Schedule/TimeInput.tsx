@@ -1,6 +1,6 @@
 'use client'
 
-import { useTimeFormat } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { Clock } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
 import { calcDuration, formatTime12h } from '@/src/lib/scheduleTime'
