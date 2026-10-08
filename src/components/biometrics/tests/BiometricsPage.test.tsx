@@ -11,8 +11,10 @@ const state = vi.hoisted(() => ({
   recalibrate: vi.fn(),
   vitals: vi.fn(),
   latest: [] as Array<{ timestamp: Date }>,
+  timeFormat: '12h' as '12h' | '24h',
 }))
 
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => state.timeFormat }))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => Math.floor(NOW / 60_000) }))
 vi.mock('next/navigation', () => ({ usePathname: () => '/en/sleep' }))
 vi.mock('@/src/providers/SideProvider', () => ({
@@ -65,6 +67,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
   state.occupied = true
+  state.timeFormat = '12h'
   state.dataPath = { occupancy: { left: 'occupied', right: 'empty' } }
   state.latest = [{ timestamp: new Date(LAST_VITAL) }]
   state.vitals.mockReturnValue({
@@ -75,6 +78,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('BiometricsPage', () => {
@@ -128,6 +132,18 @@ describe('BiometricsPage', () => {
     expect(last.startDate).toEqual(new Date(2026, 8, 26, 12))
     expect(last.endDate).toEqual(new Date(2026, 8, 27, 12))
     for (const tab of screen.getAllByRole('tab', { name: 'Night' })) expect(tab.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it.each([
+    ['12h', ['4:05', '5 AM', '2 PM'], 'in bed 6h 09m · no vitals since 3:05 PM'],
+    ['24h', ['04:05', '05:00', '14:00'], 'in bed 6h 09m · no vitals since 15:05'],
+  ] as const)('labels the vitals axis and session times in the %s clock', (format, ticks, since) => {
+    state.timeFormat = format
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, toJSON: () => ({}) })
+    const { container } = render(<BiometricsPage />)
+    const labels = [...container.querySelectorAll('svg text')].map(t => t.textContent)
+    for (const tick of ticks) expect(labels).toContain(tick)
+    expect(screen.getAllByTestId('session-row')[0].textContent).toContain(since)
   })
 
   it('drops the Occupied field from the sides card', () => {

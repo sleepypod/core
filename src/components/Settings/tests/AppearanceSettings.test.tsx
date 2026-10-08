@@ -3,18 +3,19 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AppearanceSettings, TimeFormatControl } from '../AppearanceSettings'
 import { PrefsProvider, PREFS_STORAGE_KEYS } from '@/src/providers/PrefsProvider'
 
-const mock = vi.hoisted(() => ({ mutate: vi.fn(), invalidate: vi.fn(), pending: false, error: null as null | Error, success: () => {} }))
+const defaultVariables = { temperatureUnit: 'C', timeFormat: '24h' }
+const mock = vi.hoisted(() => ({ mutate: vi.fn(), invalidate: vi.fn(), pending: false, error: null as null | Error, success: () => {}, variables: undefined as Record<string, string> | undefined }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ settings: { getAll: { invalidate: mock.invalidate } } }),
   settings: { updateDevice: { useMutation: (opts: { onSuccess: () => void }) => {
     mock.success = opts.onSuccess
-    return { mutate: mock.mutate, isPending: mock.pending, variables: { temperatureUnit: 'C', timeFormat: '24h' }, error: mock.error }
+    return { mutate: mock.mutate, isPending: mock.pending, variables: mock.variables, error: mock.error }
   } } },
 } }))
 
 beforeEach(() => {
   localStorage.clear()
-  Object.assign(mock, { pending: false, error: null })
+  Object.assign(mock, { pending: false, error: null, variables: defaultVariables })
   vi.clearAllMocks()
 })
 afterEach(() => vi.restoreAllMocks())
@@ -66,5 +67,17 @@ it('saves the time format to device settings, not this browser, and shows it opt
   expect(screen.getByRole('tab', { name: '24-hour' }).getAttribute('aria-selected')).toBe('true')
   mock.pending = false
   rerender(<TimeFormatControl format="bogus" />)
+  expect(screen.getByRole('tab', { name: '12-hour' }).getAttribute('aria-selected')).toBe('true')
+})
+
+it('shows the saved 24-hour setting and falls back to it while a pending save carries no time format', () => {
+  const { rerender } = render(<TimeFormatControl format="24h" />)
+  expect(screen.getByRole('tab', { name: '24-hour' }).getAttribute('aria-selected')).toBe('true')
+  mock.pending = true
+  mock.variables = { temperatureUnit: 'C' }
+  rerender(<TimeFormatControl format="24h" />)
+  expect(screen.getByRole('tab', { name: '24-hour' }).getAttribute('aria-selected')).toBe('true')
+  mock.variables = undefined
+  rerender(<TimeFormatControl format="12h" />)
   expect(screen.getByRole('tab', { name: '12-hour' }).getAttribute('aria-selected')).toBe('true')
 })

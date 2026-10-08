@@ -2,6 +2,8 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import { BacktestPanel } from '../BacktestPanel'
 import type { BacktestResult } from '@/src/automation/backtest'
+const mock = vi.hoisted(() => ({ timeFormat: '12h' as '12h' | '24h' }))
+vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => mock.timeFormat }))
 const result = {
   mode: 'edge', clockMin: [1320, 1380, 0, 60, 120, 420], primaryAxis: { min: 0, max: 300 }, tempAxis: { min: 60, max: 85 },
   primary: { label: 'Movement', values: [10, null, 200, 250, 100, 50] }, avg: { label: 'Average', values: [10, 20, 200, 250, 100, 50] },
@@ -28,4 +30,14 @@ it.each(['edge', 'policy'] as const)('renders %s traces with gaps, windows and c
   for (const path of container.querySelectorAll('path')) expect(path.getAttribute('d')).not.toContain('NaN')
   rerender(<BacktestPanel result={{ ...r, primary: null, avg: null, primaryAxis: null, tempAxis: null, threshold: null, timeWindow: { startMin: 0, endMin: 120 }, summary: { ...r.summary, clampHits: 0, setpointRange: null, netEffect: null } }} loading={false} nights={[]} nightId={null} onNight={vi.fn()} />)
   expect(screen.getByText('—')).toBeTruthy()
+})
+it('labels the replay axis in the pod clock format, midnight as 00:00 in 24-hour mode', () => {
+  const props = { result, loading: false, nights: [], nightId: null, onNight: vi.fn() }
+  mock.timeFormat = '12h'
+  const { rerender } = render(<BacktestPanel {...props} />)
+  for (const label of ['10p', '11p', '12a', '1a', '2a', '7a']) expect(screen.getByText(label)).toBeTruthy()
+  mock.timeFormat = '24h'
+  rerender(<BacktestPanel {...props} />)
+  for (const label of ['22:00', '23:00', '00:00', '01:00', '02:00', '07:00']) expect(screen.getByText(label)).toBeTruthy()
+  mock.timeFormat = '12h'
 })

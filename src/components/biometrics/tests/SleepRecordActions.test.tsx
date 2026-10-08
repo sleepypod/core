@@ -109,4 +109,8 @@ it('edits sleep times in 24-hour mode without changing the local date or closing
   fireEvent.change(screen.getByLabelText('Wake time minutes'), { target: { value: '05' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   expect(state.update).toHaveBeenLastCalledWith({ id: 7, enteredBedAt: new Date(2026, 8, 27, 22, 20), leftBedAt: new Date(2026, 8, 28, 7, 5) })
+  fireEvent.change(screen.getByLabelText('Wake date'), { target: { value: '' } })
+  expect((screen.getByLabelText('Wake time hours') as HTMLSelectElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(state.update).toHaveBeenLastCalledWith({ id: 7, enteredBedAt: new Date(2026, 8, 27, 22, 20) })
 })
