@@ -4,6 +4,7 @@ import { Fragment, useState } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { Badge, Card, GhostIcon, SegmentedControl } from '@/src/components/ds'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
 import { groupDaysBySharedCurve, type ScheduleGroup } from '@/src/lib/scheduleGrouping'
 import { getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
 import type { Side } from '@/src/providers/SideProvider'
@@ -119,6 +120,7 @@ export function PersonCurveList({ temps, names, onEdit, onDelete }: BothNightVie
   onDelete: (side: Side, group: ScheduleGroup) => void
 }) {
   const { unit } = useTemperatureUnit()
+  const { timeFormat } = useTimeFormatter()
   const rows = SIDES.flatMap(side => groupDaysBySharedCurve(temps[side] ?? [])
     .filter(g => g.setPoints.length > 0 || g.allDisabled)
     .map(group => ({ side, group })))
@@ -129,7 +131,7 @@ export function PersonCurveList({ temps, names, onEdit, onDelete }: BothNightVie
       {rows.map(({ side, group }) => {
         const label = formatDayRange(group.days)
         const paused = !!group.allDisabled
-        const meta = [formatWindow(group.setPoints), formatTempRange(group.setPoints, unit)].filter(Boolean)
+        const meta = [formatWindow(group.setPoints, timeFormat), formatTempRange(group.setPoints, unit)].filter(Boolean)
         return (
           <div key={`${side}-${group.key}`} className="flex min-w-0 items-center gap-3 border-b border-line py-2.5 last:border-b-0">
             <span className="w-[76px] shrink-0 truncate text-sm text-fg-2">{names[side]}</span>
