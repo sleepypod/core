@@ -141,6 +141,13 @@
       "when": 1791416428118,
       "tag": "0019_closed_psynapse",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1791419784306,
+      "tag": "0020_mature_puff_adder",
+      "breakpoints": true
     }
   ]
 }

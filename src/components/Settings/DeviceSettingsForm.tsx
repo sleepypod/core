@@ -7,6 +7,7 @@ import { Button, Card, CardHeader, InlineError, SegmentedControl, SelectValue, S
 import { NumberField, SaveToast, SectionColumns, TimeField } from './SettingsLayout'
 
 interface DeviceSettings {
+  defaultScheduleEndAction?: 'turn_off' | 'maintain'
   timezone: string
   temperatureUnit: string
   rebootDaily: boolean
@@ -129,6 +130,7 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   const isPending = mutation.isPending
 
   function save(updates: Partial<{
+    defaultScheduleEndAction: 'turn_off' | 'maintain'
     timezone: string
     temperatureUnit: 'F' | 'C'
     rebootDaily: boolean
@@ -322,6 +324,15 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
 
       <Card>
         <CardHeader title="Power" />
+        <SettingRow label="After schedule ends" sub="Default for new curves. Existing schedules keep their own setting.">
+          <SelectValue
+            label="Default after schedule ends"
+            value={device.defaultScheduleEndAction ?? 'turn_off'}
+            options={[{ value: 'turn_off', label: 'Turn off' }, { value: 'maintain', label: 'Maintain final temperature' }]}
+            onChange={value => save({ defaultScheduleEndAction: value as 'turn_off' | 'maintain' })}
+            disabled={isPending}
+          />
+        </SettingRow>
         <SettingRow
           label="Auto power-off cap"
           sub="Turns a side off after it has been on this long. Always-on sides and run-once sessions are exempt."

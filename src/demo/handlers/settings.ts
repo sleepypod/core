@@ -14,6 +14,7 @@ const deviceSettings: DeviceSettings = {
   id: 1,
   bedMode: 'two',
   unusedZoneMode: 'off',
+  defaultScheduleEndAction: 'turn_off',
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles',
   temperatureUnit: 'F',
   rebootDaily: true,

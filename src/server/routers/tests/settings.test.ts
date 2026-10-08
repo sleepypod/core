@@ -218,6 +218,15 @@ describe('settings.getAll', () => {
 })
 
 describe('settings.updateDevice', () => {
+  it('persists the default end action without rescheduling existing curves', async () => {
+    const current = { ...baseDevice, defaultScheduleEndAction: 'turn_off' }
+    const updated = { ...current, defaultScheduleEndAction: 'maintain' }
+    dbState.txRowsQueue.push([current], [updated])
+    const result = await caller.updateDevice({ defaultScheduleEndAction: 'maintain' })
+    expect(result.defaultScheduleEndAction).toBe('maintain')
+    expect(schedulerMock.getJobManager).not.toHaveBeenCalled()
+  })
+
   it('updates timezone and triggers updateTimezone reload', async () => {
     // For 'homekitEnabled' check: not present, so no prior-row select.
     // Tx: select(current) returns 1 row, update().returning().all() returns updated row.

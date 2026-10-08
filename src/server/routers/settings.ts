@@ -19,6 +19,7 @@ const deviceSettingsSchema = z.object({
   id: z.number(),
   bedMode: z.enum(['two', 'solo-left', 'solo-right']).default('two'),
   unusedZoneMode: z.enum(['follow', 'off', 'independent']).default('off'),
+  defaultScheduleEndAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
   timezone: z.string(),
   temperatureUnit: temperatureUnitSchema,
   rebootDaily: z.boolean(),
@@ -219,6 +220,7 @@ export const settingsRouter = router({
         .object({
           bedMode: z.enum(['two', 'solo-left', 'solo-right']).optional(),
           unusedZoneMode: z.enum(['follow', 'off', 'independent']).optional(),
+          defaultScheduleEndAction: z.enum(['turn_off', 'maintain']).optional(),
           timezone: timezoneSchema.optional(),
           temperatureUnit: temperatureUnitSchema.optional(),
           rebootDaily: z.boolean().optional(),
@@ -246,6 +248,7 @@ export const settingsRouter = router({
       id: z.number(),
       bedMode: z.enum(['two', 'solo-left', 'solo-right']).default('two'),
       unusedZoneMode: z.enum(['follow', 'off', 'independent']).default('off'),
+      defaultScheduleEndAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
       timezone: z.string(),
       temperatureUnit: temperatureUnitSchema,
       rebootDaily: z.boolean(),

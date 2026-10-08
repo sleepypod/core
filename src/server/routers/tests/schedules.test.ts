@@ -56,6 +56,7 @@ const SCHEMA_SQL = `
       day_of_week TEXT NOT NULL,
       on_time TEXT NOT NULL,
       off_time TEXT NOT NULL,
+      end_action TEXT NOT NULL DEFAULT 'turn_off',
       on_temperature REAL NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -1424,7 +1425,7 @@ describe('schedules openapi meta + input schema contract', () => {
     expect(Object.keys(temperature).sort()).toEqual(
       ['createdAt', 'dayOfWeek', 'enabled', 'id', 'side', 'temperature', 'time', 'updatedAt'])
     expect(Object.keys(power).sort()).toEqual(
-      ['createdAt', 'dayOfWeek', 'enabled', 'id', 'offTime', 'onTemperature', 'onTime', 'side', 'updatedAt'])
+      ['createdAt', 'dayOfWeek', 'enabled', 'endAction', 'id', 'offTime', 'onTemperature', 'onTime', 'side', 'updatedAt'])
     expect(Object.keys(alarm).sort()).toEqual(
       ['alarmTemperature', 'createdAt', 'dayOfWeek', 'duration', 'enabled', 'id', 'side', 'time', 'updatedAt', 'vibrationIntensity', 'vibrationPattern', 'wakeWindow'])
 
@@ -1454,5 +1455,21 @@ describe('schedules openapi meta + input schema contract', () => {
     // outer default would otherwise mask.
     expect(schema.parse({ deletes: {}, creates: {}, updates: {} }))
       .toEqual({ deletes: empty, creates: empty, updates: empty })
+  })
+})
+
+describe('schedule end actions', () => {
+  beforeEach(() => {
+    clearTables()
+    resetSchedulerMocks()
+  })
+  it('defaults legacy creates to turn off and round-trips maintain through individual and batch APIs', async () => {
+    const row = await caller.createPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75 })
+    expect(row.endAction).toBe('turn_off')
+    expect((await caller.updatePowerSchedule({ id: row.id, endAction: 'maintain' })).endAction).toBe('maintain')
+    await caller.batchUpdate({ updates: { power: [{ id: row.id, onTime: '21:00' }] } })
+    expect((await caller.getAll({ side: 'left' })).power.find(p => p.id === row.id)?.endAction).toBe('maintain')
+    await caller.batchUpdate({ creates: { power: [{ side: 'right', dayOfWeek: 'tuesday', onTime: '22:00', offTime: '07:00', onTemperature: 72, endAction: 'maintain' }] } })
+    expect((await caller.getAll({ side: 'right' })).power[0].endAction).toBe('maintain')
   })
 })

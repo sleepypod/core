@@ -1812,3 +1812,23 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
     expect(result.current.isLoading).toBe(false)
   })
 })
+
+it('saves a single-point maintain curve to both sides', async () => {
+  trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+  trpcMock.overrides.allRight = { temperature: [], power: [], alarm: [] }
+  sideMock.state.activeSides = ['left', 'right']
+  const { result } = renderHook(() => useSchedule())
+  await act(async () => result.current.saveCurve({ targetDays: ['monday'], setPoints: [{ time: '22:00', temperature: 75 }], endAction: 'maintain' }))
+  expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([
+    expect.objectContaining({ side: 'left', endAction: 'maintain', onTime: '22:00' }),
+    expect.objectContaining({ side: 'right', endAction: 'maintain', onTime: '22:00' }),
+  ])
+})
+
+it('preserves maintain when copying a day', async () => {
+  trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+  trpcMock.overrides.day = { temperature: [], power: [{ id: 1, side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, enabled: true, endAction: 'maintain' }], alarm: [] }
+  const { result } = renderHook(() => useSchedule())
+  await act(async () => result.current.applyToOtherDays(['tuesday']))
+  expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([expect.objectContaining({ dayOfWeek: 'tuesday', endAction: 'maintain' })])
+})

@@ -538,6 +538,7 @@ export class JobManager {
    * Schedule power off
    */
   private schedulePowerOff(sched: typeof powerSchedules.$inferSelect): void {
+    if (sched.endAction === 'maintain') return
     const [hour, minute] = this.parseTime(sched.offTime)
     const cron = this.buildWeeklyCron(sched.dayOfWeek, hour, minute)
 
@@ -551,6 +552,7 @@ export class JobManager {
   }
 
   async runPowerOffJob(sched: typeof powerSchedules.$inferSelect): Promise<void> {
+    if (sched.endAction === 'maintain') return
     // Powering off now would cut short an alarm's warm-up: do it once the
     // alarm has finished instead.
     const after = await this.alarmWarmupEnd(sched.side)
@@ -1129,10 +1131,9 @@ export class JobManager {
    * Upsert both on/off cron jobs for a single power schedule.
    */
   upsertPowerJob(sched: typeof powerSchedules.$inferSelect): void {
-    if (!sched.enabled) {
-      this.cancelPowerJob(sched.id)
-      return
-    }
+    // Maintaining must also cancel a shutdown already deferred for an alarm.
+    if (!sched.enabled || sched.endAction === 'maintain') this.cancelPowerJob(sched.id)
+    if (!sched.enabled) return
     this.schedulePowerOn(sched)
     this.schedulePowerOff(sched)
   }
