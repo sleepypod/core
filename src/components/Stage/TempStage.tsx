@@ -3,6 +3,7 @@
 import { Link2, Power } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { DeviceAlerts } from '@/src/components/TempScreen/DeviceAlerts'
 import { SideCard } from '@/src/components/TempScreen/SideCard'
 import type { Presence } from '@/src/components/TempScreen/SideCard'
 import { stepForDisplay } from '@/src/components/TempScreen/nightPhases'
@@ -357,36 +358,42 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         </div>
       )}
 
-      {/* Live indicator · view switch · link and power, top centre. */}
-      <div className="absolute left-1/2 top-6 z-10 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap">
-        {previewing
-          ? (
-              <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
-                <span aria-hidden className="size-1.5 rounded-full" style={{ background: STAGE.preview }} />
-                {`Preview · ${clock(previewAt, timeFormat)} · Back to live`}
-              </button>
-            )
-          : (
-              <span data-testid="stage-mode" className={cn(PILL, 'cursor-default font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: statusLoading ? STAGE.text2 : STAGE.live, borderColor: STAGE.line2 }}>
-                <span aria-hidden className="size-1.5 rounded-full" style={{ background: statusLoading ? STAGE.text3 : STAGE.live }} />
-                {statusLoading ? 'Connecting' : 'Live'}
-              </span>
-            )}
-        <ViewSwitch view="stage" onChange={v => v === 'cards' && onExit()} />
-        <button
-          type="button"
-          aria-pressed={isLinked}
-          onClick={handleLink}
-          className={cn(PILL, isLinked ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')}
-          style={isLinked ? undefined : GLASS}
-        >
-          <Link2 size={14} />
-          {isLinked ? 'Linked' : 'Link sides'}
-        </button>
-        <button type="button" onClick={handleAllOff} disabled={!anyOn} className={cn(PILL, 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')} style={GLASS}>
-          <Power size={14} />
-          All off
-        </button>
+      {/* Live indicator · view switch · link and power, top centre, wrapping on phones;
+          the pod's alarm, priming and pump notices sit underneath. */}
+      <div className="pointer-events-none absolute inset-x-4 top-6 z-20 flex flex-col items-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-2 whitespace-nowrap *:pointer-events-auto">
+          {previewing
+            ? (
+                <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
+                  <span aria-hidden className="size-1.5 rounded-full" style={{ background: STAGE.preview }} />
+                  {`Preview · ${clock(previewAt, timeFormat)} · Back to live`}
+                </button>
+              )
+            : (
+                <span data-testid="stage-mode" className={cn(PILL, 'cursor-default font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: statusLoading ? STAGE.text2 : STAGE.live, borderColor: STAGE.line2 }}>
+                  <span aria-hidden className="size-1.5 rounded-full" style={{ background: statusLoading ? STAGE.text3 : STAGE.live }} />
+                  {statusLoading ? 'Connecting' : 'Live'}
+                </span>
+              )}
+          <ViewSwitch view="stage" onChange={v => v === 'cards' && onExit()} />
+          <button
+            type="button"
+            aria-pressed={isLinked}
+            onClick={handleLink}
+            className={cn(PILL, isLinked ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')}
+            style={isLinked ? undefined : GLASS}
+          >
+            <Link2 size={14} />
+            {isLinked ? 'Linked' : 'Link sides'}
+          </button>
+          <button type="button" onClick={handleAllOff} disabled={!anyOn} className={cn(PILL, 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')} style={GLASS}>
+            <Power size={14} />
+            All off
+          </button>
+        </div>
+        <div data-testid="stage-alerts" className="pointer-events-auto flex w-full max-w-[560px] flex-col gap-2 rounded-card border p-2 empty:hidden min-[1200px]:mt-8" style={{ ...GLASS, borderColor: STAGE.line }}>
+          <DeviceAlerts status={status} onRefetch={() => { void refetch() }} />
+        </div>
       </div>
 
       {/* Room readouts, top right, once there is room beside the centred pills. */}

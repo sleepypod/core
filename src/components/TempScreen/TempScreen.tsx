@@ -18,12 +18,9 @@ import type { TempUnit } from '@/src/lib/tempUtils'
 import { usePrefs } from '@/src/providers/PrefsProvider'
 import { useShownSides, useSide, type Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
-import { AlarmBanner } from './AlarmBanner'
 import { AlarmCard } from './AlarmCard'
+import { DeviceAlerts } from './DeviceAlerts'
 import { LastNightCard } from './LastNightCard'
-import { PrimeCompleteNotification } from './PrimeCompleteNotification'
-import { PrimingIndicator } from './PrimingIndicator'
-import { PumpStallNotification } from './PumpStallNotification'
 import { ScheduleTimeline } from './ScheduleTimeline'
 import { SideCard, type Presence } from './SideCard'
 import { stepForDisplay, type NightPhaseKey } from './nightPhases'
@@ -215,41 +212,11 @@ export const TempScreen = () => {
     )
   }
 
-  const stallNotices = status?.pumpStallNotifications
-  const isPriming = status?.isPriming ?? false
-
   return (
     <>
       {header}
 
-      {/* Pump stall — highest priority, dismissible per-side */}
-      {SIDES.map((side) => {
-        const notice = stallNotices?.[side]
-        return notice && (
-          <PumpStallNotification
-            key={side}
-            side={side}
-            rpm={notice.rpm}
-            trippedAt={notice.trippedAt}
-            alertId={notice.alertId}
-            onAction={() => { void refetch() }}
-          />
-        )
-      })}
-
-      {isPriming && <PrimingIndicator />}
-
-      {status?.primeCompletedNotification != null && !isPriming && (
-        <PrimeCompleteNotification onDismiss={() => { void refetch() }} />
-      )}
-
-      {/* Alarm banner — active vibration with snooze/stop, or snoozed countdown */}
-      <AlarmBanner
-        leftAlarmActive={status?.leftSide?.isAlarmVibrating ?? false}
-        rightAlarmActive={status?.rightSide?.isAlarmVibrating ?? false}
-        snooze={status?.snooze}
-        onActionComplete={() => { void refetch() }}
-      />
+      <DeviceAlerts status={status} onRefetch={() => { void refetch() }} />
 
       <Link href="/settings?section=sides" className="mb-3 inline-flex rounded-ctl border border-line-2 px-3 py-2 text-sm text-fg-2 hover:text-fg" aria-label={`Manage sleepers: ${sleeperLabel}`}>
         {sleeperLabel}

@@ -5,7 +5,7 @@
  * linking copies left to right, and the flat cards appear when 3D cannot load.
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { forwardRef, useEffect, useImperativeHandle } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
@@ -63,6 +63,11 @@ vi.mock('@/src/utils/trpc', () => ({
 }))
 vi.mock('@/src/hooks/useDeviceStatus', () => ({
   useDeviceStatus: () => ({ status: m.status, isLoading: m.statusLoading, refetch: m.refetch }),
+}))
+vi.mock('@/src/components/TempScreen/DeviceAlerts', () => ({
+  DeviceAlerts: ({ status, onRefetch }: { status?: { leftSide?: { isAlarmVibrating?: boolean } }, onRefetch: () => void }) => (
+    status?.leftSide?.isAlarmVibrating ? <button type="button" onClick={onRefetch}>Stop alarm</button> : null
+  ),
 }))
 vi.mock('@/src/hooks/useSensorStream', () => ({
   useSensorStream: () => {},
@@ -340,6 +345,16 @@ describe('TempStage', () => {
     expect(onExit).toHaveBeenCalledTimes(1)
     fireEvent.keyDown(window, { key: 'v' })
     expect(onExit).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows the pod\'s alarm notice over the stage and hides the box when there is none', async () => {
+    const { rerender } = render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    expect(screen.getByTestId('stage-alerts').childElementCount).toBe(0)
+    m.status = { ...(m.status as object), leftSide: { ...sideStatus(72, 5), isAlarmVibrating: true } }
+    rerender(<TempStage onExit={() => {}} />)
+    fireEvent.click(within(screen.getByTestId('stage-alerts')).getByRole('button', { name: 'Stop alarm' }))
+    expect(m.refetch).toHaveBeenCalled()
   })
 
   it('shows Stage pressed in the view switch and turns everything off with All off', async () => {
