@@ -1832,3 +1832,21 @@ it('preserves maintain when copying a day', async () => {
   await act(async () => result.current.applyToOtherDays(['tuesday']))
   expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([expect.objectContaining({ dayOfWeek: 'tuesday', endAction: 'maintain' })])
 })
+
+it('getCurveForDay splits days with the same set points by end action', () => {
+  const days = ['monday', 'tuesday', 'wednesday', 'thursday']
+  trpcMock.overrides.allLeft = {
+    temperature: days.map((dayOfWeek, id) => ({ id, dayOfWeek, time: '22:00', temperature: 75, enabled: true })),
+    power: [
+      { id: 1, dayOfWeek: 'monday', endAction: 'maintain' },
+      { id: 2, dayOfWeek: 'tuesday', endAction: 'maintain' },
+      { id: 3, dayOfWeek: 'wednesday', endAction: 'turn_off' },
+      // Rows saved before end actions existed count as turning off.
+      { id: 4, dayOfWeek: 'thursday' },
+    ],
+    alarm: [],
+  }
+  const { result } = renderHook(() => useSchedule())
+  expect(result.current.getCurveForDay('monday').days).toEqual(['monday', 'tuesday'])
+  expect(result.current.getCurveForDay('wednesday').days).toEqual(['wednesday', 'thursday'])
+})

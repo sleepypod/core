@@ -4,7 +4,7 @@ import type * as ScheduleTime from '@/src/lib/scheduleTime'
 import { SchedulePage } from '../SchedulePage'
 
 const m = vi.hoisted(() => ({
-  defaultAction: 'turn_off',
+  defaultAction: 'turn_off' as string | undefined,
   side: { primarySide: 'left', selectedSide: 'left', selectSide: vi.fn(), singleScheduleSide: null as string | null },
   schedule: {
     confirmMessage: null as string | null,
@@ -257,6 +257,14 @@ it('uses the global default for new curves and the saved action when editing', (
   expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('maintain')
   fireEvent.click(s.getByRole('button', { name: 'close editor' }))
   fireEvent.click(s.getAllByRole('button', { name: /Edit Mon/ })[0])
+  expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
+  m.defaultAction = 'turn_off'
+})
+
+it('falls back to turning off for new curves before the default setting loads', () => {
+  m.defaultAction = undefined
+  const s = render(<SchedulePage />)
+  fireEvent.click(s.getAllByRole('button', { name: 'New curve' })[0])
   expect(s.getByTestId('editor').getAttribute('data-end-action')).toBe('turn_off')
   m.defaultAction = 'turn_off'
 })

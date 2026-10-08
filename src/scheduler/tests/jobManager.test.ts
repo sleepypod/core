@@ -1994,6 +1994,15 @@ describe('JobManager residual mutation contracts', () => {
       expect(control.powerOffLocked.mock.calls).toEqual([['left'], ['right']])
     })
 
+    it('leaves a maintained schedule on without holding a shutdown for the alarm', async () => {
+      const schedule = vi.spyOn(manager.getScheduler(), 'scheduleOneTimeJob')
+      const warmup = vi.spyOn(manager as any, 'alarmWarmupEnd')
+      await manager.runPowerOffJob({ ...power, endAction: 'maintain' })
+      expect(warmup).not.toHaveBeenCalled()
+      expect(schedule).not.toHaveBeenCalled()
+      expect(control.powerOffLocked).not.toHaveBeenCalled()
+    })
+
     it('does not hold an away side own power-off for its hidden alarm', async () => {
       const schedule = vi.spyOn(manager.getScheduler(), 'scheduleOneTimeJob')
       vi.spyOn(manager as any, 'awayModes').mockResolvedValue({ unusedZoneMode: 'follow', left: { awayMode: true }, right: { awayMode: false } })

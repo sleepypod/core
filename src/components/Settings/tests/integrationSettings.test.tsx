@@ -166,3 +166,13 @@ it('reconnects by reloading the current page', () => {
     vi.unstubAllGlobals()
   }
 })
+
+it('saves the default end action for new curves', () => {
+  const { rerender } = render(<DeviceSettingsForm device={device} />)
+  const select = screen.getByLabelText('Default after schedule ends') as HTMLSelectElement
+  expect(select.value).toBe('turn_off')
+  fireEvent.change(select, { target: { value: 'maintain' } })
+  expect(mock.calls).toHaveBeenLastCalledWith('device', { defaultScheduleEndAction: 'maintain' })
+  rerender(<DeviceSettingsForm device={{ ...device, defaultScheduleEndAction: 'maintain' }} />)
+  expect((screen.getByLabelText('Default after schedule ends') as HTMLSelectElement).value).toBe('maintain')
+})

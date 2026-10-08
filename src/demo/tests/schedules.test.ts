@@ -49,3 +49,37 @@ describe('demo alarm schedules', () => {
     expect(added[0]).toMatchObject({ ...alarm, ...expected })
   })
 })
+
+const powerRow: RouterInputs['schedules']['createPowerSchedule'] = {
+  side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75,
+}
+
+const powerCases = [
+  { name: 'defaults', settings: {}, expected: { endAction: 'turn_off', enabled: true } },
+  { name: 'maintain', settings: { endAction: 'maintain' as const, enabled: false }, expected: { endAction: 'maintain', enabled: false } },
+]
+
+describe('demo power schedules', () => {
+  it.each(powerCases)('persists $name on individual creation', async ({ settings, expected }) => {
+    const created = await required(schedules.createPowerSchedule)({ ...powerRow, ...settings })
+    expect(created).toMatchObject({ ...powerRow, ...expected })
+    const saved = await required(schedules.getAll)({ side: 'left' })
+    expect(saved.power.find(row => row.id === created.id)).toEqual(created)
+  })
+
+  it.each(powerCases)('persists $name on batch creation', async ({ settings, expected }) => {
+    const before = await required(schedules.getAll)({ side: 'left' })
+    const ids = new Set(before.power.map(row => row.id))
+    expect(await required(schedules.batchUpdate)({ creates: { power: [{ ...powerRow, ...settings }] } })).toEqual({ success: true })
+    const after = await required(schedules.getAll)({ side: 'left' })
+    const added = after.power.filter(row => !ids.has(row.id))
+    expect(added).toHaveLength(1)
+    expect(added[0]).toMatchObject({ ...powerRow, ...expected })
+  })
+
+  it('keeps the saved end action on a partial update', async () => {
+    const created = await required(schedules.createPowerSchedule)({ ...powerRow, endAction: 'maintain' })
+    const updated = await required(schedules.updatePowerSchedule)({ id: created.id, onTemperature: 70 })
+    expect(updated).toMatchObject({ endAction: 'maintain', onTemperature: 70 })
+  })
+})
