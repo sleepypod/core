@@ -1,6 +1,6 @@
 'use client'
 
-import { Hand, Minus, Plus, Power, X } from 'lucide-react'
+import { Minus, Plus, Power, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { IconButton, TempBackdrop } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
@@ -59,6 +59,8 @@ export function StagePanel({
   controlStyle, display, unit, targetF, bedF, stepDisabled, onPreview, onCommit, onStep, holdMinutes, onHoldChange, stepper,
 }: StagePanelProps) {
   const isStepper = controlStyle === 'stepper'
+  // The ownership line already reads "Off" for a side that's switched off.
+  const repeatsOwner = status.text === 'OFF' && control?.blocked === 'off'
   return (
     <aside
       role="region"
@@ -95,11 +97,12 @@ export function StagePanel({
         </button>
       </div>
 
-      <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.12em]" style={{ color: status.color }} data-testid="stage-panel-status">
-        <Hand size={13} className="shrink-0" />
-        {status.text}
-      </div>
-      <HoldStatus side={side} control={control} onResumed={onResumed} />
+      <HoldStatus
+        side={side}
+        control={control}
+        onResumed={onResumed}
+        prefix={repeatsOwner ? undefined : <span className="shrink-0 tracking-[0.12em]" style={{ color: status.color }} data-testid="stage-panel-status">{status.text}</span>}
+      />
 
       <div className="flex justify-center">
         {isStepper

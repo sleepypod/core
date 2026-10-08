@@ -224,6 +224,20 @@ describe('TempStage', () => {
     expect(m.setTemp).toHaveBeenCalledTimes(1)
   })
 
+  it('says a switched-off side is off once in the panel, and pairs a running side\'s status with its owner', async () => {
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: '2' })
+    const right = screen.getByRole('region', { name: 'Heidi controls' })
+    expect(within(right).queryByTestId('stage-panel-status')).toBeNull()
+    expect(right.querySelector('.sp-label')?.textContent).toBe('Off')
+    fireEvent.keyDown(window, { key: '1' })
+    const left = screen.getByRole('region', { name: 'Jon controls' })
+    const status = within(left).getByTestId('stage-panel-status')
+    expect(status.textContent).toMatch(/^(COOLING|WARMING|HOLDING)$/)
+    expect(status.parentElement?.textContent).toContain('Manual')
+  })
+
   it('links by copying the left side to the right, then mirrors changes to both', async () => {
     render(<TempStage onExit={() => {}} />)
     await act(async () => {})
