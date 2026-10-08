@@ -112,13 +112,14 @@ function insertPowerSchedule(opts: {
   dayOfWeek: string
   onTime: string
   offTime: string
+  endAction?: 'turn_off' | 'maintain'
   onTemperature: number
   enabled?: boolean
 }): number {
   const info = (sqlite as any)
     .prepare(
-      `INSERT INTO power_schedules (side, day_of_week, on_time, off_time, on_temperature, enabled)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO power_schedules (side, day_of_week, on_time, off_time, on_temperature, enabled, end_action)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       opts.side,
@@ -127,6 +128,7 @@ function insertPowerSchedule(opts: {
       opts.offTime,
       opts.onTemperature,
       opts.enabled === false ? 0 : 1,
+      opts.endAction ?? 'turn_off',
     )
   return Number(info.lastInsertRowid)
 }
@@ -631,6 +633,16 @@ describe('JobManager.loadSchedules', () => {
     const jobs = manager.getScheduler().getJobs()
     const tempJobs = jobs.filter(j => j.type === 'temperature')
     expect(tempJobs).toHaveLength(2)
+  })
+
+  it('restores a maintained schedule without a shutdown after reloading', async () => {
+    const id = insertPowerSchedule({ side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', onTemperature: 75, endAction: 'maintain' })
+    insertTempSchedule({ side: 'left', dayOfWeek: 'monday', time: '07:00', temperature: 80 })
+    await manager.loadSchedules()
+    const jobs = manager.getScheduler().getJobs()
+    expect(jobs.some(j => j.id === `power-on-${id}`)).toBe(true)
+    expect(jobs.some(j => j.type === 'temperature')).toBe(true)
+    expect(jobs.some(j => j.type === 'power_off')).toBe(false)
   })
 
   it('registers power-on AND power-off jobs for each enabled power schedule', async () => {
