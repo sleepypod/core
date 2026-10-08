@@ -98,7 +98,7 @@ function ThermalSideCard({ side: s }: { side: ThermalSide }) {
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-2">
           {s.guardBlocked && <Badge className="border-danger-line text-danger">GUARD BLOCKED</Badge>}
           {s.isAlarmVibrating && <Badge className="border-warn-line text-warn">ALARM VIBRATING</Badge>}
-          {s.poweredOnAt && <span className="font-mono">{`on since ${formatClock(new Date(s.poweredOnAt), timeFormat, {})}`}</span>}
+          {s.poweredOnAt && <span className="font-mono">{`on since ${formatClock(new Date(s.poweredOnAt), timeFormat, { second: '2-digit' })}`}</span>}
         </div>
       )}
     </Card>
