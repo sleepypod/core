@@ -538,3 +538,39 @@ html.dark {
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* Toasts: rise 12px and fade in over 250ms, leave the same way; the countdown bar
+   shrinks over animation-duration. Reduced motion fades only. */
+.sp-toast-in {
+  animation: sp-toast-in 250ms var(--ease-standard) both;
+}
+
+.sp-toast-out {
+  animation: sp-toast-in 250ms var(--ease-standard) reverse both;
+}
+
+.sp-toast-countdown {
+  animation: sp-toast-countdown linear forwards;
+}
+
+@keyframes sp-toast-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes sp-toast-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sp-toast-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sp-toast-in,
+  .sp-toast-out {
+    animation-name: sp-toast-fade;
+  }
+}

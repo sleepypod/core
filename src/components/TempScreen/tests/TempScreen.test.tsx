@@ -1,12 +1,15 @@
 /**
  * TempScreen behavior: per-side ± / power wiring, clamp, Link sides mirroring,
  * hold-duration forwarding, away / presence lines, the loading state and the
- * Now / Night / Dawn stepper variant.
+ * Now / Night / Dawn stepper variant, and the device notices that pause a side.
  * Context cards and the phone switcher are stubbed — they have their own data.
  */
 
 import type * as PrefsModule from '@/src/providers/PrefsProvider'
+import type { Notice } from '@/src/components/ds'
+import type * as NoticesModule from '../useTempNotices'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
+import { Droplets } from 'lucide-react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
@@ -24,6 +27,8 @@ const m = vi.hoisted(() => ({
   control: 'dial' as 'dial' | 'slider' | 'stepper',
   display: 'degrees' as 'degrees' | 'offset' | 'level',
   nudge: { left: vi.fn(), right: vi.fn() },
+  notices: [] as Notice[],
+  noticesEnabled: [] as boolean[],
 }))
 
 vi.mock('@/src/utils/trpc', () => ({
@@ -79,7 +84,16 @@ vi.mock('../ScheduleTimeline', () => ({
 }))
 vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
-vi.mock('../AlarmBanner', () => ({ AlarmBanner: () => null }))
+vi.mock('../useTempNotices', async (importOriginal) => {
+  const actual = await importOriginal<typeof NoticesModule>()
+  return {
+    ...actual,
+    useTempNotices: (_status: unknown, _refetch: unknown, opts?: { enabled?: boolean }) => {
+      m.noticesEnabled.push(opts?.enabled ?? true)
+      return { notices: m.notices, blocked: actual.blockedSides(m.notices) }
+    },
+  }
+})
 vi.mock('@/src/components/Autopilot/AutopilotStatusChip', () => ({ AutopilotStatusChip: () => null }))
 vi.mock('@/src/components/Stage/TempStage', () => ({
   TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" data-testid="temp-stage" onClick={onExit}>Back</button>,
@@ -109,6 +123,8 @@ beforeEach(() => {
   m.display = 'degrees'
   m.nudge.left.mockReset()
   m.nudge.right.mockReset()
+  m.notices = []
+  m.noticesEnabled = []
   m.status = {
     leftSide: sideStatus(76),
     rightSide: sideStatus(82),
@@ -253,6 +269,50 @@ describe('TempScreen', () => {
     expect(m.setPower).toHaveBeenCalledTimes(2)
     expect(m.setPower).toHaveBeenCalledWith({ side: 'left', powered: false }, expect.anything())
     expect(m.setPower).toHaveBeenCalledWith({ side: 'right', powered: false }, expect.anything())
+  })
+
+  it('shows the pod\'s notices under the header, danger first', () => {
+    m.notices = [
+      { id: 'priming', kind: 'progress', tone: 'cool', icon: Droplets, title: 'Priming', blocksSides: ['left', 'right'] },
+      { id: 'pump-stall:left', kind: 'action', tone: 'danger', icon: Droplets, title: 'Left side powered off. Pump stall detected.', blocksSides: ['left'] },
+    ]
+    const screen = render(<TempScreen />)
+    const banners = [...screen.getByTestId('notice-stack').querySelectorAll('[data-notice]')]
+    expect(banners.map(b => b.getAttribute('data-notice'))).toEqual(['pump-stall:left', 'priming'])
+    expect(banners.map(b => b.getAttribute('role'))).toEqual(['alert', 'status'])
+    // The prime toast fires from the cards only while they are the view on screen.
+    expect(m.noticesEnabled.at(-1)).toBe(true)
+  })
+
+  it('pauses only the side a pump stall blocks: dimmed, PAUSED, controls off', () => {
+    m.notices = [{ id: 'pump-stall:left', kind: 'action', tone: 'danger', icon: Droplets, title: 'Stall', blocksSides: ['left'] }]
+    const screen = render(<TempScreen />)
+    const left = screen.getByRole('group', { name: 'Jon (left)' })
+    const right = screen.getByRole('group', { name: 'Heidi (right)' })
+    expect(left.getAttribute('aria-disabled')).toBe('true')
+    expect(left.className).toContain('opacity-40')
+    expect(left.className).toContain('pointer-events-none')
+    expect(within(left).getByTestId('side-paused').textContent).toBe('Paused')
+    expect(within(left).getByText('PAUSED')).toBeTruthy()
+    expect((within(left).getByRole('button', { name: 'Warmer' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(left).getByRole('button', { name: 'Turn off' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(right.getAttribute('aria-disabled')).toBeNull()
+    expect(within(right).queryByTestId('side-paused')).toBeNull()
+  })
+
+  it('priming pauses both sides', () => {
+    m.notices = [{ id: 'priming', kind: 'progress', tone: 'cool', icon: Droplets, title: 'Priming', blocksSides: ['left', 'right'] }]
+    const screen = render(<TempScreen />)
+    expect(screen.getByRole('group', { name: 'Jon (left)' }).getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByRole('group', { name: 'Heidi (right)' }).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('a linked change skips the side a notice blocks', () => {
+    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null }
+    m.notices = [{ id: 'pump-stall:right', kind: 'action', tone: 'danger', icon: Droplets, title: 'Stall', blocksSides: ['right'] }]
+    const screen = render(<TempScreen />)
+    tap(card(screen, 'Jon (left)').getByRole('button', { name: 'Warmer' }))
+    expect(m.setTemp).toHaveBeenCalledExactlyOnceWith({ side: 'left', temperature: 77 }, expect.anything())
   })
 
   it('the header button toggles link', () => {

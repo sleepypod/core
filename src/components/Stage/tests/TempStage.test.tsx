@@ -5,11 +5,14 @@
  * linking copies left to right, and the flat cards appear when 3D cannot load.
  */
 
+import { Link2 } from 'lucide-react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { forwardRef, useEffect, useImperativeHandle } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
 import type { SideCard as SideCardComponent } from '@/src/components/TempScreen/SideCard'
+import type { Notice } from '@/src/components/ds'
+import type * as NoticesModule from '@/src/components/TempScreen/useTempNotices'
 import type { StageSceneCallbacks, StageSceneState } from '../stageScene'
 
 type SideCardProps = ComponentProps<typeof SideCardComponent>
@@ -42,6 +45,7 @@ const m = vi.hoisted(() => ({
   phases: null as unknown,
   nudge: vi.fn(),
   sideCards: {} as Record<string, SideCardProps>,
+  notices: [] as Notice[],
 }))
 
 vi.mock('@/src/utils/trpc', () => ({
@@ -64,11 +68,10 @@ vi.mock('@/src/utils/trpc', () => ({
 vi.mock('@/src/hooks/useDeviceStatus', () => ({
   useDeviceStatus: () => ({ status: m.status, isLoading: m.statusLoading, refetch: m.refetch }),
 }))
-vi.mock('@/src/components/TempScreen/DeviceAlerts', () => ({
-  DeviceAlerts: ({ status, onRefetch }: { status?: { leftSide?: { isAlarmVibrating?: boolean } }, onRefetch: () => void }) => (
-    status?.leftSide?.isAlarmVibrating ? <button type="button" onClick={onRefetch}>Stop alarm</button> : null
-  ),
-}))
+vi.mock('@/src/components/TempScreen/useTempNotices', async (importOriginal) => {
+  const actual = await importOriginal<typeof NoticesModule>()
+  return { ...actual, useTempNotices: () => ({ notices: m.notices, blocked: actual.blockedSides(m.notices) }) }
+})
 vi.mock('@/src/hooks/useSensorStream', () => ({
   useSensorStream: () => {},
   useSensorFrame: (type: string) => (type === 'bedTemp2' ? m.frame : m.older),
@@ -130,6 +133,7 @@ beforeEach(() => {
   m.health = { tone: 'ok', summary: 'healthy' }
   m.phases = null
   m.sideCards = {}
+  m.notices = []
   m.settings = { device: { temperatureUnit: 'F' }, sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } }
   m.occupancy = { left: { occupied: true, available: true }, right: { occupied: false, available: true } }
   m.schedules = { left: rows([['22:00', 72], ['02:00', 68], ['06:00', 79]]), right: [] }
@@ -365,10 +369,40 @@ describe('TempStage', () => {
     const { rerender } = render(<TempStage onExit={() => {}} />)
     await act(async () => {})
     expect(screen.getByTestId('stage-alerts').childElementCount).toBe(0)
-    m.status = { ...(m.status as object), leftSide: { ...sideStatus(72, 5), isAlarmVibrating: true } }
+    const stop = vi.fn()
+    m.notices = [{ id: 'alarm', kind: 'action', tone: 'warn', icon: Link2, title: 'Alarm active', actions: <button type="button" onClick={stop}>Stop</button> }]
     rerender(<TempStage onExit={() => {}} />)
-    fireEvent.click(within(screen.getByTestId('stage-alerts')).getByRole('button', { name: 'Stop alarm' }))
-    expect(m.refetch).toHaveBeenCalled()
+    fireEvent.click(within(screen.getByTestId('stage-alerts')).getByRole('button', { name: 'Stop' }))
+    expect(stop).toHaveBeenCalled()
+  })
+
+  it('pauses the side a notice blocks: label, keys, drag and panel controls', async () => {
+    m.notices = [{ id: 'pump-stall:left', kind: 'action', tone: 'danger', icon: Link2, title: 'Stall', blocksSides: ['left'] }]
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    expect(screen.getByTestId('stage-label-left-status').textContent).toBe('PAUSED')
+    expect(screen.getByTestId('stage-label-right-status').textContent).toBe('OFF')
+    fireEvent.keyDown(window, { key: '1' })
+    fireEvent.keyDown(window, { key: 'ArrowUp' })
+    fireEvent.keyDown(window, { key: ' ' })
+    act(() => m.canvas?.callbacks.onDrag('left', 75))
+    act(() => vi.advanceTimersByTime(600))
+    expect(m.setTemp).not.toHaveBeenCalled()
+    expect(m.setPower).not.toHaveBeenCalled()
+    const panel = within(screen.getByTestId('stage-panel'))
+    expect((panel.getByRole('button', { name: 'Turn Jon off' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((panel.getByRole('button', { name: 'Warmer' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('pauses blocked sides on the flat cards too', async () => {
+    m.mode = '2d'
+    m.notices = [{ id: 'priming', kind: 'progress', tone: 'cool', icon: Link2, title: 'Priming', blocksSides: ['left', 'right'] }]
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    expect(m.sideCards.left.paused).toBe(true)
+    expect(m.sideCards.right.paused).toBe(true)
+    expect(m.sideCards.left.stepDisabled).toBe(true)
+    expect(m.sideCards.left.powerDisabled).toBe(true)
   })
 
   it('shows Stage pressed in the view switch and turns everything off with All off', async () => {

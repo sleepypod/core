@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button, PageHeader, Skeleton } from '@/src/components/ds'
+import { Button, NoticeStack, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
@@ -19,7 +19,6 @@ import { usePrefs } from '@/src/providers/PrefsProvider'
 import { useShownSides, useSide, type Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
 import { AlarmCard } from './AlarmCard'
-import { DeviceAlerts } from './DeviceAlerts'
 import { LastNightCard } from './LastNightCard'
 import { ScheduleTimeline } from './ScheduleTimeline'
 import { SideCard, type Presence } from './SideCard'
@@ -28,6 +27,7 @@ import type { StepperTab } from './TempStepper'
 import { TonightCard, useNow } from './TonightCard'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
+import { useTempNotices } from './useTempNotices'
 
 const TempStage = dynamic(() => import('../Stage/TempStage').then(m => m.TempStage), { ssr: false, loading: () => <div aria-hidden="true" className="fixed inset-0 z-30 bg-[#0b0b0c] min-[900px]:left-[224px]" /> })
 
@@ -53,8 +53,8 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * - schedules.getAll / schedules.batchUpdate → stepper variant's Night / Dawn
  *   (shifts tonight's set points; see useNightPhases)
  * - device.resumeTemperature → Resume on an active manual hold
- * - device.clearAlarm / device.snoozeAlarm → AlarmBanner
- * - device.dismissPrimeNotification → PrimeCompleteNotification
+ * - device.clearAlarm / device.snoozeAlarm, pumpAlerts.* → notice banners (useTempNotices)
+ * - device.dismissPrimeNotification → the prime-complete toast (useTempNotices)
  * - biometrics.getOccupancy → in-bed dot (omitted when presence can't be sensed)
  * - settings.getAll → unit, side names, away mode
  * - Schedule and sleep timeline (desktop): schedules.getAll, biometrics.getSleepRecords,
@@ -113,6 +113,12 @@ export const TempScreen = () => {
     return () => window.removeEventListener('keydown', onKey)
   }, [showStage, setView])
   const [holdMinutes, setHoldMinutes] = useState(30)
+  const refetchStatus = () => {
+    void refetch()
+  }
+  // Pump stall, priming and alarm banners; a notice's blocksSides pauses those cards.
+  // The stage derives its own, so the prime toast fires from whichever view is up.
+  const { notices, blocked } = useTempNotices(status, refetchStatus, { enabled: !showStage })
 
   const controls = {
     left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch),
@@ -132,7 +138,8 @@ export const TempScreen = () => {
     right: useNightPhases('right', now, unit, tempDisplay, isStepper),
   }
 
-  const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side])
+  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones.
+  const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side]).filter(s => !blocked[s])
   const scheduleTargetsFor = (side: Side): Side[] => [...new Set(targetsFor(side).map(s => scheduleSide(s)))]
 
   const handleStepPhase = (side: Side, phase: NightPhaseKey, delta: number) => {
@@ -216,7 +223,7 @@ export const TempScreen = () => {
     <>
       {header}
 
-      <DeviceAlerts status={status} onRefetch={() => { void refetch() }} />
+      <NoticeStack notices={notices} />
 
       <Link href="/settings?section=sides" className="mb-3 inline-flex rounded-ctl border border-line-2 px-3 py-2 text-sm text-fg-2 hover:text-fg" aria-label={`Manage sleepers: ${sleeperLabel}`}>
         {sleeperLabel}
@@ -249,8 +256,9 @@ export const TempScreen = () => {
               targetF={c.targetF}
               bedF={c.bedF}
               isOn={c.isOn}
-              stepDisabled={!c.isOn}
-              powerDisabled={c.powerPending}
+              paused={blocked[side]}
+              stepDisabled={!c.isOn || blocked[side]}
+              powerDisabled={c.powerPending || blocked[side]}
               holdMinutes={holdMinutes}
               onHoldChange={setHoldMinutes}
               onPreview={f => handlePreview(side, f)}

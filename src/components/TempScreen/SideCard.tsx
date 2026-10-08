@@ -31,6 +31,8 @@ export interface SideCardProps {
   targetF: number
   bedF: number | null
   isOn: boolean
+  /** A notice (priming, pump stall) blocks this side: dimmed, inert, status PAUSED. */
+  paused?: boolean
   stepDisabled: boolean
   powerDisabled: boolean
   holdMinutes: number
@@ -83,6 +85,7 @@ export function SideCard({
   targetF,
   bedF,
   isOn,
+  paused = false,
   stepDisabled,
   powerDisabled,
   holdMinutes,
@@ -102,7 +105,9 @@ export function SideCard({
     <Card
       role="group"
       aria-label={`${name} (${side})`}
-      className={cn('gap-3.5 p-[18px] min-[900px]:p-5', hiddenOnPhone && 'max-[899px]:hidden')}
+      aria-disabled={paused || undefined}
+      inert={paused || undefined}
+      className={cn('gap-3.5 p-[18px] min-[900px]:p-5', hiddenOnPhone && 'max-[899px]:hidden', paused && 'pointer-events-none opacity-40')}
       backdrop={isStepper ? <TempBackdrop {...stepperBackdrop({ ...stepper, targetF, isOn })} /> : undefined}
     >
       <div className="flex items-center gap-2">
@@ -128,6 +133,7 @@ export function SideCard({
         control={control}
         prefix={(
           <>
+            {paused && <span className="shrink-0 text-fg" data-testid="side-paused">Paused</span>}
             <span className="shrink-0 min-[900px]:hidden">{line}</span>
             {/* Desktop hides the side line (the dot carries presence), so an away side says so here. */}
             {(away || linkedTo || scheduleStatus) && <span className="hidden min-[900px]:inline">{[away || linkedTo ? awayLine(linkedTo) : null, scheduleStatus].filter(Boolean).join(' · ')}</span>}
@@ -163,7 +169,7 @@ export function SideCard({
                 power={isOn}
                 onChange={onPreview}
                 onCommit={onCommit}
-                statusOverride={isOn ? undefined : 'OFF'}
+                statusOverride={paused ? 'PAUSED' : isOn ? undefined : 'OFF'}
               />
             )}
       </div>
