@@ -174,15 +174,47 @@ export function nearestSample(samples: BedSample[], minutes: number, gap = BED_G
   return best && Math.abs(best.minutes - minutes) <= gap ? best : null
 }
 
-/** Smooth path through the points: horizontal tangents at each set point. */
-function smoothPath(pts: Array<{ x: number, y: number }>): string {
-  if (pts.length === 0) return ''
-  let d = `M${pts[0].x},${pts[0].y}`
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1]
-    const b = pts[i]
-    const mx = (a.x + b.x) / 2
-    d += ` C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}`
+const r1 = (v: number) => Math.round(v * 10) / 10
+
+/**
+ * Smooth path through the points (monotone cubic, Fritsch–Carlson): it never
+ * overshoots a set point, holds stay flat, and turns ease in and out. Water
+ * changes about 1°F per 15–20 min, so this is closer to what the bed does
+ * than the scheduler's instant steps.
+ */
+export function curvePath(pts: Array<{ x: number, y: number }>): string {
+  const n = pts.length
+  if (n === 0) return ''
+  let d = `M${r1(pts[0].x)},${r1(pts[0].y)}`
+  if (n === 1) return d
+  const secant = pts.slice(1).map((b, i) => {
+    const dx = b.x - pts[i].x
+    return dx === 0 ? 0 : (b.y - pts[i].y) / dx
+  })
+  const tangent = pts.map((_, i) => {
+    if (i === 0) return secant[0]
+    if (i === n - 1) return secant[n - 2]
+    return secant[i - 1] * secant[i] <= 0 ? 0 : (secant[i - 1] + secant[i]) / 2
+  })
+  for (let i = 0; i < n - 1; i++) {
+    if (secant[i] === 0) {
+      tangent[i] = 0
+      tangent[i + 1] = 0
+      continue
+    }
+    const a = tangent[i] / secant[i]
+    const b = tangent[i + 1] / secant[i]
+    const h = a * a + b * b
+    if (h > 9) {
+      tangent[i] = (3 / Math.sqrt(h)) * a * secant[i]
+      tangent[i + 1] = (3 / Math.sqrt(h)) * b * secant[i]
+    }
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const a = pts[i]
+    const b = pts[i + 1]
+    const third = (b.x - a.x) / 3
+    d += ` C${r1(a.x + third)},${r1(a.y + tangent[i] * third)} ${r1(b.x - third)},${r1(b.y - tangent[i + 1] * third)} ${r1(b.x)},${r1(b.y)}`
   }
   return d
 }
@@ -231,8 +263,8 @@ interface CurveChartProps<T extends CurveSetPoint> {
 }
 
 /**
- * Schedule curve drawn as sharp steps (what the scheduler sends), stroked
- * with a cool/neutral/warm colour per set point vs 80°F, over an even-degree
+ * Schedule curve drawn as a smooth line through the set points, stroked and
+ * tinted underneath with a cool/neutral/warm colour per set point vs 80°F, over an even-degree
  * grid that always covers the peak, with an optional NOW line and the
  * measured bed temperature as a thin grey line. Read-only charts have no
  * dots: hovering reads out the target and bed at that time. The editor
@@ -285,11 +317,10 @@ export function CurveChart<T extends CurveSetPoint>({
     return () => ro.disconnect()
   }, [])
 
-  const allPoints = buildTimeline(setPoints)
-  const timeline = onChangePoint ? allPoints : dropHolds(allPoints)
-  const win = { ...chartDomain(allPoints), ...timeDomain }
+  const timeline = buildTimeline(setPoints)
+  const win = { ...chartDomain(timeline), ...timeDomain }
   const samples = (bed ?? []).filter(s => s.minutes >= win.start && s.minutes <= win.end)
-  const domain = drag?.domain ?? { ...chartDomain(allPoints, onChangePoint ? 4 : 1, samples.map(s => s.temperature)), ...timeDomain }
+  const domain = drag?.domain ?? { ...chartDomain(timeline, onChangePoint ? 4 : 1, samples.map(s => s.temperature)), ...timeDomain }
   const { start, end, step, lo, hi } = domain
   const padY = large ? 18 : 14
   const X = (m: number) => ((m - start) / (end - start)) * width
@@ -298,22 +329,21 @@ export function CurveChart<T extends CurveSetPoint>({
   const invY = (y: number) => lo + ((height - padY - y) / (height - padY * 2)) * (hi - lo)
 
   const coords = timeline.map(p => ({ x: X(p.minutes), y: Y(p.temperature) }))
-  const path = stepPath(coords)
+  const path = curvePath(coords)
   const bedPath = measuredPath(samples, X, Y)
   const x0 = coords[0]?.x ?? 0
   const x1 = coords[coords.length - 1]?.x ?? width
-  // Hard colour stops: each hold keeps its own tone right up to the step.
-  const stops = timeline.flatMap((p, i) => {
-    const offset = ((coords[i].x - x0) / (x1 - x0 || 1)).toFixed(3)
-    const color = TONE_VAR[tempTone(p.temperature)]
-    return i === 0 ? [{ offset, color }] : [{ offset, color: TONE_VAR[tempTone(timeline[i - 1].temperature)] }, { offset, color }]
-  })
+  // One stop per set point: the tone blends along the ramps between them.
+  const stops = timeline.map((p, i) => ({
+    offset: ((coords[i].x - x0) / (x1 - x0 || 1)).toFixed(3),
+    color: TONE_VAR[tempTone(p.temperature)],
+  }))
 
   const hoverAt = hoverMinutes !== undefined ? hoverMinutes : hover
   const setHoverAt = (m: number | null) => (onHoverMinutes ? onHoverMinutes(m) : setHover(m))
   let readout: { x: number, label: string } | null = null
   if (hoverMarks && hoverAt !== null && !onChangePoint && hoverAt >= start && hoverAt <= end) {
-    const target = heldTemperature(allPoints, hoverAt)
+    const target = heldTemperature(timeline, hoverAt)
     const sample = nearestSample(samples, hoverAt)
     const fmt = (v: number | null, decimals = 0) => (v === null ? '—' : formatSetpointF(v, unit, { includeUnit: false, decimals }))
     readout = {
@@ -399,6 +429,13 @@ export function CurveChart<T extends CurveSetPoint>({
               <linearGradient id={gradientId} x1={x0} y1="0" x2={x1 === x0 ? x0 + 1 : x1} y2="0" gradientUnits="userSpaceOnUse">
                 {stops.map((s, i) => <stop key={i} offset={s.offset} stopColor={s.color} />)}
               </linearGradient>
+              <linearGradient id={`${gradientId}-fade`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#fff" stopOpacity="0.22" />
+                <stop offset="1" stopColor="#fff" stopOpacity="0" />
+              </linearGradient>
+              <mask id={`${gradientId}-mask`}>
+                <rect width={width} height={height} fill={`url(#${gradientId}-fade)`} />
+              </mask>
             </defs>
             {(grid === 'neutral' ? [NEUTRAL_TEMP_F].filter(v => v >= lo && v <= hi) : gridTemps(lo, hi)).map(v => (
               <g key={v}>
@@ -408,11 +445,11 @@ export function CurveChart<T extends CurveSetPoint>({
                 </text>
               </g>
             ))}
-            <path d={`${path} L${x1},${height} L${x0},${height} Z`} fill="var(--text-1)" fillOpacity="0.04" />
+            <path data-testid="curve-area" d={`${path} L${x1},${height} L${x0},${height} Z`} fill={`url(#${gradientId})`} mask={`url(#${gradientId}-mask)`} />
             {bedPath && (
               <path data-testid="curve-bed" d={bedPath} fill="none" stroke="var(--text-3)" strokeWidth="1.25" strokeLinejoin="round" />
             )}
-            <path d={path} fill="none" stroke={`url(#${gradientId})`} strokeWidth="2.5" strokeLinejoin="round" />
+            <path d={path} fill="none" stroke={`url(#${gradientId})`} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
             {/* Same marks as the System → Scheduler lanes: green "on", grey "off" with its line. */}
             {endLabels && coords.length > 1 && (
               <g className="font-mono" fontSize="10" data-testid="curve-ends">
@@ -536,7 +573,7 @@ export function MiniCurve({ setPoints, height = 32, className }: { setPoints: Cu
           ))}
         </linearGradient>
       </defs>
-      <path d={smoothPath(pts)} fill="none" stroke={`url(#${id})`} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      <path d={curvePath(pts)} fill="none" stroke={`url(#${id})`} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
     </svg>
   )
 }

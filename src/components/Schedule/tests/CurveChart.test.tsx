@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { assert, afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildTimeline, chartDomain, CurveChart, dropHolds, formatHourLabel, gridTemps, heldTemperature, measuredPath, MiniCurve, minutesToTime, nearestSample, stepPath,
+  buildTimeline, chartDomain, CurveChart, curvePath, dropHolds, formatHourLabel, gridTemps, heldTemperature, measuredPath, MiniCurve, minutesToTime, nearestSample, stepPath,
 } from '../CurveChart'
 
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
@@ -63,6 +63,33 @@ describe('stepPath', () => {
   it('holds each value until the next point, then jumps', () => {
     expect(stepPath([{ x: 0, y: 10 }, { x: 50, y: 10 }, { x: 100, y: 30 }])).toBe('M0,10 L50,10 L100,10 L100,30')
     expect(stepPath([])).toBe('')
+  })
+})
+
+describe('curvePath', () => {
+  const ys = (d: string) => [...d.matchAll(/[\d.-]+,([\d.-]+)/g)].map(m => Number(m[1]))
+
+  it('runs a cubic through every point', () => {
+    const d = curvePath([{ x: 0, y: 10 }, { x: 30, y: 10 }, { x: 60, y: 40 }, { x: 90, y: 40 }])
+    expect(d.startsWith('M0,10 C')).toBe(true)
+    expect(d.match(/C/g)).toHaveLength(3)
+    expect(d.endsWith(' 90,40')).toBe(true)
+  })
+
+  it('keeps holds flat and never overshoots a set point', () => {
+    const d = curvePath([{ x: 0, y: 10 }, { x: 30, y: 10 }, { x: 60, y: 40 }, { x: 90, y: 40 }, { x: 120, y: 20 }])
+    // The first hold's control points stay on its line.
+    expect(d.split(' C')[1]).toBe('10,10 20,10 30,10')
+    for (const y of ys(d)) {
+      expect(y).toBeGreaterThanOrEqual(10)
+      expect(y).toBeLessThanOrEqual(40)
+    }
+  })
+
+  it('handles empty, single and same-time points', () => {
+    expect(curvePath([])).toBe('')
+    expect(curvePath([{ x: 5, y: 7 }])).toBe('M5,7')
+    expect(curvePath([{ x: 5, y: 7 }, { x: 5, y: 9 }])).toBe('M5,7 C5,7 5,9 5,9')
   })
 })
 
@@ -131,20 +158,22 @@ describe('time labels', () => {
 })
 
 describe('CurveChart', () => {
-  it('draws the schedule as steps with on/off labels, hard colour stops and the axis, but no dots', () => {
+  it('draws the schedule as a smooth line with on/off labels, a stop per set point and the axis, but no dots', () => {
     const { container, getByText, getByTestId } = render(<CurveChart setPoints={OVERNIGHT} />)
     expect(container.querySelectorAll('circle')).toHaveLength(0)
     expect(container.querySelector('[role="slider"]')).toBeNull()
     const line = container.querySelector('path[stroke^="url("]')
     assert(line)
-    // Hold, then a vertical jump: every segment is axis-aligned.
-    expect(line.getAttribute('d')?.split(' ').slice(1)).toHaveLength(6)
-    const stops = [...container.querySelectorAll('stop')].map(s => [s.getAttribute('offset'), s.getAttribute('stop-color')])
-    expect(stops).toHaveLength(7)
-    expect(stops[0][1]).toBe('var(--accent-warm)')
-    expect(stops[1][1]).toBe('var(--accent-warm)')
-    expect(stops[2][1]).toBe('var(--accent-cool)')
-    expect(stops[1][0]).toBe(stops[2][0])
+    // One curve segment between each pair of the four set points.
+    expect(line.getAttribute('d')?.match(/C/g)).toHaveLength(3)
+    const tone = container.querySelector(`linearGradient${line.getAttribute('stroke')?.slice(4, -1)}`)
+    assert(tone)
+    const stops = [...tone.querySelectorAll('stop')].map(s => [s.getAttribute('offset'), s.getAttribute('stop-color')])
+    expect(stops.map(s => s[1])).toEqual(['var(--accent-warm)', 'var(--accent-cool)', 'var(--accent-neutral)', 'var(--accent-warm)'])
+    expect(stops[0][0]).toBe('0.000')
+    expect(stops[3][0]).toBe('1.000')
+    // The area under the line takes the same tones, faded out towards the bottom.
+    expect(getByTestId('curve-area').getAttribute('fill')).toBe(line.getAttribute('stroke'))
     expect(within(getByTestId('curve-ends')).getByText('on')).toBeTruthy()
     expect(within(getByTestId('curve-ends')).getByText('off')).toBeTruthy()
     expect(getByText('10 PM')).toBeTruthy()
@@ -174,7 +203,7 @@ describe('CurveChart', () => {
     expect(container.querySelector('circle')?.getAttribute('fill')).toBe('var(--accent-cool)')
   })
 
-  it('draws the measured bed temperature under the steps and widens the range to fit it', () => {
+  it('draws the measured bed temperature under the target line and widens the range to fit it', () => {
     const bed = [
       { minutes: 23 * 60 + 15, temperature: 77 },
       { minutes: 23 * 60 + 20, temperature: 78.5 },
