@@ -20,6 +20,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { formatSensorC, toF } from '@/src/lib/tempUtils'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import { usePrefs } from '@/src/providers/PrefsProvider'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { useSide } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
 import StageCanvas from './StageCanvas'
@@ -101,6 +102,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
   const { footer: health } = usePodHealth()
   const { data: settings } = trpc.settings.getAll.useQuery({})
+  const timeFormat = useTimeFormat()
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
   const [zoneMode] = useStageZones()
@@ -353,7 +355,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
           ? (
               <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
                 <span aria-hidden className="size-1.5 rounded-full" style={{ background: STAGE.preview }} />
-                {`Preview · ${clock(previewAt)} · Back to live`}
+                {`Preview · ${clock(previewAt, timeFormat)} · Back to live`}
               </button>
             )
           : (

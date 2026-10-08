@@ -3,6 +3,7 @@
 import type { PointerEvent } from 'react'
 import { dropHolds, stepPath } from '@/src/components/Schedule/CurveChart'
 import type { TempUnit } from '@/src/lib/tempUtils'
+import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import type { TempDisplay } from '@/src/providers/PrefsProvider'
 import { STAGE, STAGE_SIDES, formatStageTemp } from './stageColors'
 import type { StageSide } from './stageColors'
@@ -37,6 +38,7 @@ function yOf(temperature: number, range: { lo: number, hi: number }): number {
  * the bed at that hour. The preview stays until Back to live.
  */
 export function StageTimeline({ win, now, curves, names, unit, display, previewAt, onScrub, loading }: StageTimelineProps) {
+  const timeFormat = useTimeFormat()
   const range = stageRange(curves)
   const ticks = stageTicks(win)
   const next = nextChange(curves, now)
@@ -85,7 +87,7 @@ export function StageTimeline({ win, now, curves, names, unit, display, previewA
         aria-valuemin={win.start}
         aria-valuemax={win.end}
         aria-valuenow={previewAt ?? now}
-        aria-valuetext={clock(previewAt ?? now)}
+        aria-valuetext={clock(previewAt ?? now, timeFormat)}
         tabIndex={-1}
         data-testid="stage-lane"
         className="relative cursor-ew-resize touch-none select-none"
@@ -103,18 +105,18 @@ export function StageTimeline({ win, now, curves, names, unit, display, previewA
           })}
         </svg>
         <div aria-hidden data-testid="stage-now" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(now), background: STAGE.text2 }}>
-          <span className="absolute -top-0.5 left-1.5 whitespace-nowrap font-mono text-[10px] leading-none" style={{ color: STAGE.text2 }}>{`now ${clock(now)}`}</span>
+          <span className="absolute -top-0.5 left-1.5 whitespace-nowrap font-mono text-[10px] leading-none" style={{ color: STAGE.text2 }}>{`now ${clock(now, timeFormat)}`}</span>
         </div>
         {previewAt != null && (
           <div aria-hidden data-testid="stage-preview-marker" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(previewAt), background: STAGE.preview }}>
             <span className="absolute -top-0.5 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium leading-none text-[#0b0b0c]" style={{ background: STAGE.preview }}>
-              {clock(previewAt)}
+              {clock(previewAt, timeFormat)}
             </span>
           </div>
         )}
       </div>
       <div className="flex justify-between font-mono text-[10px] text-[#5d5d63]" aria-hidden>
-        {ticks.map(t => <span key={t}>{hourLabel(t)}</span>)}
+        {ticks.map(t => <span key={t}>{hourLabel(t, timeFormat)}</span>)}
       </div>
     </div>
   )

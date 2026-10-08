@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOUR, fractionOf, formatUntil, nextChange, scheduledAt, stageCurves, stageRange, stageTicks, stageWindow, timeAtFraction } from '../stageTimelineLogic'
+import { HOUR, clock, fractionOf, formatUntil, hourLabel, nextChange, scheduledAt, stageCurves, stageRange, stageTicks, stageWindow, timeAtFraction } from '../stageTimelineLogic'
 
 // Monday 28 Sep 2026, 9 PM local.
 const now = new Date(2026, 8, 28, 21, 0)
@@ -54,5 +54,16 @@ describe('curves and preview', () => {
     expect(formatUntil(2 * HOUR + 8 * 60_000)).toBe('2h 08m')
     expect(formatUntil(45 * 60_000)).toBe('45m')
     expect(formatUntil(-5)).toBe('0m')
+  })
+})
+
+describe('clock labels', () => {
+  it('follow the pod time format, keeping midnight at 00:00 in 24-hour mode', () => {
+    const late = new Date(2026, 8, 28, 23, 30).getTime()
+    const midnight = new Date(2026, 8, 29, 0, 0).getTime()
+    expect(clock(late)).toBe('11:30 PM')
+    expect(clock(late, '24h')).toBe('23:30')
+    expect(hourLabel(midnight)).toBe('12 AM')
+    expect(hourLabel(midnight, '24h')).toBe('00:00')
   })
 })
