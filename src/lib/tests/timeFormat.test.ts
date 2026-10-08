@@ -30,3 +30,28 @@ describe('clock display formats', () => {
     expect(formatTick(new Date(2026, 9, 6, 23, 0).getTime())).toBe('11 PM')
   })
 })
+
+it('pads a single-digit schedule hour and preserves invalid values in both formats', () => {
+  expect(formatTime('7:05', '24h')).toBe('07:05')
+  expect(formatTime('7:05')).toBe('7:05 AM')
+  for (const value of ['-1:00', '123:00', '12:5', '12:00:00', '23:60']) {
+    expect(formatTime(value)).toBe(value)
+    expect(formatTime(value, '24h')).toBe(value)
+  }
+})
+
+it('supports string and epoch clocks, missing values, and hour-only labels', () => {
+  const value = '2026-10-06T07:05:09Z'
+  expect(formatClock(value, '24h', { timeZone: 'UTC' })).toBe('07:05')
+  expect(formatClock(Date.parse(value), '12h', { timeZone: 'UTC' })).toBe('7:05 AM')
+  expect(formatClock(undefined)).toBe('—')
+  expect(formatClock(value, '12h', { hour: 'numeric', timeZone: 'UTC' })).toBe('7 AM')
+  expect(formatClock(value, '12h', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })).toBe('07:05 AM')
+  expect(formatClock(value, '24h', { hour: 'numeric', timeZone: 'UTC' })).toBe('07:05')
+})
+
+it('keeps nonzero minutes in 12-hour and 24-hour chart ticks', () => {
+  const value = new Date(2026, 9, 6, 23, 5).getTime()
+  expect(formatTick(value)).toBe('11:05 PM')
+  expect(formatTick(value, '24h')).toBe('23:05')
+})
