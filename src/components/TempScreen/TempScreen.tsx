@@ -121,8 +121,8 @@ export const TempScreen = () => {
   const { notices, blocked } = useTempNotices(status, refetchStatus, { enabled: !showStage })
 
   const controls = {
-    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch),
-    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch),
+    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch, blocked.left),
+    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch, blocked.right),
   }
 
   // Stepper variant: Night / Dawn read and edit tonight's schedule per side.
@@ -138,8 +138,9 @@ export const TempScreen = () => {
     right: useNightPhases('right', now, unit, tempDisplay, isStepper),
   }
 
-  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones.
-  const targetsFor = (side: Side): Side[] => (isLinked ? SIDES : [side]).filter(s => !blocked[s])
+  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones,
+  // and drives none: its partner doesn't move from it.
+  const targetsFor = (side: Side): Side[] => blocked[side] ? [] : (isLinked ? SIDES : [side]).filter(s => !blocked[s])
   const scheduleTargetsFor = (side: Side): Side[] => [...new Set(targetsFor(side).map(s => scheduleSide(s)))]
 
   const handleStepPhase = (side: Side, phase: NightPhaseKey, delta: number) => {

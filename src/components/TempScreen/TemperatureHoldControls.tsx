@@ -39,11 +39,13 @@ export function ownershipLabel(control: TemperatureControlStatus, timeFormat: Ti
  * with Resume while a manual hold is active. `prefix` renders before it (phone
  * shows "LEFT · IN BED" on the same line).
  */
-export function HoldStatus({ side, control, prefix, onResumed }: {
+export function HoldStatus({ side, control, prefix, onResumed, disabled = false }: {
   side: Side
   control: TemperatureControlStatus | undefined
   prefix?: ReactNode
   onResumed: () => void
+  /** The side is paused by a notice: Resume takes no input. */
+  disabled?: boolean
 }) {
   const timeFormat = useTimeFormat()
   const resume = trpc.device.resumeTemperature.useMutation({ onSuccess: onResumed })
@@ -63,7 +65,7 @@ export function HoldStatus({ side, control, prefix, onResumed }: {
           <button
             type="button"
             className="ml-auto shrink-0 cursor-pointer rounded-tag border-0 bg-transparent px-1 font-mono text-[11px] uppercase tracking-[0.06em] text-fg hover:bg-active disabled:cursor-default disabled:opacity-45 max-[899px]:ml-2"
-            disabled={resume.isPending}
+            disabled={disabled || resume.isPending}
             onClick={() => resume.mutate({ side })}
           >
             Resume

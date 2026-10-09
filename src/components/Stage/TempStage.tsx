@@ -110,15 +110,15 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const [zoneMode] = useStageZones()
   const [autoReturn] = useStageAutoReturn()
   const [holdMinutes, setHoldMinutes] = useState(30)
-  const controls = {
-    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch),
-    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch),
-  }
   const refetchStatus = () => {
     void refetch()
   }
   // Pump stall, priming and alarm banners; a notice's blocksSides pauses that side's controls.
   const { notices, blocked } = useTempNotices(status, refetchStatus)
+  const controls = {
+    left: useSideTemperature('left', status?.leftSide, holdMinutes, refetch, blocked.left),
+    right: useSideTemperature('right', status?.rightSide, holdMinutes, refetch, blocked.right),
+  }
   const surface = useBedSurface()
   const now = useNow()
   const nowMs = now.getTime()
@@ -157,8 +157,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const labels = useCallback(() => labelRefs.current, [])
 
   const names = { left: sideName('left'), right: sideName('right') }
-  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones.
-  const targetsFor = (side: StageSide): StageSide[] => (isLinked ? STAGE_SIDES : [side]).filter(s => !blocked[s])
+  // A side a notice blocks (priming, its pump stall) takes no changes, even mirrored ones,
+  // and drives none: dragging it doesn't move its partner.
+  const targetsFor = (side: StageSide): StageSide[] => blocked[side] ? [] : (isLinked ? STAGE_SIDES : [side]).filter(s => !blocked[s])
   const previewing = previewAt != null
 
   const handlePreview = (side: StageSide, f: number) => {
@@ -182,7 +183,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   }
   /** Linking copies the left side's target and power to the right, then mirrors every change. */
   const handleLink = () => {
-    if (!isLinked) {
+    // A paused side takes no copy; the link itself still toggles.
+    if (!isLinked && !blocked.left && !blocked.right) {
       if (controls.right.isOn !== controls.left.isOn) controls.right.commitPower(controls.left.isOn)
       if (controls.left.isOn && controls.right.targetF !== controls.left.targetF) controls.right.commitTemp(controls.left.targetF)
     }
@@ -458,6 +460,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         name={panelName}
         scope={panelScope}
         isOn={controls[panelSide].isOn}
+        paused={blocked[panelSide]}
         powerDisabled={controls[panelSide].powerPending || blocked[panelSide]}
         onPower={() => handlePower(panelSide)}
         onClose={() => setSelected(null)}

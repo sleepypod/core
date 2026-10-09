@@ -44,6 +44,8 @@ export function useSideTemperature(
   sideStatus: SideStatus | undefined,
   holdMinutes: number,
   refetch: () => unknown,
+  /** A notice blocks this side: a −/+ step still waiting to send is dropped. */
+  blocked = false,
 ): SideTemperature {
   const setTempMutation = trpc.device.setTemperature.useMutation()
   const setPowerMutation = trpc.device.setPower.useMutation()
@@ -71,6 +73,13 @@ export function useSideTemperature(
   useEffect(() => () => {
     if (stepTimer.current) clearTimeout(stepTimer.current)
   }, [])
+
+  useEffect(() => {
+    if (!blocked || !stepTimer.current) return
+    clearTimeout(stepTimer.current)
+    stepTimer.current = null
+    discardTarget()
+  }, [blocked, discardTarget])
 
   const stepTemp = useCallback((f: number) => {
     previewTarget(f)

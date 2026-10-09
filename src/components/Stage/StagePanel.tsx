@@ -21,6 +21,8 @@ export interface StagePanelProps {
   /** "Left · In bed", "Both sides"… */
   scope: string
   isOn: boolean
+  /** A notice (priming, pump stall) blocks this side: Resume, the dial and hold take no input. */
+  paused?: boolean
   powerDisabled: boolean
   onPower: () => void
   onClose: () => void
@@ -55,7 +57,7 @@ export interface StagePanelProps {
  * paints the same time-of-day and temperature backdrop as its card.
  */
 export function StagePanel({
-  open, side, name, scope, isOn, powerDisabled, onPower, onClose, status, control, onResumed,
+  open, side, name, scope, isOn, paused = false, powerDisabled, onPower, onClose, status, control, onResumed,
   controlStyle, display, unit, targetF, bedF, stepDisabled, onPreview, onCommit, onStep, holdMinutes, onHoldChange, stepper,
 }: StagePanelProps) {
   const isStepper = controlStyle === 'stepper'
@@ -101,49 +103,52 @@ export function StagePanel({
         side={side}
         control={control}
         onResumed={onResumed}
+        disabled={paused}
         prefix={repeatsOwner ? undefined : <span className="shrink-0 tracking-[0.12em]" style={{ color: status.color }} data-testid="stage-panel-status">{status.text}</span>}
       />
 
-      <div className="flex justify-center">
-        {isStepper
-          ? (
-              <TempStepper
-                tab={stepper.tab}
-                onTabChange={stepper.onTabChange}
-                schedule={stepper.schedule}
-                onStepPhase={stepper.onStepPhase}
-                unit={unit}
-                display={display}
-                targetF={targetF}
-                bedF={bedF}
-                isOn={isOn}
-                nowDisabled={stepDisabled}
-                onStepNow={onStep}
-              />
-            )
-          : (
-              <TempControl
-                variant={controlStyle}
-                display={display}
-                targetF={targetF}
-                bedF={bedF}
-                unit={unit}
-                power={isOn}
-                onChange={onPreview}
-                onCommit={onCommit}
-                statusOverride={isOn ? undefined : 'OFF'}
-              />
-            )}
-      </div>
-
-      {!isStepper && (
-        <div className="flex items-center justify-center gap-4">
-          <IconButton icon={Minus} size={48} label="Cooler" disabled={stepDisabled} onClick={() => onStep(-1)} />
-          <IconButton icon={Plus} size={48} label="Warmer" disabled={stepDisabled} onClick={() => onStep(1)} />
+      <div inert={paused || undefined} className={cn('contents', paused && '[&>*]:opacity-40')} data-testid="stage-panel-body">
+        <div className="flex justify-center">
+          {isStepper
+            ? (
+                <TempStepper
+                  tab={stepper.tab}
+                  onTabChange={stepper.onTabChange}
+                  schedule={stepper.schedule}
+                  onStepPhase={stepper.onStepPhase}
+                  unit={unit}
+                  display={display}
+                  targetF={targetF}
+                  bedF={bedF}
+                  isOn={isOn}
+                  nowDisabled={stepDisabled}
+                  onStepNow={onStep}
+                />
+              )
+            : (
+                <TempControl
+                  variant={controlStyle}
+                  display={display}
+                  targetF={targetF}
+                  bedF={bedF}
+                  unit={unit}
+                  power={isOn}
+                  onChange={onPreview}
+                  onCommit={onCommit}
+                  statusOverride={isOn ? undefined : 'OFF'}
+                />
+              )}
         </div>
-      )}
 
-      <HoldDurationRow holdMinutes={holdMinutes} onDurationChange={onHoldChange} />
+        {!isStepper && (
+          <div className="flex items-center justify-center gap-4">
+            <IconButton icon={Minus} size={48} label="Cooler" disabled={stepDisabled} onClick={() => onStep(-1)} />
+            <IconButton icon={Plus} size={48} label="Warmer" disabled={stepDisabled} onClick={() => onStep(1)} />
+          </div>
+        )}
+
+        <HoldDurationRow holdMinutes={holdMinutes} onDurationChange={onHoldChange} />
+      </div>
     </aside>
   )
 }

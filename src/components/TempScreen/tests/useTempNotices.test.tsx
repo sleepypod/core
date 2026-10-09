@@ -20,6 +20,9 @@ const m = vi.hoisted(() => ({
   show: vi.fn(),
   refetch: vi.fn(),
   pending: { acknowledge: false, dismiss: false },
+  /** Sides whose own re-enable is in flight; the hook asks for left's observer, then right's. */
+  ackPendingSides: [] as string[],
+  ackCalls: 0,
   activeSides: ['left', 'right'] as string[],
 }))
 
@@ -31,7 +34,12 @@ vi.mock('@/src/utils/trpc', () => ({
       dismissPrimeNotification: { useMutation: () => ({ mutate: m.primeDismissMutate, isPending: false }) },
     },
     pumpAlerts: {
-      acknowledgeAndRestore: { useMutation: () => ({ mutate: m.ackMutate, isPending: m.pending.acknowledge }) },
+      acknowledgeAndRestore: {
+        useMutation: () => {
+          const side = m.ackCalls++ % 2 === 0 ? 'left' : 'right'
+          return { mutate: m.ackMutate, isPending: m.pending.acknowledge || m.ackPendingSides.includes(side) }
+        },
+      },
       dismissNotification: { useMutation: () => ({ mutate: m.stallDismissMutate, isPending: m.pending.dismiss }) },
     },
   },
@@ -65,6 +73,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   m.pending.acknowledge = false
   m.pending.dismiss = false
+  m.ackPendingSides = []
+  m.ackCalls = 0
   m.activeSides = ['left', 'right']
 })
 afterEach(cleanup)
@@ -153,6 +163,15 @@ describe('pump stall', () => {
     render(<Harness status={stall('left')} />)
     expect((screen.getByText('Re-enable') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText('Dismiss pump stall notification') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('keeps a side locked while its own request is in flight, whatever the other side does', () => {
+    m.ackPendingSides = ['left']
+    render(<Harness status={{ ...base, pumpStallNotifications: { left: stall('left').pumpStallNotifications.left, right: stall('right').pumpStallNotifications.right } }} />)
+    const [leftReenable, rightReenable] = screen.getAllByText('Re-enable') as HTMLButtonElement[]
+    const [leftDismiss, rightDismiss] = screen.getAllByLabelText('Dismiss pump stall notification') as HTMLButtonElement[]
+    expect([leftReenable.disabled, leftDismiss.disabled]).toEqual([true, true])
+    expect([rightReenable.disabled, rightDismiss.disabled]).toEqual([false, false])
   })
 
   it('exposes the banner as an alert, with plain-sentence copy, and blocks only its own side', () => {

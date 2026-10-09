@@ -51,8 +51,12 @@ export function useTempNotices(status: DeviceStatus, onRefetch: () => void, { en
   const { activeSides } = useSide()
   const toast = useToast()
 
-  const acknowledge = trpc.pumpAlerts.acknowledgeAndRestore.useMutation()
-  const dismissStall = trpc.pumpAlerts.dismissNotification.useMutation()
+  // One observer per side: a shared one tracks only its latest call, so a
+  // second side's request would hide the first side's still-pending one.
+  const stallActions = {
+    left: { acknowledge: trpc.pumpAlerts.acknowledgeAndRestore.useMutation(), dismiss: trpc.pumpAlerts.dismissNotification.useMutation() },
+    right: { acknowledge: trpc.pumpAlerts.acknowledgeAndRestore.useMutation(), dismiss: trpc.pumpAlerts.dismissNotification.useMutation() },
+  }
   const clearAlarm = trpc.device.clearAlarm.useMutation()
   const snoozeAlarm = trpc.device.snoozeAlarm.useMutation()
   const dismissPrime = trpc.device.dismissPrimeNotification.useMutation()
@@ -103,8 +107,8 @@ export function useTempNotices(status: DeviceStatus, onRefetch: () => void, { en
     const alertId = notice.alertId || undefined
     // Re-enable and dismiss race for the same guard state and alert row, so
     // both stay disabled while either is in flight for this side.
-    const pendingFor = (m: { isPending: boolean, variables?: { side: Side } }) => m.isPending && (m.variables?.side ?? side) === side
-    const busy = pendingFor(acknowledge) || pendingFor(dismissStall)
+    const { acknowledge, dismiss: dismissStall } = stallActions[side]
+    const busy = acknowledge.isPending || dismissStall.isPending
     notices.push({
       id: `pump-stall:${side}`,
       kind: 'action',

@@ -394,6 +394,55 @@ describe('TempStage', () => {
     expect((panel.getByRole('button', { name: 'Warmer' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('makes the paused panel inert, so Resume and the dial take no input', async () => {
+    m.notices = [{ id: 'pump-stall:left', kind: 'action', tone: 'danger', icon: Link2, title: 'Stall', blocksSides: ['left'] }]
+    m.status = {
+      ...(m.status as object),
+      temperatureControl: { left: { source: 'manual', requestId: null, targetTemperature: 72, holdUntil: NOW.getTime() + 60_000, blocked: null }, right: { source: null, requestId: null, targetTemperature: null, holdUntil: null, blocked: 'off' } },
+    }
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: '1' })
+    expect(screen.getByTestId('stage-panel-body').hasAttribute('inert')).toBe(true)
+    expect((screen.getByRole('button', { name: 'Resume' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('stage-panel-status').textContent).toBe('PAUSED')
+    fireEvent.keyDown(window, { key: '2' })
+    expect(screen.getByTestId('stage-panel-body').hasAttribute('inert')).toBe(false)
+  })
+
+  it('lets a paused linked side drive nothing, and links without copying onto a paused side', async () => {
+    m.side = { isLinked: true }
+    m.status = { ...(m.status as object), rightSide: sideStatus(72, 5) }
+    m.notices = [{ id: 'pump-stall:left', kind: 'action', tone: 'danger', icon: Link2, title: 'Stall', blocksSides: ['left'] }]
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    act(() => m.canvas?.callbacks.onDrag('left', 80))
+    act(() => m.canvas?.callbacks.onDragEnd('left', 80))
+    expect(m.setTemp).not.toHaveBeenCalled()
+    expect(m.setPower).not.toHaveBeenCalled()
+    cleanup()
+    m.side = { isLinked: false }
+    m.notices = [{ id: 'priming', kind: 'progress', tone: 'cool', icon: Link2, title: 'Priming', blocksSides: ['left', 'right'] }]
+    m.status = { ...(m.status as object), rightSide: sideStatus(84, 0) }
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: 'l' })
+    expect(m.toggleLink).toHaveBeenCalledTimes(1)
+    expect(m.setTemp).not.toHaveBeenCalled()
+    expect(m.setPower).not.toHaveBeenCalled()
+  })
+
+  it('drops a step still waiting to send when a notice pauses the side', async () => {
+    const { rerender } = render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: '1' })
+    fireEvent.keyDown(window, { key: 'ArrowUp' })
+    m.notices = [{ id: 'priming', kind: 'progress', tone: 'cool', icon: Link2, title: 'Priming', blocksSides: ['left', 'right'] }]
+    rerender(<TempStage onExit={() => {}} />)
+    act(() => vi.advanceTimersByTime(600))
+    expect(m.setTemp).not.toHaveBeenCalled()
+  })
+
   it('pauses blocked sides on the flat cards too', async () => {
     m.mode = '2d'
     m.notices = [{ id: 'priming', kind: 'progress', tone: 'cool', icon: Link2, title: 'Priming', blocksSides: ['left', 'right'] }]
