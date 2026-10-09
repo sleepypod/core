@@ -249,8 +249,22 @@ describe('SchedulePage', () => {
     const editing = render(<SchedulePage curve="sat-sun" curveSide="right" fromBoth />)
     expect(editing.getByTestId('editor').textContent).toContain('sunday,saturday')
     fireEvent.click(editing.getByRole('button', { name: 'close editor' }))
-    expect(m.side.selectSide).toHaveBeenLastCalledWith('both')
     expect(m.push).toHaveBeenLastCalledWith('/en/schedule')
+    // Not while the curve route is still up, where the side sync would undo it…
+    expect(m.side.selectSide).not.toHaveBeenCalledWith('both')
+    // …but once it's left, however it was left (close, save or browser Back).
+    editing.unmount()
+    expect(m.side.selectSide).toHaveBeenLastCalledWith('both')
+  })
+
+  it('keeps the open editor when a refetch regroups its days', () => {
+    m.query = { data: DATA, isLoading: false, error: null }
+    const s = render(<SchedulePage curve="sat-sun" curveSide="left" />)
+    expect(s.getByTestId('editor').textContent).toContain('sunday,saturday')
+    // Another client moved Saturday onto the weekday curve.
+    m.query = { data: { ...DATA, temperature: DATA.temperature.map(t => t.dayOfWeek === 'saturday' ? { ...t, time: t.time === '23:45' ? '23:15' : '07:00', temperature: t.time === '23:45' ? 83 : 84 } : t) }, isLoading: false, error: null }
+    s.rerender(<SchedulePage curve="sat-sun" curveSide="left" />)
+    expect(s.getByTestId('editor').textContent).toContain('sunday,saturday')
   })
 
   it('shows the empty state, loading skeleton and load errors', () => {

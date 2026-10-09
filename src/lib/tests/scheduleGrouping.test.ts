@@ -95,7 +95,23 @@ describe('simplifySetPoints', () => {
       { id: 3, time: '02:00', temperature: 75 },
       { id: 4, time: '00:00', temperature: 75 },
     ]
-    expect(simplifySetPoints(points).map(p => p.id)).toEqual([2, 3, 1])
+    // 00:00 stays: it's the first row past midnight (see below).
+    expect(simplifySetPoints(points).map(p => p.id)).toEqual([2, 4, 3, 1])
+  })
+
+  test('keeps the first point after midnight, which follows the previous day\'s evening', () => {
+    // Monday's 00:00 row fires Monday morning, after Sunday's evening rows; dropping
+    // it would leave Sunday's temperature running until 06:00.
+    const flat = [{ time: '22:00', temperature: 78 }, { time: '00:00', temperature: 78 }, { time: '03:00', temperature: 78 }, { time: '06:00', temperature: 78 }]
+    expect(simplifySetPoints(flat).map(p => p.time)).toEqual(['22:00', '00:00', '06:00'])
+  })
+
+  test('never opens a gap over 12h, so a daytime curve stays daytime when saved again', () => {
+    const day = [{ time: '08:00', temperature: 78 }, { time: '12:00', temperature: 78 }, { time: '18:00', temperature: 78 }, { time: '22:00', temperature: 78 }]
+    const once = simplifySetPoints(day)
+    expect(once.map(p => p.time)).toEqual(['08:00', '18:00', '22:00'])
+    expect(simplifySetPoints(once)).toEqual(once)
+    expect(sortChronological(once).map(p => p.time)).toEqual(['08:00', '18:00', '22:00'])
   })
 
   test('always keeps the power-on and power-off points', () => {

@@ -98,6 +98,15 @@ export function SchedulePage({ curve, curveSide, fromBoth = false }: SchedulePag
   useEffect(() => {
     if (wantSide && chosenSide !== wantSide) selectSide(wantSide)
   }, [wantSide, chosenSide, selectSide])
+  // Opened from Both: leaving the editor (close, save or browser Back) returns
+  // to Both. On unmount, so the side sync above can't undo it mid-navigation.
+  useEffect(() => {
+    if (!curve || !fromBoth) return
+    return () => selectSide('both')
+  }, [curve, fromBoth, selectSide])
+  // The curve the editor opened on: a refetch that regroups the days (another
+  // client edited them) must not unmount the editor and lose its draft.
+  const [openedCurve, setOpenedCurve] = useState<{ key: string, editor: EditingCurve } | null>(null)
 
   const [pendingDelete, setPendingDelete] = useState<{ days: DayOfWeek[], label: string } | null>(null)
   // Deleting one person's curve from the Both view narrows to that side
@@ -178,19 +187,19 @@ export function SchedulePage({ curve, curveSide, fromBoth = false }: SchedulePag
   }
 
   if (curve) {
-    const closeEditor = () => {
-      if (fromBoth) selectSide('both')
-      router.push(schedulePath)
-    }
+    const closeEditor = () => router.push(schedulePath)
     const linkedDays = curve === 'new' ? null : parseCurveSlug(curve)
     const group = linkedDays ? visibleGroups.find(g => sameDays(g.days, linkedDays)) : undefined
-    const editor: EditingCurve | null = curve === 'new'
-      ? { days: [], setPoints: [], endAction: settings?.device.defaultScheduleEndAction ?? 'turn_off' }
-      : group ? { days: group.days, setPoints: group.setPoints, endAction: group.endAction } : null
     const sideReady = !wantSide || chosenSide === wantSide
     if (!sideReady || (curve === 'new' ? settingsLoading : isLoading && !data)) {
       return <Skeleton className="h-[520px]" />
     }
+    const editorKey = `${curve}:${side}`
+    const found: EditingCurve | null = curve === 'new'
+      ? { days: [], setPoints: [], endAction: settings?.device.defaultScheduleEndAction ?? 'turn_off' }
+      : group ? { days: group.days, setPoints: group.setPoints, endAction: group.endAction } : null
+    if (found && openedCurve?.key !== editorKey) setOpenedCurve({ key: editorKey, editor: found })
+    const editor = openedCurve?.key === editorKey ? openedCurve.editor : found
     if (!editor) {
       return (
         <>
@@ -209,7 +218,7 @@ export function SchedulePage({ curve, curveSide, fromBoth = false }: SchedulePag
     }
     return (
       <CurveEditor
-        key={`${curve}:${side}`}
+        key={editorKey}
         onClose={closeEditor}
         initialEndAction={editor.endAction}
         initialDays={editor.days}

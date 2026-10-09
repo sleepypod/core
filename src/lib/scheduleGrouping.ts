@@ -93,7 +93,12 @@ export function sortChronological(points: SetPoint[]): SetPoint[] {
  * Chronological order, then drop set points inside a flat run (the same
  * temperature as both neighbours). The scheduler holds each temperature until
  * the next set point fires, so those rows change nothing; each run keeps its
- * first and last point so the curve keeps its shape.
+ * first and last point so the curve keeps its shape. Two rows inside a run
+ * still matter and stay:
+ * - the first one after midnight: rows fire on their own weekday, so it
+ *   follows the previous day's evening, which may hold another temperature;
+ * - any whose removal leaves more than 12h between neighbours, which
+ *   sortChronological would then read as an overnight wrap.
  */
 export function simplifySetPoints<P extends SetPoint>(points: P[]): P[] {
   const pool = [...points]
@@ -101,9 +106,28 @@ export function simplifySetPoints<P extends SetPoint>(points: P[]): P[] {
     const i = pool.findIndex(p => p.time === sp.time && p.temperature === sp.temperature)
     return pool.splice(i, 1)[0]
   })
-  return ordered.filter((p, i) => i === 0 || i === ordered.length - 1
-    || p.temperature !== ordered[i - 1].temperature
-    || p.temperature !== ordered[i + 1].temperature)
+  const DAY = 24 * 60
+  const clock = ordered.map(p => toMinutes(p.time))
+  // Minutes from the first point's day: past midnight in an overnight curve adds a day.
+  const at = clock.map(m => (m < clock[0] ? m + DAY : m))
+  const kept: P[] = []
+  let lastKept = 0
+  ordered.forEach((p, i) => {
+    const inFlatRun = i > 0 && i < ordered.length - 1
+      && p.temperature === ordered[i - 1].temperature
+      && p.temperature === ordered[i + 1].temperature
+    const firstAfterMidnight = i > 0 && at[i] >= DAY && at[i - 1] < DAY
+    const leavesLongGap = i < ordered.length - 1 && at[i + 1] - at[lastKept] > DAY / 2
+    if (inFlatRun && !firstAfterMidnight && !leavesLongGap) return
+    kept.push(p)
+    lastKept = i
+  })
+  return kept
+}
+
+function toMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number)
+  return h * 60 + m
 }
 
 /**
