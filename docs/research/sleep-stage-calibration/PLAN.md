@@ -8,9 +8,10 @@ agent can own it end to end. Workstreams A–D are independent; E depends on C.
 Source: Health export `/Users/ng/Desktop/apple_health_export/export.xml` joined per
 minute with `vitals` + `movement` from the Pod 5 `biometrics.db`
 (192.168.1.88:8822, `/persistent/sleepypod-data/biometrics.db`, timestamps in
-seconds). Scripts in this folder: `parse.py` (export → `records.csv`), `eval.py`
-(join + rule classifier port + grid search), `feat2.py` (windowed features,
-leave-one-night-out tree). Run with python3 + numpy + scikit-learn.
+seconds). `scripts/sleep-stage-dataset.py` does the join and reproduces the
+first three table rows with `--summary`; `feat2.py` here runs the windowed
+features and leave-one-night-out tree on its CSV. See `README.md`. The
+720-combo grid search lived in the original `eval.py` (removed; in git history).
 
 Usable nights: 2026-10-08/09 and 2026-10-09/10, left side, 587 labeled minutes.
 (2026-10-01/02 has Watch only against the right side, HR MAD 12 bpm — excluded.)
@@ -18,7 +19,7 @@ Usable nights: 2026-10-08/09 and 2026-10-09/10, left side, 587 labeled minutes.
 | Variant | 10-08 | 10-09 |
 |---|---|---|
 | Server as deployed (movement-only, `calibrationQuality` defaults to 0) | 53% | 55% |
-| iOS rule set (`calibrationQuality`=1) | 33% | 31% |
+| iOS rule set (offline simulation, `calibrationQuality`=1) | 33% | 31% |
 | Always "light" | 69% | 57% |
 | Best of 720 threshold combos (pooled) | 55% | 57% |
 
