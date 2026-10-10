@@ -2,9 +2,9 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
-import { eq, and, gte, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
+import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
 import {
@@ -37,6 +37,39 @@ function inBedExists(side: 'left' | 'right') {
       AND ${movement.timestamp} >= ${sleepRecords.enteredBedAt}
       AND ${movement.timestamp} <= COALESCE(${sleepRecords.leftBedAt}, 99999999999)
   )`
+}
+
+interface StageSegment { start: number, end: number, stage: string }
+
+const describeSegment = (s: StageSegment) => `${s.stage} ${s.start}-${s.end}`
+
+const sameSegment = (a: StageSegment, b: StageSegment) =>
+  a.start === b.start && a.end === b.end && a.stage === b.stage
+
+/** Segment ranges are half-open [start, end), so back-to-back segments do not overlap. */
+const segmentsOverlap = (a: StageSegment, b: StageSegment) => a.start < b.end && b.start < a.end
+
+/** Lists up to five conflicts, so a whole bad night does not flood the error. */
+function describeConflicts(conflicts: string[]): string {
+  const more = conflicts.length > 5 ? `; and ${conflicts.length - 5} more` : ''
+  return conflicts.slice(0, 5).join('; ') + more
+}
+
+/**
+ * Overlapping segments within one post. Identical repeats are not a conflict;
+ * the unique index stores them once.
+ */
+function batchOverlaps(segments: StageSegment[]): string[] {
+  const sorted = [...segments].sort((a, b) => a.start - b.start)
+  const conflicts: string[] = []
+  let reach: StageSegment | undefined
+  for (const s of sorted) {
+    if (reach && s.start < reach.end && !sameSegment(s, reach)) {
+      conflicts.push(`${describeSegment(reach)} overlaps ${describeSegment(s)}`)
+    }
+    if (!reach || s.end > reach.end) reach = s
+  }
+  return conflicts
 }
 
 /**
@@ -102,14 +135,14 @@ export const biometricsRouter = router({
         .strict()
     )
     .query(async ({ input }) => {
-      try {
-        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'startDate must be before or equal to endDate',
-          })
-        }
+      if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'startDate must be before or equal to endDate',
+        })
+      }
 
+      try {
         const conditions = []
         if (input.side) {
           conditions.push(eq(sleepRecords.side, input.side))
@@ -190,14 +223,14 @@ export const biometricsRouter = router({
         .strict()
     )
     .query(async ({ input }) => {
-      try {
-        if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'startDate must be before or equal to endDate',
-          })
-        }
+      if (input.startDate && input.endDate && !validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'startDate must be before or equal to endDate',
+        })
+      }
 
+      try {
         const conditions = []
         if (input.side) {
           conditions.push(eq(vitals.side, input.side))
@@ -867,6 +900,165 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to report vitals batch: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Import reference sleep stages scored by another device (Apple Watch
+   * SleepAnalysis, posted by the iOS app each morning). These are ground-truth
+   * labels for calibrating the pod's classifier; they never feed getSleepStages.
+   *
+   * Idempotent: a segment identical to a stored one (same side, source, start,
+   * end and stage) is skipped, so re-posting a night is a no-op. A post whose
+   * segments overlap each other, or overlap a different stored segment for the
+   * same side and source, is rejected whole with BAD_REQUEST listing the
+   * conflicts, so the table never holds two labels for the same minute. Stored
+   * labels are never replaced. Segment ranges are half-open [start, end) unix
+   * seconds. Unknown fields are rejected, so the iOS app must not send new
+   * fields before the server accepts them.
+   */
+  importReferenceStages: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometrics/reference-stages', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z.object({
+        side: sideSchema,
+        source: z.enum(['apple_watch']),
+        segments: z.array(
+          z.object({
+            // Unix seconds in 2001..2100: rejects millisecond timestamps, which
+            // would otherwise persist forever under first-write-wins.
+            start: z.number().int().min(1_000_000_000).max(4_102_444_800),
+            end: z.number().int().min(1_000_000_000).max(4_102_444_800),
+            stage: z.enum(['wake', 'light', 'deep', 'rem']),
+          }).strict().refine(s => s.end > s.start, { message: 'end must be after start' })
+        ).min(1).max(2000).superRefine((segments, ctx) => {
+          const conflicts = batchOverlaps(segments)
+          if (conflicts.length > 0) {
+            ctx.addIssue({ code: 'custom', message: `Segments overlap: ${describeConflicts(conflicts)}` })
+          }
+        }),
+      }).strict()
+    )
+    .output(z.object({ written: z.number() }))
+    .mutation(async ({ input }) => {
+      try {
+        const rows = input.segments.map(s => ({
+          side: input.side,
+          source: input.source,
+          start: new Date(s.start * 1000),
+          end: new Date(s.end * 1000),
+          stage: s.stage,
+        }))
+
+        const minStart = Math.min(...input.segments.map(s => s.start))
+        const maxEnd = Math.max(...input.segments.map(s => s.end))
+
+        // Check and insert in one transaction so a concurrent post cannot slip
+        // an overlapping row in between.
+        const inserted = biometricsDb.transaction((tx) => {
+          const stored = tx
+            .select()
+            .from(referenceStages)
+            .where(
+              and(
+                eq(referenceStages.side, input.side),
+                eq(referenceStages.source, input.source),
+                lt(referenceStages.start, new Date(maxEnd * 1000)),
+                gt(referenceStages.end, new Date(minStart * 1000))
+              )
+            )
+            .all()
+            .map(r => ({ start: r.start.getTime() / 1000, end: r.end.getTime() / 1000, stage: r.stage }))
+
+          const conflicts: string[] = []
+          for (const s of input.segments) {
+            for (const r of stored) {
+              if (segmentsOverlap(s, r) && !sameSegment(s, r)) {
+                conflicts.push(`${describeSegment(s)} overlaps stored ${describeSegment(r)}`)
+              }
+            }
+          }
+          if (conflicts.length > 0) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Segments overlap stored reference stages: ${describeConflicts(conflicts)}`,
+            })
+          }
+
+          return tx
+            .insert(referenceStages)
+            .values(rows)
+            .onConflictDoNothing()
+            .returning()
+            .all()
+        })
+
+        return { written: inserted.length }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to import reference stages: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Reference sleep stages for a side that overlap [startDate, endDate]
+   * (inclusive), oldest first. A segment ending exactly at startDate covers
+   * none of the window, so it is not returned.
+   */
+  getReferenceStages: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/reference-stages', protect: false, tags: ['Biometrics'] } })
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      source: z.enum(['apple_watch']),
+      start: z.date(),
+      end: z.date(),
+      stage: z.enum(['wake', 'light', 'deep', 'rem']),
+      createdAt: z.date(),
+    })))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date(),
+          endDate: z.date(),
+          limit: z.number().int().min(1).max(20000).default(2000),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      if (!validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'startDate must be before or equal to endDate',
+        })
+      }
+
+      try {
+        return await biometricsDb
+          .select()
+          .from(referenceStages)
+          .where(
+            and(
+              eq(referenceStages.side, input.side),
+              lte(referenceStages.start, input.endDate),
+              gt(referenceStages.end, input.startDate)
+            )
+          )
+          .orderBy(asc(referenceStages.start))
+          .limit(input.limit)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch reference stages: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }
