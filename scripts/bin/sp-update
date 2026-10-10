@@ -607,6 +607,36 @@ if [ "$(cat "$EXECSTART_DROPIN" 2>/dev/null || true)" != "$execstart_content" ];
   systemctl daemon-reload
 fi
 
+# Ensure sleepypod service user has journal read access for the Web log viewer (/debug, /system/logs).
+# On pods where /run/log/journal is restricted to group systemd-journal (02750), User=sleepypod
+# needs SupplementaryGroups=systemd-journal (or adm on images without systemd-journal) to run journalctl.
+supp_group=""
+if getent group systemd-journal &>/dev/null; then
+  supp_group="systemd-journal"
+elif getent group adm &>/dev/null; then
+  supp_group="adm"
+fi
+if [ -n "$supp_group" ]; then
+  if id sleepypod &>/dev/null; then
+    usermod -aG "$supp_group" sleepypod 2>/dev/null || true
+  fi
+  if id dac &>/dev/null; then
+    usermod -aG "$supp_group" dac 2>/dev/null || true
+  fi
+
+  JOURNAL_DROPIN=/etc/systemd/system/sleepypod.service.d/journal-access.conf
+  mkdir -p "$(dirname "$JOURNAL_DROPIN")"
+  journal_dropin_content=$(cat << EOF
+[Service]
+SupplementaryGroups=$supp_group
+EOF
+)
+  if [ "$(cat "$JOURNAL_DROPIN" 2>/dev/null || true)" != "$journal_dropin_content" ]; then
+    printf '%s\n' "$journal_dropin_content" > "$JOURNAL_DROPIN"
+    systemctl daemon-reload
+  fi
+fi
+
 # Install CLI tools from new source.
 #
 # Use `install` (atomic mkstemp + rename) instead of `cp` — sp-update is
