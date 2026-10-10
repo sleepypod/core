@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gte, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
@@ -867,6 +867,113 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to report vitals batch: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Import reference sleep stages scored by another device (Apple Watch
+   * SleepAnalysis, posted by the iOS app each morning). These are ground-truth
+   * labels for calibrating the pod's classifier; they never feed getSleepStages.
+   *
+   * Idempotent: a segment whose (side, source, start) already exists is
+   * skipped, so re-posting a night is a no-op. Timestamps are unix seconds.
+   */
+  importReferenceStages: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometrics/reference-stages', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z.object({
+        side: sideSchema,
+        source: z.enum(['apple_watch']),
+        segments: z.array(
+          z.object({
+            start: z.number().int().positive(),
+            end: z.number().int().positive(),
+            stage: z.enum(['wake', 'light', 'deep', 'rem']),
+          }).strict().refine(s => s.end > s.start, { message: 'end must be after start' })
+        ).min(1).max(2000),
+      }).strict()
+    )
+    .output(z.object({ written: z.number() }))
+    .mutation(async ({ input }) => {
+      try {
+        const rows = input.segments.map(s => ({
+          side: input.side,
+          source: input.source,
+          start: new Date(s.start * 1000),
+          end: new Date(s.end * 1000),
+          stage: s.stage,
+        }))
+
+        const inserted = await biometricsDb
+          .insert(referenceStages)
+          .values(rows)
+          .onConflictDoNothing()
+          .returning()
+
+        return { written: inserted.length }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to import reference stages: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Reference sleep stages for a side that overlap [startDate, endDate]
+   * (inclusive), oldest first.
+   */
+  getReferenceStages: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/reference-stages', protect: false, tags: ['Biometrics'] } })
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      source: z.enum(['apple_watch']),
+      start: z.date(),
+      end: z.date(),
+      stage: z.enum(['wake', 'light', 'deep', 'rem']),
+      createdAt: z.date(),
+    })))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date(),
+          endDate: z.date(),
+          limit: z.number().int().min(1).max(20000).default(2000),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      if (!validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'startDate must be before or equal to endDate',
+        })
+      }
+
+      try {
+        return await biometricsDb
+          .select()
+          .from(referenceStages)
+          .where(
+            and(
+              eq(referenceStages.side, input.side),
+              lte(referenceStages.start, input.endDate),
+              gte(referenceStages.end, input.startDate)
+            )
+          )
+          .orderBy(asc(referenceStages.start))
+          .limit(input.limit)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch reference stages: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

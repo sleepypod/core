@@ -229,6 +229,24 @@ export const healthRuns = sqliteTable('health_runs', {
   index('idx_health_runs_last_seen').on(t.lastSeenAt),
 ])
 
+/**
+ * Externally scored sleep stages (Apple Watch SleepAnalysis posted by the iOS
+ * app) used as ground truth for calibrating the pod's stage classifier. One
+ * row per contiguous segment. A repeated post of the same night is a no-op:
+ * the unique key is the segment start per side and source.
+ */
+export const referenceStages = sqliteTable('reference_stages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  source: text('source', { enum: ['apple_watch'] }).notNull(),
+  start: integer('start', { mode: 'timestamp' }).notNull(),
+  end: integer('end', { mode: 'timestamp' }).notNull(),
+  stage: text('stage', { enum: ['wake', 'light', 'deep', 'rem'] }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, t => [
+  uniqueIndex('uq_reference_stages_side_source_start').on(t.side, t.source, t.start),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {

@@ -36,6 +36,7 @@ import {
  *   sleep_records     — derived summaries, low volume, keep indefinitely
  *   water_level_alerts — user-facing events, low volume, keep indefinitely
  *   calibration_*     — small, correctness-critical, keep indefinitely
+ *   reference_stages  — external ground-truth labels, low volume, keep indefinitely
  */
 
 const RETENTION_TABLES = [

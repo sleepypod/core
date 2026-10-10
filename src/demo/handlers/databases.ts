@@ -51,6 +51,7 @@ const TABLES: Record<DbKey, TableSpec[]> = {
     { name: 'cap_sense_frames', columns: ['id', 'side', 'timestamp', 'zones', 'max', 'mean', 'spread', 'peak_zone', 'frame_count', 'status_counts'], perHour: 120, rows: 5_760, bytesPerRow: 180, retention: { days: 2, by: 'cap frame writer' } },
     { name: 'prime_events', columns: ['id', 'timestamp'], perHour: 0, rows: 31, bytesPerRow: 16 },
     { name: 'health_runs', columns: ['id', 'check_id', 'status', 'detail', 'started_at', 'last_seen_at'], perHour: 4, rows: 2_150, bytesPerRow: 120, retention: RETAINED },
+    { name: 'reference_stages', columns: ['id', 'side', 'source', 'start', 'end', 'stage', 'created_at'], perHour: 0, rows: 120, bytesPerRow: 48 },
     { name: 'calibration_profiles', columns: ['id', 'side', 'sensor_type', 'status', 'parameters', 'quality_score', 'samples_used', 'error_message', 'created_at', 'expires_at'], perHour: 0, rows: 6, bytesPerRow: 640 },
     { name: 'calibration_runs', columns: ['id', 'side', 'sensor_type', 'status', 'parameters', 'quality_score', 'samples_used', 'duration_ms', 'triggered_by', 'created_at'], perHour: 0, rows: 540, bytesPerRow: 640 },
   ],
@@ -58,7 +59,7 @@ const TABLES: Record<DbKey, TableSpec[]> = {
 
 const MIGRATIONS: Record<DbKey, { count: number, tag: string }> = {
   sleepypod: { count: 17, tag: '0016_hardware_deadline' },
-  biometrics: { count: 17, tag: '0016_health_runs' },
+  biometrics: { count: 18, tag: '0017_reference_stages' },
 }
 
 const isNight = (t: number) => {

@@ -240,6 +240,26 @@ exports[`complete Drizzle schema contracts > pins every biometrics table, column
     "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
       "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
+      "source | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:apple_watch",
+      "start | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "end | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "stage | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:wake,light,deep,rem",
+      "created_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:fn:Date | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "referenceStages",
+    "foreignKeys": [],
+    "indexes": [
+      "uq_reference_stages_side_source_start | unique | columns:side,source,start | where:none",
+    ],
+    "name": "reference_stages",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
       "entered_bed_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "left_bed_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "sleep_duration_seconds | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
