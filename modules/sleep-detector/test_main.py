@@ -716,13 +716,13 @@ class TestAdaptiveBaseline:
 
     def test_hysteresis_keeps_session_through_partial_dip(self):
         # Once in bed, dipping to +70/channel (+210 summed, above the 150
-        # exit) must not end the session. The occupant's load (+150) keeps
-        # the dip above EXIT_COLLAPSE_FRACTION of it; see TestExitToNewEmptyLevel.
+        # exit) must not end the session, though it is under
+        # EXIT_COLLAPSE_FRACTION of the load: that rule is capSense2 only.
         t = _live_tracker()
         ts = _run(t, self.T0, 600, 0)
-        ts = _run(t, ts, 3600, 150)
+        ts = _run(t, ts, 3600, 600)
         ts = _run(t, ts, 1800, 70)
-        ts = _run(t, ts, 3600, 150)
+        ts = _run(t, ts, 3600, 600)
         ts = _run(t, ts, 600, 0)
         rows = _rows_full(t)
         assert len(rows) == 1
@@ -1008,7 +1008,7 @@ class TestRestartHysteresis:
         import json
         t = _live_tracker()
         ts = _run(t, self.T0, 600, 0)
-        ts = _run(t, ts, 3600, 150)               # in bed
+        ts = _run(t, ts, 3600, 600)               # in bed
         ts = _run(t, ts, 1800, 70)                # +210 summed: between exit and enter
         assert t._session_start is not None
         t2 = _live_tracker()
@@ -1368,6 +1368,80 @@ class TestExitToNewEmptyLevel:
         rows = _rows_full(t2)
         assert t2._session_start is None
         assert len(rows) == 1
+        assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
+
+    def test_one_transient_does_not_set_the_load(self):
+        # Two frames at 10x the load while getting in (or right after a
+        # restart) used to become the occupied peak, and the sleeper's real
+        # load then read as a collapse.
+        import json
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 10, 300)
+        ts = self._run(t, ts, 2 * 3600, 30)
+        t2 = _live_tracker()
+        t2.db = t.db
+        t2.restore(json.loads(json.dumps(t.snapshot())), now=ts + 30)
+        ts = self._run(t2, ts + 30, 10, 300)
+        ts = self._run(t2, ts, 2 * 3600, 30)
+        assert t2._session_start is not None
+        assert _rows_full(t2) == []
+
+    def test_unobserved_time_does_not_settle_a_collapse(self):
+        # A low reading, then nothing for over EXIT_SETTLE_S, then another:
+        # no evidence the bed stayed empty in between.
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, 30)
+        t.process(ts, _cap2(*(v + 5 / 3 for v in EMPTY2)))
+        ts += main.EXIT_SETTLE_S + 1
+        t.process(ts, _cap2(*(v + 5 / 3 for v in EMPTY2)))
+        ts = self._run(t, ts + 5, 3600, 30)
+        assert t.baseline.source != "exit-rebase"
+        assert t._session_start is not None
+        assert _rows_full(t) == []
+
+    def test_partial_side_frames_do_not_starve_the_baseline(self):
+        # Only the firmware sentinel arms the settling skip; records carrying
+        # one side each must not hide every frame of the other.
+        t = _live_tracker()
+        ts = self.T0
+        for _ in range(20):
+            t.process(ts, _cap2(*EMPTY2, side="right"))
+            t.process(ts + 0.5, _cap2(*EMPTY2))
+            ts += 1.0
+        assert t.baseline is not None
+
+    def test_merged_exit_waits_for_the_other_side(self):
+        # Home's load collapses while the sleeper is still on the away side:
+        # the session ends when they leave that side, not at the collapse.
+        holder = main.DBHolder(_make_db())
+        main._db_write_failures = 0
+        mk = lambda side: main.SessionTracker(side=side, db=holder, calibration=_Cal(),
+                                              pump_gate=main.PumpGateCapSense(),
+                                              _last_movement_write=0.0)
+        home, away = mk("left"), mk("right")
+
+        def run(start, seconds, left, right):
+            ts = start
+            while ts < start + seconds:
+                lv = [v + left / 3 for v in EMPTY2]
+                rv = [v + right / 3 for v in EMPTY2]
+                frame = {"type": "capSense2",
+                         "left": {"values": [x for v in lv for x in (v, v)] + [1.16, 1.16]},
+                         "right": {"values": [x for v in rv for x in (v, v)] + [1.16, 1.16]}}
+                main.process_single_sleeper(home, away, ts, frame)
+                ts += 5.0
+            return ts
+
+        ts = run(self.T0, 3600, 0, 0)
+        ts = run(ts, 3600, -7.7, 0)
+        ts = run(ts, 4 * 3600, 30, 0)
+        ts = run(ts, 500, 0, 30)                    # rolled onto the away side
+        exit_ts = ts
+        run(ts, 3600, 0, 0)
+        rows = holder.conn.execute("SELECT side, left_bed_at FROM sleep_records").fetchall()
+        assert len(rows) == 1 and rows[0][0] == "left"
         assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
 
     def test_merged_session_ends_where_the_home_side_emptied(self):

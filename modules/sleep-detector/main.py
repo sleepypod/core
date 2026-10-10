@@ -145,7 +145,11 @@ CAPSENSE2_PRESENCE_THRESHOLD = 6.0
 # (the peak of a OCCUPIED_LOAD_TAU_S average of the rise while occupied)
 # and stays there for EXIT_SETTLE_S is empty: the baseline is reseeded to
 # the reading and the exit dated where the collapse began. Sleepers there
-# held 50-100% of their load; the empty bed read 10-20%.
+# held 50-100% of their load; the empty bed read 10-20%. capSense2 only:
+# capSense (Pod 3/4) has no recorded nights to set the fraction, and a
+# sleeper there can hold a dip from +600 to +70 per channel for half an hour.
+# Only observed time counts toward EXIT_SETTLE_S, so a sensor gap or a
+# restart can't confirm a collapse it didn't see.
 EXIT_COLLAPSE_FRACTION = 0.25
 EXIT_SETTLE_S = 10 * 60
 OCCUPIED_LOAD_TAU_S = 5 * 60
@@ -584,7 +588,8 @@ class AdaptiveBaseline:
     def __init__(self, fmt: str, means: dict, threshold: float,
                  ref_mean: Optional[float] = None, source: str = "bootstrap",
                  profile_seen_at: Optional[float] = None, absence_ready: bool = False,
-                 occupied_load: Optional[float] = None, collapse_since: Optional[float] = None):
+                 occupied_load: Optional[float] = None, collapse_since: Optional[float] = None,
+                 collapse_dwell_s: float = 0.0):
         self.fmt = fmt
         self.means = {ch: float(v) for ch, v in means.items()}
         self.threshold = float(threshold)
@@ -606,7 +611,9 @@ class AdaptiveBaseline:
         # after the bed emptied still recognises the collapse.
         self.occupied_load = occupied_load
         self.collapse_since = collapse_since
+        self.collapse_dwell_s = collapse_dwell_s
         self._load_avg: Optional[float] = None
+        self._load_obs_s = 0.0
         self._load_last_ts: Optional[float] = None
 
     @property
@@ -647,7 +654,8 @@ class AdaptiveBaseline:
                        profile_seen_at=state.get("profile_seen_at"),
                        absence_ready=state.get("absence_ready") is True,
                        occupied_load=_opt_float(state.get("occupied_load")),
-                       collapse_since=_opt_float(state.get("collapse_since")))
+                       collapse_since=_opt_float(state.get("collapse_since")),
+                       collapse_dwell_s=float(state.get("collapse_dwell_s") or 0.0))
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -655,7 +663,7 @@ class AdaptiveBaseline:
         return {"format": self.fmt, "means": self.means, "threshold": self.threshold,
                 "ref_mean": self.ref_mean, "profile_seen_at": self.profile_seen_at,
                 "absence_ready": self.absence_ready, "occupied_load": self.occupied_load,
-                "collapse_since": self.collapse_since}
+                "collapse_since": self.collapse_since, "collapse_dwell_s": self.collapse_dwell_s}
 
     def values(self, record: dict, side: str) -> Optional[dict]:
         """This format's per-channel values for a frame, or None if unusable."""
@@ -710,28 +718,42 @@ class AdaptiveBaseline:
 
         Returns the ts the collapse began when the baseline was just reseeded
         to this reading (the exit time), else None."""
+        if self.fmt != "capSense2":
+            return None
         dev = self.deviation(values)
         if not occupied or dev <= self.exit_threshold:
             # Unoccupied, or about to read absent anyway.
             self.occupied_load = self.collapse_since = None
+            self.collapse_dwell_s = 0.0
             self._load_avg = self._load_last_ts = None
+            self._load_obs_s = 0.0
             return None
         dt = 0.0 if self._load_last_ts is None else ts - self._load_last_ts
         self._load_last_ts = ts
         dt = max(0.0, min(dt, BASELINE_MAX_STEP_S))
         if self.collapse_since is None:
             # Frozen during a collapse, so the drop can't lower its own bar.
+            # A plain mean until OCCUPIED_LOAD_TAU_S has been observed, and no
+            # peak before then: one transient (getting in, or the first sample
+            # after a restart) must not set the bar for the night.
+            self._load_obs_s += dt
             if self._load_avg is None:
                 self._load_avg = dev
-            self._load_avg += dt / OCCUPIED_LOAD_TAU_S * (dev - self._load_avg)
-            self.occupied_load = max(self.occupied_load or 0.0, self._load_avg)
+            elif self._load_obs_s > 0:
+                alpha = dt / min(self._load_obs_s, OCCUPIED_LOAD_TAU_S)
+                self._load_avg += alpha * (dev - self._load_avg)
+            if self._load_obs_s >= OCCUPIED_LOAD_TAU_S:
+                self.occupied_load = max(self.occupied_load or 0.0, self._load_avg)
         if dev >= EXIT_COLLAPSE_FRACTION * (self.occupied_load or 0.0):
             self.collapse_since = None
+            self.collapse_dwell_s = 0.0
             return None
         if self.collapse_since is None:
             self.collapse_since = ts
+            self.collapse_dwell_s = 0.0
             return None
-        if ts - self.collapse_since < EXIT_SETTLE_S:
+        self.collapse_dwell_s += dt
+        if self.collapse_dwell_s < EXIT_SETTLE_S:
             return None
         since = self.collapse_since
         self.reseed(values, "exit-rebase")
@@ -764,7 +786,9 @@ class AdaptiveBaseline:
         self._absence_drop_since = self._absence_rise_since = None
         self._absence_last_ts = None
         self.occupied_load = self.collapse_since = None
+        self.collapse_dwell_s = 0.0
         self._load_avg = self._load_last_ts = None
+        self._load_obs_s = 0.0
 
     def to_params(self) -> dict:
         """Calibration-profile params (the shape the calibrators write)."""
@@ -1082,6 +1106,9 @@ class SessionTracker:
     # it is skipped too. Its down-and-back-up delta added ~110 to one epoch
     # in five on an occupied side.
     _cap2_settling: bool = False
+    # Last sample this side's level read occupied (not persisted). Merged
+    # mode dates a rebase exit no earlier than the other side's.
+    _level_present_ts: Optional[float] = None
 
     def snapshot(self) -> dict:
         """JSON-serializable state needed to resume after a restart."""
@@ -1208,7 +1235,10 @@ class SessionTracker:
         rtype = record.get("type", "")
         usable = usable_presence_input(record, self.side)
         if rtype == "capSense2":
-            settling, self._cap2_settling = self._cap2_settling, not usable
+            data = record.get(self.side)
+            raw = data.get("values") if isinstance(data, dict) else None
+            sentinel = isinstance(raw, (list, tuple)) and CAPSENSE2_SENTINEL in raw[:8]
+            settling, self._cap2_settling = self._cap2_settling, sentinel
             usable = usable and not settling
         baseline = self._sync_baseline(record) if usable else self.baseline
         values = baseline.values(record, self.side) if usable and baseline is not None else None
@@ -1225,6 +1255,8 @@ class SessionTracker:
                             EXIT_COLLAPSE_FRACTION * 100, EXIT_SETTLE_S // 60)
             present = baseline.is_present(values, self._level_present)
             self._level_present = present
+            if present:
+                self._level_present_ts = ts
         # Movement's capSense2 common-mode rejection uses the baseline's ref.
         baselines = ({"ref": {"mean": baseline.ref_mean}}
                      if baseline is not None and baseline.ref_mean is not None else None)
@@ -1603,6 +1635,11 @@ def process_single_sleeper(home: SessionTracker, away: SessionTracker,
     present = any(evidence) if evidence else None
     delta = h.delta + (a.delta if a is not None else 0.0)
     exits = [o.exit_at for o in (h, a) if o is not None and o.exit_at is not None]
+    if exits:
+        # The sleeper may have stayed on the other side after this one's
+        # load collapsed: the merged exit is the later of the two.
+        exits += [t._level_present_ts for t, o in ((home, h), (away, a))
+                  if (o is None or o.exit_at is None) and t._level_present_ts is not None]
     capped = home.commit(ts, present, delta, max(exits) if exits else None)
     # A capped session in merged mode may be held open by either side's load.
     home.settle(h, reset=capped)

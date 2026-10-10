@@ -17,9 +17,10 @@ vitals already in biometrics.db, deterministically:
     end of the last run lasting at least MIN_RUN_S.
   - left_bed_at = that end + ABSENCE_TIMEOUT_S (the detector's own exit
     delay), never later than the original. Duration is recomputed, intervals
-    are clipped to the new end, and the final exit is counted as the
-    detector counts it on a natural close.
-  - Records with no qualifying run are left unchanged and listed.
+    are clipped to the new end, and exits are recounted from the present
+    intervals that remain, each ending in an exit as on a natural close.
+  - Records with no qualifying run, or with interval JSON that isn't a list
+    of [start, stop] pairs, are left unchanged and listed.
 
 Dry run by default. --apply first writes a consistent copy of the database to
 <db>.bak.<epoch> (SQLite backup API, safe alongside the running services),
@@ -66,21 +67,24 @@ def occupancy_end(vitals_ts):
     return end
 
 
-def clip_intervals(raw, end):
-    """Intervals clipped to `end`; ones starting at or after it are dropped."""
+def parse_intervals(raw):
+    """A record's [start, stop] intervals, or None if the JSON isn't that."""
+    if not raw:
+        return []
     try:
-        intervals = json.loads(raw) if raw else []
+        intervals = json.loads(raw)
     except ValueError:
-        return raw
-    out = []
-    for iv in intervals:
-        if not isinstance(iv, list) or len(iv) != 2:
-            continue
-        start, stop = iv
-        if start >= end:
-            continue
-        out.append([start, min(stop, end)])
-    return json.dumps(out)
+        return None
+    if not isinstance(intervals, list) or not all(
+            isinstance(iv, list) and len(iv) == 2
+            and all(isinstance(x, (int, float)) for x in iv) for iv in intervals):
+        return None
+    return intervals
+
+
+def clip_intervals(intervals, end):
+    """Intervals clipped to `end`; ones starting at or after it are dropped."""
+    return [[start, min(stop, end)] for start, stop in intervals if start < end]
 
 
 def plan(conn):
@@ -99,7 +103,10 @@ def plan(conn):
         end = occupancy_end(vitals)
         item = {"id": rid, "side": side, "entered": entered, "left": left,
                 "vitals": len(vitals), "last_vitals": vitals[-1] if vitals else None}
-        if end is None:
+        present_iv, absent_iv = parse_intervals(present), parse_intervals(absent)
+        if present_iv is None or absent_iv is None:
+            item["action"] = "malformed"
+        elif end is None:
             item["action"] = "no-evidence"
         else:
             new_left = min(left, end + ABSENCE_TIMEOUT_S)
@@ -109,11 +116,15 @@ def plan(conn):
                 item["action"] = "too-short"
                 item["new_left"] = new_left
             else:
+                kept = clip_intervals(present_iv, new_left)
+                # Each kept present interval ends in an exit, the last at
+                # new_left. Older records without intervals count the final one.
+                new_exits = min(exits + 1, len(kept)) if kept else exits + 1
                 item.update(action="repair", new_left=new_left,
                             new_duration=new_left - entered,
-                            new_exits=exits + 1,
-                            present=clip_intervals(present, new_left),
-                            absent=clip_intervals(absent, new_left))
+                            new_exits=new_exits,
+                            present=json.dumps(kept),
+                            absent=json.dumps(clip_intervals(absent_iv, new_left)))
         out.append(item)
     return out
 
@@ -144,6 +155,8 @@ def report(items, verbose):
     print(f"  keep:        {len(by.get('keep', []))}  (vitals run to the cap)")
     print(f"  too-short:   {len(by.get('too-short', []))}  (occupancy under {MIN_SESSION_S}s; left unchanged)")
     print(f"  no-evidence: {len(by.get('no-evidence', []))}  (no vitals run of {MIN_RUN_S // 60}+ min; left unchanged)")
+    if by.get("malformed"):
+        print(f"  malformed:   {len(by['malformed'])}  (interval JSON unreadable; left unchanged)")
 
 
 def apply(db_path, conn, items):
