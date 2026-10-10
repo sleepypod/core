@@ -113,6 +113,18 @@ describe('biometrics reference stages', () => {
       await expect(caller.importReferenceStages(input as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     })
 
+    it.each([
+      ['milliseconds', T0 * 1000],
+      ['beyond the Date range', 9e15],
+    ])('rejects a %s timestamp without writing anything', async (_label, start) => {
+      await expect(caller.importReferenceStages({
+        side: 'left',
+        source: 'apple_watch',
+        segments: [night[0], { start, end: start + MIN, stage: 'light' }],
+      })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+      expect(db.select().from(referenceStages).all()).toHaveLength(0)
+    })
+
     it('rejects more than 2000 segments in one post', async () => {
       const segments = Array.from({ length: 2001 }, (_, i) => ({ start: T0 + i * MIN, end: T0 + (i + 1) * MIN, stage: 'light' as const }))
       await expect(caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments }))

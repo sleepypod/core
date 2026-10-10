@@ -888,8 +888,10 @@ export const biometricsRouter = router({
         source: z.enum(['apple_watch']),
         segments: z.array(
           z.object({
-            start: z.number().int().positive(),
-            end: z.number().int().positive(),
+            // Unix seconds in 2001..2100: rejects millisecond timestamps, which
+            // would otherwise persist forever under first-write-wins.
+            start: z.number().int().min(1_000_000_000).max(4_102_444_800),
+            end: z.number().int().min(1_000_000_000).max(4_102_444_800),
             stage: z.enum(['wake', 'light', 'deep', 'rem']),
           }).strict().refine(s => s.end > s.start, { message: 'end must be after start' })
         ).min(1).max(2000),
