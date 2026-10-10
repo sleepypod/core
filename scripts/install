@@ -790,6 +790,20 @@ if id dac &>/dev/null; then
   usermod -aG dac sleepypod
 fi
 
+# Add sleepypod and dac to systemd-journal (or adm on images without it) so the
+# Next.js /system/logs endpoint can run journalctl without permission errors.
+if getent group systemd-journal &>/dev/null; then
+  usermod -aG systemd-journal sleepypod 2>/dev/null || true
+  if id dac &>/dev/null; then
+    usermod -aG systemd-journal dac 2>/dev/null || true
+  fi
+elif getent group adm &>/dev/null; then
+  usermod -aG adm sleepypod 2>/dev/null || true
+  if id dac &>/dev/null; then
+    usermod -aG adm dac 2>/dev/null || true
+  fi
+fi
+
 # Allow the sleepypod service user to run sp-update as root without a
 # password. The next-server runs as User=sleepypod and exposes a tRPC
 # system.triggerUpdate mutation that spawns sp-update; without this
