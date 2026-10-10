@@ -8,9 +8,11 @@ agent can own it end to end. Workstreams A–D are independent; E depends on C.
 Source: Health export `/Users/ng/Desktop/apple_health_export/export.xml` joined per
 minute with `vitals` + `movement` from the Pod 5 `biometrics.db`
 (192.168.1.88:8822, `/persistent/sleepypod-data/biometrics.db`, timestamps in
-seconds). Scripts in this folder: `parse.py` (export → `records.csv`), `eval.py`
-(join + rule classifier port + grid search), `feat2.py` (windowed features,
-leave-one-night-out tree). Run with python3 + numpy + scikit-learn.
+seconds). Scripts in this folder: `parse.py` (export → `records.csv`), `load.py`
+(shared per-minute join), `eval.py` (rule classifier port + grid search),
+`feat2.py` (windowed features, leave-one-night-out tree). Run with python3 +
+numpy + scikit-learn. The port takes the same inputs as `classifySleepStages`:
+outlier-filtered vitals and movement by rounded 5-minute bucket.
 
 Usable nights: 2026-10-08/09 and 2026-10-09/10, left side, 587 labeled minutes.
 (2026-10-01/02 has Watch only against the right side, HR MAD 12 bpm — excluded.)
@@ -18,9 +20,10 @@ Usable nights: 2026-10-08/09 and 2026-10-09/10, left side, 587 labeled minutes.
 | Variant | 10-08 | 10-09 |
 |---|---|---|
 | Server as deployed (movement-only, `calibrationQuality` defaults to 0) | 53% | 55% |
-| iOS rule set (`calibrationQuality`=1) | 33% | 31% |
+| iOS rule set (`calibrationQuality`=1) | 33% | 32% |
 | Always "light" | 69% | 57% |
-| Best of 720 threshold combos (pooled) | 55% | 57% |
+| Best of 720 threshold combos (picked on both nights, in-sample) | 59% | 57% |
+| Best of 720, picked on the other night only (held out) | 59% | 45% |
 
 Why the rules fail:
 - Per-minute pod HR ratio for Watch-deep is 0.95–1.04, never < 0.92. The "deep = low HR" rule fires on noise.
@@ -37,7 +40,7 @@ Stages are **not stored**. `classifySleepStages` runs at query time over `vitals
 | Layer | Stored? | Backfill |
 |---|---|---|
 | Sleep stages | No (derived at read) | Automatic once classifier changes. Nothing to migrate. |
-| `sleep_records` 16 h cap | Yes | One-off repair: for records with `sleep_duration_seconds`=57600, set `left_bed_at` = last `vitals`/`movement` timestamp for that side within the record + `ABSENCE_TIMEOUT_S` (120 s); recompute duration. Deterministic from existing rows. Keep a `.bak` (pattern: `biometrics.db.bak.<epoch>` already exists on the pod). |
+| `sleep_records` 16 h cap | Yes | One-off repair: for records with `sleep_duration_seconds`=57600, set `left_bed_at` = end of the side's last `vitals` run of 30+ min within the record (runs split at gaps over 5 min) + `ABSENCE_TIMEOUT_S` (120 s), never later than the original; recompute duration, clip intervals, recount exits. Movement rows are not evidence: they run to the cap. Deterministic from existing rows. Keep a `.bak` (pattern: `biometrics.db.bak.<epoch>` already exists on the pod). |
 | `movement` zeros | Yes | Not recoverable: raw `.RAW` is a rolling single file on tmpfs (Pod 5), nothing archived (`archive-push-staging` empty). `cap_sense_frames` holds ~2 days of per-window zone sums (69k rows, 10-08→10-10) — only those days could be re-derived, not worth it. Forward-only fix. |
 | `vitals` HR/HRV/BR | Yes | Not recomputable (raw gone). Keep as is; treat HRV as an index. |
 | HealthKit samples written by the iOS app ("sleepypod" source) | In HealthKit | iOS app must delete its own `HKCategoryTypeIdentifierSleepAnalysis` samples for affected nights and rewrite after the server returns new stages. HealthKit permits deleting samples your app wrote. Out of this repo; track in sleepypod-ios. |
@@ -49,8 +52,8 @@ Stages are **not stored**. `classifySleepStages` runs at query time over `vitals
 Why: 126/782 sessions hit `MAX_SESSION_S`; the stage timeline runs to 17:30 on an empty bed.
 What: find why presence stays true after the bed empties on Pod 5 (adaptive baseline, exit fraction, or capSense2 sentinel handling); fix; add the repair script from §2 as `scripts/repair-capped-sessions.py` (dry-run default).
 Acceptance:
-- Replay test with recorded capSense2 frames ending in an empty bed closes the session within `ABSENCE_TIMEOUT_S`.
-- Repair script on a copy of the pod DB rewrites all 126 capped records; `left_bed_at` ≤ last vitals timestamp + 120 s; writes `.bak` first.
+- Replay test with recorded capSense2 frames ending in an empty bed stores `left_bed_at` within `ABSENCE_TIMEOUT_S` of the real exit. Detection itself lags by up to `EXIT_SETTLE_S` (10 min): the collapse is confirmed after 10 minutes and the exit backdated to its start.
+- Repair script on a copy of the pod DB rewrites every capped record that has a vitals run of 30+ min ending before the cap (52 of 126 on the 2026-10-10 copy); `left_bed_at` = end of that run + 120 s, never later than the original; writes `.bak` first. Records whose vitals run to the cap (keep), with no such run (no-evidence) or with unreadable intervals (malformed) are left unchanged and listed; repairs that drop later short runs are listed as short-final-run.
 - `docs/sleep-detector.md` updated.
 
 ### B. Sleep detector: movement all-zero  (modules/sleep-detector, python)

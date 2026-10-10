@@ -1,34 +1,28 @@
-import sqlite3, csv, statistics as st, itertools
-from datetime import datetime, timedelta, timezone
-from collections import defaultdict, Counter
-LA=timezone(timedelta(hours=-7))
-c=sqlite3.connect('poddb/biometrics.db')
-def p(s): return datetime.strptime(s, '%Y-%m-%d %H:%M:%S %z')
-rows=[r for r in csv.DictReader(open('records.csv'))]
-M={'AsleepCore':'light','AsleepDeep':'deep','AsleepREM':'rem','Awake':'wake'}
-wl={}
-for r in rows:
-    if 'Watch' in r['source'] and r['type']=='SleepAnalysis':
-        v=M.get(r['value'].replace('HKCategoryValueSleepAnalysis',''))
-        if not v: continue
-        t=p(r['start']).replace(second=0); e=p(r['end'])
-        while t<e: wl[int(t.timestamp())//60]=v; t+=timedelta(minutes=1)
-nights={'10-08':('left',datetime(2026,10,9,2,0,tzinfo=LA),datetime(2026,10,9,8,20,tzinfo=LA)),
-        '10-09':('left',datetime(2026,10,10,3,10,tzinfo=LA),datetime(2026,10,10,11,5,tzinfo=LA))}
-STAGES=('wake','light','deep','rem')
-def rows_for(side,a,b):
-    v=c.execute("select timestamp,heart_rate,hrv,breathing_rate from vitals where side=? and timestamp between ? and ? order by timestamp",(side,a.timestamp(),b.timestamp())).fetchall()
-    m={int(t)//60:mv for t,mv in c.execute("select timestamp,total_movement from movement where side=? and timestamp between ? and ?",(side,a.timestamp(),b.timestamp()))}
+import statistics as st, itertools
+from collections import Counter
+from load import nights, STAGES, rows_for
+# ---- port of classifier (filterOutliers + phase1 + smoothing + transitions)
+# Same inputs as classifySleepStages: outlier-filtered vitals, and movement by
+# rounded 5-minute bucket (mov5), not by minute.
+def filter_outliers(eps):
+    """filterOutliers: hard limits, then null an HR more than 2 std from the
+    median of its +-2-row window."""
     out=[]
-    for t,hr,hrv,br in v:
-        k=int(t)//60
-        out.append(dict(t=t,k=k,hr=hr,hrv=hrv,br=br,mov=m.get(k),w=wl.get(k)))
+    for i,e in enumerate(eps):
+        hr,hrv,br=e['hr'],e['hrv'],e['br']
+        if hr is not None and (hr<45 or hr>130): hr=None
+        if hrv is not None and (hrv<1 or hrv>300): hrv=None
+        if br is not None and (br<8 or br>25): br=None
+        if hr is not None:
+            w=[x['hr'] for x in eps[max(0,i-2):i+3] if x['hr'] is not None and 45<=x['hr']<=130]
+            if w:
+                med=sorted(w)[len(w)//2]; mean=sum(w)/len(w)
+                sd=(sum((h-mean)**2 for h in w)/len(w))**0.5
+                if sd>0 and abs(hr-med)>2*sd: hr=None
+        out.append(dict(e,hr=hr,hrv=hrv,br=br))
     return out
-# ---- port of classifier (phase1 + smoothing + transitions)
 def classify(ep, avg, cq=1.0, deep_r=0.92, rem_r=0.95, rem_hrv=25, rem_mov=30, rem2_mov=50, rem2_hrv=40, wake_mov=200):
-    hr,hrv,mov=ep['hr'],ep['hrv'],ep['mov']
-    if hr is not None and (hr<45 or hr>130): hr=None
-    if hrv is not None and (hrv<1 or hrv>300): hrv=None
+    hr,hrv,mov=ep['hr'],ep['hrv'],ep['mov5']
     if cq<0.3: return 'wake' if (mov is not None and mov>wake_mov) else 'light'
     if mov is not None and mov>wake_mov: return 'wake'
     if hr:
@@ -48,7 +42,8 @@ def post(st_):
         if (a,b) in {('wake','deep'),('deep','wake'),('deep','rem'),('rem','deep')}: s[i]='light'
     return s
 def run(eps, **kw):
-    hrs=[e['hr'] for e in eps if e['hr']]; avg=st.mean(hrs)
+    eps=filter_outliers(eps)
+    hrs=[e['hr'] for e in eps if e['hr']]; avg=st.mean(hrs) if hrs else 60
     return post([classify(e,avg,**kw) for e in eps])
 def report(name, pred, eps):
     pairs=[(a,e['w']) for a,e in zip(pred,eps) if e['w']]
@@ -77,22 +72,30 @@ for k,(side,a,b) in nights.items():
     maj=Counter(e['w'] for e in lab).most_common(1)[0][0]
     report(f"always-{maj}", [maj]*len(eps), eps)
 # grid search across both nights (pooled)
-print("\n=== grid search pooled over both nights (deep ratio, rem ratio, rem hrv, rem mov, wake mov)")
-best=[]
-groups=[rows_for(side,a,b) for (side,a,b) in nights.values()]
-for dr,rr,rh,rm,wm in itertools.product([0.85,0.88,0.90,0.92,0.94],[0.95,1.0,1.03,1.06],[25,40,60,999],[30,60,120],[100,200,400]):
-    tot=ag=0; preds=Counter()
-    for eps in groups:
-        pr=run(eps,cq=1.0,deep_r=dr,rem_r=rr,rem_hrv=rh,rem_mov=rm,rem2_mov=rm,rem2_hrv=rh,wake_mov=wm)
-        for a,e in zip(pr,eps):
-            if e['w']: tot+=1; ag+=(a==e['w']); preds[a]+=1
-    best.append((ag/tot,dr,rr,rh,rm,wm,dict(preds)))
-best.sort(reverse=True)
-for b in best[:8]: print(f"  {b[0]*100:.0f}%  deep<{b[1]} rem>={b[2]} remHRV<{b[3]} remMov<{b[4]} wakeMov>{b[5]} pred={b[6]}")
-# leave-one-night-out for the top config
-print("\n=== leave-one-night-out check for top-1 params")
-_,dr,rr,rh,rm,wm,_=best[0]
-for i,eps in enumerate(groups):
+def grid(groups):
+    best=[]
+    for dr,rr,rh,rm,wm in itertools.product([0.85,0.88,0.90,0.92,0.94],[0.95,1.0,1.03,1.06],[25,40,60,999],[30,60,120],[100,200,400]):
+        tot=ag=0; preds=Counter()
+        for eps in groups:
+            pr=run(eps,cq=1.0,deep_r=dr,rem_r=rr,rem_hrv=rh,rem_mov=rm,rem2_mov=rm,rem2_hrv=rh,wake_mov=wm)
+            for a,e in zip(pr,eps):
+                if e['w']: tot+=1; ag+=(a==e['w']); preds[a]+=1
+        best.append((ag/tot,dr,rr,rh,rm,wm,dict(preds)))
+    best.sort(reverse=True)
+    return best
+def score(eps, params):
+    _,dr,rr,rh,rm,wm,_=params
     pr=run(eps,cq=1.0,deep_r=dr,rem_r=rr,rem_hrv=rh,rem_mov=rm,rem2_mov=rm,rem2_hrv=rh,wake_mov=wm)
     pairs=[(a,e['w']) for a,e in zip(pr,eps) if e['w']]
-    print(f"  night {list(nights)[i]}: {100*sum(a==b for a,b in pairs)/len(pairs):.0f}%")
+    return 100*sum(a==b for a,b in pairs)/len(pairs)
+print("\n=== grid search pooled over both nights (deep ratio, rem ratio, rem hrv, rem mov, wake mov)")
+groups=[rows_for(side,a,b) for (side,a,b) in nights.values()]
+best=grid(groups)
+for b in best[:8]: print(f"  {b[0]*100:.0f}%  deep<{b[1]} rem>={b[2]} remHRV<{b[3]} remMov<{b[4]} wakeMov>{b[5]} pred={b[6]}")
+print("\n=== pooled top-1 params per night (in-sample: both nights picked them)")
+for i,eps in enumerate(groups):
+    print(f"  night {list(nights)[i]}: {score(eps,best[0]):.0f}%")
+print("\n=== leave-one-night-out: params picked on the other night only, scored on the held-out one")
+for i,eps in enumerate(groups):
+    top=grid([g for j,g in enumerate(groups) if j!=i])[0]
+    print(f"  night {list(nights)[i]}: {score(eps,top):.0f}%  deep<{top[1]} rem>={top[2]} remHRV<{top[3]} remMov<{top[4]} wakeMov>{top[5]}")

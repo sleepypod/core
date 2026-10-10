@@ -1,7 +1,5 @@
-import sqlite3, csv, statistics as st
-from datetime import datetime, timedelta, timezone
 from collections import Counter
-exec(open('eval.py').read().split('# ---- port of classifier')[0])  # reuse loaders: nights, rows_for, wl
+from load import c, nights, rows_for, STAGES
 import numpy as np
 print("\n=== movement health per night (nonzero fraction, p50/p90/p99)")
 for k,(side,a,b) in nights.items():
@@ -17,14 +15,18 @@ r=c.execute("select count(*),avg(heart_rate),avg(hrv),avg(breathing_rate) from v
 print(f"  after 11:05 ->18:04  n={r[0]} HR={r[1]} HRV={r[2]} BR={r[3]}  (bed likely empty; vitals still emitted?)")
 print("\n=== windowed features per Watch stage (15-min centered): HR std, HRV/night-median, BR std, time-since-onset")
 def windowed(eps):
+    """Rows within 7.5 min either side by timestamp (vitals gaps don't widen
+    the window); tso = fraction of the time from first to last row elapsed."""
+    t=np.array([e['t'] for e in eps],float)
     hr=np.array([e['hr'] if e['hr'] else np.nan for e in eps],float)
     hrv=np.array([e['hrv'] if e['hrv'] else np.nan for e in eps],float)
     br=np.array([e['br'] if e['br'] else np.nan for e in eps],float)
     medhrv=np.nanmedian(hrv); medhr=np.nanmedian(hr)
+    t0,t1=t[0],t[-1]
     out=[]
-    for i,e in enumerate(eps):
-        s=slice(max(0,i-7),i+8)
-        out.append(dict(w=e['w'],hr_std=np.nanstd(hr[s]),hr_rel=np.nanmean(hr[s])/medhr,hrv_rel=np.nanmean(hrv[s])/medhrv,br_std=np.nanstd(br[s]),tso=i/len(eps)))
+    for e in eps:
+        s=slice(np.searchsorted(t,e['t']-450,'left'),np.searchsorted(t,e['t']+450,'right'))
+        out.append(dict(w=e['w'],hr_std=np.nanstd(hr[s]),hr_rel=np.nanmean(hr[s])/medhr,hrv_rel=np.nanmean(hrv[s])/medhrv,br_std=np.nanstd(br[s]),tso=(e['t']-t0)/(t1-t0)))
     return out
 allf=[]
 for k,(side,a,b) in nights.items():
