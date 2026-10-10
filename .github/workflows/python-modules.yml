@@ -8,6 +8,7 @@ on:
       - 'modules/**/pyproject.toml'
       - 'modules/**/uv.lock'
       - 'modules/.coveragerc'
+      - 'scripts/**/*.py'
       - '.github/workflows/python-modules.yml'
   pull_request:
     types: [opened, synchronize, reopened]
@@ -16,6 +17,7 @@ on:
       - 'modules/**/pyproject.toml'
       - 'modules/**/uv.lock'
       - 'modules/.coveragerc'
+      - 'scripts/**/*.py'
       - '.github/workflows/python-modules.yml'
   workflow_dispatch:
 
@@ -76,6 +78,13 @@ jobs:
             target: .
             cov_source: .
             deps: ""
+          # Stdlib-only repo scripts; tests load them by path from
+          # scripts/tests/.
+          - name: scripts
+            workdir: scripts
+            target: tests
+            cov_source: .
+            deps: ""
 
     steps:
       - name: Checkout
@@ -100,7 +109,9 @@ jobs:
             uv sync --locked --no-install-project
           else
             uv venv .venv
-            uv pip install --python .venv/bin/python ${{ matrix.module.deps }}
+            if [ -n "${{ matrix.module.deps }}" ]; then
+              uv pip install --python .venv/bin/python ${{ matrix.module.deps }}
+            fi
           fi
           # shellcheck source=/dev/null
           . .venv/bin/activate
