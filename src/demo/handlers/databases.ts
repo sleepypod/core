@@ -59,7 +59,7 @@ const TABLES: Record<DbKey, TableSpec[]> = {
 
 const MIGRATIONS: Record<DbKey, { count: number, tag: string }> = {
   sleepypod: { count: 17, tag: '0016_hardware_deadline' },
-  biometrics: { count: 18, tag: '0017_reference_stages' },
+  biometrics: { count: 19, tag: '0018_reference_stages_read_index' },
 }
 
 const isNight = (t: number) => {
@@ -130,6 +130,10 @@ function overview(): Overview {
   }
 }
 
+const REFERENCE_STAGE_CYCLE = ['light', 'deep', 'light', 'rem', 'light', 'wake'] as const
+const REFERENCE_SEGMENT_SECONDS = 20 * 60
+const REFERENCE_SEGMENTS_PER_NIGHT = 24
+
 /** Plausible cell value for a column, from its name alone. */
 function cellFor(column: string, rowIndex: number, idTop: number, rand: () => number): string | number | null {
   const now = Math.floor(Date.now() / 1000)
@@ -137,6 +141,18 @@ function cellFor(column: string, rowIndex: number, idTop: number, rand: () => nu
   if (/password|secret|token|api_?key/i.test(column)) return '••••'
   if (column === 'side') return rowIndex % 2 === 0 ? 'left' : 'right'
   if (/(_at|timestamp|last_checked|last_updated)$/.test(column)) return now - rowIndex * 60 - Math.floor(rand() * 20)
+  if (column === 'source') return 'apple_watch'
+  if (column === 'stage') return REFERENCE_STAGE_CYCLE[rowIndex % REFERENCE_STAGE_CYCLE.length]
+  if (column === 'start' || column === 'end') {
+    // Newest first: back-to-back 20-minute segments per night, ending at the
+    // latest 07:00 UTC. Start and end come from the same row index, so end is
+    // always after start.
+    const day = DAY / 1000
+    const wake = 7 * HOUR / 1000
+    const nightEnd = Math.floor((now - wake) / day) * day + wake - Math.floor(rowIndex / REFERENCE_SEGMENTS_PER_NIGHT) * day
+    const end = nightEnd - (rowIndex % REFERENCE_SEGMENTS_PER_NIGHT) * REFERENCE_SEGMENT_SECONDS
+    return column === 'end' ? end : end - REFERENCE_SEGMENT_SECONDS
+  }
   if (column === 'level') return 'ok'
   if (column === 'status') return 'ok'
   if (column === 'heart_rate') return Math.round(randomBetween(rand, 52, 66))
