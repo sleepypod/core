@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   recalibrate: vi.fn(),
   vitals: vi.fn(),
   latest: [] as Array<{ timestamp: Date }>,
+  latestPending: false,
   timeFormat: '12h' as '12h' | '24h',
   shown: ['left', 'right'] as Array<'left' | 'right'>,
 }))
@@ -33,7 +34,7 @@ vi.mock('@/src/utils/trpc', () => ({
     biometrics: {
       getVitals: {
         useQuery: (input: { limit: number }) => (input.limit === 1
-          ? { data: state.latest, isLoading: false }
+          ? { data: state.latestPending ? undefined : state.latest, isLoading: state.latestPending, isSuccess: !state.latestPending }
           : state.vitals(input)),
       },
       getVitalsSummary: { useQuery: () => ({ data: { avgHeartRate: 61, minHeartRate: 40, maxHeartRate: 84, avgHRV: 43, avgBreathingRate: 17.8, recordCount: 585 }, isLoading: false }) },
@@ -72,6 +73,7 @@ beforeEach(() => {
   state.timeFormat = '12h'
   state.dataPath = { occupancy: { left: 'occupied', right: 'empty' } }
   state.latest = [{ timestamp: new Date(LAST_VITAL) }]
+  state.latestPending = false
   state.vitals.mockReturnValue({
     data: [...session(new Date(2026, 8, 27, 4, 5).getTime(), 258), ...session(new Date(2026, 8, 28, 12, 52).getTime(), 134)],
     isLoading: false,
@@ -99,6 +101,16 @@ describe('BiometricsPage', () => {
     expect(banner.textContent).toContain('Jon’s side reads occupied, but the last vital arrived 3h 56m ago and nobody has moved since.')
     fireEvent.click(within(banner).getByRole('button', { name: 'No — recalibrate empty bed' }))
     await waitFor(() => expect(state.recalibrate).toHaveBeenCalledWith({ side: 'left', sensorType: 'capacitance' }))
+  })
+
+  it('does not call the pipeline stalled while the latest vital is still loading', () => {
+    state.latestPending = true
+    render(<BiometricsPage />)
+    expect(screen.queryByTestId('stale-banner')).toBeNull()
+    cleanup()
+    state.dataPath = { occupancy: { left: 'suspect', right: 'empty' } }
+    render(<BiometricsPage />)
+    expect(screen.queryByTestId('suspect-banner')).toBeNull()
   })
 
   it('hides the banner when the side is empty', () => {

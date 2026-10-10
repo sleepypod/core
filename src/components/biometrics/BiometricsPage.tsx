@@ -78,7 +78,8 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   const lastVitalAt = latestQ.data?.[0] ? new Date(latestQ.data[0].timestamp).getTime() : null
   const occupied = occupancyQ.data?.[side].occupied ?? false
   const suspect = dataPathQ.data?.occupancy[side] === 'suspect'
-  const stale = occupied && !suspect && (lastVitalAt == null || now - lastVitalAt > STALE_MS)
+  // Occupancy resolves before the latest-vital query on first paint; a null vital is only evidence once that query has settled.
+  const stale = occupied && !suspect && latestQ.isSuccess && (lastVitalAt == null || now - lastVitalAt > STALE_MS)
   const includesNow = win.start <= now && now <= win.end
   const stall = stale && includesNow && lastVitalAt != null && lastVitalAt >= win.start ? { start: lastVitalAt, end: now } : null
   const rangeLabel = formatRangeLabel(win)
@@ -125,7 +126,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
         <SegmentedControl ariaLabel="Range" full options={RANGES} value={range} onChange={pickRange} />
       </div>
 
-      {occupied && suspect && (
+      {occupied && suspect && latestQ.isSuccess && (
         <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-warn-line bg-warn-bg/50 px-4 py-3 text-[14px] text-warn" role="status" data-testid="suspect-banner">
           <HeartPulse size={18} className="shrink-0" />
           <span className="min-w-0 flex-1 basis-[240px]">
