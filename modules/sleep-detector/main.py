@@ -70,6 +70,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# session_limits sits next to this file, also when another module's tests
+# load main.py by path. Appended, so it never shadows their own modules.
+sys.path.append(str(Path(__file__).resolve().parent))
 
 import cbor2
 from common.nats_follower import create_follower
