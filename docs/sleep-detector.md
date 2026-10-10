@@ -14,7 +14,7 @@ flowchart TD
     TypeFilter -->|"capSense/capSense2"| Extract["Extract channel values\n(sentinel filter, ref compensation)"]
     TypeFilter -->|Other| Skip[Skip]
     Extract --> Presence["Presence detection\n(raw-unit rise over baseline or fallback)"]
-    Extract --> PumpGate{"Pump gate active?\n(RPM > 0 OR guard OR ref anomaly)"}
+    Extract --> PumpGate{"Pump gate active?\n(pump changed state < 3s ago OR ref anomaly)"}
     PumpGate -->|Yes| ZeroDelta["delta = 0\n(suppress artifact)"]
     PumpGate -->|No| Delta["Movement delta\n(|current - previous| per channel)"]
     ZeroDelta --> Session["SessionTracker\n(per side)"]
@@ -22,8 +22,7 @@ flowchart TD
     Presence --> Session
     Session -->|"60s epoch"| RawScore["Raw score = min(1000, sum * scale)"]
     RawScore --> Baseline["Baseline subtraction\n(score - P5 of trailing 30 epochs)"]
-    Baseline --> MedianFilt["3-epoch median filter"]
-    MedianFilt --> Clamp["Clamp to 0-1000"]
+    Baseline --> Clamp["Clamp to 0-1000"]
     Clamp --> MovDB[("movement table\n(total_movement 0-1000)")]
     Session -->|"absence > 120s"| SleepDB[("sleep_records table")]
 ```
@@ -36,7 +35,7 @@ Movement is measured as the sum of absolute sample-to-sample deltas across the 3
 
 ```mermaid
 flowchart LR
-    Raw["capSense2 record\n[A1,A2,B1,B2,C1,C2,ref1,ref2]"] --> Sentinel{"Any sensing value\n(indices 0-5) == -1.0?"}
+    Raw["capSense2 record\n[A1,A2,B1,B2,C1,C2,ref1,ref2]"] --> Sentinel{"Sentinel (-1.0) frame,\nor the frame after one?"}
     Sentinel -->|Yes| Hold["Zero-order hold\n(keep previous, delta=0)"]
     Sentinel -->|No| Avg["Average pairs\nA=(A1+A2)/2\nB=(B1+B2)/2\nC=(C1+C2)/2"]
     Avg --> Ref["Reference compensation\nsubtract ref drift from nominal 1.16"]
@@ -47,8 +46,7 @@ flowchart LR
     Delta --> Buf
     Buf -->|"Every 60s"| Score["raw_score = min(1000, sum * 10)"]
     Score --> Baseline["score -= P5(trailing 30 epochs)\n(skip during 10-min cold start)"]
-    Baseline --> Median["3-epoch median filter"]
-    Median --> Clamp["clamp(0, 1000)"]
+    Baseline --> Clamp["clamp(0, 1000)"]
     Clamp --> DB[("movement table")]
 ```
 
@@ -76,13 +74,13 @@ Score is capped at 1000. capSense2 (Pod 5) sums its float channel deltas `×10`.
 
 capSense (Pod 3/4) integer channels change by several counts per sample with nobody moving, so a plain delta sum saturates every minute. Instead each channel's delta counts `×1`, only by its excess over `CAPSENSE_NOISE_K` (6) times that channel's typical delta (median over the last ~10 minutes, at least 1), and only when it lands on a level the channel hasn't held in the last `CAPSENSE_LEVEL_MEMORY` samples (~3 min). The level rule is for breathing flicker: in some lying positions one channel flips between two fixed levels (~200 counts apart) with each breath while the body is still, which otherwise scored 1000 for half an hour at a time. Turning over moves the channels to new levels and still counts; the return leg of an out-and-back motion (a tap, a twitch) doesn't.
 
-After summing, each epoch has the 5th percentile of the trailing epochs subtracted. capSense2 epochs then pass through a 3-epoch median filter. capSense epochs don't: a turn-over is usually one busy minute between still ones, which the median zeroed, and the noise margin and level memory already reject that sensor's artifacts.
+After summing, each epoch has the 5th percentile of the trailing epochs subtracted. There is no median filter: a turn-over is usually one busy minute between still ones, which a 3-epoch median zeroed. On capSense the noise margin and level memory reject that sensor's artifacts; on capSense2 the periodic glitch the median used to hide (the frame after a sentinel) is skipped at the source.
 
 Normal healthy sleep averages ~10 major position changes per night (De Koninck et al. 1992).
 
 ### Sentinel filtering
 
-capSense2 firmware occasionally emits `-1.0` as a sentinel value on read errors in the sensing channels (indices 0-5). These are filtered via zero-order hold (carry forward the last valid reading, emit delta=0 for that sample). The next valid sample computes its delta against the last valid reading, which may span the sentinel gap — this produces a slightly larger delta but avoids the massive spike that a raw sentinel-to-valid transition would cause. Reference channel sentinels (indices 6-7) disable reference compensation for that sample but do not affect the sensing channels.
+capSense2 firmware emits `-1.0` as a sentinel value on read errors in the sensing channels (indices 0-5); Pod 5 sends an all `-1.0` frame every 5 minutes. These are filtered via zero-order hold (carry forward the last valid reading, emit delta=0 for that sample). The frame right after a sentinel frame is still settling — every channel above 28.5 reads exactly 28.5 — so it is held too; its down-and-back-up delta added ~110 to one epoch in five on an occupied side. The next valid sample computes its delta against the last valid reading, which may span the gap. Reference channel sentinels (indices 6-7) disable reference compensation for that sample but do not affect the sensing channels.
 
 ### Reference channel compensation
 
@@ -90,32 +88,30 @@ The capSense2 record includes a reference channel pair (indices 6,7) that reads 
 
 ### Pump artifact gating (#230)
 
-**Problem.** The pod's air pump runs periodically to maintain mattress pressure. Pump vibrations couple mechanically through the mattress into the capacitive sensor electrodes, producing small but consistent delta spikes (~0.05-0.2 per channel per sample). Over a 60-second epoch with ~120 samples, these accumulate to raw scores of 60-200 per pump-active epoch. Over a full night with frequent pump cycles, movement scores escalate from a true ~50 to 960-990 by the early morning hours.
+**Problem.** Pump transients couple mechanically through the mattress into the capacitive electrodes. The gate was first built for a pump that cycles, and gated every sample while the pump ran. Pod 5 circulates continuously (~1940 RPM, boosting to ~3100) for as long as a side is on, so that gate zeroed movement for whole nights: 97% of epochs on pod 88's 2026-10-09 night were exactly 0. A steady pump does not raise the delta floor: on pod 88 an empty side scored ~25 per epoch with the pump off, at 1940 RPM and at 3100 RPM.
 
-**Three-signal detection.** The `PumpGateCapSense` class uses three independent signals:
+**Two-signal detection.** The `PumpGateCapSense` class gates a side's delta:
 
-1. **Primary: frzHealth pump RPM.** The `frzHealth` record (Pod 5 only, ~0.06 Hz) reports pump RPM per side. Any RPM > 0 means the pump is running. This is the most reliable signal but has low temporal resolution (~16s between updates).
+1. **Pump state change.** For `PUMP_GUARD_S` (3 s, ~6 samples at ~2 Hz) after that side's pump starts, stops, or steps its RPM by more than `PUMP_RPM_CHANGE_FRACTION` (10%). The RPM comes from `frzHealth` (`side.pump.rpm` on Pod 5, ~0.1 Hz). Once a side's `frzHealth` reports an RPM, its `frzTherm` `power` is ignored: that is the TEC drive, which drops to 0 while the pump keeps running. Pods without `frzHealth` RPM still take pump state from `frzTherm`.
 
-2. **Secondary: Reference channel anomaly.** The capSense2 reference channel pair (indices 6,7) is mechanically coupled to the sensor PCB but does not respond to body presence. When `|ref_delta| > 0.02` AND at least 2 of 3 active channel deltas correlate (both spike together with magnitude > 0.5x the ref delta), the sample is flagged as mechanical coupling rather than body movement.
+2. **Reference channel anomaly.** The capSense2 reference channel pair (indices 6,7) is mechanically coupled to the sensor PCB but does not respond to body presence. When `|ref_delta| > 0.02` AND at least 2 of 3 active channel deltas correlate (both spike together with magnitude > 0.5x the ref delta), the sample is flagged as mechanical coupling rather than body movement.
 
-3. **Guard period: 3 seconds.** After pump-off is detected (RPM transitions from >0 to 0), a 3-second guard period (~6 samples at ~2 Hz) suppresses deltas while residual vibrations decay. This is shorter than the piezo processor's 5-second guard because capacitive sensors have lower sensitivity to mechanical vibration than piezoelectric sensors.
-
-When any signal is active, the movement delta for that sample is forced to 0.
+When either signal is active, the movement delta for that sample is forced to 0. Any steady pump floor that remains is removed by the baseline subtraction below.
 
 **Pipeline position.** Pump gating is applied after reference compensation and before delta computation:
 
 ```text
-1. Sentinel filter (-1.0 values)
+1. Sentinel filter (-1.0 frames and the frame after each)
 2. Pair averaging
 3. Reference compensation
-4. PUMP GATE — if pumpActive OR inGuardPeriod OR refAnomaly: delta = 0
+4. PUMP GATE — if pump changed state < PUMP_GUARD_S ago OR refAnomaly: delta = 0
 5. Per-channel delta
 6. 60s epoch accumulation
 ```
 
 ### Baseline subtraction
 
-After computing the raw epoch score (`min(1000, sum * scale)`), the 5th percentile of the trailing 30 epochs is subtracted. This removes slow-building noise floors (residual pump artifacts that leak through the gate, thermal drift in the capacitive sensor).
+After computing the raw epoch score (`min(1000, sum * scale)`), the 5th percentile of the trailing 30 epochs is subtracted. This removes slow-building noise floors (steady pump vibration, thermal drift in the capacitive sensor). A still sleeper's floor varies by a few points from minute to minute, so still epochs land at small nonzero scores rather than exactly 0.
 
 - **Trailing window:** 30 epochs (30 minutes at 60s epochs)
 - **Percentile:** 5th (robust to outliers; represents the quietest ~1.5 epochs in the window)
@@ -123,11 +119,9 @@ After computing the raw epoch score (`min(1000, sum * scale)`), the 5th percenti
 
 The subtracted score is clamped to a minimum of 0.
 
-### 3-epoch median filter
+### No median filter
 
-A 3-epoch running median is applied as the final smoothing step after baseline subtraction. This suppresses isolated spike artifacts (single-epoch transients from sensor glitches, brief vibration events) without attenuating sustained movement events.
-
-The median filter output is clamped to [0, 1000] before writing to the database.
+A 3-epoch median filter used to follow baseline subtraction. It erased a lone busy minute between still ones, which is what a turn-over looks like, so it was dropped for capSense and then for capSense2. The subtracted score is clamped to [0, 1000] before writing to the database.
 
 ## Presence Detection
 
@@ -141,12 +135,13 @@ The baseline is maintained by the detector itself (`AdaptiveBaseline`), not by s
 
 - **Drift:** while the bed is empty and the reading is within the exit threshold, the baseline follows it with time constant `BASELINE_UP_TAU_S` (30 min). A load between the exit and enter thresholds is never learned as empty.
 - **Contamination:** any reading below baseline pulls it down with `BASELINE_DOWN_TAU_S` (2 min), so a baseline captured with someone in bed recovers minutes after they get up.
+- **Exit to a new empty level:** the empty level itself moves with the bedding. On pod 88 the covers pulled back before bed lowered it by 7.7 (summed), the contamination rule learned that, and the made bed then read +7.5 over the baseline, above the exit threshold, for the rest of the day: 126 of 782 sessions ran to the 16 h cap. So while a side reads occupied, the detector tracks its occupied load (the peak of a 5-minute average of the rise, `OCCUPIED_LOAD_TAU_S`). If the rise falls below `EXIT_COLLAPSE_FRACTION` (25%) of that load and stays there for `EXIT_SETTLE_S` (10 min), the bed is empty at a new level: the baseline is reseeded to the reading and the absence is dated from where the collapse began, so `left_bed_at` lands on the real exit. Sleepers on pod 88 held 50-100% of their load through the night; the empty bed read 10-20%. The load and collapse start are saved with the baseline, so a restart mid-collapse doesn't lose them.
 - **Stuck load:** after a session force-closed at `MAX_SESSION_S`, the current level becomes the new empty level.
 - **Seeding:** the saved state file, else the active calibration profile — including this detector's own published baseline when the state file is lost (legacy capSense profiles with a z-score threshold get the raw-unit default) — else the first frame. A calibration profile newer than any seen — a manual recalibration — is adopted as a reseed.
 - **Publishing:** every `BASELINE_PUBLISH_S` (15 min) the baseline is upserted to `calibration_profiles` with `source: "adaptive"`, in the calibrators' shape, so Node's occupancy check and the UI see the same level. Profiles marked adaptive never replace a live baseline; they only seed one when there is none.
 - Per-sample tracking time is capped at `BASELINE_MAX_STEP_S`, so a gap or restart can't move the baseline in one step. Frames with a missing side or capSense2 sentinels are ignored.
 
-Replaying recorded capSense data starting from a baseline captured with the sleeper in bed, the baseline recovers within minutes of them getting up, sessions end at the real wake time rather than at the next recalibration, and a bedding shift of a few tens of units per channel produces no session.
+Replaying pod 88's recorded capSense2 frames for 2026-10-09, the session ends at 15:28, the real exit, instead of at the 16 h cap the next morning. Replaying recorded capSense data starting from a baseline captured with the sleeper in bed, the baseline recovers within minutes of them getting up, sessions end at the real wake time rather than at the next recalibration, and a bedding shift of a few tens of units per channel produces no session.
 
 ## Single-Sleeper Mode
 
@@ -229,6 +224,9 @@ This filters phantom-session flicker (1-3 scattered non-still epochs per bucket)
 | `BASELINE_UP_TAU_S` | 30 min | Empty-bed drift tracking time constant |
 | `BASELINE_DOWN_TAU_S` | 2 min | Recovery when the reading falls below baseline |
 | `BASELINE_PUBLISH_S` | 15 min | Baseline written back to calibration_profiles |
+| `EXIT_COLLAPSE_FRACTION` | 0.25 | Rise below this fraction of the occupied load counts as a collapse |
+| `EXIT_SETTLE_S` | 10 min | A collapse held this long rebases the baseline and ends the stay |
+| `OCCUPIED_LOAD_TAU_S` | 5 min | Averaging time for the occupied load |
 | `CALIBRATION_RELOAD_S` | 60 s | Poll calibration_profiles for updates |
 | `STATE_SAVE_INTERVAL_S` | 60 s | Checkpoint an open session to the state file |
 | `STATE_MAX_GAP_S` | 30 min | Longer downtime closes a restored session instead of resuming it |
@@ -237,12 +235,12 @@ This filters phantom-session flicker (1-3 scattered non-still epochs per bucket)
 | Movement cap | 1000 | Prevents outlier scores from sensor glitches |
 | Sentinel value | -1.0 | capSense2 firmware error indicator |
 | Reference nominal | 1.16 | Expected reference channel value |
-| `PUMP_GUARD_S` | 3.0 s | Guard period after pump-off; 6 samples at ~2 Hz (#230) |
+| `PUMP_GUARD_S` | 3.0 s | Guard period after a pump state change; 6 samples at ~2 Hz (#230) |
+| `PUMP_RPM_CHANGE_FRACTION` | 0.1 | RPM step that counts as a pump state change |
 | `REF_ANOMALY_THRESHOLD` | 0.02 | Reference channel deviation for secondary pump detection |
 | `BASELINE_TRAILING_EPOCHS` | 30 | 30-minute trailing window for baseline subtraction |
 | `BASELINE_COLD_START_EPOCHS` | 10 | 10-minute minimum before baseline subtraction activates |
 | `BASELINE_PERCENTILE` | 5 | 5th percentile; represents quietest epoch in trailing window |
-| `MEDIAN_FILTER_WINDOW` | 3 | 3-epoch median filter; suppresses isolated spikes |
 | `MIN_BUCKET_NONSTILL_FLOOR` | 2 | Chart density gate; minimum non-still epochs per rendered bucket |
 
 ## Literature References
@@ -264,12 +262,12 @@ This filters phantom-session flicker (1-3 scattered non-still epochs per bucket)
 
 4. **Scale calibration.** The `* 10` scale factor and 1000 cap were empirically tuned on one Pod 5. Different pod generations or mattress configurations may need adjustment.
 
-5. **Pump gate frzHealth dependency.** The primary pump signal comes from `frzHealth` records which are Pod 5 only and arrive at ~0.06 Hz (~16s between updates). There is a detection latency window where pump vibrations may leak through before the first frzHealth record confirms pump-on. The reference channel anomaly detector (signal 2) partially covers this gap but is less reliable than direct RPM monitoring.
+5. **Pump gate frzHealth dependency.** The pump state signal comes from `frzHealth` records, which are Pod 5 only and arrive every ~10 s. A pump start can leak a few seconds of transient before the first record confirms it. The reference channel anomaly detector partially covers this gap.
 
 6. **Pump gate field name uncertainty.** The exact field names in frzHealth records for pump RPM (`pumpRpm`, `pump_rpm`, etc.) have not been confirmed on live hardware. The implementation checks multiple candidate names for robustness, but if the firmware uses an unexpected name, the primary signal will be inactive and only the reference anomaly detector will provide gating.
 
 7. **Baseline subtraction cold start.** Movement scores during the first 10 minutes of a session are not baseline-subtracted, which may produce slightly elevated readings compared to later in the night. This is acceptable because the baseline requires sufficient history to be meaningful.
 
-8. **Median filter smoothing behavior.** The 3-epoch median filter is causal (trailing window), so it does not depend on future epochs. It may still soften abrupt transitions, which is acceptable since movement data is not used for real-time alerting.
+8. **Isolated glitches are not smoothed.** Without a median filter, a one-off sensor glitch that survives the sentinel and pump gates scores as one busy minute. The chart's density gate (two non-still epochs per bucket) keeps single minutes from rendering on their own.
 
 9. **Calibrator RAW path coupling (Pod 5).** The calibrator reads RAW files from `RAW_DATA_DIR`, which must match the tmpfs path created by `sleepypod-tmpfs-prep` (`/persistent/biometrics`, per ADR-0018). A mismatch makes every reader see an empty directory, so the detector (and piezo/temperature calibration) receives no frames at all. The calibrator unit file declares `RequiresMountsFor=/persistent/biometrics` to surface this as a startup failure rather than a silent runtime degradation.
