@@ -26,7 +26,7 @@ vi.mock('@/src/lib/occupancy', () => ({ getOccupancy: vi.fn() }))
 const { biometricsRouter } = await import('@/src/server/routers/biometrics')
 const caller = biometricsRouter.createCaller({})
 
-// 2026-10-09 23:00:00 UTC, unix seconds
+// 2026-10-10 23:00:00 UTC, unix seconds
 const T0 = 1791673200
 const MIN = 60
 
@@ -67,18 +67,56 @@ describe('biometrics reference stages', () => {
       expect(db.select().from(referenceStages).all()).toHaveLength(4)
     })
 
-    it('keeps the first write when a repost changes an existing segment', async () => {
+    it('writes only the new segments when a repost extends the night', async () => {
       await caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments: night })
       const out = await caller.importReferenceStages({
         side: 'left',
         source: 'apple_watch',
-        segments: [{ start: T0, end: T0 + 25 * MIN, stage: 'wake' }, { start: T0 + 72 * MIN, end: T0 + 90 * MIN, stage: 'light' }],
+        segments: [...night, { start: T0 + 72 * MIN, end: T0 + 90 * MIN, stage: 'light' }],
       })
 
       expect(out).toEqual({ written: 1 })
-      const first = db.select().from(referenceStages).all().find(r => r.start.getTime() === T0 * 1000)
+      expect(db.select().from(referenceStages).all()).toHaveLength(5)
+    })
+
+    it.each([
+      ['changes a stored segment', { start: T0, end: T0 + 25 * MIN, stage: 'wake' as const }, `wake ${T0}-${T0 + 25 * MIN} overlaps stored light ${T0}-${T0 + 20 * MIN}`],
+      ['shifts a stored start by 30 s', { start: T0 + 30, end: T0 + 20 * MIN + 30, stage: 'light' as const }, `light ${T0 + 30}-${T0 + 20 * MIN + 30} overlaps stored light ${T0}-${T0 + 20 * MIN}`],
+    ])('rejects a repost that %s, keeping the first write', async (_label, changed, conflict) => {
+      await caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments: night })
+      await expect(caller.importReferenceStages({
+        side: 'left',
+        source: 'apple_watch',
+        segments: [changed, { start: T0 + 72 * MIN, end: T0 + 90 * MIN, stage: 'light' }],
+      })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining(conflict) })
+
+      const rows = db.select().from(referenceStages).all()
+      expect(rows).toHaveLength(4)
+      const first = rows.find(r => r.start.getTime() === T0 * 1000)
       expect(first?.stage).toBe('light')
       expect(first?.end.getTime()).toBe((T0 + 20 * MIN) * 1000)
+    })
+
+    it('does not treat a stored segment for another side or source as a conflict', async () => {
+      await caller.importReferenceStages({ side: 'right', source: 'apple_watch', segments: [{ start: T0, end: T0 + 25 * MIN, stage: 'wake' }] })
+      const out = await caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments: night })
+      expect(out).toEqual({ written: 4 })
+    })
+
+    it('stores an exact duplicate within one post once', async () => {
+      const out = await caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments: [night[0], night[1], night[0]] })
+      expect(out).toEqual({ written: 2 })
+    })
+
+    it.each([
+      ['share a start with different stages', [night[0], { ...night[0], stage: 'deep' as const }], `light ${T0}-${T0 + 20 * MIN} overlaps deep ${T0}-${T0 + 20 * MIN}`],
+      ['share a start with different ends', [night[0], { ...night[0], end: T0 + 10 * MIN }], `light ${T0}-${T0 + 10 * MIN}`],
+      ['overlap with different starts', [night[1], { start: T0 + 10 * MIN, end: T0 + 25 * MIN, stage: 'wake' as const }], `wake ${T0 + 10 * MIN}-${T0 + 25 * MIN} overlaps deep ${T0 + 20 * MIN}-${T0 + 50 * MIN}`],
+      ['nest one inside another', [night[1], night[0], { start: T0 + 30 * MIN, end: T0 + 35 * MIN, stage: 'wake' as const }], `deep ${T0 + 20 * MIN}-${T0 + 50 * MIN} overlaps wake ${T0 + 30 * MIN}-${T0 + 35 * MIN}`],
+    ])('rejects a post whose segments %s, writing nothing', async (_label, segments, conflict) => {
+      await expect(caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments }))
+        .rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining(conflict) })
+      expect(db.select().from(referenceStages).all()).toHaveLength(0)
     })
 
     it('stores the same start separately per side', async () => {
@@ -166,6 +204,15 @@ describe('biometrics reference stages', () => {
       expect(rows.map(r => r.stage)).toEqual(['deep', 'rem'])
     })
 
+    it('excludes a segment that ends exactly at startDate', async () => {
+      const rows = await caller.getReferenceStages({
+        side: 'left',
+        startDate: new Date((T0 + 20 * MIN) * 1000),
+        endDate: new Date((T0 + 30 * MIN) * 1000),
+      })
+      expect(rows.map(r => r.stage)).toEqual(['deep'])
+    })
+
     it('excludes segments entirely outside the window', async () => {
       const rows = await caller.getReferenceStages({
         side: 'left',
@@ -183,6 +230,15 @@ describe('biometrics reference stages', () => {
         limit: 2,
       })
       expect(rows.map(r => r.stage)).toEqual(['light', 'deep'])
+    })
+
+    it('reads by side and start through the unique index without sorting', () => {
+      const plan = raw.prepare(
+        'EXPLAIN QUERY PLAN SELECT * FROM reference_stages WHERE side = ? AND start <= ? AND "end" > ? ORDER BY start',
+      ).all('left', T0 + 120 * MIN, T0) as Array<{ detail: string }>
+      const details = plan.map(p => p.detail).join('\n')
+      expect(details).toContain('uq_reference_stages_side_start_source')
+      expect(details).not.toContain('TEMP B-TREE')
     })
 
     it('rejects startDate after endDate', async () => {

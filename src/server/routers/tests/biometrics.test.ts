@@ -207,12 +207,12 @@ describe('biometrics.getSleepRecords', () => {
     expect(out).toHaveLength(1)
   })
 
-  it('rejects inverted date range', async () => {
+  it('rejects inverted date range as BAD_REQUEST', async () => {
     await expect(caller.getSleepRecords({
       startDate: new Date('2025-02-01'),
       endDate: new Date('2025-01-01'),
       limit: 10,
-    })).rejects.toThrow(/startDate/)
+    })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
   })
 })
 
@@ -225,12 +225,12 @@ describe('biometrics.getVitals', () => {
     expect(out).toHaveLength(1)
   })
 
-  it('rejects inverted date range', async () => {
+  it('rejects inverted date range as BAD_REQUEST', async () => {
     await expect(caller.getVitals({
       startDate: new Date('2025-02-01'),
       endDate: new Date('2025-01-01'),
       limit: 10,
-    })).rejects.toThrow(/startDate/)
+    })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
   })
 })
 

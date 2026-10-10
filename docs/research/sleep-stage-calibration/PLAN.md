@@ -70,10 +70,10 @@ Acceptance:
 
 ### D. Comparison-data ingestion from the app  (src/server, tRPC + iOS stub)
 Why: manual Health exports do not scale to 20 nights.
-What: tRPC mutation `biometrics.importReferenceStages({side, source:'apple_watch', segments:[{start,end,stage}]})` writing a new `reference_stages` table (migration in `src/db/biometrics-migrations`), idempotent on (source, start). The iOS app posts the Watch's `SleepAnalysis` samples each morning. Dataset builder (C) reads this table when no export is given.
+What: tRPC mutation `biometrics.importReferenceStages({side, source:'apple_watch', segments:[{start,end,stage}]})` writing a new `reference_stages` table (migration in `src/db/biometrics-migrations`), idempotent on (side, source, start); a post that overlaps itself or a different stored segment is rejected. The iOS app posts the Watch's `SleepAnalysis` samples each morning. Dataset builder (C) reads this table when no export is given.
 Acceptance:
 - Migration + Drizzle schema; mutation validates input at the boundary; duplicate posts are no-ops.
-- `sleep-stage-dataset.py --from-db` yields the same rows as `--from-export` for 10-09.
+- `sleep-stage-dataset.py --from-db` yields the same rows as `--from-export` for 10-09 (pending C, which adds `--from-db`).
 
 ### E. Classifier v2  (src/lib/sleep-stages.ts) — blocked on C, needs ≥ 20 nights
 Why: the current rule family cannot beat always-light.
