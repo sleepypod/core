@@ -26,22 +26,22 @@ Movement scoring (Proportional Integration Mode):
   channel's typical delta, since sensor noise alone would fill the scale, and
   only when it lands on a level the channel hasn't held in the last minute:
   in some positions one channel flips between two levels with each breath.
-  Pod 3/4 epochs also skip the 3-epoch median filter, which zeroed turn-overs.
 
   Pump artifact gating (#230):
-    Pump vibrations contaminate capSense2 deltas, inflating movement scores
-    from ~50 to 960-990 overnight. Three-signal pump detection gates the
+    Pump transients contaminate capSense2 deltas. Two signals gate the
     movement delta computation:
-      1. Primary: frzHealth pump RPM > 0 → pump running
-      2. Secondary: reference channel anomaly (|ref_delta| > 0.02 with
-         correlated active channel spikes = mechanical coupling)
-      3. Guard period: 3 seconds trailing after pump-off (6 samples at ~2 Hz)
+      1. Pump state change (frzHealth RPM start, stop or >10% step) → 3 s
+         guard. A steadily running pump is not gated: Pod 5 circulates
+         continuously while a side is on, and gating it zeroed whole nights.
+      2. Reference channel anomaly (|ref_delta| > 0.02 with correlated
+         active channel spikes = mechanical coupling)
     When any gate is active, delta is forced to 0.
 
   Post-epoch processing:
     - Baseline subtraction: 5th percentile of trailing 30 epochs (10-min cold start)
-    - 3-epoch median filter for smoothing
     - Clamp to [0, 1000]
+  No median filter: a turn-over is usually one busy minute between still
+  ones, which a 3-epoch median zeroed.
 
   Sentinel values (-1.0 from firmware) are filtered via zero-order hold.
   Reference channel pair is used for common-mode rejection.
@@ -70,6 +70,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# session_limits sits next to this file, also when another module's tests
+# load main.py by path. Appended, so it never shadows their own modules.
+sys.path.append(str(Path(__file__).resolve().parent))
 
 import cbor2
 from common.nats_follower import create_follower
@@ -86,6 +89,7 @@ from common.calibration import (
     capsense_threshold,
     capsense2_channel_values,
 )
+from session_limits import ABSENCE_TIMEOUT_S, MAX_SESSION_S, MIN_SESSION_S
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -95,10 +99,8 @@ RAW_DATA_DIR = Path(os.environ.get("RAW_DATA_DIR", "/persistent"))
 BIOMETRICS_DB = Path(os.environ.get("BIOMETRICS_DATABASE_URL", "file:/persistent/sleepypod-data/biometrics.db").replace("file:", ""))
 SLEEPYPOD_DB = Path(os.environ.get("DATABASE_URL", "file:/persistent/sleepypod-data/sleepypod.db").replace("file:", ""))
 
-# Seconds of continuous absence before we consider the user has left bed
-ABSENCE_TIMEOUT_S = 120
-# Minimum session length to record (filters out accidental detections)
-MIN_SESSION_S = 300
+# ABSENCE_TIMEOUT_S, MIN_SESSION_S and MAX_SESSION_S live in session_limits,
+# shared with scripts/repair-capped-sessions.py.
 # Presence debounce / hysteresis: a present<->absent flip is only committed
 # after the new raw state has persisted for this many seconds. Without it,
 # brief capSense dropouts (sub-second flaps at 2 Hz while the occupant is
@@ -107,12 +109,6 @@ MIN_SESSION_S = 300
 # debug 2026-06-10). Must be < ABSENCE_TIMEOUT_S so debounced absence still
 # closes the session on a real bed-exit.
 PRESENCE_DEBOUNCE_S = 30.0
-# Hard upper bound on a single session. Belt-and-suspenders against a session
-# that never closes (e.g. presence flapping that historically kept resetting
-# the absence timer, producing 2736/2850min runaway durations). A continuous
-# presence span beyond this is force-closed at the cap rather than persisted as
-# a multi-day sleep_record.
-MAX_SESSION_S = 16 * 3600
 # How often to write a movement row (seconds)
 MOVEMENT_INTERVAL_S = 60
 # How often to reload calibration profiles (seconds)
@@ -137,6 +133,22 @@ BASELINE_MAX_STEP_S = 10.0
 BASELINE_PUBLISH_S = 15 * 60
 # capSense2 profile threshold default (raw float units), as the calibrator.
 CAPSENSE2_PRESENCE_THRESHOLD = 6.0
+# Exit to a new empty level. The fast downward track also learns a lower
+# EMPTY level — bedding pulled back before getting in (pod 88: -7.7 units
+# for an hour) — and the made bed then reads above it for good: the empty
+# bed stayed "occupied" until the MAX_SESSION_S cap (126 capped sessions).
+# A side whose rise falls below EXIT_COLLAPSE_FRACTION of its occupied load
+# (the peak of a OCCUPIED_LOAD_TAU_S average of the rise while occupied)
+# and stays there for EXIT_SETTLE_S is empty: the baseline is reseeded to
+# the reading and the exit dated where the collapse began. Sleepers there
+# held 50-100% of their load; the empty bed read 10-20%. capSense2 only:
+# capSense (Pod 3/4) has no recorded nights to set the fraction, and a
+# sleeper there can hold a dip from +600 to +70 per channel for half an hour.
+# Only observed time counts toward EXIT_SETTLE_S, so a sensor gap or a
+# restart can't confirm a collapse it didn't see.
+EXIT_COLLAPSE_FRACTION = 0.25
+EXIT_SETTLE_S = 10 * 60
+OCCUPIED_LOAD_TAU_S = 5 * 60
 # In-progress session state survives restarts/reboots via this file. Without
 # it a reboot or service restart mid-session silently dropped the whole night.
 STATE_PATH = Path(os.environ.get(
@@ -156,8 +168,11 @@ STATE_MAX_GAP_S = 30 * 60
 MIN_VALID_WALL_CLOCK_TS = 1577836800.0  # 2020-01-01 00:00:00 UTC
 
 # Pump gating for movement scoring (#230)
-# Guard period after pump-off: 3 seconds = ~6 samples at 2 Hz capSense rate
+# Guard period after a pump state change: 3 seconds = ~6 samples at 2 Hz
 PUMP_GUARD_S = 3.0
+# A running pump whose RPM moves by more than this fraction (e.g. the
+# 1940 -> 3100 boost) counts as a state change.
+PUMP_RPM_CHANGE_FRACTION = 0.1
 # Reference channel anomaly threshold (capSense2 units)
 REF_ANOMALY_THRESHOLD = 0.02
 # Pod 3/4 capSense movement. The integer channels change by several counts
@@ -187,11 +202,6 @@ BASELINE_TRAILING_EPOCHS = 30
 BASELINE_COLD_START_EPOCHS = 10  # ~10 minutes at 60s epochs
 # Percentile for baseline (5th percentile)
 BASELINE_PERCENTILE = 5
-# Median filter window (epochs). Not applied to capSense (Pod 3/4): there a
-# turn-over is usually one busy minute between still ones, which the median
-# zeroed, and the noise margin and level memory already reject the sensor's
-# artifacts.
-MEDIAN_FILTER_WINDOW = 3
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -543,6 +553,30 @@ def usable_presence_input(record: dict, side: str) -> bool:
                for ch in ("out", "cen", "in"))
 
 
+def _opt_float(v) -> Optional[float]:
+    return float(v) if v is not None else None
+
+
+def _saved_collapse(state: dict) -> tuple:
+    """The saved (occupied_load, collapse_since, collapse_dwell_s), or no
+    collapse if any is unusable. An infinite load or a NaN dwell would confirm
+    a collapse on the next low sample; the rest of the baseline is still good."""
+    try:
+        load = _opt_float(state.get("occupied_load"))
+        since = _opt_float(state.get("collapse_since"))
+        dwell = float(state.get("collapse_dwell_s") or 0.0)
+    except (TypeError, ValueError):
+        load = since = dwell = math.nan
+    if ((load is not None and not (math.isfinite(load) and load > 0))
+            or (since is not None and not math.isfinite(since))
+            or not (math.isfinite(dwell) and dwell >= 0)):
+        log.warning("Ignoring invalid saved collapse state (load %r, since %r, dwell %r)",
+                    state.get("occupied_load"), state.get("collapse_since"),
+                    state.get("collapse_dwell_s"))
+        return None, None, 0.0
+    return load, since, dwell
+
+
 class AdaptiveBaseline:
     """Self-adjusting empty-bed level for one side's capacitance channels.
 
@@ -556,6 +590,9 @@ class AdaptiveBaseline:
       with time constant BASELINE_UP_TAU_S.
     - Contamination: any reading below baseline pulls it down with
       BASELINE_DOWN_TAU_S — a body only adds capacitance.
+    - Exit to a new empty level: an occupied rise that collapses below
+      EXIT_COLLAPSE_FRACTION of the occupied load for EXIT_SETTLE_S reseeds
+      the baseline (see observe_load).
     - Seeding: saved state, else the calibration profile (including a manual
       recalibration, adopted whenever a newer one appears), else the first
       sample.
@@ -566,7 +603,9 @@ class AdaptiveBaseline:
 
     def __init__(self, fmt: str, means: dict, threshold: float,
                  ref_mean: Optional[float] = None, source: str = "bootstrap",
-                 profile_seen_at: Optional[float] = None, absence_ready: bool = False):
+                 profile_seen_at: Optional[float] = None, absence_ready: bool = False,
+                 occupied_load: Optional[float] = None, collapse_since: Optional[float] = None,
+                 collapse_dwell_s: float = 0.0):
         self.fmt = fmt
         self.means = {ch: float(v) for ch, v in means.items()}
         self.threshold = float(threshold)
@@ -584,6 +623,14 @@ class AdaptiveBaseline:
         # deliberately skipped, so it isn't re-adopted every reload.
         self.profile_seen_at = profile_seen_at
         self._last_track_ts: Optional[float] = None
+        # Exit to a new empty level (observe_load). Both persist, so a restart
+        # after the bed emptied still recognises the collapse.
+        self.occupied_load = occupied_load
+        self.collapse_since = collapse_since
+        self.collapse_dwell_s = collapse_dwell_s
+        self._load_avg: Optional[float] = None
+        self._load_obs_s = 0.0
+        self._load_last_ts: Optional[float] = None
 
     @property
     def exit_threshold(self) -> float:
@@ -618,17 +665,25 @@ class AdaptiveBaseline:
         if not isinstance(state, dict):
             return None
         try:
-            return cls(str(state["format"]), dict(state["means"]), float(state["threshold"]),
+            fmt, means, threshold = str(state["format"]), dict(state["means"]), float(state["threshold"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        occupied_load, collapse_since, collapse_dwell_s = _saved_collapse(state)
+        try:
+            return cls(fmt, means, threshold,
                        ref_mean=state.get("ref_mean"), source="state",
                        profile_seen_at=state.get("profile_seen_at"),
-                       absence_ready=state.get("absence_ready") is True)
+                       absence_ready=state.get("absence_ready") is True,
+                       occupied_load=occupied_load, collapse_since=collapse_since,
+                       collapse_dwell_s=collapse_dwell_s)
         except (KeyError, TypeError, ValueError):
             return None
 
     def snapshot(self) -> dict:
         return {"format": self.fmt, "means": self.means, "threshold": self.threshold,
                 "ref_mean": self.ref_mean, "profile_seen_at": self.profile_seen_at,
-                "absence_ready": self.absence_ready}
+                "absence_ready": self.absence_ready, "occupied_load": self.occupied_load,
+                "collapse_since": self.collapse_since, "collapse_dwell_s": self.collapse_dwell_s}
 
     def values(self, record: dict, side: str) -> Optional[dict]:
         """This format's per-channel values for a frame, or None if unusable."""
@@ -677,6 +732,60 @@ class AdaptiveBaseline:
                 and abs(self.deviation(values)) <= self.exit_threshold):
             self.absence_ready = True
 
+    def observe_load(self, ts: float, values: dict, occupied: bool) -> Optional[float]:
+        """Detect an exit to a new empty level. Called once per usable sample
+        before the presence decision; `occupied` is the side's level latch.
+
+        Returns the ts the collapse began when the baseline was just reseeded
+        to this reading (the exit time), else None."""
+        if self.fmt != "capSense2":
+            return None
+        dev = self.deviation(values)
+        if not occupied or dev <= self.exit_threshold:
+            # Unoccupied, or about to read absent anyway.
+            self.occupied_load = self.collapse_since = None
+            self.collapse_dwell_s = 0.0
+            self._load_avg = self._load_last_ts = None
+            self._load_obs_s = 0.0
+            return None
+        dt = 0.0 if self._load_last_ts is None else ts - self._load_last_ts
+        self._load_last_ts = ts
+        dt = max(0.0, min(dt, BASELINE_MAX_STEP_S))
+        if self.collapse_since is None:
+            # Frozen during a collapse, so the drop can't lower its own bar.
+            # A plain mean until OCCUPIED_LOAD_TAU_S has been observed, and no
+            # peak before then: one transient (getting in, or the first sample
+            # after a restart) must not set the bar for the night.
+            self._load_obs_s += dt
+            if self._load_avg is None:
+                self._load_avg = dev
+            elif self._load_obs_s > 0:
+                alpha = dt / min(self._load_obs_s, OCCUPIED_LOAD_TAU_S)
+                self._load_avg += alpha * (dev - self._load_avg)
+            if self._load_obs_s >= OCCUPIED_LOAD_TAU_S:
+                self.occupied_load = max(self.occupied_load or 0.0, self._load_avg)
+        # A load at or under 4x the exit threshold leaves no reading both
+        # under the fraction and above the exit threshold, so the rule is off:
+        # such a low-gain side keeps the old exit path only.
+        if EXIT_COLLAPSE_FRACTION * (self.occupied_load or 0.0) <= self.exit_threshold:
+            self.collapse_since = None
+            self.collapse_dwell_s = 0.0
+            return None
+        if dev >= EXIT_COLLAPSE_FRACTION * self.occupied_load:
+            self.collapse_since = None
+            self.collapse_dwell_s = 0.0
+            return None
+        if self.collapse_since is None:
+            self.collapse_since = ts
+            self.collapse_dwell_s = 0.0
+            return None
+        self.collapse_dwell_s += dt
+        if self.collapse_dwell_s < EXIT_SETTLE_S:
+            return None
+        since = self.collapse_since
+        self.reseed(values, "exit-rebase")
+        return since
+
     def track(self, ts: float, values: dict, occupied: bool) -> None:
         """Follow the empty-bed level. Called once per sample after the
         presence decision; `occupied` is the committed (debounced) state."""
@@ -703,6 +812,10 @@ class AdaptiveBaseline:
         self._absence_reference = sum(self.means.values())
         self._absence_drop_since = self._absence_rise_since = None
         self._absence_last_ts = None
+        self.occupied_load = self.collapse_since = None
+        self.collapse_dwell_s = 0.0
+        self._load_avg = self._load_last_ts = None
+        self._load_obs_s = 0.0
 
     def to_params(self) -> dict:
         """Calibration-profile params (the shape the calibrators write)."""
@@ -757,17 +870,6 @@ def _percentile(values: List[int], pct: int) -> int:
     return s[idx]
 
 
-def _median(values: List[int]) -> int:
-    """Compute the median of a list of integers."""
-    if not values:
-        return 0
-    s = sorted(values)
-    n = len(s)
-    if n % 2 == 1:
-        return s[n // 2]
-    return (s[n // 2 - 1] + s[n // 2]) // 2
-
-
 # ---------------------------------------------------------------------------
 # Pump artifact gating for capSense2 movement scoring (#230)
 # ---------------------------------------------------------------------------
@@ -798,12 +900,16 @@ def _extract_ref_delta(record: dict, side: str,
 
 
 class PumpGateCapSense:
-    """Three-signal pump artifact gate for capSense2 movement scoring.
+    """Pump artifact gate for capSense2 movement scoring.
 
-    Detects pump activity via:
-      1. Primary: frzHealth pump RPM > 0 on either side
-      2. Secondary: reference channel anomaly with correlated active channels
-      3. Guard period: 3 seconds trailing after pump-off
+    Gates a side's movement delta:
+      1. For PUMP_GUARD_S after that side's pump changes state (start, stop,
+         or an RPM step beyond PUMP_RPM_CHANGE_FRACTION). A steadily running
+         pump is not gated: on Pod 5 it circulates at ~1940 RPM for as long
+         as the side is on, its vibration doesn't raise the delta floor (an
+         empty side scored ~25/epoch with the pump off, at 1940 and at 3100
+         RPM), and gating it zeroed movement for whole nights.
+      2. On a reference channel anomaly with correlated active channels.
 
     When gate is active, movement delta should be forced to 0.
 
@@ -814,16 +920,18 @@ class PumpGateCapSense:
     def __init__(self):
         # Per-side pump RPM state from frzHealth records
         self._pump_rpm: Dict[str, float] = {"left": 0.0, "right": 0.0}
-        # Per-side timestamp (monotonic) when that pump last turned off —
+        # Per-side timestamp (monotonic) of that pump's last state change —
         # for the guard period. Per-side because gating both beds on either
-        # pump under-counted the movement table during long pump runtimes;
-        # cross-side mechanical coupling is what Signal 2 (correlated
-        # ref-anomaly) exists to catch. -inf = never turned off (0.0 would
-        # falsely gate the first PUMP_GUARD_S after process start, since
-        # time.monotonic() has an arbitrary, possibly near-zero origin).
-        self._pump_off_at: Dict[str, float] = {"left": float("-inf"), "right": float("-inf")}
-        # Whether each pump was active on previous check (for detecting pump-off transition)
-        self._was_pump_active: Dict[str, bool] = {"left": False, "right": False}
+        # pump under-counted the movement table; cross-side mechanical
+        # coupling is what Signal 2 (correlated ref-anomaly) exists to catch.
+        # -inf = never changed (0.0 would falsely gate the first PUMP_GUARD_S
+        # after process start, since time.monotonic() has an arbitrary,
+        # possibly near-zero origin).
+        self._pump_change_at: Dict[str, float] = {"left": float("-inf"), "right": float("-inf")}
+        # Sides whose frzHealth reports a real pump RPM. Their frzTherm
+        # `power` is the TEC drive, not the pump; reading it as pump state
+        # flipped the pump "off" and back "on" every ~10 s.
+        self._rpm_reported: set = set()
         # Reference channel anomaly state
         self._ref_anomaly_active: bool = False
 
@@ -851,6 +959,7 @@ class PumpGateCapSense:
                     if val is not None:
                         try:
                             rpm = float(val)
+                            self._rpm_reported.add(side)
                         except (TypeError, ValueError):
                             pass
                         break
@@ -861,6 +970,7 @@ class PumpGateCapSense:
                     if val is not None:
                         try:
                             rpm = float(val)
+                            self._rpm_reported.add(side)
                         except (TypeError, ValueError):
                             pass
                 # Also check pumpDuty as fallback — any duty > 0 means pump is running
@@ -878,6 +988,8 @@ class PumpGateCapSense:
                             pass
 
             elif rtype == "frzTherm":
+                if side in self._rpm_reported:
+                    continue
                 # frzTherm may carry pump duty cycle
                 for key in ("pumpDuty", "pump_duty", "duty", "pumpRpm",
                             "pump_rpm", "power"):
@@ -889,15 +1001,12 @@ class PumpGateCapSense:
                             pass
                         break
 
+            # Start, stop or a step in speed opens this side's guard period.
+            prev = self._pump_rpm[side]
+            if (prev > 0) != (rpm > 0) or (
+                    prev > 0 and abs(rpm - prev) > PUMP_RPM_CHANGE_FRACTION * prev):
+                self._pump_change_at[side] = time.monotonic()
             self._pump_rpm[side] = rpm
-
-        # Track per-side pump-off transitions for the guard period
-        for side in ("left", "right"):
-            pump_active = self._pump_rpm[side] > 0
-            if self._was_pump_active[side] and not pump_active:
-                # This side's pump just turned off — start its guard period
-                self._pump_off_at[side] = time.monotonic()
-            self._was_pump_active[side] = pump_active
 
     def is_gated(self, record: dict, side: str,
                  channel_deltas: Optional[List[float]] = None,
@@ -914,15 +1023,10 @@ class PumpGateCapSense:
 
         Returns True if the delta should be suppressed.
         """
-        # Signal 1: frzHealth pump RPM — this side's pump only. Gating both
-        # sides on either pump zeroed real movement on the idle side for the
-        # whole pump runtime; the other pump's mechanical coupling (if any)
-        # is caught by the correlated ref-anomaly check below.
-        if self._pump_rpm.get(side, 0.0) > 0:
-            return True
-
-        # Signal 3: Guard period (checked before ref anomaly since it's cheap)
-        if time.monotonic() - self._pump_off_at.get(side, float("-inf")) < PUMP_GUARD_S:
+        # Signal 1: this side's pump just changed state. The other pump's
+        # mechanical coupling (if any) is caught by the correlated
+        # ref-anomaly check below.
+        if time.monotonic() - self._pump_change_at.get(side, float("-inf")) < PUMP_GUARD_S:
             return True
 
         # Signal 2: Reference channel anomaly (capSense2 only)
@@ -955,6 +1059,9 @@ class SideObservation:
     delta: float
     values: Optional[dict]
     record: dict
+    # Set when this frame rebased the baseline to an empty bed at a new
+    # level: the ts the occupied load collapsed (AdaptiveBaseline.observe_load).
+    exit_at: Optional[float] = None
 
 
 @dataclass
@@ -981,9 +1088,8 @@ class SessionTracker:
     _last_movement_write: float = field(default_factory=time.time)
     _prev_values: Optional[list] = None  # previous sample's channel values
     _scale_factor: float = 10.0  # default for capSense2; updated on first record
-    # Epoch score history for baseline subtraction and median filter
+    # Epoch score history for baseline subtraction
     _epoch_scores: deque = field(default_factory=lambda: deque(maxlen=BASELINE_TRAILING_EPOCHS))
-    _median_buf: deque = field(default_factory=lambda: deque(maxlen=MEDIAN_FILTER_WINDOW))
     _pump_gated_samples: int = 0  # counter for logging
     # capSense (Pod 3/4) per-channel delta history and typical delta; see
     # CAPSENSE_NOISE_K.
@@ -1022,6 +1128,14 @@ class SessionTracker:
     # evidence. A merged home-side absence requires usable evidence from both.
     _vitals_presence: Optional[bool] = None
     _vitals_evidence_ts: Optional[float] = None
+    # Pod 5 firmware emits an all -1.0 capSense2 frame every 5 min; the frame
+    # after it is still settling (channels above 28.5 read exactly 28.5), so
+    # it is skipped too. Its down-and-back-up delta added ~110 to one epoch
+    # in five on an occupied side.
+    _cap2_settling: bool = False
+    # Last sample this side's level read occupied (not persisted). Merged
+    # mode dates a rebase exit no earlier than the other side's.
+    _level_present_ts: Optional[float] = None
 
     def snapshot(self) -> dict:
         """JSON-serializable state needed to resume after a restart."""
@@ -1110,6 +1224,10 @@ class SessionTracker:
                     if adopted is not None:
                         log.info("%s: presence baseline from calibration profile (created %s)",
                                  self.side, created_at)
+                        if b is not None and b.collapse_since is not None:
+                            log.info("%s: the new profile drops a collapse pending since %s; "
+                                     "the occupied load is learned again", self.side,
+                                     datetime.fromtimestamp(b.collapse_since, tz=timezone.utc).isoformat())
                         b = adopted
                     elif b is not None:
                         b.profile_seen_at = created_at  # wrong format — stop re-checking
@@ -1147,21 +1265,36 @@ class SessionTracker:
         self._last_ts = ts
         rtype = record.get("type", "")
         usable = usable_presence_input(record, self.side)
+        if rtype == "capSense2":
+            data = record.get(self.side)
+            raw = data.get("values") if isinstance(data, dict) else None
+            sentinel = isinstance(raw, (list, tuple)) and CAPSENSE2_SENTINEL in raw[:8]
+            settling, self._cap2_settling = self._cap2_settling, sentinel
+            usable = usable and not settling
         baseline = self._sync_baseline(record) if usable else self.baseline
         values = baseline.values(record, self.side) if usable and baseline is not None else None
         present: Optional[bool] = None  # unusable frame: no new evidence
+        exit_at: Optional[float] = None
         if baseline is not None:
             baseline.observe_absence_reference(ts, values)
         if values is not None:
+            exit_at = baseline.observe_load(ts, values, self._level_present)
+            if exit_at is not None:
+                log.warning("%s: occupied load collapsed at %s and stayed under %.0f%% for %d min — "
+                            "presence baseline rebased to the empty bed's new level",
+                            self.side, datetime.fromtimestamp(exit_at, tz=timezone.utc).isoformat(),
+                            EXIT_COLLAPSE_FRACTION * 100, EXIT_SETTLE_S // 60)
             present = baseline.is_present(values, self._level_present)
             self._level_present = present
+            if present:
+                self._level_present_ts = ts
         # Movement's capSense2 common-mode rejection uses the baseline's ref.
         baselines = ({"ref": {"mean": baseline.ref_mean}}
                      if baseline is not None and baseline.ref_mean is not None else None)
 
         # Set scale factor based on sensor type (Pod 3/4 int vs Pod 5 float).
         # capSense scores the excess over its noise (see CAPSENSE_NOISE_K)
-        # one to one, and skips the median filter (keyed on this factor).
+        # one to one.
         if rtype == "capSense" and self._scale_factor != 1.0:
             self._scale_factor = 1.0
         elif rtype == "capSense2" and self._scale_factor != 10.0:
@@ -1189,7 +1322,7 @@ class SessionTracker:
         else:
             # Sentinel or invalid — skip delta, keep previous (zero-order hold)
             delta = 0.0
-        return SideObservation(ts, present, delta, values, record)
+        return SideObservation(ts, present, delta, values, record, exit_at)
 
     def _capsense_movement(self, channel_deltas: list,
                            values: Optional[list] = None) -> float:
@@ -1217,9 +1350,20 @@ class SessionTracker:
                     excess[i] = 0.0
         return sum(excess)
 
-    def commit(self, ts: float, present: Optional[bool], delta: float) -> bool:
+    def commit(self, ts: float, present: Optional[bool], delta: float,
+               exit_at: Optional[float] = None) -> bool:
         """Advance the session with one sample's presence and movement.
+        `exit_at`: a baseline rebase found the bed empty since then; if this
+        sample reads absent, the absence is dated from it so the session
+        ends where the occupant left, not EXIT_SETTLE_S later.
         Returns True if the session was just force-closed at MAX_SESSION_S."""
+        if (exit_at is not None and present is False and self._debounced_present
+                and self._pending_state is None):
+            self._pending_state = False
+            self._pending_since = max(exit_at, self._interval_start or exit_at)
+            # Observed evidence of the exit: outranks the restart fallback,
+            # which would date it at the last presence before the restart.
+            self._resumed_last_present = None
         self._update(ts, self._debounced_present if present is None else present, delta)
         capped, self._cap_closed = self._cap_closed, False
         return capped
@@ -1231,6 +1375,12 @@ class SessionTracker:
         if obs.values is None or self.baseline is None:
             return
         if reset:
+            if self.baseline.collapse_since is not None:
+                # Not confirmed (under EXIT_SETTLE_S observed), so not an exit.
+                log.info("%s: the cap discards a collapse pending since %s (%.0f s observed of the %d s needed)",
+                         self.side,
+                         datetime.fromtimestamp(self.baseline.collapse_since, tz=timezone.utc).isoformat(),
+                         self.baseline.collapse_dwell_s, EXIT_SETTLE_S)
             self.baseline.reseed(obs.values, "cap-reset")
             log.warning("%s: presence baseline reset to current level after a capped session",
                         self.side)
@@ -1265,7 +1415,7 @@ class SessionTracker:
         obs = self.observe(ts, record)
         if obs is None:
             return
-        capped = self.commit(ts, obs.present, obs.delta)
+        capped = self.commit(ts, obs.present, obs.delta, obs.exit_at)
         self.settle(obs, reset=capped)
         self.publish_vitals_presence(ts, [(self, obs)])
 
@@ -1391,18 +1541,21 @@ class SessionTracker:
             log.info("%s: session too short (%ds), discarding", self.side, duration_s)
             wrote = True  # treat discard as final — nothing to retry
         else:
-            # Close any open interval
+            # Close any open interval, on copies: a failed write keeps the
+            # session for a retry, which must not append the interval again.
+            present_intervals = list(self._present_intervals)
+            absent_intervals = list(self._absent_intervals)
             if self._interval_start is not None:
                 if self._was_present:
-                    self._present_intervals.append([self._interval_start, left_ts])
+                    present_intervals.append([self._interval_start, left_ts])
                 elif left_ts > self._interval_start:
-                    self._absent_intervals.append([self._interval_start, left_ts])
+                    absent_intervals.append([self._interval_start, left_ts])
 
             wrote = write_sleep_record(
                 self.db, self.side,
                 self._session_start, left_at,
                 duration_s, self._exit_count,
-                self._present_intervals, self._absent_intervals,
+                present_intervals, absent_intervals,
             )
             if wrote:
                 log.info("%s: session recorded — %.1f hr, %d exits",
@@ -1434,7 +1587,6 @@ class SessionTracker:
         self._prev_values = None  # avoid stale delta on next session start
         self._movement_buf = []   # discard leftover deltas from session end
         self._epoch_scores.clear()
-        self._median_buf.clear()
         self._pump_gated_samples = 0
         self._resumed_last_present = None
 
@@ -1471,18 +1623,9 @@ class SessionTracker:
             # Cold start: not enough history yet, skip baseline subtraction
             score_after_baseline = raw_score
 
-        # Step 3: 3-epoch median filter for smoothing (not for capSense)
-        self._median_buf.append(score_after_baseline)
-        if self._scale_factor == 1.0:
-            filtered_score = score_after_baseline
-        elif len(self._median_buf) >= MEDIAN_FILTER_WINDOW:
-            filtered_score = _median(list(self._median_buf))
-        else:
-            # Not enough epochs yet for median filter, pass through
-            filtered_score = score_after_baseline
-
-        # Step 4: Final clamp to [0, 1000]
-        total = max(0, min(1000, filtered_score))
+        # Step 3: Final clamp to [0, 1000]. No median filter: it zeroed a
+        # turn-over, usually one busy minute between still ones.
+        total = max(0, min(1000, score_after_baseline))
 
         wrote = write_movement(self.db, self.side,
                                datetime.fromtimestamp(ts, tz=timezone.utc), total)
@@ -1534,7 +1677,13 @@ def process_single_sleeper(home: SessionTracker, away: SessionTracker,
     evidence = [o.present for o in (h, a) if o is not None and o.present is not None]
     present = any(evidence) if evidence else None
     delta = h.delta + (a.delta if a is not None else 0.0)
-    capped = home.commit(ts, present, delta)
+    exits = [o.exit_at for o in (h, a) if o is not None and o.exit_at is not None]
+    if exits:
+        # The sleeper may have stayed on the other side after this one's
+        # load collapsed: the merged exit is the later of the two.
+        exits += [t._level_present_ts for t, o in ((home, h), (away, a))
+                  if (o is None or o.exit_at is None) and t._level_present_ts is not None]
+    capped = home.commit(ts, present, delta, max(exits) if exits else None)
     # A capped session in merged mode may be held open by either side's load.
     home.settle(h, reset=capped)
     if a is not None:

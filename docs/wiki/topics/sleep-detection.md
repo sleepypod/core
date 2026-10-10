@@ -26,23 +26,23 @@ The previous approach measured "how present" someone was, not "how much they mov
 1. **Sentinel filter** — capSense2 firmware occasionally emits -1.0; handled via zero-order hold
 2. **Pair averaging** — average redundant channel pairs (A1+A2)/2, etc.
 3. **Reference compensation** — subtract ref channel drift from nominal 1.16 (common-mode rejection)
-4. **Pump gate** — suppress deltas during pump activity (see below)
+4. **Pump gate** — suppress deltas for 3 s after a pump state change (see below)
 5. **Per-channel delta** — |current - previous| per channel
 6. **60s epoch accumulation** → `raw_score = min(1000, sum × scale)`
 7. **Baseline subtraction** — subtract P5 of trailing 30 epochs (removes slow-building noise)
-8. **3-epoch median filter** — suppress isolated spike artifacts
-9. **Clamp** to [0, 1000]
+8. **Clamp** to [0, 1000]
+
+No median filter: it zeroed a turn-over, usually one busy minute between still ones. The capSense2 frame after each firmware sentinel is skipped instead.
 
 Scale factor is sensor-dependent: capSense2 (Pod 5) uses ×10, capSense (Pod 3) uses ×0.5 to normalize different ADC ranges.
 
 ## Pump Artifact Gating
 
-Without gating, pump vibrations accumulate to raw scores of 60-200 per pump-active epoch, escalating from ~50 to 960-990 by early morning.
+Pod 5 runs its pump continuously while a side is on, and a steady pump doesn't raise the delta floor. Gating the running pump zeroed 97% of a night's epochs, so only changes gate.
 
-Three-signal detection:
-1. **frzHealth pump RPM** (Pod 5 only, ~0.06 Hz) — any RPM > 0 means pump running
+Two-signal detection:
+1. **Pump state change** — 3-second guard after a side's frzHealth RPM starts, stops, or steps by >10% (shorter than [[piezo-processing|piezo's 5s]] — capacitive sensors are less sensitive to mechanical vibration)
 2. **Reference channel anomaly** — |ref_delta| > 0.02 AND 2+ active channels correlate
-3. **3-second guard period** after pump-off (shorter than [[piezo-processing|piezo's 5s]] — capacitive sensors are less sensitive to mechanical vibration)
 
 ## Presence Detection
 

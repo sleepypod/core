@@ -226,6 +226,28 @@ class TestWriteSleepRecordResilience:
         assert len(replaced) == 1
         assert main._db_write_failures == 0
 
+    def test_failed_close_does_not_duplicate_intervals_on_retry(self):
+        # The open interval was appended before the write; a failed write
+        # kept it, and every retry appended another copy.
+        import json
+        t = _tracker()
+        good = t.db.conn
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        ts = base + 31
+        while ts < base + main.MAX_SESSION_S - 600:
+            ts += 600
+            samples.append((ts, True))
+        _feed(t, samples)
+        t.db.conn = _FailingConn()
+        _feed(t, [(base + main.MAX_SESSION_S + 10, True), (base + main.MAX_SESSION_S + 20, True)])
+        assert t._session_start is not None, "a failed write must keep the session"
+        t.db.conn = good
+        _feed(t, [(base + main.MAX_SESSION_S + 30, True)])
+        rows = good.execute("SELECT present_intervals FROM sleep_records").fetchall()
+        assert len(rows) == 1
+        assert json.loads(rows[0][0]) == [[base, base + main.MAX_SESSION_S]]
+
 
 class TestSharedConnectionHolder:
     """Both SessionTrackers read connections from one DBHolder so reconnect
@@ -248,9 +270,14 @@ class TestSharedConnectionHolder:
 
 class TestPumpGatePerSide:
     """Gating both beds whenever EITHER pump ran zeroed real movement on the
-    idle side for the whole pump runtime, under-counting the movement table.
-    Signal 1 (RPM) and Signal 3 (guard period) are now per-side; cross-side
-    mechanical coupling remains covered by Signal 2 (correlated ref-anomaly)."""
+    idle side, so the gate and its guard period are per-side; cross-side
+    mechanical coupling remains covered by the correlated ref-anomaly check.
+
+    Only pump state changes gate. Pod 5 circulates at ~1940 RPM for as long
+    as a side is on; gating the running pump zeroed 97% of a night's epochs
+    (pod 88, 2026-10-09)."""
+
+    T = 1000.0
 
     def _frz(self, left_rpm, right_rpm):
         return {
@@ -259,55 +286,75 @@ class TestPumpGatePerSide:
             "right": {"pumpRpm": right_rpm},
         }
 
-    def test_only_running_side_is_gated(self):
+    def _at(self, gate, dt, record=None):
+        with patch("main.time.monotonic", return_value=self.T + dt):
+            if record is not None:
+                gate.update_pump_state(record)
+                return None
+            return gate.is_gated({}, "left"), gate.is_gated({}, "right")
+
+    def test_pump_start_gates_that_side_for_the_guard_period(self):
         gate = main.PumpGateCapSense()
-        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=0))
+        self._at(gate, 0, self._frz(left_rpm=1940, right_rpm=0))
+        assert self._at(gate, 1) == (True, False)
+        assert self._at(gate, main.PUMP_GUARD_S + 0.1) == (False, False)
 
-        assert gate.is_gated({}, "left") is True
-        assert gate.is_gated({}, "right") is False
-
-    def test_both_sides_gated_when_both_pumps_run(self):
+    def test_steadily_running_pump_is_not_gated(self):
         gate = main.PumpGateCapSense()
-        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=2800))
+        self._at(gate, 0, self._frz(left_rpm=1940, right_rpm=1940))
+        for k in range(1, 30):                     # ~10 s reports, small jitter
+            self._at(gate, 10 * k, self._frz(left_rpm=1940 + k % 3 * 4, right_rpm=1944))
+            assert self._at(gate, 10 * k + 0.5) == (False, False)
 
-        assert gate.is_gated({}, "left") is True
-        assert gate.is_gated({}, "right") is True
-
-    def test_guard_period_applies_per_side(self):
+    def test_pump_stop_gates_only_the_side_that_ran(self):
         gate = main.PumpGateCapSense()
-        gate.update_pump_state(self._frz(left_rpm=3000, right_rpm=0))
-        # Left pump turns off → left enters its guard period; right never ran.
-        gate.update_pump_state(self._frz(left_rpm=0, right_rpm=0))
+        self._at(gate, 0, self._frz(left_rpm=3000, right_rpm=0))
+        self._at(gate, 60, self._frz(left_rpm=0, right_rpm=0))
+        assert self._at(gate, 61) == (True, False)
+        assert self._at(gate, 60 + main.PUMP_GUARD_S + 0.1) == (False, False)
 
-        assert gate.is_gated({}, "left") is True, "guard period must gate the side that ran"
-        assert gate.is_gated({}, "right") is False, "idle side must not inherit the guard"
+    def test_rpm_step_gates(self):
+        gate = main.PumpGateCapSense()
+        self._at(gate, 0, self._frz(left_rpm=1940, right_rpm=0))
+        self._at(gate, 60, self._frz(left_rpm=3100, right_rpm=0))
+        assert self._at(gate, 61) == (True, False)
 
     def test_no_pumps_no_gate(self):
         gate = main.PumpGateCapSense()
-        gate.update_pump_state(self._frz(left_rpm=0, right_rpm=0))
-
-        assert gate.is_gated({}, "left") is False
-        assert gate.is_gated({}, "right") is False
+        self._at(gate, 0, self._frz(left_rpm=0, right_rpm=0))
+        assert self._at(gate, 1) == (False, False)
 
     def test_captured_nats_nested_health_rpm(self):
         gate = main.PumpGateCapSense()
-        gate.update_pump_state({
+        self._at(gate, 0, {
             "type": "frzHealth",
             "left": {"pump": {"mode": "pwm", "rpm": 1868, "water": True}},
             "right": {"pump": {"mode": "pwm", "rpm": 0, "water": True}},
         })
-        assert gate.is_gated({}, "left") is True
-        assert gate.is_gated({}, "right") is False
+        assert self._at(gate, 1) == (True, False)
 
     def test_captured_nats_therm_power(self):
+        # Without frzHealth RPM, frzTherm power is the only pump signal.
         gate = main.PumpGateCapSense()
-        gate.update_pump_state({
+        self._at(gate, 0, {
             "type": "frzTherm",
             "left": {"power": 0.024},
             "right": {"power": 0.0},
         })
-        assert gate.is_gated({}, "left") is True
-        assert gate.is_gated({}, "right") is False
+        assert self._at(gate, 1) == (True, False)
+
+    def test_therm_power_ignored_once_health_reports_rpm(self):
+        # Pod 5 frzTherm power is the TEC drive; it drops to 0 while the pump
+        # keeps running, and used to toggle the pump state every ~10 s.
+        gate = main.PumpGateCapSense()
+        health = {"type": "frzHealth", "left": {"pump": {"rpm": 1940}}, "right": {"pump": {"rpm": 0}}}
+        self._at(gate, 0, health)
+        for k in range(1, 10):
+            self._at(gate, 10 * k, {"type": "frzTherm", "left": {"power": 0.0 if k % 2 else 0.007},
+                                    "right": {"power": 0.0}})
+            assert self._at(gate, 10 * k + 0.5) == (False, False)
+            self._at(gate, 10 * k + 1, health)
+            assert self._at(gate, 10 * k + 1.5) == (False, False)
 
 
 def _tracker():
@@ -691,7 +738,8 @@ class TestAdaptiveBaseline:
 
     def test_hysteresis_keeps_session_through_partial_dip(self):
         # Once in bed, dipping to +70/channel (+210 summed, above the 150
-        # exit) must not end the session.
+        # exit) must not end the session, though it is under
+        # EXIT_COLLAPSE_FRACTION of the load: that rule is capSense2 only.
         t = _live_tracker()
         ts = _run(t, self.T0, 600, 0)
         ts = _run(t, ts, 3600, 600)
@@ -1133,7 +1181,7 @@ class TestCapSenseMovement:
         before = len(t._epoch_scores)
         self._feed_levels(t, ts, 5 * 60, rng, lambda k: {"out": 400, "cen": -300, "in": 250})
         assert max(list(t._epoch_scores)[before:]) >= 500
-        # ...and it reaches the stored minute (no median filter on capSense).
+        # ...and it reaches the stored minute (no median filter).
         around = [m for ts, m in self._minutes(t) if moved_at - 60 <= ts <= moved_at + 120]
         assert max(around) >= 500
 
@@ -1159,7 +1207,6 @@ class TestCapSenseMovement:
         t._scale_factor = scale
         t._session_start = at - 3600
         t._epoch_scores.extend([0] * 20)
-        t._median_buf.extend([0, 0])
         t._movement_buf = [raw]
         t._last_movement_write = at - 61
         t._flush_movement(at)
@@ -1169,11 +1216,11 @@ class TestCapSenseMovement:
         self._flush_one(t, 1.0, 700.0, self.T0)
         assert [m for _, m in self._minutes(t)] == [700]
 
-    def test_capsense2_keeps_the_median_filter(self):
-        # Pod 5: a lone busy epoch between still ones is still smoothed away.
+    def test_capsense2_writes_a_lone_busy_epoch_unfiltered(self):
+        # Pod 5: the 3-epoch median zeroed a lone turn-over minute too.
         t = self._tracker()
         self._flush_one(t, 10.0, 70.0, self.T0)
-        assert [m for _, m in self._minutes(t)] == [0]
+        assert [m for _, m in self._minutes(t)] == [700]
 
     def _warm(self, t, noise=5.0):
         for _ in range(main.CAPSENSE_NOISE_MIN_SAMPLES):
@@ -1250,3 +1297,353 @@ class TestAbsenceReadiness:
         for ts in range(240, 271, 5):
             b.observe_absence_reference(ts, EMPTY)
         assert b.absence_ready
+
+
+def _cap2(a, b, c, side="left", ref=1.16):
+    return {"type": "capSense2", side: {"values": [a, a, b, b, c, c, ref, ref]}}
+
+
+# Pod 5 empty-bed zone means (pod 88 left side).
+EMPTY2 = (16.6, 15.0, 21.6)
+
+
+class TestExitToNewEmptyLevel:
+    """Pod 88 2026-10-09: bedding pulled back before bed lowered the empty
+    level by 7.7; the fast downward track learned it; the made bed then read
+    +7.5 over that baseline, above the exit threshold, so the empty bed stayed
+    "occupied" until the 16 h cap (126 of 782 sessions)."""
+
+    T0 = 1_791_500_000.0
+    EXIT_TS = 1791559700   # 2026-10-09 15:28:20 UTC, from the recorded frames
+
+    @staticmethod
+    def _run(t, start, seconds, rise, step=5.0):
+        """capSense2 frames `rise` (summed) above EMPTY2, spread evenly."""
+        ts = start
+        while ts < start + seconds:
+            t.process(ts, _cap2(*(v + rise / 3 for v in EMPTY2)))
+            ts += step
+        return ts
+
+    def test_recorded_night_closes_at_the_real_exit(self):
+        import csv, gzip
+        path = Path(__file__).resolve().parent / "fixtures" / "pod5_left_bedding_shift.csv.gz"
+        with gzip.open(path, "rt") as f:
+            frames = [r for r in csv.reader(line for line in f if not line.startswith("#"))][1:]
+        t = _live_tracker()
+        for ts, a, b, c in frames:
+            t.process(float(ts), _cap2(float(a), float(b), float(c)))
+        rows = _rows_full(t)
+        assert t._session_start is None, "the empty bed held the session open"
+        night = [r for r in rows if r[0] <= self.EXIT_TS - 6 * 3600]
+        assert len(night) == 1
+        entered, left_at, duration_s, _ = night[0]
+        assert abs(left_at - self.EXIT_TS) <= main.ABSENCE_TIMEOUT_S
+        assert duration_s < main.MAX_SESSION_S
+
+    def test_bedding_pulled_back_before_bed_does_not_hold_the_session(self):
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)          # made bed, empty
+        ts = self._run(t, ts, 3600, -7.7)            # covers pulled back
+        ts = self._run(t, ts, 6 * 3600, 30)          # asleep
+        exit_ts = ts
+        ts = self._run(t, ts, 3600, 0)               # up, bed made again
+        rows = _rows_full(t)
+        assert t._session_start is None
+        assert len(rows) == 1
+        assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
+        assert t.baseline.source == "exit-rebase"
+
+    def test_still_sleeper_at_partial_load_keeps_the_session(self):
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 2 * 3600, 30)
+        ts = self._run(t, ts, 2 * 3600, 12)          # 40% of the load, still
+        ts = self._run(t, ts, 2 * 3600, 30)
+        ts = self._run(t, ts, 1800, 0)
+        rows = _rows_full(t)
+        assert len(rows) == 1
+        assert rows[0][3] == 1                       # only the morning exit
+
+    def test_brief_collapse_keeps_the_session(self):
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, -7.7)
+        ts = self._run(t, ts, 3 * 3600, 30)
+        ts = self._run(t, ts, main.EXIT_SETTLE_S - 120, 0)  # sat up, edge of bed
+        ts = self._run(t, ts, 3 * 3600, 30)
+        assert t._session_start is not None
+        assert _rows_full(t) == []
+
+    def test_collapse_survives_a_restart(self):
+        import json
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, -7.7)
+        ts = self._run(t, ts, 3 * 3600, 30)
+        exit_ts = ts
+        ts = self._run(t, ts, 300, 0)
+        t2 = _live_tracker()
+        t2.db = t.db
+        t2.restore(json.loads(json.dumps(t.snapshot())), now=ts + 30)
+        self._run(t2, ts + 30, 1800, 0)
+        rows = _rows_full(t2)
+        assert t2._session_start is None
+        assert len(rows) == 1
+        assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
+
+    def test_one_transient_does_not_set_the_load(self):
+        # Two frames at 10x the load while getting in (or right after a
+        # restart) used to become the occupied peak, and the sleeper's real
+        # load then read as a collapse.
+        import json
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 10, 300)
+        ts = self._run(t, ts, 2 * 3600, 30)
+        t2 = _live_tracker()
+        t2.db = t.db
+        t2.restore(json.loads(json.dumps(t.snapshot())), now=ts + 30)
+        ts = self._run(t2, ts + 30, 10, 300)
+        ts = self._run(t2, ts, 2 * 3600, 30)
+        assert t2._session_start is not None
+        assert _rows_full(t2) == []
+
+    def test_unobserved_time_does_not_settle_a_collapse(self):
+        # A low reading, then nothing for over EXIT_SETTLE_S, then another:
+        # no evidence the bed stayed empty in between.
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, 30)
+        t.process(ts, _cap2(*(v + 5 / 3 for v in EMPTY2)))
+        ts += main.EXIT_SETTLE_S + 1
+        t.process(ts, _cap2(*(v + 5 / 3 for v in EMPTY2)))
+        ts = self._run(t, ts + 5, 3600, 30)
+        assert t.baseline.source != "exit-rebase"
+        assert t._session_start is not None
+        assert _rows_full(t) == []
+
+    def test_collapse_edge_outranks_the_restart_fallback(self):
+        # A collapse confirmed by the first frame after a restart, before any
+        # present frame: the exit is the collapse edge, not the last presence
+        # before the restart (which falls inside the collapse).
+        import json
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, -7.7)
+        ts = self._run(t, ts, 3 * 3600, 30)
+        exit_ts = ts
+        ts = self._run(t, ts, 300, 0)
+        state = json.loads(json.dumps(t.snapshot()))
+        state["baseline"]["collapse_dwell_s"] = main.EXIT_SETTLE_S
+        t2 = _live_tracker()
+        t2.db = t.db
+        t2.restore(state, now=ts + 30)
+        assert t2._resumed_last_present is not None
+        self._run(t2, ts + 30, 1800, 0)
+        rows = _rows_full(t2)
+        assert t2._session_start is None
+        assert len(rows) == 1
+        assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
+
+    @pytest.mark.parametrize("field, value", [
+        ("occupied_load", float("inf")),
+        ("occupied_load", float("nan")),
+        ("occupied_load", -5.0),
+        ("occupied_load", "heavy"),
+        ("collapse_since", float("inf")),
+        ("collapse_dwell_s", float("nan")),
+        ("collapse_dwell_s", -1.0),
+    ])
+    def test_invalid_saved_collapse_is_dropped_not_the_baseline(self, field, value):
+        saved = {"format": "capSense2", "means": {"A": 16.6, "B": 15.0, "C": 21.6},
+                 "threshold": 6.0, "ref_mean": 1.16, "absence_ready": True,
+                 "occupied_load": 30.0, "collapse_since": self.T0, "collapse_dwell_s": 120.0}
+        saved[field] = value
+        b = main.AdaptiveBaseline.from_state(saved)
+        assert b is not None
+        assert b.means == {"A": 16.6, "B": 15.0, "C": 21.6} and b.absence_ready
+        assert (b.occupied_load, b.collapse_since, b.collapse_dwell_s) == (None, None, 0.0)
+
+    def test_infinite_saved_load_does_not_end_the_night(self):
+        # Every reading is under 25% of an infinite load, so a sleeper at
+        # full load would read as a collapse and close 10 minutes later.
+        import json
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 2 * 3600, 30)
+        state = json.loads(json.dumps(t.snapshot()))
+        state["baseline"]["occupied_load"] = float("inf")
+        t2 = _live_tracker()
+        t2.db = t.db
+        t2.restore(json.loads(json.dumps(state)), now=ts + 30)
+        self._run(t2, ts + 30, 3600, 30)
+        assert t2.baseline.source != "exit-rebase"
+        assert t2._session_start is not None
+        assert _rows_full(t2) == []
+
+    def test_low_gain_load_keeps_the_old_exit_path(self):
+        # A load at or under 4x the exit threshold leaves no reading that is
+        # both a collapse and still occupied, so the rule stays off: a dip to
+        # just above the exit threshold holds the session (documented limit).
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 2 * 3600, 10)
+        assert t.baseline.occupied_load <= t.baseline.exit_threshold / main.EXIT_COLLAPSE_FRACTION
+        ts = self._run(t, ts, 3600, 3.5)
+        assert t.baseline.collapse_since is None
+        assert t.baseline.source != "exit-rebase"
+        assert t._session_start is not None
+        self._run(t, ts, 1800, 0)
+        rows = _rows_full(t)
+        assert t._session_start is None and len(rows) == 1
+
+    def test_cap_logs_the_collapse_it_discards(self, caplog):
+        # Disputed in review: a collapse under EXIT_SETTLE_S old when the cap
+        # fires is unconfirmed, so the cap stands, but it must be visible.
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, -7.7)
+        start = ts
+        ts = self._run(t, ts, main.MAX_SESSION_S - 300, 30, step=10.0)
+        with caplog.at_level(logging.INFO):
+            self._run(t, ts, 600, 0, step=10.0)
+        rows = _rows_full(t)
+        assert len(rows) == 1 and rows[0][2] == main.MAX_SESSION_S
+        assert abs(rows[0][0] - start) <= 10
+        assert [r for r in caplog.records
+                if r.levelno == logging.INFO and "cap discards a collapse" in r.getMessage()]
+
+    def test_partial_side_frames_do_not_starve_the_baseline(self):
+        # Only the firmware sentinel arms the settling skip; records carrying
+        # one side each must not hide every frame of the other.
+        t = _live_tracker()
+        ts = self.T0
+        for _ in range(20):
+            t.process(ts, _cap2(*EMPTY2, side="right"))
+            t.process(ts + 0.5, _cap2(*EMPTY2))
+            ts += 1.0
+        assert t.baseline is not None
+
+    def test_merged_exit_waits_for_the_other_side(self):
+        # Home's load collapses while the sleeper is still on the away side:
+        # the session ends when they leave that side, not at the collapse.
+        holder = main.DBHolder(_make_db())
+        main._db_write_failures = 0
+        mk = lambda side: main.SessionTracker(side=side, db=holder, calibration=_Cal(),
+                                              pump_gate=main.PumpGateCapSense(),
+                                              _last_movement_write=0.0)
+        home, away = mk("left"), mk("right")
+
+        def run(start, seconds, left, right):
+            ts = start
+            while ts < start + seconds:
+                lv = [v + left / 3 for v in EMPTY2]
+                rv = [v + right / 3 for v in EMPTY2]
+                frame = {"type": "capSense2",
+                         "left": {"values": [x for v in lv for x in (v, v)] + [1.16, 1.16]},
+                         "right": {"values": [x for v in rv for x in (v, v)] + [1.16, 1.16]}}
+                main.process_single_sleeper(home, away, ts, frame)
+                ts += 5.0
+            return ts
+
+        ts = run(self.T0, 3600, 0, 0)
+        ts = run(ts, 3600, -7.7, 0)
+        ts = run(ts, 4 * 3600, 30, 0)
+        ts = run(ts, 500, 0, 30)                    # rolled onto the away side
+        exit_ts = ts
+        run(ts, 3600, 0, 0)
+        rows = holder.conn.execute("SELECT side, left_bed_at FROM sleep_records").fetchall()
+        assert len(rows) == 1 and rows[0][0] == "left"
+        assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
+
+    def test_merged_session_ends_where_the_home_side_emptied(self):
+        holder = main.DBHolder(_make_db())
+        main._db_write_failures = 0
+        mk = lambda side: main.SessionTracker(side=side, db=holder, calibration=_Cal(),
+                                              pump_gate=main.PumpGateCapSense(),
+                                              _last_movement_write=0.0)
+        home, away = mk("left"), mk("right")
+
+        def run(start, seconds, rise):
+            ts = start
+            while ts < start + seconds:
+                vals = [v + rise / 3 for v in EMPTY2]
+                frame = {"type": "capSense2",
+                         "left": {"values": [vals[0], vals[0], vals[1], vals[1], vals[2], vals[2], 1.16, 1.16]},
+                         "right": {"values": [v for p in EMPTY2 for v in (p, p)] + [1.16, 1.16]}}
+                main.process_single_sleeper(home, away, ts, frame)
+                ts += 5.0
+            return ts
+
+        ts = run(self.T0, 3600, 0)
+        ts = run(ts, 3600, -7.7)
+        ts = run(ts, 4 * 3600, 30)
+        exit_ts = ts
+        run(ts, 3600, 0)
+        rows = holder.conn.execute("SELECT side, left_bed_at FROM sleep_records").fetchall()
+        assert len(rows) == 1 and rows[0][0] == "left"
+        assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
+
+
+class TestPod5Movement:
+    """Pod 88 2026-10-09: movement was exactly 0 for 97% of a night's epochs.
+    The pump gate zeroed every delta while the (continuously running) pump
+    spun, and the 3-epoch median erased lone busy minutes."""
+
+    T0 = 1_791_500_000.0
+    LOADED = (31.0, 19.4, 31.6)                      # right side, occupied
+
+    def test_still_then_roll_with_the_pump_running(self):
+        import random
+        rng = random.Random(5)
+        clock = [self.T0]
+        gate = main.PumpGateCapSense()
+        holder = main.DBHolder(_make_db())
+        main._db_write_failures = 0
+        t = main.SessionTracker(side="left", db=holder, calibration=_Cal(), pump_gate=gate,
+                                _last_movement_write=self.T0)
+        health = {"type": "frzHealth", "left": {"pump": {"rpm": 1940}}, "right": {"pump": {"rpm": 0}}}
+
+        def feed(seconds, level, jitter=0.01, swing=0.0):
+            k = 0
+            while clock[0] < feed.end + seconds:
+                ts = clock[0]
+                if int(ts) % 10 == 0 and ts == int(ts):
+                    gate.update_pump_state(health)
+                if int(ts - self.T0) % 300 == 0 and ts == int(ts):
+                    t.process(ts, _cap2(-1.0, -1.0, -1.0, ref=-1.0))      # firmware sentinel
+                    clock[0] += 0.5
+                    continue
+                shift = swing * (1 if (k // 2) % 2 else -1)
+                vals = [v + shift + rng.gauss(0, jitter) for v in level]
+                t.process(ts, _cap2(*vals))
+                k += 1
+                clock[0] += 0.5
+            feed.end = clock[0]
+        feed.end = self.T0
+
+        with patch("main.time.monotonic", side_effect=lambda: clock[0]):
+            feed(600, EMPTY2)                         # empty
+            feed(40 * 60, self.LOADED)                # in bed, still
+            roll_at = clock[0]
+            feed(10, self.LOADED, swing=2.0)          # rolls over
+            feed(15 * 60, self.LOADED)                # still again
+        rows = holder.conn.execute("SELECT timestamp, total_movement FROM movement ORDER BY timestamp").fetchall()
+        still = [m for ts, m in rows if self.T0 + 600 + 15 * 60 <= ts < roll_at]
+        roll = [m for ts, m in rows if roll_at <= ts <= roll_at + 60]
+        assert len(still) >= 20
+        assert sum(1 for m in still if m > 0) >= 0.5 * len(still), still
+        assert max(still) <= 50, still
+        assert max(roll) > 200, roll
+
+    def test_frame_after_a_sentinel_is_skipped(self):
+        # The first frame after the 5-minute all -1.0 frame reads 28.5 on
+        # every channel above 28.5 (live pod 88 capture, 2026-10-10).
+        t = _live_tracker()
+        t.process(self.T0, _cap2(*self.LOADED))
+        t.process(self.T0 + 0.5, _cap2(-1.0, -1.0, -1.0, ref=-1.0))
+        obs = t.observe(self.T0 + 1.0, _cap2(28.5, 19.4, 28.5))
+        assert obs.delta == 0.0 and obs.present is None
+        obs = t.observe(self.T0 + 1.5, _cap2(*self.LOADED))
+        assert obs.delta < 0.01
