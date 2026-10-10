@@ -226,6 +226,28 @@ class TestWriteSleepRecordResilience:
         assert len(replaced) == 1
         assert main._db_write_failures == 0
 
+    def test_failed_close_does_not_duplicate_intervals_on_retry(self):
+        # The open interval was appended before the write; a failed write
+        # kept it, and every retry appended another copy.
+        import json
+        t = _tracker()
+        good = t.db.conn
+        base = 1_777_000_000.0
+        samples = [(base, True), (base + 31, True)]
+        ts = base + 31
+        while ts < base + main.MAX_SESSION_S - 600:
+            ts += 600
+            samples.append((ts, True))
+        _feed(t, samples)
+        t.db.conn = _FailingConn()
+        _feed(t, [(base + main.MAX_SESSION_S + 10, True), (base + main.MAX_SESSION_S + 20, True)])
+        assert t._session_start is not None, "a failed write must keep the session"
+        t.db.conn = good
+        _feed(t, [(base + main.MAX_SESSION_S + 30, True)])
+        rows = good.execute("SELECT present_intervals FROM sleep_records").fetchall()
+        assert len(rows) == 1
+        assert json.loads(rows[0][0]) == [[base, base + main.MAX_SESSION_S]]
+
 
 class TestSharedConnectionHolder:
     """Both SessionTrackers read connections from one DBHolder so reconnect
@@ -1400,6 +1422,97 @@ class TestExitToNewEmptyLevel:
         assert t.baseline.source != "exit-rebase"
         assert t._session_start is not None
         assert _rows_full(t) == []
+
+    def test_collapse_edge_outranks_the_restart_fallback(self):
+        # A collapse confirmed by the first frame after a restart, before any
+        # present frame: the exit is the collapse edge, not the last presence
+        # before the restart (which falls inside the collapse).
+        import json
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, -7.7)
+        ts = self._run(t, ts, 3 * 3600, 30)
+        exit_ts = ts
+        ts = self._run(t, ts, 300, 0)
+        state = json.loads(json.dumps(t.snapshot()))
+        state["baseline"]["collapse_dwell_s"] = main.EXIT_SETTLE_S
+        t2 = _live_tracker()
+        t2.db = t.db
+        t2.restore(state, now=ts + 30)
+        assert t2._resumed_last_present is not None
+        self._run(t2, ts + 30, 1800, 0)
+        rows = _rows_full(t2)
+        assert t2._session_start is None
+        assert len(rows) == 1
+        assert abs(rows[0][1] - exit_ts) <= main.ABSENCE_TIMEOUT_S
+
+    @pytest.mark.parametrize("field, value", [
+        ("occupied_load", float("inf")),
+        ("occupied_load", float("nan")),
+        ("occupied_load", -5.0),
+        ("occupied_load", "heavy"),
+        ("collapse_since", float("inf")),
+        ("collapse_dwell_s", float("nan")),
+        ("collapse_dwell_s", -1.0),
+    ])
+    def test_invalid_saved_collapse_is_dropped_not_the_baseline(self, field, value):
+        saved = {"format": "capSense2", "means": {"A": 16.6, "B": 15.0, "C": 21.6},
+                 "threshold": 6.0, "ref_mean": 1.16, "absence_ready": True,
+                 "occupied_load": 30.0, "collapse_since": self.T0, "collapse_dwell_s": 120.0}
+        saved[field] = value
+        b = main.AdaptiveBaseline.from_state(saved)
+        assert b is not None
+        assert b.means == {"A": 16.6, "B": 15.0, "C": 21.6} and b.absence_ready
+        assert (b.occupied_load, b.collapse_since, b.collapse_dwell_s) == (None, None, 0.0)
+
+    def test_infinite_saved_load_does_not_end_the_night(self):
+        # Every reading is under 25% of an infinite load, so a sleeper at
+        # full load would read as a collapse and close 10 minutes later.
+        import json
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 2 * 3600, 30)
+        state = json.loads(json.dumps(t.snapshot()))
+        state["baseline"]["occupied_load"] = float("inf")
+        t2 = _live_tracker()
+        t2.db = t.db
+        t2.restore(json.loads(json.dumps(state)), now=ts + 30)
+        self._run(t2, ts + 30, 3600, 30)
+        assert t2.baseline.source != "exit-rebase"
+        assert t2._session_start is not None
+        assert _rows_full(t2) == []
+
+    def test_low_gain_load_keeps_the_old_exit_path(self):
+        # A load at or under 4x the exit threshold leaves no reading that is
+        # both a collapse and still occupied, so the rule stays off: a dip to
+        # just above the exit threshold holds the session (documented limit).
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 2 * 3600, 10)
+        assert t.baseline.occupied_load <= t.baseline.exit_threshold / main.EXIT_COLLAPSE_FRACTION
+        ts = self._run(t, ts, 3600, 3.5)
+        assert t.baseline.collapse_since is None
+        assert t.baseline.source != "exit-rebase"
+        assert t._session_start is not None
+        self._run(t, ts, 1800, 0)
+        rows = _rows_full(t)
+        assert t._session_start is None and len(rows) == 1
+
+    def test_cap_logs_the_collapse_it_discards(self, caplog):
+        # Disputed in review: a collapse under EXIT_SETTLE_S old when the cap
+        # fires is unconfirmed, so the cap stands, but it must be visible.
+        t = _live_tracker()
+        ts = self._run(t, self.T0, 3600, 0)
+        ts = self._run(t, ts, 3600, -7.7)
+        start = ts
+        ts = self._run(t, ts, main.MAX_SESSION_S - 300, 30, step=10.0)
+        with caplog.at_level(logging.INFO):
+            self._run(t, ts, 600, 0, step=10.0)
+        rows = _rows_full(t)
+        assert len(rows) == 1 and rows[0][2] == main.MAX_SESSION_S
+        assert abs(rows[0][0] - start) <= 10
+        assert [r for r in caplog.records
+                if r.levelno == logging.INFO and "cap discards a collapse" in r.getMessage()]
 
     def test_partial_side_frames_do_not_starve_the_baseline(self):
         # Only the firmware sentinel arms the settling skip; records carrying

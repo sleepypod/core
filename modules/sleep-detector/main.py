@@ -86,6 +86,7 @@ from common.calibration import (
     capsense_threshold,
     capsense2_channel_values,
 )
+from session_limits import ABSENCE_TIMEOUT_S, MAX_SESSION_S, MIN_SESSION_S
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -95,10 +96,8 @@ RAW_DATA_DIR = Path(os.environ.get("RAW_DATA_DIR", "/persistent"))
 BIOMETRICS_DB = Path(os.environ.get("BIOMETRICS_DATABASE_URL", "file:/persistent/sleepypod-data/biometrics.db").replace("file:", ""))
 SLEEPYPOD_DB = Path(os.environ.get("DATABASE_URL", "file:/persistent/sleepypod-data/sleepypod.db").replace("file:", ""))
 
-# Seconds of continuous absence before we consider the user has left bed
-ABSENCE_TIMEOUT_S = 120
-# Minimum session length to record (filters out accidental detections)
-MIN_SESSION_S = 300
+# ABSENCE_TIMEOUT_S, MIN_SESSION_S and MAX_SESSION_S live in session_limits,
+# shared with scripts/repair-capped-sessions.py.
 # Presence debounce / hysteresis: a present<->absent flip is only committed
 # after the new raw state has persisted for this many seconds. Without it,
 # brief capSense dropouts (sub-second flaps at 2 Hz while the occupant is
@@ -107,12 +106,6 @@ MIN_SESSION_S = 300
 # debug 2026-06-10). Must be < ABSENCE_TIMEOUT_S so debounced absence still
 # closes the session on a real bed-exit.
 PRESENCE_DEBOUNCE_S = 30.0
-# Hard upper bound on a single session. Belt-and-suspenders against a session
-# that never closes (e.g. presence flapping that historically kept resetting
-# the absence timer, producing 2736/2850min runaway durations). A continuous
-# presence span beyond this is force-closed at the cap rather than persisted as
-# a multi-day sleep_record.
-MAX_SESSION_S = 16 * 3600
 # How often to write a movement row (seconds)
 MOVEMENT_INTERVAL_S = 60
 # How often to reload calibration profiles (seconds)
@@ -561,6 +554,26 @@ def _opt_float(v) -> Optional[float]:
     return float(v) if v is not None else None
 
 
+def _saved_collapse(state: dict) -> tuple:
+    """The saved (occupied_load, collapse_since, collapse_dwell_s), or no
+    collapse if any is unusable. An infinite load or a NaN dwell would confirm
+    a collapse on the next low sample; the rest of the baseline is still good."""
+    try:
+        load = _opt_float(state.get("occupied_load"))
+        since = _opt_float(state.get("collapse_since"))
+        dwell = float(state.get("collapse_dwell_s") or 0.0)
+    except (TypeError, ValueError):
+        load = since = dwell = math.nan
+    if ((load is not None and not (math.isfinite(load) and load > 0))
+            or (since is not None and not math.isfinite(since))
+            or not (math.isfinite(dwell) and dwell >= 0)):
+        log.warning("Ignoring invalid saved collapse state (load %r, since %r, dwell %r)",
+                    state.get("occupied_load"), state.get("collapse_since"),
+                    state.get("collapse_dwell_s"))
+        return None, None, 0.0
+    return load, since, dwell
+
+
 class AdaptiveBaseline:
     """Self-adjusting empty-bed level for one side's capacitance channels.
 
@@ -649,13 +662,17 @@ class AdaptiveBaseline:
         if not isinstance(state, dict):
             return None
         try:
-            return cls(str(state["format"]), dict(state["means"]), float(state["threshold"]),
+            fmt, means, threshold = str(state["format"]), dict(state["means"]), float(state["threshold"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        occupied_load, collapse_since, collapse_dwell_s = _saved_collapse(state)
+        try:
+            return cls(fmt, means, threshold,
                        ref_mean=state.get("ref_mean"), source="state",
                        profile_seen_at=state.get("profile_seen_at"),
                        absence_ready=state.get("absence_ready") is True,
-                       occupied_load=_opt_float(state.get("occupied_load")),
-                       collapse_since=_opt_float(state.get("collapse_since")),
-                       collapse_dwell_s=float(state.get("collapse_dwell_s") or 0.0))
+                       occupied_load=occupied_load, collapse_since=collapse_since,
+                       collapse_dwell_s=collapse_dwell_s)
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -744,7 +761,14 @@ class AdaptiveBaseline:
                 self._load_avg += alpha * (dev - self._load_avg)
             if self._load_obs_s >= OCCUPIED_LOAD_TAU_S:
                 self.occupied_load = max(self.occupied_load or 0.0, self._load_avg)
-        if dev >= EXIT_COLLAPSE_FRACTION * (self.occupied_load or 0.0):
+        # A load at or under 4x the exit threshold leaves no reading both
+        # under the fraction and above the exit threshold, so the rule is off:
+        # such a low-gain side keeps the old exit path only.
+        if EXIT_COLLAPSE_FRACTION * (self.occupied_load or 0.0) <= self.exit_threshold:
+            self.collapse_since = None
+            self.collapse_dwell_s = 0.0
+            return None
+        if dev >= EXIT_COLLAPSE_FRACTION * self.occupied_load:
             self.collapse_since = None
             self.collapse_dwell_s = 0.0
             return None
@@ -1197,6 +1221,10 @@ class SessionTracker:
                     if adopted is not None:
                         log.info("%s: presence baseline from calibration profile (created %s)",
                                  self.side, created_at)
+                        if b is not None and b.collapse_since is not None:
+                            log.info("%s: the new profile drops a collapse pending since %s; "
+                                     "the occupied load is learned again", self.side,
+                                     datetime.fromtimestamp(b.collapse_since, tz=timezone.utc).isoformat())
                         b = adopted
                     elif b is not None:
                         b.profile_seen_at = created_at  # wrong format — stop re-checking
@@ -1330,6 +1358,9 @@ class SessionTracker:
                 and self._pending_state is None):
             self._pending_state = False
             self._pending_since = max(exit_at, self._interval_start or exit_at)
+            # Observed evidence of the exit: outranks the restart fallback,
+            # which would date it at the last presence before the restart.
+            self._resumed_last_present = None
         self._update(ts, self._debounced_present if present is None else present, delta)
         capped, self._cap_closed = self._cap_closed, False
         return capped
@@ -1341,6 +1372,12 @@ class SessionTracker:
         if obs.values is None or self.baseline is None:
             return
         if reset:
+            if self.baseline.collapse_since is not None:
+                # Not confirmed (under EXIT_SETTLE_S observed), so not an exit.
+                log.info("%s: the cap discards a collapse pending since %s (%.0f s observed of the %d s needed)",
+                         self.side,
+                         datetime.fromtimestamp(self.baseline.collapse_since, tz=timezone.utc).isoformat(),
+                         self.baseline.collapse_dwell_s, EXIT_SETTLE_S)
             self.baseline.reseed(obs.values, "cap-reset")
             log.warning("%s: presence baseline reset to current level after a capped session",
                         self.side)
@@ -1501,18 +1538,21 @@ class SessionTracker:
             log.info("%s: session too short (%ds), discarding", self.side, duration_s)
             wrote = True  # treat discard as final — nothing to retry
         else:
-            # Close any open interval
+            # Close any open interval, on copies: a failed write keeps the
+            # session for a retry, which must not append the interval again.
+            present_intervals = list(self._present_intervals)
+            absent_intervals = list(self._absent_intervals)
             if self._interval_start is not None:
                 if self._was_present:
-                    self._present_intervals.append([self._interval_start, left_ts])
+                    present_intervals.append([self._interval_start, left_ts])
                 elif left_ts > self._interval_start:
-                    self._absent_intervals.append([self._interval_start, left_ts])
+                    absent_intervals.append([self._interval_start, left_ts])
 
             wrote = write_sleep_record(
                 self.db, self.side,
                 self._session_start, left_at,
                 duration_s, self._exit_count,
-                self._present_intervals, self._absent_intervals,
+                present_intervals, absent_intervals,
             )
             if wrote:
                 log.info("%s: session recorded — %.1f hr, %d exits",
