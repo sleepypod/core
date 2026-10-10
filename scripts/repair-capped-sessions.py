@@ -15,17 +15,23 @@ vitals already in biometrics.db, deterministically:
     a 22-minute run 35 minutes after the bed emptied). So the vitals are
     split into runs at gaps over VITALS_GAP_S, and the occupant left at the
     end of the last run lasting at least MIN_RUN_S.
-  - left_bed_at = that end + ABSENCE_TIMEOUT_S (the detector's own exit
-    delay), never later than the original. Duration is recomputed, intervals
-    are clipped to the new end, and exits are recounted from the present
-    intervals that remain, each ending in an exit as on a natural close.
+  - left_bed_at = that end + ABSENCE_TIMEOUT_S, never later than the
+    original. The 120 s is padding for the time between the last vitals row
+    and the exit; a natural close stores the first absent sample instead,
+    with no padding. Duration is recomputed, intervals are clipped to the
+    new end, and exits are recounted from the present intervals that remain,
+    each ending in an exit as on a natural close.
+  - Shorter runs after that end are dropped as empty-bed noise. That also
+    drops a genuine short return to bed (60 min, a 10-min gap, 20 min), so
+    such records are listed as short-final-run for review before --apply.
   - Records with no qualifying run, or with interval JSON that isn't a list
     of [start, stop] pairs, are left unchanged and listed.
 
 Dry run by default. --apply first writes a consistent copy of the database to
-<db>.bak.<epoch> (SQLite backup API, safe alongside the running services),
-then updates all repairable records in one transaction. Re-running finds
-nothing: repaired records are no longer exactly MAX_SESSION_S long.
+<db>.bak.<epoch> (<db>.bak.<epoch>.<n> if that exists; SQLite backup API,
+safe alongside the running services), then updates all repairable records in
+one transaction. Re-running finds nothing: repaired records are no longer
+exactly MAX_SESSION_S long.
 
 Usage:
   scripts/repair-capped-sessions.py [--db PATH]           # dry run
@@ -39,11 +45,12 @@ import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
-# Mirrors modules/sleep-detector/main.py.
-MAX_SESSION_S = 16 * 3600
-ABSENCE_TIMEOUT_S = 120
-MIN_SESSION_S = 300
+# The detector's own values, from the module it imports them from.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "modules" / "sleep-detector"))
+from session_limits import ABSENCE_TIMEOUT_S, MAX_SESSION_S, MIN_SESSION_S  # noqa: E402
+
 # Vitals gaps longer than this split runs; runs shorter than MIN_RUN_S are
 # empty-bed noise.
 VITALS_GAP_S = 5 * 60
@@ -54,17 +61,21 @@ DEFAULT_DB = os.environ.get(
 ).replace("file:", "")
 
 
+def vitals_runs(vitals_ts):
+    """[start, end] of each vitals run, split at gaps over VITALS_GAP_S."""
+    runs = []
+    for ts in vitals_ts:
+        if runs and ts - runs[-1][1] <= VITALS_GAP_S:
+            runs[-1][1] = ts
+        else:
+            runs.append([ts, ts])
+    return runs
+
+
 def occupancy_end(vitals_ts):
     """End of the last vitals run lasting at least MIN_RUN_S, or None."""
-    end = None
-    run_start = prev = None
-    for ts in vitals_ts:
-        if prev is None or ts - prev > VITALS_GAP_S:
-            run_start = ts
-        prev = ts
-        if ts - run_start >= MIN_RUN_S:
-            end = ts
-    return end
+    ends = [end for start, end in vitals_runs(vitals_ts) if end - start >= MIN_RUN_S]
+    return ends[-1] if ends else None
 
 
 def parse_intervals(raw):
@@ -124,7 +135,8 @@ def plan(conn):
                             new_duration=new_left - entered,
                             new_exits=new_exits,
                             present=json.dumps(kept),
-                            absent=json.dumps(clip_intervals(absent_iv, new_left)))
+                            absent=json.dumps(clip_intervals(absent_iv, new_left)),
+                            dropped_runs=[r for r in vitals_runs(vitals) if r[0] > end])
         out.append(item)
     return out
 
@@ -152,6 +164,14 @@ def report(items, verbose):
         hours = sorted((it["new_duration"]) / 3600 for it in repaired)
         print(f"               new durations {hours[0]:.1f}-{hours[-1]:.1f} h, "
               f"median {hours[len(hours) // 2]:.1f} h")
+    short = [it for it in repaired if it["dropped_runs"]]
+    if short:
+        print(f"    short-final-run: {len(short)} of these drop later vitals runs under "
+              f"{MIN_RUN_S // 60} min as empty-bed noise; review before --apply:")
+        for it in short:
+            runs = ", ".join(f"{fmt(a)[11:]}-{fmt(b)[11:]} ({(b - a) / 60:.0f} min)"
+                             for a, b in it["dropped_runs"])
+            print(f"      {it['id']:>5} {it['side']:5} new left {fmt(it['new_left'])}  dropped {runs}")
     print(f"  keep:        {len(by.get('keep', []))}  (vitals run to the cap)")
     print(f"  too-short:   {len(by.get('too-short', []))}  (occupancy under {MIN_SESSION_S}s; left unchanged)")
     print(f"  no-evidence: {len(by.get('no-evidence', []))}  (no vitals run of {MIN_RUN_S // 60}+ min; left unchanged)")
@@ -159,12 +179,26 @@ def report(items, verbose):
         print(f"  malformed:   {len(by['malformed'])}  (interval JSON unreadable; left unchanged)")
 
 
+def reserve_backup_path(db_path):
+    """Create and return a backup path no earlier run is using. Exclusive
+    create, so two runs in the same second can't overwrite each other's."""
+    base = f"{db_path}.bak.{int(time.time())}"
+    for n in range(1000):
+        path = base if n == 0 else f"{base}.{n}"
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        except FileExistsError:
+            continue
+        return path
+    raise RuntimeError(f"no free backup path at {base}.*")
+
+
 def apply(db_path, conn, items):
     repaired = [it for it in items if it["action"] == "repair"]
     if not repaired:
         print("nothing to apply")
         return
-    backup_path = f"{db_path}.bak.{int(time.time())}"
+    backup_path = reserve_backup_path(db_path)
     dst = sqlite3.connect(backup_path)
     try:
         conn.backup(dst)
