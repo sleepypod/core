@@ -244,7 +244,9 @@ export const referenceStages = sqliteTable('reference_stages', {
   stage: text('stage', { enum: ['wake', 'light', 'deep', 'rem'] }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 }, t => [
-  uniqueIndex('uq_reference_stages_side_source_start').on(t.side, t.source, t.start),
+  // Start before source so getReferenceStages (side + start range, no source)
+  // can seek and read in order instead of scanning the side and sorting.
+  uniqueIndex('uq_reference_stages_side_start_source').on(t.side, t.start, t.source),
 ])
 
 // ── Calibration tables ──

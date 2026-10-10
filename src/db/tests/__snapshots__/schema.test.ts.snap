@@ -249,7 +249,7 @@ exports[`complete Drizzle schema contracts > pins every biometrics table, column
     "exportName": "referenceStages",
     "foreignKeys": [],
     "indexes": [
-      "uq_reference_stages_side_source_start | unique | columns:side,source,start | where:none",
+      "uq_reference_stages_side_start_source | unique | columns:side,start,source | where:none",
     ],
     "name": "reference_stages",
     "primaryKeys": [],
