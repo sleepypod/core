@@ -175,6 +175,27 @@ describe('biometrics reference stages', () => {
         .rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR', message: expect.stringContaining('Failed to import reference stages') })
       raw = new Database(':memory:')
     })
+
+    it('reports a non-Error failure as Unknown error', async () => {
+      dbHolder.current = {
+        transaction: () => {
+          throw 'disk gone'
+        },
+      }
+      await expect(caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments: night }))
+        .rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to import reference stages: Unknown error' })
+    })
+
+    it('lists five conflicts and counts the rest', async () => {
+      const outer = { start: T0, end: T0 + 100 * MIN, stage: 'light' as const }
+      const nested = Array.from({ length: 7 }, (_, i) => ({ start: T0 + (i + 1) * 10 * MIN, end: T0 + (i + 1) * 10 * MIN + MIN, stage: 'wake' as const }))
+      const error = await caller.importReferenceStages({ side: 'left', source: 'apple_watch', segments: [outer, ...nested] }).catch(e => e)
+
+      expect(error).toMatchObject({ code: 'BAD_REQUEST' })
+      expect(error.message).toContain('; and 2 more')
+      expect(error.message.match(/ overlaps /g)).toHaveLength(5)
+      expect(db.select().from(referenceStages).all()).toHaveLength(0)
+    })
   })
 
   describe('getReferenceStages', () => {
@@ -247,6 +268,29 @@ describe('biometrics reference stages', () => {
         startDate: new Date((T0 + MIN) * 1000),
         endDate: new Date(T0 * 1000),
       })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    })
+
+    it('wraps database failures as INTERNAL_SERVER_ERROR', async () => {
+      raw.close()
+      await expect(caller.getReferenceStages({
+        side: 'left',
+        startDate: new Date(T0 * 1000),
+        endDate: new Date((T0 + MIN) * 1000),
+      })).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR', message: expect.stringContaining('Failed to fetch reference stages: ') })
+      raw = new Database(':memory:')
+    })
+
+    it('reports a non-Error failure as Unknown error', async () => {
+      dbHolder.current = {
+        select: () => {
+          throw 'disk gone'
+        },
+      }
+      await expect(caller.getReferenceStages({
+        side: 'left',
+        startDate: new Date(T0 * 1000),
+        endDate: new Date((T0 + MIN) * 1000),
+      })).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to fetch reference stages: Unknown error' })
     })
   })
 })
