@@ -1,8 +1,8 @@
 'use client'
 
-import { Minus, Plus, Power, X } from 'lucide-react'
+import { Minus, Plane, Plus, Power, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { IconButton, TempBackdrop } from '@/src/components/ds'
+import { IconButton, TempBackdrop, Toggle } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
 import type { NightPhaseKey } from '@/src/components/TempScreen/nightPhases'
 import { HoldDurationRow, HoldStatus } from '@/src/components/TempScreen/TemperatureHoldControls'
@@ -12,6 +12,8 @@ import type { SideNightPhases } from '@/src/components/TempScreen/useNightPhases
 import type { TempUnit } from '@/src/lib/tempUtils'
 import type { ControlVariant, TempDisplay } from '@/src/providers/PrefsProvider'
 import type { TemperatureControlStatus } from '@/src/temperature/controller'
+import type { CSSProperties } from 'react'
+import { STAGE } from './stageColors'
 import type { SideStatus, StageSide } from './stageColors'
 
 export interface StagePanelProps {
@@ -25,6 +27,10 @@ export interface StagePanelProps {
   paused?: boolean
   powerDisabled: boolean
   onPower: () => void
+  away: boolean
+  /** Flips away mode for this side; omitted while the sides are linked. */
+  onAwayToggle?: () => void
+  awayDisabled?: boolean
   onClose: () => void
   status: SideStatus
   control: TemperatureControlStatus | undefined
@@ -49,6 +55,14 @@ export interface StagePanelProps {
   }
 }
 
+// The stage is dark-only, so the shared toggle keeps its dark colours under a light theme.
+const STAGE_TOGGLE = {
+  '--status-ok': STAGE.live,
+  '--toggle-off-track': STAGE.line2,
+  '--toggle-off-knob': '#6a6a70',
+  '--toggle-on-knob': STAGE.app,
+} as CSSProperties
+
 /**
  * The selected side's controls, floating at the right of the stage below the header,
  * as tall as its content (scrolling only when the room between the header and the
@@ -57,7 +71,7 @@ export interface StagePanelProps {
  * paints the same time-of-day and temperature backdrop as its card.
  */
 export function StagePanel({
-  open, side, name, scope, isOn, paused = false, powerDisabled, onPower, onClose, status, control, onResumed,
+  open, side, name, scope, isOn, paused = false, powerDisabled, onPower, away, onAwayToggle, awayDisabled, onClose, status, control, onResumed,
   controlStyle, display, unit, targetF, bedF, stepDisabled, onPreview, onCommit, onStep, holdMinutes, onHoldChange, stepper,
 }: StagePanelProps) {
   const isStepper = controlStyle === 'stepper'
@@ -81,6 +95,12 @@ export function StagePanel({
       <div className="flex items-center gap-2.5">
         <span className="shrink-0 text-[18px] font-medium text-[#ececec]">{name}</span>
         <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.14em] text-[#8b8b92]">{scope}</span>
+        {onAwayToggle && (
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[#5d5d63]" style={STAGE_TOGGLE}>
+            <Plane size={12} aria-hidden />
+            <Toggle on={away} onChange={onAwayToggle} disabled={awayDisabled} label={`Away mode for ${name} (${side === 'left' ? 'Left' : 'Right'} side)`} />
+          </span>
+        )}
         <button
           type="button"
           aria-label={isOn ? `Turn ${name} off` : `Turn ${name} on`}
@@ -88,7 +108,8 @@ export function StagePanel({
           disabled={powerDisabled}
           onClick={onPower}
           className={cn(
-            'ml-auto flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors disabled:cursor-default disabled:opacity-45',
+            !onAwayToggle && 'ml-auto',
+            'flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors disabled:cursor-default disabled:opacity-45',
             isOn ? 'border-[#ececec] bg-[#ececec] text-[#0b0b0c]' : 'border-[#26262a] bg-transparent text-[#8b8b92] hover:bg-white/[0.08]',
           )}
         >

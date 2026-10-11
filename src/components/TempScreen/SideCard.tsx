@@ -2,7 +2,7 @@
 
 import { Minus, Plane, Plus, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button, Card, IconButton, StatusDot, TempBackdrop } from '@/src/components/ds'
+import { Button, Card, IconButton, StatusDot, TempBackdrop, Toggle } from '@/src/components/ds'
 import { TempControl } from '@/src/components/TempControl/TempControl'
 import type { TempUnit } from '@/src/lib/tempUtils'
 import type { ControlVariant, TempDisplay } from '@/src/providers/PrefsProvider'
@@ -41,6 +41,9 @@ export interface SideCardProps {
   onCommit: (f: number) => void
   onStep: (delta: number) => void
   onPower: () => void
+  /** Flips away mode for this side (settings.updateSide). */
+  onAwayToggle: () => void
+  awayDisabled?: boolean
   onResumed: () => void
   /** Phones show one side at a time; the other card is hidden below 900px. */
   hiddenOnPhone?: boolean
@@ -97,6 +100,8 @@ export function SideCard({
   onCommit,
   onStep,
   onPower,
+  onAwayToggle,
+  awayDisabled,
   onResumed,
   hiddenOnPhone,
   stepper,
@@ -129,6 +134,10 @@ export function SideCard({
               </>
             )
           : presence && <StatusDot tone={presence === 'in' ? 'ok' : 'muted'} />}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-fg-3">
+          <Plane size={12} aria-hidden />
+          <Toggle on={away} onChange={onAwayToggle} disabled={awayDisabled} label={`Away mode for ${name} (${side === 'left' ? 'Left' : 'Right'} side)`} />
+        </span>
         <button
           type="button"
           aria-label={isOn ? 'Turn off' : 'Turn on'}
@@ -137,7 +146,7 @@ export function SideCard({
           onClick={onPower}
           hidden={awayOff}
           className={cn(
-            'ml-auto flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border bg-black/20 transition-colors hover:bg-white/[0.08] disabled:cursor-default disabled:opacity-45',
+            'flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full border bg-black/20 transition-colors hover:bg-white/[0.08] disabled:cursor-default disabled:opacity-45',
             !isOn ? 'border-fg-2 text-fg-2' : side === 'left' ? 'border-side-left text-side-left' : 'border-side-right text-side-right',
           )}
         >

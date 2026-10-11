@@ -9,6 +9,7 @@ import { stepForDisplay } from '@/src/components/TempScreen/nightPhases'
 import type { NightPhaseKey } from '@/src/components/TempScreen/nightPhases'
 import type { StepperTab } from '@/src/components/TempScreen/TempStepper'
 import { useNow } from '@/src/components/TempScreen/TonightCard'
+import { useAwayMode } from '@/src/components/TempScreen/useAwayMode'
 import { useNightPhases } from '@/src/components/TempScreen/useNightPhases'
 import { useSideTemperature } from '@/src/components/TempScreen/useSideTemperature'
 import { useTempNotices } from '@/src/components/TempScreen/useTempNotices'
@@ -104,6 +105,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const { sideName } = useSideNames()
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
   const { data: settings } = trpc.settings.getAll.useQuery({})
+  const away = useAwayMode(settings?.sides)
   const timeFormat = useTimeFormat()
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
@@ -301,7 +303,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const panelName = isLinked ? 'Both sides' : names[panelSide]
   const panelScope = isLinked
     ? `${names.left} · ${names.right} · Linked`
-    : [panelSide === 'left' ? 'Left' : 'Right', settings?.sides?.[panelSide]?.awayMode ? 'Away' : presenceFor(panelSide) === 'in' ? 'In bed' : presenceFor(panelSide) === 'out' ? 'Out of bed' : null].filter(Boolean).join(' · ')
+    : [panelSide === 'left' ? 'Left' : 'Right', away.isAway(panelSide) ? 'Away' : presenceFor(panelSide) === 'in' ? 'In bed' : presenceFor(panelSide) === 'out' ? 'Out of bed' : null].filter(Boolean).join(' · ')
   const roomText = formatSensorC(surface.ambientC, unit, { includeUnit: false, nullDisplay: '—' })
   const humidityText = surface.humidity == null ? '—' : `${Math.round(surface.humidity)}%`
   const bedAirText = formatSensorC(mean([...surface.zonesC.left, ...surface.zonesC.right]), unit, { decimals: 1, includeUnit: false, nullDisplay: '—' })
@@ -426,7 +428,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
                   side={side}
                   name={names[side]}
                   presence={presenceFor(side)}
-                  away={Boolean(settings?.sides?.[side]?.awayMode)}
+                  away={away.isAway(side)}
                   control={status?.temperatureControl?.[side]}
                   variant={controlStyle}
                   display={display}
@@ -443,6 +445,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
                   onCommit={f => handleCommit(side, f)}
                   onStep={delta => handleStep(side, delta)}
                   onPower={() => handlePower(side)}
+                  onAwayToggle={() => away.toggle(side)}
+                  awayDisabled={away.pending}
                   onResumed={() => { void refetch() }}
                   stepper={isStepper
                     ? { tab: stepperTab[side], onTabChange: tab => handleTabChange(side, tab), schedule: nightPhases[side], onStepPhase: (phase, delta) => handleStepPhase(side, phase, delta), now }
@@ -463,6 +467,9 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         paused={blocked[panelSide]}
         powerDisabled={controls[panelSide].powerPending || blocked[panelSide]}
         onPower={() => handlePower(panelSide)}
+        away={away.isAway(panelSide)}
+        onAwayToggle={isLinked ? undefined : () => away.toggle(panelSide)}
+        awayDisabled={away.pending}
         onClose={() => setSelected(null)}
         status={statusOf(panelSide)}
         control={status?.temperatureControl?.[panelSide]}

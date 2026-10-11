@@ -16,6 +16,9 @@ const m = vi.hoisted(() => ({
   setTemp: vi.fn(),
   setPower: vi.fn(),
   tempPending: false,
+  updateSide: vi.fn(),
+  invalidateSettings: vi.fn(),
+  awaySaving: undefined as undefined | { side: 'left' | 'right', awayMode: boolean },
   refetch: vi.fn(),
   toggleLink: vi.fn(),
   side: { isLinked: false, primarySide: 'left' as 'left' | 'right', singleSleeperSide: null as 'left' | 'right' | null },
@@ -33,13 +36,26 @@ const m = vi.hoisted(() => ({
 
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
+    useUtils: () => ({ settings: { getAll: { invalidate: m.invalidateSettings } } }),
     device: {
       setTemperature: { useMutation: () => ({ mutate: m.setTemp, isPending: m.tempPending }) },
       setPower: { useMutation: () => ({ mutate: m.setPower, isPending: false }) },
       resumeTemperature: { useMutation: () => ({ mutate: vi.fn(), isPending: false, error: null }) },
       getStatus: { useQuery: () => ({ data: { podVersion: 'J00' } }) },
     },
-    settings: { getAll: { useQuery: () => ({ data: m.settings }) } },
+    settings: {
+      getAll: { useQuery: () => ({ data: m.settings }) },
+      updateSide: {
+        useMutation: (opts: { onSuccess: () => void }) => ({
+          mutate: (input: unknown) => {
+            m.updateSide(input)
+            opts.onSuccess()
+          },
+          isPending: m.awaySaving != null,
+          variables: m.awaySaving,
+        }),
+      },
+    },
     biometrics: { getOccupancy: { useQuery: () => ({ data: m.occupancy }) } },
   },
 }))
@@ -113,6 +129,9 @@ beforeEach(() => {
   m.setTemp.mockReset()
   m.setPower.mockReset()
   m.tempPending = false
+  m.updateSide.mockReset()
+  m.invalidateSettings.mockReset()
+  m.awaySaving = undefined
   m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: null }
   // The stage is the default; these cover the cards it toggles back to.
   localStorage.setItem('sleepypod.base.temp.view', 'cards')
@@ -222,6 +241,29 @@ describe('TempScreen', () => {
     expect(within(right).getByText('Heidi').className).toContain('text-fg-2')
     expect(within(right).getByRole('slider')).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Jon (left)' }).className).not.toContain('border-dashed')
+  })
+
+  it('flips away mode from each card with one tap through the Settings mutation', () => {
+    const screen = render(<TempScreen />)
+    const jon = card(screen, 'Jon (left)').getByRole('switch', { name: 'Away mode for Jon (Left side)' })
+    const heidi = card(screen, 'Heidi (right)').getByRole('switch', { name: 'Away mode for Heidi (Right side)' })
+    expect(jon.getAttribute('aria-checked')).toBe('false')
+    expect(heidi.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(jon)
+    expect(m.updateSide).toHaveBeenCalledWith({ side: 'left', awayMode: true })
+    fireEvent.click(heidi)
+    expect(m.updateSide).toHaveBeenLastCalledWith({ side: 'right', awayMode: false })
+    expect(m.invalidateSettings).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows the tapped away state while it saves, and holds both toggles until it lands', () => {
+    m.awaySaving = { side: 'left', awayMode: true }
+    const screen = render(<TempScreen />)
+    const left = card(screen, 'Jon (left)')
+    expect(left.getByRole('switch', { name: /Jon/ }).getAttribute('aria-checked')).toBe('true')
+    expect(left.getByTestId('side-away').textContent).toBe('AWAY')
+    expect((left.getByRole('switch') as HTMLButtonElement).disabled).toBe(true)
+    expect((card(screen, 'Heidi (right)').getByRole('switch') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('an away side that is off reads Off with a Turn on button', () => {

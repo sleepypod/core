@@ -23,6 +23,8 @@ const NOW = new Date(2026, 8, 28, 21, 0)
 const m = vi.hoisted(() => ({
   setTemp: vi.fn(),
   setPower: vi.fn(),
+  updateSide: vi.fn(),
+  invalidateSettings: vi.fn(),
   refetch: vi.fn(),
   toggleLink: vi.fn(),
   orbitBy: vi.fn(),
@@ -50,12 +52,24 @@ const m = vi.hoisted(() => ({
 
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
+    useUtils: () => ({ settings: { getAll: { invalidate: m.invalidateSettings } } }),
     device: {
       setTemperature: { useMutation: () => ({ mutate: m.setTemp, isPending: false }) },
       setPower: { useMutation: () => ({ mutate: m.setPower, isPending: false }) },
       resumeTemperature: { useMutation: (opts?: { onSuccess?: () => void }) => ({ mutate: () => opts?.onSuccess?.(), isPending: false, error: null }) },
     },
-    settings: { getAll: { useQuery: () => ({ data: m.settings }) } },
+    settings: {
+      getAll: { useQuery: () => ({ data: m.settings }) },
+      updateSide: {
+        useMutation: (opts: { onSuccess: () => void }) => ({
+          mutate: (input: unknown) => {
+            m.updateSide(input)
+            opts.onSuccess()
+          },
+          isPending: false,
+        }),
+      },
+    },
     biometrics: {
       getOccupancy: { useQuery: () => ({ data: m.occupancy }) },
       getSleepRecords: { useQuery: ({ side }: { side: 'left' | 'right' }) => ({ data: m.records[side] }) },
@@ -240,6 +254,41 @@ describe('TempStage', () => {
     const status = within(left).getByTestId('stage-panel-status')
     expect(status.textContent).toMatch(/^(COOLING|WARMING|HOLDING)$/)
     expect(status.parentElement?.textContent).toContain('Manual')
+  })
+
+  it('flips away mode from the panel header for the selected side, and hides it while linked', async () => {
+    m.settings = { device: { temperatureUnit: 'F' }, sides: { left: { name: 'Jon', awayMode: false }, right: { name: 'Heidi', awayMode: true } } }
+    const { rerender } = render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: '1' })
+    const jon = within(screen.getByRole('region', { name: 'Jon controls' })).getByRole('switch', { name: 'Away mode for Jon (Left side)' })
+    expect(jon.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(jon)
+    expect(m.updateSide).toHaveBeenCalledWith({ side: 'left', awayMode: true })
+    expect(m.invalidateSettings).toHaveBeenCalledTimes(1)
+
+    fireEvent.keyDown(window, { key: '2' })
+    const right = screen.getByRole('region', { name: 'Heidi controls' })
+    expect(right.textContent).toContain('Right · Away')
+    const heidi = within(right).getByRole('switch', { name: 'Away mode for Heidi (Right side)' })
+    expect(heidi.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(heidi)
+    expect(m.updateSide).toHaveBeenLastCalledWith({ side: 'right', awayMode: false })
+
+    m.side = { isLinked: true }
+    rerender(<TempStage onExit={() => {}} />)
+    expect(within(screen.getByTestId('stage-panel')).queryByRole('switch')).toBeNull()
+  })
+
+  it('wires away mode into the flat cards when 3D is unavailable', async () => {
+    m.mode = '2d'
+    m.settings = { device: { temperatureUnit: 'F' }, sides: { left: { name: 'Jon' }, right: { name: 'Heidi', awayMode: true } } }
+    render(<TempStage onExit={() => {}} />)
+    await act(async () => {})
+    expect(m.sideCards.left.away).toBe(false)
+    expect(m.sideCards.right.away).toBe(true)
+    act(() => m.sideCards.right.onAwayToggle())
+    expect(m.updateSide).toHaveBeenCalledWith({ side: 'right', awayMode: false })
   })
 
   it('links by copying the left side to the right, then mirrors changes to both', async () => {

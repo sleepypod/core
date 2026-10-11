@@ -25,6 +25,7 @@ import { SideCard, type Presence } from './SideCard'
 import { stepForDisplay, type NightPhaseKey } from './nightPhases'
 import type { StepperTab } from './TempStepper'
 import { TonightCard, useNow } from './TonightCard'
+import { useAwayMode } from './useAwayMode'
 import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
 import { useTempNotices } from './useTempNotices'
@@ -81,6 +82,7 @@ export const TempScreen = () => {
   const { status, isLoading: statusLoading, refetch } = useDeviceStatus()
 
   const { data: settings } = trpc.settings.getAll.useQuery({})
+  const away = useAwayMode(settings?.sides)
   const bedState = { ...settings?.sides, ...settings?.device }
   const scheduleSide = (side: Side): Side => scheduleSourceSide(side, bedState) ?? side
   const soloSide = settings?.device?.bedMode === 'solo-left' ? 'left' : settings?.device?.bedMode === 'solo-right' ? 'right' : null
@@ -247,7 +249,7 @@ export const TempScreen = () => {
               side={side}
               name={sideName(side)}
               presence={presenceFor(side)}
-              away={Boolean(settings?.sides?.[side]?.awayMode)}
+              away={away.isAway(side)}
               scheduleStatus={!scheduleSourceSide(side, bedState) ? 'Schedule off' : !activeSleeperSides(bedState).includes(side) && bedState.unusedZoneMode === 'independent' ? 'Independent schedule' : undefined}
               linkedTo={scheduleSide(side) !== side ? sideName(scheduleSide(side)) : undefined}
               control={status?.temperatureControl?.[side]}
@@ -266,6 +268,8 @@ export const TempScreen = () => {
               onCommit={f => handleCommit(side, f)}
               onStep={delta => handleStep(side, delta)}
               onPower={() => handlePower(side)}
+              onAwayToggle={() => away.toggle(side)}
+              awayDisabled={away.pending}
               onResumed={() => { void refetch() }}
               hiddenOnPhone={side !== primarySide}
               stepper={isStepper
