@@ -26,7 +26,8 @@ describe('side status', () => {
     expect(sideStatus({ on: true, targetF: 90, bedF: 80 }, 'F', 'degrees')).toEqual({ word: 'WARMING', text: 'WARMING', color: STAGE.warming })
   })
   it('describes the schedule while previewing, in the temperature colour', () => {
-    expect(sideStatus({ on: true, targetF: 72, bedF: 80 }, 'F', 'degrees', 79)).toEqual({ word: 'SCHEDULED', text: 'SCHEDULED 79°', color: tempColor(79) })
+    expect(sideStatus({ on: true, targetF: 72, bedF: 80 }, 'F', 'degrees', 79)).toEqual({ word: 'SCHEDULED', text: 'SCHEDULED 79°', color: STAGE.preview })
+    expect(sideStatus({ on: true, targetF: 72, bedF: 80 }, 'F', 'degrees', 80.5).color).not.toBe(tempColor(80.5))
     expect(sideStatus({ on: true, targetF: 72, bedF: 80 }, 'C', 'degrees', 79).text).toBe('SCHEDULED 26°')
     expect(sideStatus({ on: true, targetF: 72, bedF: 80 }, 'F', 'degrees', null).text).toBe('OFF')
   })

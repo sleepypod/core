@@ -75,7 +75,8 @@ export interface SideReading {
 export function sideStatus(side: SideReading, unit: TempUnit, display: TempDisplay, previewF?: number | null): SideStatus {
   if (previewF !== undefined) {
     if (previewF === null) return { word: 'OFF', text: 'OFF', color: STAGE.text2 }
-    return { word: 'SCHEDULED', text: `SCHEDULED ${formatStageTemp(previewF, unit, display)}`, color: tempColor(previewF) }
+    // The ramp's middle stop is the cover's own grey, so a scheduled 80° would vanish against the bed; the preview amber always reads.
+    return { word: 'SCHEDULED', text: `SCHEDULED ${formatStageTemp(previewF, unit, display)}`, color: STAGE.preview }
   }
   if (!side.on) return { word: 'OFF', text: 'OFF', color: STAGE.text2 }
   if (side.bedF == null || Math.abs(side.targetF - side.bedF) < 0.5) return { word: 'HOLDING', text: 'HOLDING', color: STAGE.text2 }
