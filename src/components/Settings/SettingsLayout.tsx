@@ -1,6 +1,8 @@
 'use client'
 
 import { TimeInput } from '@/src/components/Schedule/TimeInput'
+import { SegmentedControl } from '@/src/components/ds'
+import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { CheckCircle2, Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -20,6 +22,32 @@ export function SectionColumns({ left, right, className }: {
       <div className="flex min-w-0 flex-col gap-3.5">{left}</div>
       {right && <div className="flex min-w-0 flex-col gap-3.5">{right}</div>}
     </div>
+  )
+}
+
+/**
+ * Left/Right tab strip at the top of a per-side card. Every card on the page
+ * binds to the same selected side, so switching one switches them all.
+ */
+export function SideTabs({ side, onChange, label }: {
+  side: 'left' | 'right'
+  onChange: (side: 'left' | 'right') => void
+  /** Card title, used to name the tab list ("Profile side"). */
+  label: string
+}) {
+  const { leftName, rightName } = useSideNames()
+  return (
+    <SegmentedControl
+      full
+      size="sm"
+      ariaLabel={`${label} side`}
+      value={side}
+      options={[
+        { value: 'left', label: leftName },
+        { value: 'right', label: rightName },
+      ]}
+      onChange={onChange}
+    />
   )
 }
 

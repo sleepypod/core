@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { Card, CardHeader, InlineError, SelectValue, SettingRow, StatusDot, TextField, Toggle } from '@/src/components/ds'
-import { SectionColumns } from './SettingsLayout'
+import { SectionColumns, SideTabs } from './SettingsLayout'
 
 interface SideData {
   side: 'left' | 'right'
@@ -26,6 +26,8 @@ interface SideSettingsFormProps {
    * it would do nothing (the watcher stands down on unsensable presence).
    */
   presenceAvailable: boolean | null
+  /** When set, each card shows a Left/Right tab strip that calls this. */
+  onSideChange?: (side: 'left' | 'right') => void
 }
 
 const AUTO_OFF_DURATION_OPTIONS = [5, 10, 15, 30, 45, 60, 90, 120] as const
@@ -43,7 +45,7 @@ function formatMinutes(mins: number): string {
 /**
  * Per-side settings: profile name, away mode, always on, and auto-off.
  */
-export function SideSettingsForm({ side, sideData, presenceAvailable }: SideSettingsFormProps) {
+export function SideSettingsForm({ side, sideData, presenceAvailable, onSideChange }: SideSettingsFormProps) {
   const d = sideData ?? {
     side,
     name: side === 'left' ? 'Left' : 'Right',
@@ -59,11 +61,16 @@ export function SideSettingsForm({ side, sideData, presenceAvailable }: SideSett
       key={`${d.side}-${d.name}-${d.awayMode}-${d.awayStart}-${d.awayReturn}-${d.alwaysOn}-${d.autoOffEnabled}-${d.autoOffMinutes}`}
       data={d}
       presenceAvailable={presenceAvailable}
+      onSideChange={onSideChange}
     />
   )
 }
 
-function SideCards({ data, presenceAvailable }: { data: SideData, presenceAvailable: boolean | null }) {
+function SideCards({ data, presenceAvailable, onSideChange }: {
+  data: SideData
+  presenceAvailable: boolean | null
+  onSideChange?: (side: 'left' | 'right') => void
+}) {
   const utils = trpc.useUtils()
   const [name, setName] = useState(data.name)
   const [awayMode, setAwayMode] = useState(data.awayMode)
@@ -147,9 +154,12 @@ function SideCards({ data, presenceAvailable }: { data: SideData, presenceAvaila
       ? <StatusDot tone="ok" label="Presence available" />
       : <StatusDot tone="warn" label="Presence unavailable" />
 
+  const tabs = (label: string) => onSideChange && <SideTabs side={data.side} onChange={onSideChange} label={label} />
+
   const left = (
     <>
       <Card>
+        {tabs('Profile')}
         <CardHeader title="Profile" />
         <div className="grid grid-cols-2 gap-3">
           <label className="flex min-w-0 flex-col gap-1.5">
@@ -171,6 +181,7 @@ function SideCards({ data, presenceAvailable }: { data: SideData, presenceAvaila
       </Card>
 
       <Card>
+        {tabs('Away mode')}
         <CardHeader title="Away mode" subtitle="Temporarily pause this sleeper’s tracking and alarms. Their profile and schedules are saved. The other-zone preference controls temperature while one sleeper is home." />
         <SettingRow label="Away">
           <Toggle
@@ -201,6 +212,7 @@ function SideCards({ data, presenceAvailable }: { data: SideData, presenceAvaila
   const right = (
     <>
       <Card>
+        {tabs('Auto-off')}
         <CardHeader title="Auto-off" subtitle="Turns this side off after you leave the bed" right={presence} />
         <SettingRow label="Turn off after">
           <SelectValue

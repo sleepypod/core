@@ -6,7 +6,7 @@ import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { Button, Card, CardHeader, InlineError, Modal, SegmentedControl, SettingRow, Skeleton, Stepper, ValueChip } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
-import { SectionColumns } from './SettingsLayout'
+import { SectionColumns, SideTabs } from './SettingsLayout'
 
 type TapType = 'doubleTap' | 'tripleTap' | 'quadTap'
 type ActionType = 'temperature' | 'alarm'
@@ -99,7 +99,11 @@ function TapDots({ taps }: { taps: number }) {
  * Tap gestures for one side: what double/triple/quad taps do normally and
  * while an alarm is ringing. Each chip opens the gesture editor.
  */
-export function TapGestureConfig({ filterSide = 'left' }: { filterSide?: Side } = {}) {
+export function TapGestureConfig({ filterSide = 'left', onSideChange }: {
+  filterSide?: Side
+  /** When set, each card shows a Left/Right tab strip that calls this. */
+  onSideChange?: (side: Side) => void
+} = {}) {
   const { sideName } = useSideNames()
   const utils = trpc.useUtils()
   const settingsQuery = trpc.settings.getAll.useQuery({})
@@ -196,6 +200,8 @@ export function TapGestureConfig({ filterSide = 'left' }: { filterSide?: Side } 
       </SettingRow>
     ))
 
+  const tabs = (label: string) => onSideChange && <SideTabs side={filterSide} onChange={onSideChange} label={label} />
+
   const editingLabel = editing ? TAP_TYPES.find(t => t.key === editing.tapType)?.label : ''
   const editingExists = editing ? !!findGesture(editing.side, editing.tapType) : false
 
@@ -204,12 +210,14 @@ export function TapGestureConfig({ filterSide = 'left' }: { filterSide?: Side } 
       <SectionColumns
         left={(
           <Card>
+            {tabs('Tap gestures')}
             <CardHeader title="Tap gestures" subtitle="Tap the top of the cover on your side" />
             {rows(idleDescription, false)}
           </Card>
         )}
         right={(
           <Card>
+            {tabs('While an alarm is ringing')}
             <CardHeader title="While an alarm is ringing" />
             {rows(ringingDescription, true)}
           </Card>

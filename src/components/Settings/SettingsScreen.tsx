@@ -9,7 +9,7 @@ import type { AppRouter } from '@/src/server/routers/app'
 import { useDocumentTitle } from '@/src/hooks/useDocumentTitle'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { cn } from '@/lib/utils'
-import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SegmentedControl, SettingRow, Skeleton } from '@/src/components/ds'
+import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SettingRow, Skeleton } from '@/src/components/ds'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
 import { DOCS_URL } from '@/src/components/AppShell/navItems'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
@@ -48,8 +48,8 @@ export function SettingsScreen() {
     if (legacyStatus) router.replace(`/${pathname.split('/')[1] || 'en'}/system`)
   }, [legacyStatus, pathname, router])
 
+  // Shared by the Left/Right tabs inside every per-side card.
   const [selectedSide, setSelectedSide] = useState<Side>('left')
-  const { leftName, rightName } = useSideNames()
 
   const navigate = useCallback(
     (next: SectionId | null, push = false) => {
@@ -65,12 +65,6 @@ export function SettingsScreen() {
     [router, searchParams],
   )
 
-  const sideOptions = [
-    { value: 'left' as const, label: leftName },
-    { value: 'right' as const, label: rightName },
-  ]
-  const hasSidePicker = active === 'sides' || active === 'gestures'
-
   return (
     <>
       {!chosen && (
@@ -83,7 +77,7 @@ export function SettingsScreen() {
       {/* Desktop section navigation is nested under Settings in the app sidebar. */}
       <div className={cn(!chosen && 'max-[899px]:hidden')}>
         <div className="flex min-w-0 flex-col gap-3.5">
-          {/* Phone: back link + centered title, side picker full width below */}
+          {/* Phone: back link + centered title */}
           <div className="relative flex min-h-[30px] items-center min-[900px]:hidden">
             <button
               type="button"
@@ -95,16 +89,6 @@ export function SettingsScreen() {
             </button>
             <h1 className="absolute inset-x-0 text-center text-[17px] font-medium">{meta.label}</h1>
           </div>
-          {hasSidePicker && (
-            <SegmentedControl
-              full
-              className="min-[900px]:hidden"
-              ariaLabel="Person"
-              value={selectedSide}
-              options={sideOptions}
-              onChange={setSelectedSide}
-            />
-          )}
 
           {/* Desktop: breadcrumb, then section title + description */}
           <div className="hidden flex-col gap-1 min-[900px]:flex">
@@ -112,26 +96,21 @@ export function SettingsScreen() {
             <div className="flex min-h-9 items-center gap-3">
               <h1 className="whitespace-nowrap text-[22px] font-medium">{meta.label}</h1>
               <span className="truncate text-[13px] text-fg-2">{meta.description}</span>
-              {hasSidePicker && (
-                <SegmentedControl
-                  className="ml-auto"
-                  ariaLabel="Person"
-                  value={selectedSide}
-                  options={sideOptions}
-                  onChange={setSelectedSide}
-                />
-              )}
             </div>
           </div>
 
-          <SectionBody section={active} side={selectedSide} />
+          <SectionBody section={active} side={selectedSide} onSideChange={setSelectedSide} />
         </div>
       </div>
     </>
   )
 }
 
-function SectionBody({ section, side }: { section: SectionId, side: Side }) {
+function SectionBody({ section, side, onSideChange }: {
+  section: SectionId
+  side: Side
+  onSideChange: (side: Side) => void
+}) {
   switch (section) {
     case 'device':
       return (
@@ -142,9 +121,9 @@ function SectionBody({ section, side }: { section: SectionId, side: Side }) {
         </>
       )
     case 'sides':
-      return <WithSettings>{data => <SidesSection data={data} side={side} />}</WithSettings>
+      return <WithSettings>{data => <SidesSection data={data} side={side} onSideChange={onSideChange} />}</WithSettings>
     case 'gestures':
-      return <TapGestureConfig filterSide={side} />
+      return <TapGestureConfig filterSide={side} onSideChange={onSideChange} />
     case 'appearance':
       return (
         <WithSettings>
@@ -199,7 +178,11 @@ function WithSettings({ children }: { children: (data: SettingsData) => ReactNod
   return <>{children(data)}</>
 }
 
-function SidesSection({ data, side }: { data: SettingsData, side: Side }) {
+function SidesSection({ data, side, onSideChange }: {
+  data: SettingsData
+  side: Side
+  onSideChange: (side: Side) => void
+}) {
   // Drives the auto-off toggle gate: the feature is only safe where presence
   // can be sensed. Polls so a side that comes online (calibration completes,
   // sensor stream resumes) re-enables the toggle without a manual refresh.
@@ -216,6 +199,7 @@ function SidesSection({ data, side }: { data: SettingsData, side: Side }) {
         side={side}
         sideData={side === 'left' ? data.sides.left : data.sides.right}
         presenceAvailable={presenceAvailable}
+        onSideChange={onSideChange}
       />
     </div>
   )

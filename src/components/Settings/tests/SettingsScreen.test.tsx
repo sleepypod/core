@@ -11,18 +11,20 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
 vi.mock('../BedSetupSettings', () => ({ BedSetupSettings: () => <div>Bed setup</div> }))
 vi.mock('../DeviceSettingsForm', () => ({ DeviceSettingsForm: () => <div>Device form</div> }))
 vi.mock('../SensorSourceCard', () => ({ SensorSourceCard: () => <div>Sensor source card</div> }))
-vi.mock('../SideSettingsForm', () => ({ SideSettingsForm: ({ side, presenceAvailable }: { side: string, presenceAvailable: boolean }) => (
+vi.mock('../SideSettingsForm', () => ({ SideSettingsForm: ({ side, presenceAvailable, onSideChange }: { side: string, presenceAvailable: boolean, onSideChange: (s: string) => void }) => (
   <div>
     {'Side '}
     {side}
     {' '}
     {String(presenceAvailable)}
+    <button type="button" onClick={() => onSideChange('right')}>Side tab right</button>
   </div>
 ) }))
-vi.mock('../TapGestureConfig', () => ({ TapGestureConfig: ({ filterSide }: { filterSide: string }) => (
+vi.mock('../TapGestureConfig', () => ({ TapGestureConfig: ({ filterSide, onSideChange }: { filterSide: string, onSideChange: (s: string) => void }) => (
   <div>
     {'Gestures '}
     {filterSide}
+    <button type="button" onClick={() => onSideChange('right')}>Gesture tab right</button>
   </div>
 ) }))
 vi.mock('../MqttSettingsForm', () => ({ MqttSettingsForm: () => <div>MQTT form</div> }))
@@ -69,10 +71,15 @@ it.each([
   mock.query = `section=${section}`
   render(<SettingsScreen />)
   expect(screen.getByText(text)).toBeTruthy()
+  expect(screen.queryByRole('tablist', { name: 'Person' })).toBeNull()
   if (section === 'device') expect(screen.getByText('Sensor source card')).toBeTruthy()
   if (section === 'sides') {
-    fireEvent.click(screen.getAllByRole('tab', { name: 'Sam' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Side tab right' }))
     expect(screen.getByText('Side right false')).toBeTruthy()
+  }
+  if (section === 'gestures') {
+    fireEvent.click(screen.getByRole('button', { name: 'Gesture tab right' }))
+    expect(screen.getByText('Gestures right')).toBeTruthy()
   }
 })
 
