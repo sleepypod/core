@@ -220,9 +220,10 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
         >
           Latest
         </Button>
+        <div className="ml-auto">
+          <WatchUpload key={side} side={side} name={sideName(side)} />
+        </div>
       </div>
-
-      <WatchUpload key={side} side={side} name={sideName(side)} />
 
       <SummaryRow summary={summaryQ.data ?? null} loading={summaryQ.isLoading} />
 

@@ -77,7 +77,7 @@ export function VitalsExplorer(props: ComponentProps<typeof VitalsChart>) {
         </Button>
         <Button icon={ArrowLeft} size="sm" onClick={() => viewport.current?.scrollBy({ left: -viewport.current.clientWidth * 0.7, behavior: 'smooth' })}>Pan earlier</Button>
         <Button icon={ArrowRight} size="sm" onClick={() => viewport.current?.scrollBy({ left: viewport.current.clientWidth * 0.7, behavior: 'smooth' })}>Pan later</Button>
-        <span className="font-mono text-xs text-fg-2" role="status">
+        <span className="ml-auto text-right font-mono text-xs text-fg-2" role="status">
           {`${Number(zoom.toFixed(1))}× · Ctrl + scroll to zoom · drag to select · Shift + drag to pan`}
         </span>
       </div>
