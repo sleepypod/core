@@ -212,8 +212,9 @@ export interface NightSummary {
  * night's stages client-side from the range's vitals + movement.
  *
  * `ruleset` null = the side's classifier is unknown (still loading or failed
- * to load): vitals averages are kept but no stages or quality are computed,
- * rather than classifying with the defaults.
+ * to load), and `calibrationQuality` null = the side's calibration is unknown:
+ * in either case vitals averages are kept but no stages or quality are
+ * computed, rather than classifying with the defaults or at full quality.
  */
 export function buildNights(
   from: Date,
@@ -221,7 +222,7 @@ export function buildNights(
   records: SleepRecordRow[],
   vitals: VitalsRow[] = [],
   movement: MovementRow[] = [],
-  calibrationQuality = 1.0,
+  calibrationQuality: number | null = 1.0,
   ruleset: StageRuleset | null = DEFAULT_STAGE_RULESET,
 ): NightSummary[] {
   const byNight = groupByNight(records)
@@ -247,7 +248,7 @@ export function buildNights(
       }
       const nv = sortedVitals.filter(v => inWindow(v.timestamp)).map(v => ({ ...v, timestamp: new Date(v.timestamp) }))
       if (nv.length > 0) {
-        if (ruleset !== null) {
+        if (ruleset !== null && calibrationQuality !== null) {
           const nm = movement.filter(m => inWindow(m.timestamp)).map(m => ({ ...m, timestamp: new Date(m.timestamp) }))
           const epochs = classifySleepStages(nv, nm, calibrationQuality, ruleset)
           if (epochs.length > 0) {

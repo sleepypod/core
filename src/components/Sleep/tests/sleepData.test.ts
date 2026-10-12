@@ -175,6 +175,20 @@ describe('week nights', () => {
     expect(night.hr).toBe(65)
   })
 
+  it('keeps vitals but classifies nothing while calibration is unknown', () => {
+    const r = rec(1, at(21, 23), 1)
+    const vitals = [70, 60, 60, 70].map((heartRate, i) => ({
+      timestamp: new Date(at(21, 23).getTime() + i * 300_000),
+      heartRate,
+      hrv: 40,
+      breathingRate: 14,
+    }))
+    const [, night] = buildNights(new Date(2026, 8, 20), 2, [r], vitals, [], null)
+    expect(night.distribution).toBeNull()
+    expect(night.quality).toBeNull()
+    expect(night.hr).toBe(65)
+  })
+
   it('normalizes the REM/Light/Deep split and labels bars', () => {
     expect(sleepSplit({ wake: 10, rem: 18, light: 45, deep: 27 })).toEqual({ rem: 20, light: 50, deep: 30 })
     expect(sleepSplit({ wake: 100, rem: 0, light: 0, deep: 0 })).toBeUndefined()
