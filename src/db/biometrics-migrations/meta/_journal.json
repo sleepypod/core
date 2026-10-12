@@ -134,6 +134,13 @@
       "when": 1791670976777,
       "tag": "0018_reference_stages_read_index",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1791781352426,
+      "tag": "0019_reference_vitals",
+      "breakpoints": true
     }
   ]
 }

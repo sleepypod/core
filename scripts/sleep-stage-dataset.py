@@ -30,9 +30,10 @@ Usage:
   scripts/sleep-stage-dataset.py apple_health_export/ biometrics.db --summary
   scripts/sleep-stage-dataset.py --from-db biometrics.db --side left --out dataset.csv
 
---from-db reads Watch stages from the reference_stages table that
-biometrics.importReferenceStages writes, instead of a Health export. That source
-carries no Watch heart rate, so the side-mismatch guard cannot run.
+--from-db reads Watch stages from the reference_stages table and Watch heart
+rate from reference_vitals (both filled by scripts/import-watch-health.py or
+the iOS app), instead of a Health export. On a DB without reference_vitals the
+watch_hr column is empty and the side-mismatch guard cannot run.
 
 See docs/research/sleep-stage-calibration/README.md for pulling the pod DB.
 Stdlib only; runs under python3 >= 3.9 directly or via the uv shebang.
@@ -149,6 +150,29 @@ def segments_from_db(conn, side, source='apple_watch'):
         'SELECT start, "end", stage FROM reference_stages WHERE side = ? AND source = ? ORDER BY start',
         (side, source)).fetchall()
     return [(to_dt(s), to_dt(e), st) for s, e, st in rows if st in STAGES and float(e) > float(s)]
+
+
+def hr_from_db(conn, side, source='apple_watch'):
+    """Read Watch heart-rate samples from reference_vitals (see
+    scripts/import-watch-health.py) as [(unix_s, bpm)] sorted by time, like
+    parse_export. An older DB without the table yields no samples, so the
+    watch_hr column stays empty and the side-mismatch guard cannot run."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_vitals'").fetchone()
+    if not exists:
+        warn('reference_vitals table not found; watch_hr will be empty and the side-mismatch guard is off')
+        return []
+    rows = conn.execute(
+        'SELECT timestamp, heart_rate FROM reference_vitals WHERE side = ? AND source = ? ORDER BY timestamp',
+        (side, source)).fetchall()
+    out = []
+    for ts, bpm in rows:
+        ts, bpm = float(ts), float(bpm)
+        if ts > 1e11:
+            ts /= 1000.0
+        if math.isfinite(bpm):
+            out.append((int(ts), bpm))
+    return out
 
 
 def stage_lookup(segments):
@@ -451,7 +475,8 @@ def main(argv=None):
     ap.add_argument('inputs', nargs='+', metavar='PATH',
                     help='<export.xml | export dir> <biometrics.db>, or just <biometrics.db> with --from-db')
     ap.add_argument('--from-db', action='store_true',
-                    help='read Watch stages from the reference_stages table instead of an export')
+                    help='read Watch stages and heart rate from the reference_stages / reference_vitals '
+                         'tables instead of an export')
     ap.add_argument('--side', choices=('left', 'right'), default='left')
     ap.add_argument('--out', help='CSV path (default: stdout unless --summary)')
     ap.add_argument('--summary', action='store_true', help='print per-night classifier agreement')
@@ -482,7 +507,7 @@ def main(argv=None):
     conn = sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True)
 
     if args.from_db:
-        segments, watch_hr = segments_from_db(conn, args.side), []
+        segments, watch_hr = segments_from_db(conn, args.side), hr_from_db(conn, args.side)
     else:
         try:
             segments, watch_hr = parse_export(export_xml, args.source)

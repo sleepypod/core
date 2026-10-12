@@ -46,6 +46,24 @@ Only samples whose source name matches `--source` (default `Watch`) are used:
 `SleepAnalysis` stages (Core→light, Deep, REM, Awake; InBed and Unspecified are
 ignored) and `HeartRate`.
 
+## 2b. Import the Watch data into the pod
+
+The export can also be pushed into the pod itself, so the Biometrics page
+draws Watch heart rate as a dashed line over the pod's, and later dataset
+builds can use `--from-db` without an export:
+
+```sh
+scripts/import-watch-health.py ~/Desktop/apple_health_export --pod <pod-ip> --side left
+```
+
+It posts `SleepAnalysis` segments to `POST /api/biometrics/reference-stages`
+and `HeartRate` samples to `POST /api/biometrics/reference-vitals`, in batches
+of 2000, for the last 30 days (`--days 0` for everything; `--dry-run` to count
+only). Both endpoints are first-write-wins on side + time + source, so
+re-running on a newer export only adds what is new. Watch heart rate is kept
+in its own `reference_vitals` table and never mixed into the pod's `vitals`,
+which feed occupancy, sleep staging and the chart baselines.
+
 ## 3. Build the dataset
 
 ```sh
@@ -79,12 +97,13 @@ Options:
   difference between pod HR and Watch HR exceeds it is skipped with a warning,
   because it means the Watch wearer slept on the other side. Nights with fewer
   than 10 HR matches are kept with a warning that the guard could not run.
-- `--from-db` reads Watch stages from the `reference_stages` table that
-  `biometrics.importReferenceStages` fills, instead of an export:
+- `--from-db` reads Watch stages from the `reference_stages` table and Watch
+  heart rate from `reference_vitals` (both filled by the import script in
+  section 2b, or by the iOS app), instead of an export:
   `scripts/sleep-stage-dataset.py --from-db poddb/biometrics.db --side left --out dataset.csv`.
-  That table has no Watch heart rate, so `watch_hr` is empty and the guard
-  cannot run. Night labels use the machine's local time zone; set `TZ` if it
-  differs from the pod's.
+  On a pod that has never had Watch heart rate imported, `watch_hr` is empty
+  and the guard cannot run. Night labels use the machine's local time zone;
+  set `TZ` if it differs from the pod's.
 
 ## 4. Summary
 

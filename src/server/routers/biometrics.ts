@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement, referenceStages } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages, referenceVitals } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
@@ -1060,6 +1060,110 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to fetch reference stages: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Import externally measured heart-rate samples (Apple Watch via a Health
+   * export or the iOS app). Stored in `reference_vitals`, never in `vitals`:
+   * the pod's own series drives occupancy, staging and chart baselines, and a
+   * Watch sample at a slightly different second would otherwise interleave
+   * with it. A repeated post is a no-op (unique on side, timestamp, source).
+   */
+  importReferenceVitals: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometrics/reference-vitals', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z.object({
+        side: sideSchema,
+        source: z.enum(['apple_watch']),
+        samples: z.array(
+          z.object({
+            // Unix seconds in 2001..2100: rejects millisecond timestamps, which
+            // would otherwise persist forever under first-write-wins.
+            timestamp: z.number().int().min(1_000_000_000).max(4_102_444_800),
+            heartRate: z.number().min(20).max(250),
+          }).strict()
+        ).min(1).max(2000),
+      }).strict()
+    )
+    .output(z.object({ written: z.number() }))
+    .mutation(async ({ input }) => {
+      try {
+        const rows = input.samples.map(s => ({
+          side: input.side,
+          source: input.source,
+          timestamp: new Date(s.timestamp * 1000),
+          heartRate: s.heartRate,
+        }))
+        const inserted = biometricsDb
+          .insert(referenceVitals)
+          .values(rows)
+          .onConflictDoNothing()
+          .returning()
+          .all()
+        return { written: inserted.length }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to import reference vitals: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Reference heart-rate samples for a side in [startDate, endDate]
+   * (inclusive), oldest first.
+   */
+  getReferenceVitals: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/reference-vitals', protect: false, tags: ['Biometrics'] } })
+    .output(z.array(z.object({
+      id: z.number(),
+      side: sideSchema,
+      source: z.enum(['apple_watch']),
+      timestamp: z.date(),
+      heartRate: z.number(),
+      createdAt: z.date(),
+    })))
+    .input(
+      z
+        .object({
+          side: sideSchema,
+          startDate: z.date(),
+          endDate: z.date(),
+          limit: z.number().int().min(1).max(20000).default(5000),
+        })
+        .strict()
+    )
+    .query(async ({ input }) => {
+      if (!validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'startDate must be before or equal to endDate',
+        })
+      }
+
+      try {
+        return await biometricsDb
+          .select()
+          .from(referenceVitals)
+          .where(
+            and(
+              eq(referenceVitals.side, input.side),
+              gte(referenceVitals.timestamp, input.startDate),
+              lte(referenceVitals.timestamp, input.endDate)
+            )
+          )
+          .orderBy(asc(referenceVitals.timestamp))
+          .limit(input.limit)
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch reference vitals: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

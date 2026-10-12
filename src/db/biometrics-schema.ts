@@ -249,6 +249,28 @@ export const referenceStages = sqliteTable('reference_stages', {
   uniqueIndex('uq_reference_stages_side_start_source').on(t.side, t.start, t.source),
 ])
 
+/**
+ * Externally measured heart rate (Apple Watch samples posted from a Health
+ * export or the iOS app), kept beside the pod's own `vitals` so the two can be
+ * compared without one polluting the other: the pod series feeds occupancy,
+ * sleep staging and the charts' baselines, so Watch samples must never land in
+ * `vitals`. One row per sample; a repeated post is a no-op (unique on side,
+ * timestamp, source). Low volume (one sample every few minutes while worn),
+ * kept indefinitely like reference_stages.
+ */
+export const referenceVitals = sqliteTable('reference_vitals', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  source: text('source', { enum: ['apple_watch'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  heartRate: real('heart_rate').notNull(), // bpm
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, t => [
+  // Timestamp before source so getReferenceVitals (side + time range, no
+  // source) seeks and reads in order.
+  uniqueIndex('uq_reference_vitals_side_timestamp_source').on(t.side, t.timestamp, t.source),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {

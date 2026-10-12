@@ -52,6 +52,7 @@ const TABLES: Record<DbKey, TableSpec[]> = {
     { name: 'prime_events', columns: ['id', 'timestamp'], perHour: 0, rows: 31, bytesPerRow: 16 },
     { name: 'health_runs', columns: ['id', 'check_id', 'status', 'detail', 'started_at', 'last_seen_at'], perHour: 4, rows: 2_150, bytesPerRow: 120, retention: RETAINED },
     { name: 'reference_stages', columns: ['id', 'side', 'source', 'start', 'end', 'stage', 'created_at'], perHour: 0, rows: 120, bytesPerRow: 48 },
+    { name: 'reference_vitals', columns: ['id', 'side', 'source', 'timestamp', 'heart_rate', 'created_at'], perHour: 12, rows: 2_600, bytesPerRow: 40 },
     { name: 'calibration_profiles', columns: ['id', 'side', 'sensor_type', 'status', 'parameters', 'quality_score', 'samples_used', 'error_message', 'created_at', 'expires_at'], perHour: 0, rows: 6, bytesPerRow: 640 },
     { name: 'calibration_runs', columns: ['id', 'side', 'sensor_type', 'status', 'parameters', 'quality_score', 'samples_used', 'duration_ms', 'triggered_by', 'created_at'], perHour: 0, rows: 540, bytesPerRow: 640 },
   ],
@@ -59,7 +60,7 @@ const TABLES: Record<DbKey, TableSpec[]> = {
 
 const MIGRATIONS: Record<DbKey, { count: number, tag: string }> = {
   sleepypod: { count: 17, tag: '0016_hardware_deadline' },
-  biometrics: { count: 19, tag: '0018_reference_stages_read_index' },
+  biometrics: { count: 20, tag: '0019_reference_vitals' },
 }
 
 const isNight = (t: number) => {

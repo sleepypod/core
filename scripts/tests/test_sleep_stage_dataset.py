@@ -101,6 +101,16 @@ def add_reference_stages(conn, side='left'):
     conn.commit()
 
 
+def add_reference_vitals(conn, side='left', minutes=range(0, 30), offset=0.0):
+    conn.execute('CREATE TABLE reference_vitals (id INTEGER PRIMARY KEY AUTOINCREMENT, side TEXT, '
+                 'source TEXT, timestamp INTEGER, heart_rate REAL, created_at INTEGER)')
+    base = int(T0.timestamp())
+    for m in minutes:
+        conn.execute('INSERT INTO reference_vitals (side, source, timestamp, heart_rate, created_at) VALUES (?,?,?,?,0)',
+                     (side, 'apple_watch', base + m * 60 + 20, pod_hr(m) + offset))
+    conn.commit()
+
+
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -207,6 +217,50 @@ class JoinTest(Fixture):
         from_db, _ = self.run_main('--from-db', self.db_path)
         self.assertEqual(from_db, from_export)
         self.assertEqual(len(from_db.strip().splitlines()), 41)
+
+    def test_from_db_reads_watch_hr_from_reference_vitals(self):
+        old_tz = os.environ.get('TZ')
+        os.environ['TZ'] = 'America/Los_Angeles'
+        time.tzset()
+        self.addCleanup(self._restore_tz, old_tz)
+        write_export(self.export)
+        conn = make_db(self.db_path)
+        add_reference_stages(conn)
+        add_reference_vitals(conn)
+        conn.close()
+        from_export, _ = self.run_main(self.export, self.db_path)
+        from_db, err = self.run_main('--from-db', self.db_path)
+        self.assertEqual(from_db, from_export)
+        self.assertNotIn('reference_vitals', err)
+        rows = list(csv.DictReader(io.StringIO(from_db)))
+        self.assertTrue(any(r['watch_hr'] for r in rows))
+
+    def test_from_db_without_reference_vitals_warns_and_leaves_watch_hr_empty(self):
+        conn = make_db(self.db_path)
+        add_reference_stages(conn)
+        conn.close()
+        out, err = self.run_main('--from-db', self.db_path)
+        self.assertIn('reference_vitals table not found', err)
+        rows = list(csv.DictReader(io.StringIO(out)))
+        self.assertTrue(rows)
+        self.assertTrue(all(r['watch_hr'] == '' for r in rows))
+
+    def test_from_db_side_mismatch_guard_uses_reference_vitals(self):
+        conn = make_db(self.db_path)
+        add_reference_stages(conn)
+        add_reference_vitals(conn, offset=25.0)  # Watch wearer slept on the other side
+        conn.close()
+        out, err = self.run_main('--from-db', self.db_path)
+        self.assertIn('skipp', err.lower())
+        self.assertEqual(out.strip(), ','.join(ds.CSV_FIELDS))
+
+    def test_hr_from_db_tolerates_millisecond_timestamps(self):
+        conn = sqlite3.connect(':memory:')
+        conn.execute('CREATE TABLE reference_vitals (side TEXT, source TEXT, timestamp INTEGER, heart_rate REAL)')
+        conn.execute("INSERT INTO reference_vitals VALUES ('left', 'apple_watch', ?, 61.0)", (int(T0.timestamp()) * 1000,))
+        conn.execute("INSERT INTO reference_vitals VALUES ('left', 'apple_watch', ?, 'nan')", (int(T0.timestamp()) + 60,))
+        conn.execute("INSERT INTO reference_vitals VALUES ('right', 'apple_watch', ?, 70.0)", (int(T0.timestamp()),))
+        self.assertEqual(ds.hr_from_db(conn, 'left'), [(int(T0.timestamp()), 61.0)])
 
     @staticmethod
     def _restore_tz(old_tz):

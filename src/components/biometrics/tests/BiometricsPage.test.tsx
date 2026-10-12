@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   latestPending: false,
   timeFormat: '12h' as '12h' | '24h',
   shown: ['left', 'right'] as Array<'left' | 'right'>,
+  reference: [] as Array<{ timestamp: Date, heartRate: number }>,
 }))
 
 vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => state.timeFormat }))
@@ -48,6 +49,7 @@ vi.mock('@/src/utils/trpc', () => ({
       },
       getFileCount: { useQuery: () => ({ data: { rawFiles: { left: 4, right: 4 }, totalSizeMB: 8.45 } }) },
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
+      getReferenceVitals: { useQuery: () => ({ data: state.reference }) },
     },
     settings: { getAll: { useQuery: () => ({ data: { sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } } }) } },
     health: {
@@ -158,6 +160,22 @@ describe('BiometricsPage', () => {
     const labels = [...container.querySelectorAll('svg text')].map(t => t.textContent)
     for (const tick of ticks) expect(labels).toContain(tick)
     expect(screen.getAllByTestId('session-row')[0].textContent).toContain(since)
+  })
+
+  it('overlays imported Watch heart rate on the chart and names it in the legend', () => {
+    state.reference = [
+      { timestamp: new Date(2026, 8, 27, 4, 10), heartRate: 58 },
+      { timestamp: new Date(2026, 8, 27, 4, 20), heartRate: 57 },
+    ]
+    try {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, toJSON: () => ({}) })
+      render(<BiometricsPage />)
+      expect(screen.getAllByTestId('vitals-reference')).toHaveLength(1)
+      expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
+    }
+    finally {
+      state.reference = []
+    }
   })
 
   it('drops the Occupied field from the sides card', () => {

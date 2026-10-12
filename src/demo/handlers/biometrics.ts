@@ -115,6 +115,26 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       .slice(0, input.limit ?? 288)
   },
 
+  // Imported Apple Watch heart rate: one sample every five minutes, a touch
+  // below the pod's reading, so the Biometrics page shows the overlay.
+  getReferenceVitals: (input) => {
+    const start = input.startDate.getTime()
+    const end = input.endDate.getTime()
+    if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    return demoVitals(input.side, start, end)
+      .filter((_, i) => i % 5 === 0)
+      .map(v => ({
+        id: Math.floor(v.t / 1000) * 2 + sideBit(input.side),
+        side: input.side,
+        source: 'apple_watch' as const,
+        timestamp: new Date(v.t),
+        heartRate: Math.round((v.heartRate - 1.5) * 10) / 10,
+        createdAt: new Date(v.t),
+      }))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+      .slice(0, input.limit ?? 5000)
+  },
+
   getVitalsSummary: (input) => {
     const end = input.endDate?.getTime() ?? Date.now()
     const start = input.startDate?.getTime() ?? Date.now() - 7 * DAY

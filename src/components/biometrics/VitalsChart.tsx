@@ -7,6 +7,8 @@
  * shows the stall. Each row draws gridlines → the range's p25–p75 band → the
  * raw per-minute line → a 9-minute centred mean. Hover (or tap and drag)
  * shows one crosshair through all rows, snapped to the nearest reading.
+ * Imported Apple Watch heart rate (`reference`) is drawn as a dashed line over
+ * the heart-rate row so the two sensors can be compared night by night.
  */
 'use client'
 
@@ -57,11 +59,32 @@ function pathOf(xs: number[], ys: Array<number | null>): string {
   return d
 }
 
-export function VitalsChart({ sessions, stall, bands }: {
+export interface ReferencePoint { t: number, hr: number }
+
+/** Reference samples inside a session, in time order. */
+export function referenceInSession(reference: ReferencePoint[], s: { start: number, end: number }): ReferencePoint[] {
+  return reference.filter(p => p.t >= s.start && p.t <= s.end)
+}
+
+/** The reference sample nearest `t`, or null when none is within `tolMs`. */
+export function nearestReference(points: ReferencePoint[], t: number, tolMs = REFERENCE_TOL_MS): ReferencePoint | null {
+  let best: ReferencePoint | null = null
+  for (const p of points) {
+    if (best == null || Math.abs(p.t - t) < Math.abs(best.t - t)) best = p
+  }
+  return best && Math.abs(best.t - t) <= tolMs ? best : null
+}
+
+const REFERENCE_TOL_MS = 5 * 60_000
+const REFERENCE_STROKE = 'var(--text-2)'
+
+export function VitalsChart({ sessions, stall, bands, reference = [] }: {
   sessions: Session[]
   /** In bed with no vitals: from the last reading to now. */
   stall: { start: number, end: number } | null
   bands: Record<MetricKey, Band>
+  /** Imported Apple Watch heart rate, time-sorted. */
+  reference?: ReferencePoint[]
 }) {
   const timeFormat = useTimeFormat()
   const [wrapRef, wrapW] = useWidth<HTMLDivElement>()
@@ -74,6 +97,7 @@ export function VitalsChart({ sessions, stall, bands }: {
     br: rollingMean(s.points, 'br'),
   })), [sessions])
   const [hover, setHover] = useState<{ seg: number, idx: number } | null>(null)
+  const referenceBySession = useMemo(() => sessions.map(s => referenceInSession(reference, s)), [sessions, reference])
 
   const rowTop = (i: number) => HEAD_H + i * (ROW_H + ROW_GAP)
   const yOf = (i: number, v: number) => {
@@ -95,6 +119,7 @@ export function VitalsChart({ sessions, stall, bands }: {
   const hoverSmooth = hover ? smooth[hover.seg] : undefined
   const hoverSeg = hover ? axis.segments.find(s => s.kind === 'session' && s.index === hover.seg) : undefined
   const hoverX = hovered && hoverSeg ? axis.xOf(hoverSeg, hovered.t) : null
+  const hoverReference = hovered && hover ? nearestReference(referenceBySession[hover.seg] ?? [], hovered.t) : null
 
   return (
     <div ref={wrapRef} className="relative w-full" style={{ height: HEAD_H + PLOT_H + AXIS_H }} data-testid="vitals-chart">
@@ -162,6 +187,17 @@ export function VitalsChart({ sessions, stall, bands }: {
                       </g>
                     )
                   })}
+                  {referenceBySession[seg.index]?.length > 0 && (
+                    <path
+                      data-testid="vitals-reference"
+                      d={pathOf(referenceBySession[seg.index].map(p => axis.xOf(seg, p.t)), referenceBySession[seg.index].map(p => yOf(0, p.hr)))}
+                      fill="none"
+                      stroke={REFERENCE_STROKE}
+                      strokeWidth={1.25}
+                      strokeDasharray="3 3"
+                      strokeLinejoin="round"
+                    />
+                  )}
                 </g>
               )
             })}
@@ -209,6 +245,14 @@ export function VitalsChart({ sessions, stall, bands }: {
                     </g>
                   )
                 })}
+                {hoverReference && hoverSeg && (
+                  <g data-testid="vitals-reference-hover">
+                    <circle cx={axis.xOf(hoverSeg, hoverReference.t)} cy={yOf(0, hoverReference.hr)} r={3} fill={REFERENCE_STROKE} stroke="var(--surface-card)" strokeWidth={1.5} />
+                    <text x={axis.xOf(hoverSeg, hoverReference.t) + (hoverX + 8 + 60 > plotW ? -8 : 8)} y={yOf(0, hoverReference.hr) + 14} textAnchor={hoverX + 8 + 60 > plotW ? 'end' : 'start'} className="fill-fg-2 font-mono" fontSize={10}>
+                      {`watch ${Math.round(hoverReference.hr)}`}
+                    </text>
+                  </g>
+                )}
                 <rect x={hoverX - 34} y={HEAD_H + PLOT_H + 4} width={68} height={18} rx={3} fill="var(--border-2)" />
                 <text x={hoverX} y={HEAD_H + PLOT_H + 17} textAnchor="middle" className="fill-fg font-mono" fontSize={11}>{clock(hovered.t, timeFormat)}</text>
               </g>
@@ -232,13 +276,19 @@ export function VitalsChart({ sessions, stall, bands }: {
   )
 }
 
-export function VitalsLegend({ bandLabel, stalled }: { bandLabel: string, stalled: boolean }) {
+export function VitalsLegend({ bandLabel, stalled, reference = false }: { bandLabel: string, stalled: boolean, reference?: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-fg-2">
       <span className="flex items-center gap-2">
         <span className="h-0.5 w-4 rounded bg-fg-2" />
         9-min average
       </span>
+      {reference && (
+        <span className="flex items-center gap-2">
+          <span className="h-0 w-4 border-t border-dashed border-fg-2" />
+          Apple Watch heart rate
+        </span>
+      )}
       <span className="flex items-center gap-2">
         <span className="h-px w-4 bg-fg-3" />
         per minute
