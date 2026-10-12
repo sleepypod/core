@@ -1251,6 +1251,57 @@ class TestPumpCouplingGuardWithBedPresence:
         assert proc._presence.state == PresenceDetector.ABSENT
         assert seen == []
 
+    def test_away_side_inherits_home_occupancy_but_not_relaxation(self):
+        """Single sleeper on the left: both processors read the left zone as
+        occupied. The right (away) side's own pump coupling, in the band the
+        guard exists for, must stay behind the guard — only the home side
+        may treat the merged occupancy as its own."""
+        import main
+        proc, seen = self._proc(True, 0.5)
+        proc.side = "right"
+        proc.home_side = lambda: "left"
+        sig = self._moderate_signal(proc)
+        with patch("main._autocorr_quality", return_value=0.5), \
+                patch("main.time.time", return_value=1_000_000.0):
+            proc.ingest(sig)
+        assert proc._presence.state == PresenceDetector.ABSENT
+        assert seen == []
+
+    def test_home_side_in_single_sleeper_mode_is_relaxed(self):
+        proc, seen = self._proc(True, 0.5)
+        proc.home_side = lambda: "left"
+        sig = self._moderate_signal(proc)
+        with patch("main._autocorr_quality", return_value=0.5), \
+                patch("main.time.time", return_value=1_000_000.0):
+            proc.ingest(sig)
+        assert proc._presence.state == PresenceDetector.PRESENT
+        assert len(seen) == 1
+
+    def test_later_cross_channel_rejection_ends_relaxed_presence(self):
+        """Relaxed entry before the sibling's values arrive, then the sibling
+        shows the stronger signal: rejection must count as weak windows so
+        presence exits through the normal hysteresis instead of latching on
+        energy alone."""
+        import main
+        proc, seen = self._proc(True, 0.3)
+        proc._pump_state = None
+        other = main.SideProcessor("right", main.DBHolder(TestWriteVitalsResilience()._make_db()))
+        proc._other = other
+        np.random.seed(7)
+        sig = make_bcg_signal(62, 15, noise_level=0.05) * 0.6
+        states = []
+        with patch("main._autocorr_quality", return_value=0.3):
+            for cycle in range(1 + proc._presence.exit_count):
+                if cycle == 1:
+                    other._last_med_std = proc._presence.enter_threshold * 2
+                    other._last_acr_qual = 0.8
+                with patch("main.time.time", return_value=1_000_000.0 + cycle * 61):
+                    proc.ingest(sig)
+                states.append(proc._presence.state)
+        assert states[0] == PresenceDetector.PRESENT
+        assert states[-1] == PresenceDetector.ABSENT
+        assert len(seen) == proc._presence.exit_count
+
 
 class TestSideProcessorAbsenceThrottle:
     """_maybe_write must update _last_write on 'no user' so return from
