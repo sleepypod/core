@@ -1,17 +1,20 @@
 import json
 import os
-import time
 import pytest
 
 from common.bed_presence import BED_PRESENCE_STALE_S, BedPresence
 
 
 def _write(path, left=True, right=False, version=1):
+    # Match evidence and file time exactly; filesystem timestamp precision can
+    # otherwise make fresh evidence appear to be in the future on CI.
+    stamp = 1_700_000_000
     path.write_text(json.dumps({
         "version": version,
-        "left": {"debounced_present": left, "vitals_presence": left, "vitals_evidence_ts": time.time(), "session_start": None},
-        "right": {"debounced_present": right, "vitals_presence": right, "vitals_evidence_ts": time.time(), "session_start": None},
+        "left": {"debounced_present": left, "vitals_presence": left, "vitals_evidence_ts": stamp, "session_start": None},
+        "right": {"debounced_present": right, "vitals_presence": right, "vitals_evidence_ts": stamp, "session_start": None},
     }))
+    os.utime(path, (stamp, stamp))
 
 
 class Clock:
