@@ -263,3 +263,36 @@ it('keeps the whole selected session when it crosses noon', () => {
   expect(input.startDate).toEqual(new Date(2026, 8, 27, 11))
   expect(input.endDate).toEqual(new Date(2026, 8, 27, 14))
 })
+
+it.each([
+  ['Week', 'Previous week', new Date(2026, 8, 15), new Date(2026, 8, 22)],
+  ['Week', 'Next week', new Date(2026, 8, 29), new Date(2026, 9, 6)],
+  ['Month', 'Previous month', new Date(2026, 6, 31), new Date(2026, 7, 30)],
+  ['Month', 'Next month', new Date(2026, 8, 29), new Date(2026, 9, 29)],
+])('steps %s using %s across calendar boundaries', (range, button, startDate, endDate) => {
+  render(<BiometricsPage />)
+  fireEvent.click(screen.getAllByRole('tab', { name: range as string })[0])
+  fireEvent.click(screen.getByRole('button', { name: button as string }))
+  expect(state.vitals.mock.calls.at(-1)?.[0]).toMatchObject({ startDate, endDate })
+})
+
+it.each([
+  ['Previous night', new Date(2026, 8, 25, 12)],
+  ['Next night', new Date(2026, 8, 27, 12)],
+])('uses the focused session night as the anchor for %s', (button, startDate) => {
+  render(<BiometricsPage />)
+  fireEvent.click(screen.getAllByTestId('session-row')[1])
+  fireEvent.click(screen.getByRole('button', { name: button as string }))
+  expect(state.vitals.mock.calls.at(-1)?.[0].startDate).toEqual(startDate)
+  expect(screen.queryByRole('button', { name: 'Back to range' })).toBeNull()
+})
+
+it('clears session focus when switching people and ignores clearing the date field', () => {
+  render(<BiometricsPage />)
+  fireEvent.click(screen.getAllByTestId('session-row')[1])
+  fireEvent.click(screen.getByRole('tab', { name: 'Heidi' }))
+  expect(screen.queryByRole('button', { name: 'Back to range' })).toBeNull()
+  const input = state.vitals.mock.calls.at(-1)?.[0]
+  fireEvent.change(screen.getByLabelText('Biometrics date'), { target: { value: '' } })
+  expect(state.vitals.mock.calls.at(-1)?.[0]).toEqual(input)
+})

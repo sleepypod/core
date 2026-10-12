@@ -630,3 +630,23 @@ it('does not expose internal errors from Watch stage import', async () => {
   }
   finally { await client.close() }
 })
+
+it('imports stage-only Watch data and rejects empty import requests', async () => {
+  callerMock.biometrics.importReferenceStages.mockResolvedValue({ written: 1 })
+  const client = await connect()
+  try {
+    const result = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'left', segments: [{ start: 1791700000, end: 1791700060, stage: 'deep' }],
+    } }) as CallToolResult
+    expect(JSON.parse(text(result))).toEqual({ vitals: 0, stages: 1, stageError: null })
+    const empty = await client.callTool({ name: 'import_apple_watch_data', arguments: { side: 'left' } }) as CallToolResult
+    expect(empty.isError).toBe(true)
+    expect(text(empty)).toContain('Provide samples or segments')
+    callerMock.biometrics.importReferenceVitals.mockResolvedValue({ written: 1 })
+    const vitalsOnly = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'left', samples: [{ timestamp: 1791700000, heartRate: 60 }],
+    } }) as CallToolResult
+    expect(JSON.parse(text(vitalsOnly))).toEqual({ vitals: 1, stages: 0, stageError: null })
+  }
+  finally { await client.close() }
+})

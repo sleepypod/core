@@ -193,3 +193,27 @@ it('zooms all chart rows to the brush window and restores the full range on rese
   expect(screen.queryByText(/Selected window/)).toBeNull()
   expect(screen.getAllByTestId('vitals-reference')).toHaveLength(2)
 })
+
+it('cancels selection and leaves touch, secondary-click, and Shift gestures unselected', () => {
+  withWidth()
+  const selected = vi.fn()
+  const { container } = render(<VitalsChart sessions={sessions} bands={bands} stall={null} onSelectWindow={selected} />)
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  overlay.setPointerCapture = vi.fn()
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  for (const input of [{ pointerType: 'touch', button: 0 }, { pointerType: 'mouse', button: 2 }, { pointerType: 'mouse', button: 0, shiftKey: true }]) {
+    fireEvent.pointerDown(overlay, { ...input, clientX: 100 })
+    fireEvent.pointerUp(overlay, { clientX: 300 })
+    expect(screen.queryByTestId('vitals-selection')).toBeNull()
+    expect(selected).not.toHaveBeenCalled()
+  }
+  fireEvent.pointerDown(overlay, { pointerType: 'mouse', button: 0, clientX: 100 })
+  fireEvent.pointerMove(overlay, { pointerType: 'mouse', clientX: 300 })
+  expect(screen.getByTestId('vitals-selection')).toBeTruthy()
+  fireEvent.pointerCancel(overlay)
+  fireEvent.pointerUp(overlay, { clientX: 300 })
+  expect(screen.queryByTestId('vitals-selection')).toBeNull()
+  expect(selected).not.toHaveBeenCalled()
+  fireEvent.pointerLeave(overlay, { pointerType: 'mouse' })
+  expect(screen.queryByTestId('vitals-reference-hover')).toBeNull()
+})

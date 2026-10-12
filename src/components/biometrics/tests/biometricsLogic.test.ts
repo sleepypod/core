@@ -141,3 +141,18 @@ it('keeps night boundaries at local noon across daylight saving changes', () => 
     expect(nightWindow(end + 30 * MIN).start).toBe(end)
   }
 })
+
+it('maps brush edges across compressed gaps, ignores stalls, and handles an empty axis', async () => {
+  const { timeAtX } = await import('../biometricsLogic')
+  const empty = layoutAxis([], 400, null)
+  expect(timeAtX(empty, 0)).toBeNull()
+  const axis = layoutAxis([{ start: 100, end: 200 }, { start: 400, end: 500 }], 400, { start: 500, end: 600 })
+  const [first, second] = axis.segments
+  expect(timeAtX(axis, -100)).toBe(100)
+  expect(timeAtX(axis, first.x + first.w + 1)).toBe(200)
+  expect(timeAtX(axis, second.x - 1)).toBe(400)
+  expect(timeAtX(axis, second.x + second.w / 2)).toBe(450)
+  expect(timeAtX(axis, 900)).toBe(500)
+  expect(timeAtX(layoutAxis([], 400, { start: 500, end: 600 }), 100)).toBeNull()
+  expect(timeAtX(layoutAxis([{ start: 100, end: 100 }], 0, null), 0)).toBe(100)
+})

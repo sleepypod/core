@@ -108,3 +108,39 @@ it('still honors a client disconnect when switching to the import budget', async
   }
   finally { timeout.mockRestore() }
 })
+
+it('rejects missing and empty bodies without retaining staged files', async () => {
+  for (const body of [undefined, '']) {
+    const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body }))
+    expect(response.status).toBe(400)
+    expect(await readdir(directory)).toEqual([])
+  }
+})
+
+it('enforces the streaming size limit even without a content-length header', async () => {
+  const chunk = new Uint8Array(1)
+  Object.defineProperty(chunk, 'byteLength', { value: 513 * 1024 * 1024 })
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(chunk)
+      controller.close()
+    },
+  })
+  const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body, duplex: 'half' } as RequestInit))
+  expect(response.status).toBe(413)
+  expect(await response.json()).toEqual({ error: 'Upload exceeds 512 MiB' })
+  expect(await readdir(directory)).toEqual([])
+})
+
+it('rejects concurrent uploads and releases the slot after staging is cancelled', async () => {
+  const client = new AbortController()
+  const response = POST(new Request('http://pod/api/biometrics/watch-upload?side=left', {
+    method: 'POST', body: new ReadableStream(), duplex: 'half', signal: client.signal,
+  } as RequestInit))
+  const competing = await POST(new Request('http://pod/api/biometrics/watch-upload?side=right', { method: 'POST', body: '<HealthData/>' }))
+  expect(competing.status).toBe(409)
+  client.abort()
+  expect((await response).status).toBe(408)
+  expect(await readdir(directory)).toEqual([])
+  expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body: '<HealthData/>' }))).status).toBe(200)
+})
