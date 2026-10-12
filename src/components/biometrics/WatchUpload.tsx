@@ -59,7 +59,7 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
   return (
     <>
       <Button icon={Upload} size="sm" onClick={() => setOpen(true)}>Upload Apple Watch data</Button>
-      <Modal open={open} onClose={() => { if (!busy.current) setOpen(false) }} title="Upload Apple Watch data" width={520}>
+      <Modal open={open} onClose={() => { if (!busy.current) setOpen(false) }} title="Upload Apple Watch data" width={600}>
         <div className="flex flex-col gap-4">
           <p className="text-sm text-fg-2">
             {'Import for '}
@@ -68,9 +68,24 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
             (
             {side}
             {' '}
-            side). In Apple Health, open your profile → Export All Health Data, then select export.zip or the extracted export.xml.
+            side). Use this sleeper’s Apple Health export.
           </p>
-          <p className="text-sm text-fg-2">Only Watch heart rate and sleep stages are imported. Existing records are preserved, and the uploaded file is removed after processing.</p>
+          <section className="space-y-2 text-sm text-fg-2" aria-label="What this imports">
+            <h3 className="font-medium text-fg">What this does</h3>
+            <p>Imports Apple Watch heart rate and sleep stages for the selected period. Watch heart rate appears alongside the pod’s readings in Vitals so you can compare them; sleep stages are saved as reference data.</p>
+            <p>This is a one-time import. Upload a fresh export whenever you want to add recent data. Previously imported records are skipped, and the pod’s own readings are preserved.</p>
+          </section>
+          <section className="space-y-2 text-sm text-fg-2" aria-label="How to get your export">
+            <h3 className="font-medium text-fg">How to get your data</h3>
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>On your iPhone, open Health → Summary and tap your profile picture or initials.</li>
+              <li>Scroll down, tap Export All Health Data, and confirm the export.</li>
+              <li>Save the export to Files, or AirDrop it to the computer you’re using.</li>
+              <li>Select export.zip below (no need to unzip), choose a period, then select Upload and sync.</li>
+            </ol>
+            <a href="https://support.apple.com/guide/iphone/share-your-health-data-iph5ede58c3d/ios" target="_blank" rel="noreferrer" className="inline-block text-link underline">Apple’s export guide</a>
+          </section>
+          <p className="text-xs text-fg-2">The full export is sent to your pod, which imports only Watch heart rate and sleep stages and removes the uploaded file after processing. ZIP or extracted export.xml, up to 512 MiB.</p>
           <label className="flex flex-col gap-2 text-sm">
             Health export
             <input
