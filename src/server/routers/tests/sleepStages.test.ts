@@ -9,6 +9,7 @@ import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { TRPCError } from '@trpc/server'
 import * as mainSchema from '@/src/db/schema'
 import * as bioSchema from '@/src/db/biometrics-schema'
 import {
@@ -34,6 +35,27 @@ const BED = new Date(Date.UTC(2026, 9, 10, 23))
 const at = (minutes: number) => new Date(BED.getTime() + minutes * MIN)
 
 const movementOnly: StageClassifier = { engine: 'rules', ruleset: MOVEMENT_ONLY_STAGE_RULESET }
+
+/** Await a procedure expected to reject, returning the TRPCError for
+ * code/message assertions. */
+async function rejectionOf(promise: Promise<unknown>): Promise<TRPCError> {
+  try {
+    await promise
+  }
+  catch (error) {
+    return error as TRPCError
+  }
+  throw new Error('expected the call to reject')
+}
+
+/** A stand-in db whose first query throws `error`, for the catch blocks. */
+function throwing(error: unknown) {
+  return {
+    select: () => {
+      throw error
+    },
+  }
+}
 
 describe('sleepStages router', () => {
   let mainRaw: Database.Database
@@ -96,6 +118,27 @@ describe('sleepStages router', () => {
       expect(out.classifier).toEqual(DEFAULT_STAGE_CLASSIFIER)
       expect(out.isDefault).toBe(true)
     })
+
+    it('resolves a recorded "before" that no longer validates to the defaults', async () => {
+      mainRaw.prepare('INSERT INTO stage_classifier_changes (side, before, after, summary) VALUES (?, ?, ?, ?)')
+        .run('left', JSON.stringify({ engine: 'neural' }), null, 'Reset to default')
+      const { changes } = await caller.getClassifier({ side: 'left' })
+      expect(changes).toHaveLength(1)
+      expect(changes[0]).toMatchObject({ summary: 'Reset to default', before: DEFAULT_STAGE_CLASSIFIER, agreementBefore: null, agreementAfter: null })
+    })
+
+    it('wraps unexpected failures as INTERNAL_SERVER_ERROR', async () => {
+      dbHolder.main = throwing(new Error('disk gone'))
+      const error = await rejectionOf(caller.getClassifier({ side: 'left' }))
+      expect(error.code).toBe('INTERNAL_SERVER_ERROR')
+      expect(error.message).toBe('Failed to load stage classifier: disk gone')
+    })
+
+    it('falls back to "Unknown error" for non-Error throws', async () => {
+      dbHolder.main = throwing('not an Error instance')
+      const error = await rejectionOf(caller.getClassifier({ side: 'left' }))
+      expect(error.message).toBe('Failed to load stage classifier: Unknown error')
+    })
   })
 
   describe('setClassifier', () => {
@@ -139,7 +182,61 @@ describe('sleepStages router', () => {
 
     it('throws NOT_FOUND when the side has no settings row', async () => {
       mainRaw.prepare('DELETE FROM side_settings WHERE side = ?').run('left')
-      await expect(caller.setClassifier({ side: 'left', classifier: movementOnly })).rejects.toThrow(/Side settings for left not found/)
+      const error = await rejectionOf(caller.setClassifier({ side: 'left', classifier: movementOnly }))
+      expect(error.code).toBe('NOT_FOUND')
+      expect(error.message).toBe('Side settings for left not found')
+    })
+
+    it('records null agreement when the side has no nights', async () => {
+      await caller.setClassifier({ side: 'left', classifier: movementOnly })
+      const { changes } = await caller.getClassifier({ side: 'left' })
+      expect(changes).toHaveLength(1)
+      expect(changes[0]).toMatchObject({ agreementBefore: null, agreementAfter: null })
+    })
+
+    it('records null agreement when the latest night has no reference stages', async () => {
+      seedNight()
+      await caller.setClassifier({ side: 'left', classifier: movementOnly })
+      const { changes } = await caller.getClassifier({ side: 'left' })
+      expect(changes[0]).toMatchObject({ summary: 'Removed rule 2: Deep +4 more', agreementBefore: null, agreementAfter: null })
+    })
+
+    it('records null agreement when the latest night has reference stages but no vitals', async () => {
+      bio.insert(bioSchema.sleepRecords).values({
+        side: 'left', enteredBedAt: at(0), leftBedAt: at(60), sleepDurationSeconds: 3600, timesExitedBed: 0, presentIntervals: [], notPresentIntervals: [],
+      }).run()
+      bio.insert(bioSchema.referenceStages).values({ side: 'left', source: 'apple_watch', start: BED, end: at(60), stage: 'light' }).run()
+      await caller.setClassifier({ side: 'left', classifier: movementOnly })
+      const { changes } = await caller.getClassifier({ side: 'left' })
+      expect(changes[0]).toMatchObject({ agreementBefore: null, agreementAfter: null })
+    })
+
+    it('treats a stored value that no longer validates as nothing stored', async () => {
+      mainRaw.prepare('UPDATE side_settings SET stage_classifier = ? WHERE side = ?').run(JSON.stringify({ engine: 'neural' }), 'left')
+
+      // Resetting records nothing: there was no valid classifier to reset.
+      expect(await caller.setClassifier({ side: 'left', classifier: null })).toEqual({ classifier: DEFAULT_STAGE_CLASSIFIER, isDefault: true })
+      expect((await caller.getClassifier({ side: 'left' })).changes).toEqual([])
+
+      // Saving records a change from the defaults, with no "before".
+      mainRaw.prepare('UPDATE side_settings SET stage_classifier = ? WHERE side = ?').run(JSON.stringify({ engine: 'neural' }), 'left')
+      await caller.setClassifier({ side: 'left', classifier: movementOnly })
+      const { changes } = await caller.getClassifier({ side: 'left' })
+      expect(changes).toHaveLength(1)
+      expect(changes[0]).toMatchObject({ summary: 'Removed rule 2: Deep +4 more', before: null })
+    })
+
+    it('wraps unexpected failures as INTERNAL_SERVER_ERROR', async () => {
+      dbHolder.main = throwing(new Error('locked'))
+      const error = await rejectionOf(caller.setClassifier({ side: 'left', classifier: movementOnly }))
+      expect(error.code).toBe('INTERNAL_SERVER_ERROR')
+      expect(error.message).toBe('Failed to save stage classifier: locked')
+    })
+
+    it('falls back to "Unknown error" for non-Error throws', async () => {
+      dbHolder.main = throwing('not an Error instance')
+      const error = await rejectionOf(caller.setClassifier({ side: 'left', classifier: null }))
+      expect(error.message).toBe('Failed to save stage classifier: Unknown error')
     })
   })
 
@@ -151,8 +248,50 @@ describe('sleepStages router', () => {
 
     it('throws NOT_FOUND for another side\'s night', async () => {
       const record = seedNight('right')
-      await expect(caller.previewClassifier({ side: 'left', sleepRecordId: record.id, classifier: movementOnly }))
-        .rejects.toThrow(new RegExp(`Sleep record ${record.id} not found`))
+      const error = await rejectionOf(caller.previewClassifier({ side: 'left', sleepRecordId: record.id, classifier: movementOnly }))
+      expect(error.code).toBe('NOT_FOUND')
+      expect(error.message).toBe(`Sleep record ${record.id} not found for side 'left'`)
+    })
+
+    it('previews one night by id, ignoring `nights`', async () => {
+      const older = seedNight('left', -24 * 60)
+      seedNight('left')
+      const out = await caller.previewClassifier({ side: 'left', sleepRecordId: older.id, nights: 7, classifier: DEFAULT_STAGE_CLASSIFIER })
+      expect(out.nights).toBe(1)
+      expect(out.sleepRecordId).toBe(older.id)
+      expect(out.enteredBedAt).toBe(older.enteredBedAt.getTime())
+      expect(out.leftBedAt).toBe(older.leftBedAt.getTime())
+      expect(out.candidate?.stats).toMatchObject({ epochs: 12, nights: 1 })
+    })
+
+    it('returns null results for a night without vitals', async () => {
+      const [record] = bio.insert(bioSchema.sleepRecords).values({
+        side: 'left', enteredBedAt: at(0), leftBedAt: at(60), sleepDurationSeconds: 3600, timesExitedBed: 0, presentIntervals: [], notPresentIntervals: [],
+      }).returning().all()
+      const out = await caller.previewClassifier({ side: 'left', classifier: movementOnly })
+      expect(out).toEqual({
+        sleepRecordId: record.id,
+        enteredBedAt: BED.getTime(),
+        leftBedAt: at(60).getTime(),
+        nights: 1,
+        hasReference: false,
+        saved: null,
+        candidate: null,
+        changed: null,
+      })
+    })
+
+    it('wraps unexpected failures as INTERNAL_SERVER_ERROR', async () => {
+      dbHolder.bio = throwing(new Error('disk gone'))
+      const error = await rejectionOf(caller.previewClassifier({ side: 'left', classifier: movementOnly }))
+      expect(error.code).toBe('INTERNAL_SERVER_ERROR')
+      expect(error.message).toBe('Failed to preview stage classifier: disk gone')
+    })
+
+    it('falls back to "Unknown error" for non-Error throws', async () => {
+      dbHolder.bio = throwing('not an Error instance')
+      const error = await rejectionOf(caller.previewClassifier({ side: 'left', classifier: movementOnly }))
+      expect(error.message).toBe('Failed to preview stage classifier: Unknown error')
     })
 
     it('classifies the latest night with the saved and candidate rules', async () => {

@@ -4,6 +4,7 @@ import {
   classifyNights,
   classifySleepStages,
   mergeIntoBlocks,
+  mergeRunStats,
   runStageClassifier,
   stageDurations,
   summarizeRuns,
@@ -14,6 +15,7 @@ import {
   scoreAgainstReference,
   type SleepEpoch,
   type SleepStage,
+  type StageRunStats,
 } from '../sleep-stages'
 import { DEFAULT_STAGE_RULESET, MOVEMENT_ONLY_STAGE_RULESET, type StageRuleset } from '../sleep-stage-rules'
 
@@ -1029,5 +1031,85 @@ describe('runStageClassifier statistics', () => {
     expect(out?.summary.agreement).toMatchObject({ epochs: 2, accuracy: 1 })
     expect(out?.summary.stats.nights).toBe(2)
     expect(classifyNights([{ ...earlier, vitalsData: [] }], bare)).toBeNull()
+  })
+})
+
+describe('runStageClassifier — shadowing by several earlier rules', () => {
+  const bare: StageRuleset = {
+    ...DEFAULT_STAGE_RULESET,
+    outliers: { ...DEFAULT_STAGE_RULESET.outliers, heartRateSpikeStdDevs: 0 },
+    smoothIsolatedEpochs: false,
+    transitions: [],
+    rules: [
+      { stage: 'wake', when: [{ metric: 'movement', op: '>', value: 200 }] },
+      { stage: 'deep', when: [{ metric: 'heartRate', op: '<', value: 65 }] },
+      { stage: 'rem', when: [{ metric: 'heartRate', op: '>=', value: 50 }] },
+    ],
+  }
+  const restless = (minute: number) => ({ v: vitalRow(minute, 70, 40, 14), m: movRow(minute, 300) })
+  const calm = (minute: number) => ({ v: vitalRow(minute, 60, 40, 14), m: movRow(minute, 10) })
+
+  it('credits the earlier rule that took the most epochs, whichever order they came in', () => {
+    const wakeFirst = [restless(0), calm(5), calm(10)]
+    const a = runStageClassifier(wakeFirst.map(e => e.v), wakeFirst.map(e => e.m), 1, bare).stats
+    expect(a.ruleHits).toEqual([1, 2, 0])
+    expect(a.ruleMatches).toEqual([1, 2, 3])
+    expect(a.shadowedBy).toEqual([null, null, 1])
+
+    const deepFirst = [calm(0), calm(5), restless(10)]
+    const b = runStageClassifier(deepFirst.map(e => e.v), deepFirst.map(e => e.m), 1, bare).stats
+    expect(b.shadowedBy).toEqual([null, null, 1])
+
+    const tie = [restless(0), calm(5)]
+    const c = runStageClassifier(tie.map(e => e.v), tie.map(e => e.m), 1, bare).stats
+    expect(c.shadowedBy).toEqual([null, null, 0])
+  })
+})
+
+describe('mergeRunStats', () => {
+  const base: StageRunStats = {
+    epochs: 0,
+    lowSignal: false,
+    ruleHits: [0, 0, 0],
+    ruleMatches: [0, 0, 0],
+    shadowedBy: [null, null, null],
+    fallbackHits: 0,
+    metricRanges: { hrRatio: null, heartRate: null, hrv: null, breathingRate: null, movement: null },
+    heartRateReadings: 0,
+    spikesDropped: 0,
+    smoothed: 0,
+    transitionFixes: 0,
+  }
+
+  it('is null without runs', () => {
+    expect(mergeRunStats([])).toBeNull()
+  })
+
+  it('sums counts and widens metric ranges, skipping nights without a metric', () => {
+    const a = { ...base, epochs: 4, fallbackHits: 1, heartRateReadings: 4, spikesDropped: 1, smoothed: 2, transitionFixes: 1, metricRanges: { ...base.metricRanges, heartRate: { min: 60, max: 70 }, hrv: { min: 20, max: 30 } } }
+    const b = { ...base, epochs: 2, fallbackHits: 2, heartRateReadings: 2, spikesDropped: 0, smoothed: 1, transitionFixes: 3, metricRanges: { ...base.metricRanges, heartRate: { min: 55, max: 65 } } }
+    const merged = mergeRunStats([a, b])
+    expect(merged).toMatchObject({ epochs: 6, fallbackHits: 3, heartRateReadings: 6, spikesDropped: 1, smoothed: 3, transitionFixes: 4, lowSignal: false })
+    expect(merged?.metricRanges).toEqual({ hrRatio: null, heartRate: { min: 55, max: 70 }, hrv: { min: 20, max: 30 }, breathingRate: null, movement: null })
+  })
+
+  it('keeps a shadowing rule only when the rule matched but never fired in any night', () => {
+    const fired = { ...base, ruleHits: [1, 0, 0], ruleMatches: [1, 0, 2], shadowedBy: [null, null, 0] }
+    const silent = { ...base, ruleHits: [0, 1, 0], ruleMatches: [0, 1, 1], shadowedBy: [null, null, 1] }
+    const unused = { ...base, ruleHits: [0, 0, 0], ruleMatches: [0, 0, 0], shadowedBy: [null, null, null] }
+    const merged = mergeRunStats([unused, fired, silent])
+    expect(merged?.ruleHits).toEqual([1, 1, 0])
+    expect(merged?.ruleMatches).toEqual([1, 1, 3])
+    expect(merged?.shadowedBy).toEqual([null, null, 0])
+    expect(mergeRunStats([unused])?.shadowedBy).toEqual([null, null, null])
+  })
+
+  it('reads a shorter rule list as zeros and reports no shadow when none was recorded', () => {
+    const inconsistent = { ...base, ruleHits: [0, 0, 0], ruleMatches: [0, 0, 2], shadowedBy: [null, null, null] }
+    const short = { ...base, ruleHits: [0], ruleMatches: [1], shadowedBy: [null] }
+    const merged = mergeRunStats([inconsistent, short])
+    expect(merged?.ruleHits).toEqual([0, 0, 0])
+    expect(merged?.ruleMatches).toEqual([1, 0, 2])
+    expect(merged?.shadowedBy).toEqual([null, null, null])
   })
 })

@@ -10,11 +10,13 @@ import {
   DEFAULT_STAGE_RULESET,
   MOVEMENT_ONLY_STAGE_RULESET,
   type StageClassifier,
+  type StageRuleset,
 } from '@/src/lib/sleep-stage-rules'
 
 const trpcMock = vi.hoisted(() => {
   const setMutate = vi.fn()
   const previewMutate = vi.fn()
+  const invalidate = vi.fn()
   const state = {
     classifier: null as unknown as StageClassifier,
     movementOnly: null as unknown as StageClassifier['ruleset'],
@@ -22,31 +24,45 @@ const trpcMock = vi.hoisted(() => {
     changes: [] as unknown[],
     preview: undefined as unknown,
     savePending: false,
+    saveError: null as { message: string } | null,
+    saveOptions: null as { onSuccess?: () => void } | null,
+    queryError: null as { message: string } | null,
+    loading: false,
+    previewError: null as { message: string } | null,
+    previewPending: false,
   }
   return {
     setMutate,
     previewMutate,
+    invalidate,
     state,
     trpc: {
-      useUtils: () => ({ sleepStages: { getClassifier: { invalidate: vi.fn() } } }),
+      useUtils: () => ({ sleepStages: { getClassifier: { invalidate } } }),
       sleepStages: {
         getClassifier: {
           useQuery: () => ({
-            data: {
-              classifier: state.classifier,
-              isDefault: state.isDefault,
-              changes: state.changes,
-              presets: [
-                { id: 'default', label: 'Default', description: '', classifier: { engine: 'rules', ruleset: state.classifier.ruleset } },
-                { id: 'movementOnly', label: 'Movement only', description: '', classifier: { engine: 'rules', ruleset: state.movementOnly } },
-              ],
-            },
-            isLoading: false,
-            error: null,
+            data: state.loading || state.queryError
+              ? undefined
+              : {
+                  classifier: state.classifier,
+                  isDefault: state.isDefault,
+                  changes: state.changes,
+                  presets: [
+                    { id: 'default', label: 'Default', description: '', classifier: { engine: 'rules', ruleset: state.classifier.ruleset } },
+                    { id: 'movementOnly', label: 'Movement only', description: '', classifier: { engine: 'rules', ruleset: state.movementOnly } },
+                  ],
+                },
+            isLoading: state.loading,
+            error: state.queryError,
           }),
         },
-        setClassifier: { useMutation: () => ({ mutate: setMutate, isPending: state.savePending, error: null }) },
-        previewClassifier: { useMutation: () => ({ mutate: previewMutate, data: state.preview, error: null, isPending: false }) },
+        setClassifier: {
+          useMutation: (options: { onSuccess?: () => void }) => {
+            state.saveOptions = options
+            return { mutate: setMutate, isPending: state.savePending, error: state.saveError }
+          },
+        },
+        previewClassifier: { useMutation: () => ({ mutate: previewMutate, data: state.preview, error: state.previewError, isPending: state.previewPending }) },
       },
     },
   }
@@ -56,6 +72,8 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: trpcMock.trpc }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Left', rightName: 'Right', sideName: (s: string) => s }) }))
 
 import { SleepStageRules } from '../SleepStageRules'
+import type { PreviewOutput } from '../SleepStagePreview'
+import { move } from '../SleepStageRows'
 
 const renderRules = () => render(<SleepStageRules side="left" onSideChange={vi.fn()} />)
 const savedRuleset = () => trpcMock.setMutate.mock.calls.at(-1)?.[0].classifier.ruleset
@@ -104,10 +122,29 @@ const PREVIEW = {
   changed: { segments: [{ start: BED + 60 * MIN, end: BED + 90 * MIN }], changed: 6, total: 100 },
 }
 
+/** No wake/movement or deep/hrRatio rule, a rule with no conditions, spikes off, no low-signal rules or transitions. */
+const CUSTOM_RULESET: StageRuleset = {
+  ...DEFAULT_STAGE_RULESET,
+  outliers: { ...DEFAULT_STAGE_RULESET.outliers, heartRateSpikeStdDevs: 0 },
+  lowSignalRules: [],
+  rules: [
+    { stage: 'rem', when: [] },
+    { stage: 'light', when: [{ metric: 'hrv', op: '>', value: 50 }] },
+  ],
+  transitions: [],
+}
+
+type PreviewStats = NonNullable<PreviewOutput['candidate']>['stats']
+const customStats = (over: Partial<PreviewStats>) => ({
+  ...PREVIEW,
+  candidate: { ...PREVIEW.candidate, stats: { ...PREVIEW.candidate.stats, ...over } },
+})
+
 beforeEach(() => {
   vi.useFakeTimers()
   trpcMock.setMutate.mockClear()
   trpcMock.previewMutate.mockClear()
+  trpcMock.invalidate.mockClear()
   Object.assign(trpcMock.state, {
     classifier: DEFAULT_STAGE_CLASSIFIER,
     isDefault: true,
@@ -115,6 +152,12 @@ beforeEach(() => {
     preview: undefined,
     movementOnly: MOVEMENT_ONLY_STAGE_RULESET,
     savePending: false,
+    saveError: null,
+    saveOptions: null,
+    queryError: null,
+    loading: false,
+    previewError: null,
+    previewPending: false,
   })
 })
 
@@ -311,5 +354,290 @@ describe('SleepStageRules', () => {
     expect(within(changes).getByText('no watch data')).toBeTruthy()
     fireEvent.click(within(changes).getAllByRole('button', { name: 'Revert' })[0])
     expect(trpcMock.setMutate).toHaveBeenCalledWith({ side: 'left', classifier: before })
+  })
+
+  it('shows the query error instead of the editor', () => {
+    trpcMock.state.queryError = { message: 'db offline' }
+    renderRules()
+    expect(screen.getByText('Failed to load sleep stage rules: db offline')).toBeTruthy()
+    expect(screen.queryByText('Stage rules')).toBeNull()
+  })
+
+  it('shows skeletons while the rules load and never previews', () => {
+    trpcMock.state.loading = true
+    renderRules()
+    expect(screen.queryByText(/Profile:/)).toBeNull()
+    act(() => vi.advanceTimersByTime(1000))
+    expect(trpcMock.previewMutate).not.toHaveBeenCalled()
+  })
+
+  it('shows the save error and refetches the rules after a save succeeds', () => {
+    trpcMock.state.saveError = { message: 'Save failed' }
+    renderRules()
+    expect(screen.getByText('Save failed')).toBeTruthy()
+    act(() => trpcMock.state.saveOptions?.onSuccess?.())
+    expect(trpcMock.invalidate).toHaveBeenCalledWith({ side: 'left' })
+  })
+
+  it('reads a custom ruleset: always-rules, no quick adjust, spikes off, no transitions', () => {
+    trpcMock.state.classifier = { engine: 'rules', ruleset: CUSTOM_RULESET }
+    trpcMock.state.isDefault = false
+    trpcMock.state.preview = customStats({
+      rules: { epochs: 100, hits: [0, 40], matches: [100, 40], shadowedBy: [null, null], fallbackHits: 60 },
+      lowSignalRules: { epochs: 0, hits: [], matches: [], shadowedBy: [], fallbackHits: 0 },
+      metricRanges: { hrRatio: null, heartRate: null, hrv: null, breathingRate: null, movement: null },
+    })
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+
+    expect(screen.queryByText('Quick adjust')).toBeNull()
+    expect(screen.getByText('always')).toBeTruthy()
+    expect(screen.getByText('Never fires on these nights.')).toBeTruthy()
+    expect(screen.getByText('(off)')).toBeTruthy()
+    expect(screen.queryByText(/dropped/)).toBeNull()
+    expect(screen.getByText('Any stage may follow any other')).toBeTruthy()
+    expect(screen.queryByText(/transitions last night/)).toBeNull()
+    // No metric ranges: no "· last night 0–412" tails on rules or limits.
+    expect(screen.queryByText(/· last night \d/)).toBeNull()
+
+    // The empty rule reads "always" while editing too.
+    open('Rule 1 stage')
+    expect(screen.getByText('always')).toBeTruthy()
+
+    // The nested add button appends a low-signal rule and opens it.
+    fireEvent.click(screen.getByRole('button', { name: '+ Low-signal rule' }))
+    expect(screen.getByLabelText('Low-signal rule 1 stage').tagName).toBe('SELECT')
+    fireEvent.change(screen.getByLabelText('Low-signal rule 1 stage'), { target: { value: 'light' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(savedRuleset().lowSignalRules).toEqual([{ stage: 'light', when: [{ metric: 'movement', op: '>', value: 100 }] }])
+  })
+
+  it('ignores per-rule stats that do not describe the current rules', () => {
+    trpcMock.state.preview = customStats({
+      rules: { epochs: 100, hits: [8, 14, 17], matches: [8, 14, 17], shadowedBy: [null, null, null], fallbackHits: 59 },
+      lowSignalRules: { epochs: 50, hits: [10], matches: [10], shadowedBy: [null], fallbackHits: 40 },
+    })
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.queryByText(/% of epochs/)).toBeNull()
+    expect(screen.queryByText(/Never fires/)).toBeNull()
+    // The low-signal list is aligned, so its bar shows.
+    expect(screen.getByText('20% on those nights')).toBeTruthy()
+  })
+
+  it('keeps the edited rule open when moved and closes it when removed', () => {
+    renderRules()
+    open('Rule 2 stage')
+    fireEvent.click(screen.getByLabelText('Move rule 2 up'))
+    expect((screen.getByLabelText('Rule 1 stage') as HTMLSelectElement).value).toBe('deep')
+    expect(screen.getByLabelText('Rule 2 stage').tagName).toBe('BUTTON')
+    fireEvent.click(screen.getByLabelText('Move rule 1 down'))
+    expect((screen.getByLabelText('Rule 2 stage') as HTMLSelectElement).value).toBe('deep')
+    fireEvent.click(screen.getByLabelText('Remove rule 2'))
+    expect(screen.queryByRole('button', { name: 'Done' })).toBeNull()
+    expect(screen.getByLabelText('Rule 2 stage').textContent).toBe('REM')
+  })
+
+  it('leaves the list alone when moving out of range', () => {
+    const list = ['a', 'b']
+    expect(move(list, 0, -1)).toBe(list)
+    expect(move(list, 1, 2)).toBe(list)
+    expect(move(list, 0, 1)).toEqual(['b', 'a'])
+  })
+
+  it('changes a condition metric and comparison while editing', () => {
+    renderRules()
+    open('Rule 1 condition 1')
+    fireEvent.change(screen.getByLabelText('Rule 1 condition 1 metric'), { target: { value: 'hrv' } })
+    fireEvent.change(screen.getByLabelText('Rule 1 condition 1 comparison'), { target: { value: '<=' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.getByLabelText('Rule 1 condition 1').textContent).toBe('HRV ≤')
+    expect(screen.getByLabelText('Rule 1 condition 1 value').textContent).toBe('200 ms')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(savedRuleset().rules[0].when[0]).toEqual({ metric: 'hrv', op: '<=', value: 200 })
+  })
+
+  it('finishes editing the limits, spike, low-signal and fallback rows with Done', () => {
+    renderRules()
+    open('Heart rate (bpm) limits')
+    fireEvent.change(screen.getByLabelText('Heart rate (bpm) maximum'), { target: { value: '140' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.getByLabelText('Heart rate (bpm) limits').textContent).toBe('45–140')
+
+    open('Heart-rate spike threshold')
+    fireEvent.change(screen.getByLabelText('Heart-rate spike threshold'), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.getByLabelText('Heart-rate spike threshold').tagName).toBe('BUTTON')
+    expect(screen.getByLabelText('Heart-rate spike threshold').textContent).toBe('3')
+
+    open('Low-signal threshold')
+    fireEvent.change(screen.getByLabelText('Low-signal threshold'), { target: { value: '0.5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.getByLabelText('Low-signal threshold').textContent).toBe('0.5')
+
+    open('Fallback stage')
+    expect(screen.getByLabelText('Fallback stage').tagName).toBe('SELECT')
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.getByLabelText('Fallback stage').tagName).toBe('BUTTON')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const r = savedRuleset()
+    expect(r.outliers.heartRate).toEqual({ min: 45, max: 140 })
+    expect(r.outliers.heartRateSpikeStdDevs).toBe(3)
+    expect(r.lowSignalBelow).toBe(0.5)
+  })
+
+  it('reads mixed transitions with their via and edits them in place', () => {
+    trpcMock.state.classifier = {
+      engine: 'rules',
+      ruleset: {
+        ...DEFAULT_STAGE_RULESET,
+        transitions: [
+          { from: 'wake', to: 'deep', via: 'light' },
+          { from: 'deep', to: 'wake', via: 'light' },
+          { from: 'rem', to: 'light', via: 'wake' },
+        ],
+      },
+    }
+    renderRules()
+    const row = screen.getByLabelText('Transition 1 from').closest('div') as HTMLElement
+    expect(row.textContent).toContain('Never jump directly between Wake and Deep via Light, or from REM to Light via Wake')
+    expect(screen.queryByLabelText('Transitions via')).toBeNull()
+
+    open('Transition 3 via')
+    expect(screen.getByText('Transitions that must pass through another stage')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Transition 1 from'), { target: { value: 'light' } })
+    fireEvent.change(screen.getByLabelText('Transition 1 to'), { target: { value: 'rem' } })
+    fireEvent.change(screen.getByLabelText('Transition 3 via'), { target: { value: 'deep' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Transition' }))
+    expect((screen.getByLabelText('Transition 4 to') as HTMLSelectElement).value).toBe('deep')
+    fireEvent.click(screen.getByRole('button', { name: 'Pair' }))
+    expect(screen.getByLabelText('Transition 6 from')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('Remove transition 2'))
+    expect(screen.queryByLabelText('Transition 6 from')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.getByLabelText('Transition 1 from').tagName).toBe('BUTTON')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const t = savedRuleset().transitions
+    expect(t).toHaveLength(5)
+    expect(t[0]).toEqual({ from: 'light', to: 'rem', via: 'light' })
+    expect(t[1]).toEqual({ from: 'rem', to: 'light', via: 'deep' })
+    expect(t[2]).toEqual({ from: 'wake', to: 'deep', via: 'light' })
+  })
+
+  it('hides the quick adjust readout arrow until a value changes and reads unchanged without a preview', () => {
+    renderRules()
+    expect(screen.queryByText(/→/)).toBeNull()
+    expect(screen.getAllByText(/· unchanged/)).toHaveLength(2)
+  })
+
+  it('previews 7 nights with per-night labels and the low-signal night count', () => {
+    trpcMock.state.preview = { ...customStats({ lowSignalNights: 2 }), nights: 7 }
+    renderRules()
+    fireEvent.click(screen.getByRole('tab', { name: '7 nights' }))
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByText('Wake per night')).toBeTruthy()
+    expect(screen.getByText('Deep per night')).toBeTruthy()
+    expect(screen.getByText(/2 of the last 7 nights/)).toBeTruthy()
+    expect(screen.getAllByText(/last 7 nights 0–412/)).toHaveLength(2)
+    fireEvent.click(screen.getByRole('tab', { name: 'Last night' }))
+    act(() => vi.advanceTimersByTime(400))
+    expect(trpcMock.previewMutate).toHaveBeenLastCalledWith(expect.objectContaining({ nights: 1 }))
+    expect(screen.queryByText('Wake per night')).toBeNull()
+  })
+
+  it('says when the low-signal rules were used last night', () => {
+    trpcMock.state.preview = customStats({ lowSignalNights: 1 })
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByText(/· used last night/)).toBeTruthy()
+  })
+
+  it('previews a candidate without saved stages, kappa, watch reference or changed strip', () => {
+    trpcMock.state.preview = {
+      ...PREVIEW,
+      hasReference: false,
+      enteredBedAt: null,
+      leftBedAt: null,
+      changed: null,
+      saved: null,
+      candidate: { ...PREVIEW.candidate, agreement: null },
+    }
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.queryByLabelText('Saved quality')).toBeNull()
+    expect(screen.getByLabelText('These rules quality').textContent).toBe('Q 89')
+    expect(screen.getAllByText('—')).toHaveLength(2)
+    expect(screen.getByText(/Import Apple Watch stages/)).toBeTruthy()
+    expect(screen.queryByLabelText('Changed epochs')).toBeNull()
+    expect(screen.getAllByText(/· unchanged/)).toHaveLength(2)
+  })
+
+  it('shows one value when the saved and candidate deltas are equal', () => {
+    trpcMock.state.preview = {
+      ...PREVIEW,
+      candidate: { ...PREVIEW.saved, agreement: { epochs: 90, accuracy: 0.84, kappa: null } },
+    }
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByText('38m')).toBeTruthy()
+    expect(screen.getByText('84%')).toBeTruthy()
+    expect(screen.getByLabelText('These rules quality').textContent).toBe('Q 88')
+  })
+
+  it('previews saved stages without a candidate', () => {
+    trpcMock.state.preview = { ...PREVIEW, candidate: null, changed: null }
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByLabelText('Saved quality').textContent).toBe('Q 88 · κ 0.74')
+    expect(screen.queryByLabelText('These rules quality')).toBeNull()
+    expect(screen.getAllByText('—')).toHaveLength(3)
+  })
+
+  it('says when there is no night to preview', () => {
+    trpcMock.state.preview = { ...PREVIEW, saved: null, candidate: null }
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByText('No night with vitals to preview yet.')).toBeTruthy()
+  })
+
+  it('shows the preview error and dims the preview while it reloads', () => {
+    trpcMock.state.previewError = { message: 'Preview failed' }
+    trpcMock.state.previewPending = true
+    trpcMock.state.preview = PREVIEW
+    renderRules()
+    expect(screen.getByText('Preview failed')).toBeTruthy()
+    expect(screen.getByText('These rules').closest('.opacity-60')).not.toBeNull()
+  })
+
+  it('tones each change by its effect on watch agreement and disables revert while saving', () => {
+    trpcMock.state.savePending = true
+    trpcMock.state.changes = [
+      { id: 3, changedAt: Date.UTC(2026, 9, 9, 12), summary: 'Better', before: null, agreementBefore: 0.84, agreementAfter: 0.86 },
+      { id: 2, changedAt: Date.UTC(2026, 9, 8, 12), summary: 'Worse', before: null, agreementBefore: 0.8, agreementAfter: 0.7 },
+      { id: 1, changedAt: Date.UTC(2026, 9, 7, 12), summary: 'Same', before: null, agreementBefore: 0.8, agreementAfter: 0.8 },
+    ]
+    renderRules()
+    expect(screen.getByText('watch 84% → 86%').className).toContain('text-ok')
+    expect(screen.getByText('watch 80% → 70%').className).toContain('text-warn')
+    expect(screen.getByText('watch 80% → 80%').className).toContain('text-fg-2')
+    for (const b of screen.getAllByRole('button', { name: 'Revert' })) expect(b.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('discarding closes the row being edited', () => {
+    renderRules()
+    open('Rule 2 stage')
+    fireEvent.change(screen.getByLabelText('Rule 2 stage'), { target: { value: 'rem' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(screen.getByLabelText('Rule 2 stage').tagName).toBe('BUTTON')
+    expect(screen.getByLabelText('Rule 2 stage').textContent).toBe('Deep')
+  })
+
+  it('ignores the preset placeholder', () => {
+    renderRules()
+    fireEvent.change(screen.getByLabelText('Start from preset'), { target: { value: '' } })
+    expect(screen.getByLabelText('Rule 2 stage')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
   })
 })
