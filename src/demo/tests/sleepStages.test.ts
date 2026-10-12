@@ -39,6 +39,19 @@ describe('demo sleepStages', () => {
     expect(out.saved).not.toBeNull()
   })
 
+  it('previews several nights and records changes with their effect', async () => {
+    const week = await required(sleepStages.previewClassifier)({ side: 'left', nights: 7, classifier: movementOnly })
+    expect(week.nights).toBeGreaterThan(1)
+    expect(week.candidate?.stats.nights).toBe(week.nights)
+    expect(week.changed).not.toBeNull()
+
+    await required(sleepStages.setClassifier)({ side: 'left', classifier: movementOnly })
+    // Earlier tests' saves and resets stay in the session log; the newest is first.
+    const { changes } = await required(sleepStages.getClassifier)({ side: 'left' })
+    expect(changes[0]).toMatchObject({ summary: 'Removed rule 2: Deep +4 more', before: null })
+    expect(changes[0].agreementAfter).not.toBeNull()
+  })
+
   it('rejects another side\'s night', async () => {
     const right = demoNights('right')[0]
     expect(() => required(sleepStages.previewClassifier)({ side: 'left', sleepRecordId: right.id, classifier: movementOnly }))

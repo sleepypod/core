@@ -1,51 +1,45 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Moon, Plus, RotateCcw, X } from 'lucide-react'
+import { RotateCcw } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Button, Card, CardHeader, GhostIcon, InlineError, SelectValue, SettingRow, Skeleton, StageBar, Toggle } from '@/src/components/ds'
+import { Button, Card, CardHeader, InlineError, SegmentedControl, SelectValue, Skeleton, Slider, Toggle } from '@/src/components/ds'
+import { useSideNames } from '@/src/hooks/useSideNames'
+import { stageRulesetSchema, type StageClassifier, type StageRuleset } from '@/src/lib/sleep-stage-rules'
 import {
-  SLEEP_STAGES,
-  STAGE_METRICS,
-  STAGE_METRIC_LABELS,
-  STAGE_METRIC_UNITS,
-  STAGE_OPERATORS,
-  stageRulesetSchema,
-  type StageCondition,
-  type StageRule,
-  type StageRuleset,
-  type StageTransition,
-} from '@/src/lib/sleep-stage-rules'
-import type { SleepStage } from '@/src/lib/sleep-stages'
-import { NumberField, SectionColumns, SideTabs } from './SettingsLayout'
+  AddRuleButton,
+  FallbackRow,
+  LimitsRow,
+  LowSignalRow,
+  RuleList,
+  Seen,
+  SpikeRow,
+  TransitionsRow,
+} from './SleepStageRows'
+import { ChangesCard, StagePreviewCard, type PreviewNights, type PreviewOutput } from './SleepStagePreview'
+import {
+  findQuickAdjust,
+  formatMetricValue,
+  formatSignedMinutes,
+  shortDate,
+  withConditionValue,
+  type QuickAdjust,
+} from './sleepStageEditing'
 
 type Side = 'left' | 'right'
-
-const STAGE_LABELS: Record<SleepStage, string> = { wake: 'Wake', light: 'Light', deep: 'Deep', rem: 'REM' }
-const STAGE_OPTIONS = SLEEP_STAGES.map(s => ({ value: s, label: STAGE_LABELS[s] }))
-const METRIC_OPTIONS = STAGE_METRICS.map(m => ({ value: m, label: STAGE_METRIC_LABELS[m] }))
-const OP_OPTIONS = STAGE_OPERATORS.map(o => ({ value: o, label: o }))
-
-const NEW_CONDITION: StageCondition = { metric: 'movement', op: '>', value: 100 }
-
-function move<T>(list: T[], from: number, to: number): T[] {
-  if (to < 0 || to >= list.length) return list
-  const next = [...list]
-  const [item] = next.splice(from, 1)
-  next.splice(to, 0, item)
-  return next
-}
 
 const sameRuleset = (a: StageRuleset, b: StageRuleset) => JSON.stringify(a) === JSON.stringify(b)
 
 /**
- * Sleep stage rules for one side: the ordered rules that turn each epoch's
- * heart rate, HRV, breathing and movement into wake/light/deep/REM, plus the
- * outlier limits, smoothing and transition constraints around them. Changes
- * preview against a recent night before saving.
+ * Sleep stage rules for one side, read as sentences: the ordered rules that
+ * turn each epoch's heart rate, HRV, breathing and movement into
+ * wake/light/deep/REM, the signal limits and cleanup around them, and a
+ * preview of what the draft would change before it is saved. Values are
+ * click-to-edit; only the row being edited shows controls.
  */
 export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChange: (side: Side) => void }) {
   const utils = trpc.useUtils()
+  const { leftName, rightName } = useSideNames()
   const query = trpc.sleepStages.getClassifier.useQuery({ side })
   const save = trpc.sleepStages.setClassifier.useMutation({
     onSuccess: () => utils.sleepStages.getClassifier.invalidate({ side }),
@@ -53,6 +47,8 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
 
   const saved = query.data?.classifier.ruleset
   const [draft, setDraft] = useState<StageRuleset | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [nights, setNights] = useState<PreviewNights>(1)
   // Re-seed the draft when the side or its stored ruleset changes — by value,
   // so a background refetch of the same rules keeps unsaved edits.
   const seed = saved ? `${side}:${JSON.stringify(saved)}` : null
@@ -60,7 +56,11 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
   if (seed !== seeded) {
     setSeeded(seed)
     setDraft(saved ?? null)
+    setEditing(null)
   }
+
+  const validation = draft ? stageRulesetSchema.safeParse(draft) : null
+  const preview = useStagePreview(side, validation?.success ? validation.data : null, saved ?? null, nights)
 
   if (query.error) {
     return (
@@ -69,285 +69,271 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
       </Card>
     )
   }
-  if (!draft || !query.data) {
-    return <SectionColumns left={<Skeleton className="h-[320px]" />} right={<Skeleton className="h-[200px]" />} />
+  if (!draft || !query.data || !saved || !validation) {
+    return (
+      <div className="grid items-start gap-3.5 @min-[800px]:grid-cols-[minmax(0,1fr)_300px]">
+        <Skeleton className="h-[420px]" />
+        <Skeleton className="h-[260px]" />
+      </div>
+    )
   }
 
-  const { isDefault, presets } = query.data
-  const dirty = saved !== undefined && !sameRuleset(draft, saved)
-  const validation = stageRulesetSchema.safeParse(draft)
+  const { isDefault, presets, changes } = query.data
+  const dirty = !sameRuleset(draft, saved)
   const update = (patch: Partial<StageRuleset>) => setDraft({ ...draft, ...patch })
+  const busy = save.isPending
+  const data = preview.data
+  const stats = data?.candidate?.stats ?? null
+  const seenLabel = nights > 1 ? `last ${data?.nights ?? nights} nights` : 'last night'
+  const ranges = stats?.metricRanges ?? {}
+  const lastChange = changes[0]
 
   return (
-    <SectionColumns
-      left={(
-        // Freeze the editor while a save is in flight: the refetch it triggers
-        // re-seeds the draft, which would silently drop edits typed meanwhile.
-        <fieldset disabled={save.isPending} className="contents">
-          <Card>
-            <CardHeader
-              icon={Moon}
-              title="Stage rules"
-              subtitle="Each 5-minute epoch takes the stage of the first rule whose conditions all hold. Stages are worked out when a night is shown, so saving re-scores past nights too."
-            />
-            <SideTabs side={side} onChange={onSideChange} label="Stage rules" />
-            <SettingRow label={isDefault ? 'Using the default rules' : 'Using custom rules'}>
-              <SelectValue
-                label="Start from preset"
-                value=""
-                options={[{ value: '', label: 'Load preset…' }, ...presets.map(p => ({ value: p.id, label: p.label }))]}
-                onChange={(id) => {
-                  const preset = presets.find(p => p.id === id)
-                  if (preset) setDraft(preset.classifier.ruleset)
-                }}
-              />
-            </SettingRow>
-            <RuleList rules={draft.rules} onChange={rules => update({ rules })} />
-            <SettingRow label="Otherwise">
-              <SelectValue label="Fallback stage" value={draft.fallback} options={STAGE_OPTIONS} onChange={fallback => update({ fallback })} />
-            </SettingRow>
-            {!validation.success && (
-              <InlineError>{validation.error.issues[0]?.message ?? 'These rules are not valid'}</InlineError>
-            )}
-            {save.error && <InlineError>{save.error.message}</InlineError>}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="primary"
-                disabled={!dirty || !validation.success || save.isPending}
-                onClick={() => save.mutate({ side, classifier: { engine: 'rules', ruleset: draft } })}
-              >
-                {save.isPending ? 'Saving…' : 'Save'}
-              </Button>
-              <Button disabled={!dirty} onClick={() => saved && setDraft(saved)}>Discard</Button>
-              <Button
-                variant="ghost"
-                icon={RotateCcw}
-                className="ml-auto"
-                disabled={isDefault || save.isPending}
-                onClick={() => save.mutate({ side, classifier: null })}
-              >
-                Reset to default
-              </Button>
-            </div>
-          </Card>
-
-          <Card>
-            <CardHeader
-              title="Signal handling"
-              subtitle="Readings outside these limits are ignored. When the piezo calibration quality is low, the low-signal rules replace the rules above."
-            />
-            <RangeRow label="Heart rate (bpm)" range={draft.outliers.heartRate} onChange={heartRate => update({ outliers: { ...draft.outliers, heartRate } })} />
-            <RangeRow label="HRV (ms)" range={draft.outliers.hrv} onChange={hrv => update({ outliers: { ...draft.outliers, hrv } })} />
-            <RangeRow label="Breathing (br/min)" range={draft.outliers.breathingRate} onChange={breathingRate => update({ outliers: { ...draft.outliers, breathingRate } })} />
-            <SettingRow label="Drop heart-rate spikes beyond (std devs, 0 = off)">
-              <NumberField
-                label="Heart-rate spike threshold"
-                value={draft.outliers.heartRateSpikeStdDevs}
-                min={0}
-                max={10}
-                step={0.5}
-                onChange={heartRateSpikeStdDevs => update({ outliers: { ...draft.outliers, heartRateSpikeStdDevs } })}
-              />
-            </SettingRow>
-            <SettingRow label="Low signal below calibration quality">
-              <NumberField label="Low-signal threshold" value={draft.lowSignalBelow} min={0} max={1} step={0.05} onChange={lowSignalBelow => update({ lowSignalBelow })} />
-            </SettingRow>
-            <RuleList rules={draft.lowSignalRules} onChange={lowSignalRules => update({ lowSignalRules })} label="Low-signal rule" />
-            <SettingRow label="Smooth single-epoch blips (A-B-A → A-A-A)">
-              <Toggle label="Smooth single-epoch blips" on={draft.smoothIsolatedEpochs} onChange={smoothIsolatedEpochs => update({ smoothIsolatedEpochs })} />
-            </SettingRow>
-            <TransitionList transitions={draft.transitions} onChange={transitions => update({ transitions })} />
-          </Card>
-        </fieldset>
-      )}
-      right={<StagePreview side={side} ruleset={validation.success ? validation.data : null} />}
-    />
-  )
-}
-
-function RuleList({ rules, onChange, label = 'Rule' }: { rules: StageRule[], onChange: (rules: StageRule[]) => void, label?: string }) {
-  const setRule = (i: number, rule: StageRule) => onChange(rules.map((r, j) => (j === i ? rule : r)))
-  return (
-    <div className="flex flex-col gap-2">
-      {rules.map((rule, i) => (
-        <div key={i} className="flex flex-col gap-2 rounded-ctl border border-line px-3 py-2.5">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-fg-3">{i + 1}</span>
-            <SelectValue label={`${label} ${i + 1} stage`} value={rule.stage} options={STAGE_OPTIONS} onChange={stage => setRule(i, { ...rule, stage })} />
-            <span className="text-[13px] text-fg-2">{rule.when.length === 0 ? 'always' : 'when'}</span>
-            <span className="ml-auto flex items-center gap-1">
-              <GhostIcon icon={ArrowUp} label={`Move ${label.toLowerCase()} ${i + 1} up`} disabled={i === 0} onClick={() => onChange(move(rules, i, i - 1))} />
-              <GhostIcon icon={ArrowDown} label={`Move ${label.toLowerCase()} ${i + 1} down`} disabled={i === rules.length - 1} onClick={() => onChange(move(rules, i, i + 1))} />
-              <GhostIcon icon={X} label={`Remove ${label.toLowerCase()} ${i + 1}`} onClick={() => onChange(rules.filter((_, j) => j !== i))} />
-            </span>
-          </div>
-          {rule.when.map((c, k) => (
-            <div key={k} className="flex flex-wrap items-center gap-2 pl-3">
-              <span className="flex items-center gap-2">
-                <span className="w-6 text-xs text-fg-3">{k > 0 ? 'and' : ''}</span>
-                <SelectValue
-                  label={`${label} ${i + 1} condition ${k + 1} metric`}
-                  value={c.metric}
-                  options={METRIC_OPTIONS}
-                  onChange={metric => setRule(i, { ...rule, when: rule.when.map((x, m) => (m === k ? { ...x, metric } : x)) })}
-                />
-              </span>
-              <span className="flex items-center gap-2 max-[519px]:pl-8">
-                <SelectValue
-                  label={`${label} ${i + 1} condition ${k + 1} comparison`}
-                  value={c.op}
-                  options={OP_OPTIONS}
-                  onChange={op => setRule(i, { ...rule, when: rule.when.map((x, m) => (m === k ? { ...x, op } : x)) })}
-                />
-                <NumberField
-                  label={`${label} ${i + 1} condition ${k + 1} value`}
-                  value={c.value}
-                  step={c.metric === 'hrRatio' ? 0.01 : 1}
-                  onChange={value => setRule(i, { ...rule, when: rule.when.map((x, m) => (m === k ? { ...x, value } : x)) })}
-                />
-                {STAGE_METRIC_UNITS[c.metric] && <span className="text-xs text-fg-3">{STAGE_METRIC_UNITS[c.metric]}</span>}
-                <GhostIcon
-                  icon={X}
-                  label={`Remove ${label.toLowerCase()} ${i + 1} condition ${k + 1}`}
-                  onClick={() => setRule(i, { ...rule, when: rule.when.filter((_, m) => m !== k) })}
-                />
-              </span>
-            </div>
-          ))}
+    <div className="flex min-w-0 flex-col gap-3.5">
+      {/* Toolbar: profile, state, preset, reset */}
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[13px]">
+        <SegmentedControl
+          ariaLabel="Stage rules side"
+          value={side}
+          options={[{ value: 'left', label: leftName }, { value: 'right', label: rightName }]}
+          onChange={onSideChange}
+        />
+        <span className="text-fg-2">
+          {`Profile: ${isDefault ? 'System defaults' : 'Custom rules'}`}
+          {lastChange && ` · changed ${shortDate(lastChange.changedAt)}`}
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          <SelectValue
+            label="Start from preset"
+            value=""
+            disabled={busy}
+            options={[{ value: '', label: 'Load preset…' }, ...presets.map(p => ({ value: p.id, label: p.label }))]}
+            onChange={(id) => {
+              const preset = presets.find(p => p.id === id)
+              if (!preset) return
+              setDraft(preset.classifier.ruleset)
+              setEditing(null)
+            }}
+          />
           <Button
             variant="ghost"
             size="sm"
-            icon={Plus}
-            className="self-start"
-            disabled={rule.when.length >= 8}
-            onClick={() => setRule(i, { ...rule, when: [...rule.when, NEW_CONDITION] })}
+            icon={RotateCcw}
+            disabled={isDefault || busy}
+            onClick={() => save.mutate({ side, classifier: null })}
           >
-            Condition
+            Reset to default
           </Button>
+        </span>
+      </div>
+
+      <div className="grid items-start gap-3.5 @min-[800px]:grid-cols-[minmax(0,1fr)_300px]">
+        {/* Freeze the editor while a save is in flight: the refetch it triggers
+            re-seeds the draft, which would silently drop edits typed meanwhile. */}
+        <fieldset disabled={busy} className="m-0 flex min-w-0 flex-col gap-3.5 border-0 p-0">
+          <QuickAdjustCard draft={draft} saved={saved} preview={data} onChange={setDraft} />
+
+          <Card>
+            <CardHeader
+              title="Stage rules"
+              subtitle="Each 5-minute epoch takes the first rule that matches, top to bottom. Click any value to change it. Applied changes re-score past nights too."
+            />
+            <div className="flex flex-col">
+              <RuleList
+                label="Rule"
+                rules={draft.rules}
+                onChange={rules => update({ rules })}
+                editingKey={editing}
+                onEdit={setEditing}
+                stats={stats?.rules ?? null}
+                hitCaption="of epochs"
+                ranges={ranges}
+                seenLabel={seenLabel}
+              />
+              <FallbackRow
+                fallback={draft.fallback}
+                editing={editing === 'fallback'}
+                onEdit={on => setEditing(on ? 'fallback' : null)}
+                onChange={fallback => update({ fallback })}
+                stats={stats?.rules && stats.rules.hits.length === draft.rules.length ? stats.rules : null}
+              />
+            </div>
+            <AddRuleButton label="Rule" rules={draft.rules} onChange={rules => update({ rules })} onEdit={setEditing} />
+          </Card>
+
+          <Card>
+            <CardHeader title="Signal" subtitle="Readings outside these limits are ignored before the rules run." />
+            <div className="flex flex-col">
+              <LimitsRow
+                outliers={draft.outliers}
+                onChange={outliers => update({ outliers })}
+                editing={editing === 'limits'}
+                onEdit={on => setEditing(on ? 'limits' : null)}
+                ranges={ranges}
+                seenLabel={seenLabel}
+              />
+              <SpikeRow
+                value={draft.outliers.heartRateSpikeStdDevs}
+                onChange={heartRateSpikeStdDevs => update({ outliers: { ...draft.outliers, heartRateSpikeStdDevs } })}
+                editing={editing === 'spike'}
+                onEdit={on => setEditing(on ? 'spike' : null)}
+                dropped={stats?.spikesDropped ?? null}
+                readings={stats?.heartRateReadings ?? null}
+                seenLabel={seenLabel}
+              />
+              <LowSignalRow
+                value={draft.lowSignalBelow}
+                onChange={lowSignalBelow => update({ lowSignalBelow })}
+                editing={editing === 'lowSignal'}
+                onEdit={on => setEditing(on ? 'lowSignal' : null)}
+                lowSignalNights={stats?.lowSignalNights ?? null}
+                nights={data?.nights ?? nights}
+              >
+                <RuleList
+                  label="Low-signal rule"
+                  nested
+                  rules={draft.lowSignalRules}
+                  onChange={lowSignalRules => update({ lowSignalRules })}
+                  editingKey={editing}
+                  onEdit={setEditing}
+                  stats={stats?.lowSignalRules ?? null}
+                  hitCaption="on those nights"
+                  ranges={ranges}
+                  seenLabel={seenLabel}
+                />
+                <AddRuleButton nested label="Low-signal rule" rules={draft.lowSignalRules} onChange={lowSignalRules => update({ lowSignalRules })} onEdit={setEditing} />
+              </LowSignalRow>
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader title="Cleanup" subtitle="Applied after the rules." />
+            <div className="flex flex-col">
+              <div className="flex items-center justify-between gap-3 border-t border-line py-2.5 text-sm">
+                <span>
+                  {'Smooth single-epoch blips '}
+                  <span className="text-fg-2">(A-B-A becomes A-A-A)</span>
+                  {stats && draft.smoothIsolatedEpochs && <Seen>{`fixed ${stats.smoothed} ${seenLabel}`}</Seen>}
+                </span>
+                <Toggle label="Smooth single-epoch blips" on={draft.smoothIsolatedEpochs} onChange={smoothIsolatedEpochs => update({ smoothIsolatedEpochs })} />
+              </div>
+              <TransitionsRow
+                transitions={draft.transitions}
+                onChange={transitions => update({ transitions })}
+                editing={editing === 'transitions'}
+                onEdit={on => setEditing(on ? 'transitions' : null)}
+                fixes={stats?.transitionFixes ?? null}
+                seenLabel={seenLabel}
+              />
+            </div>
+          </Card>
+
+          {!validation.success && (
+            <InlineError>{validation.error.issues[0]?.message ?? 'These rules are not valid'}</InlineError>
+          )}
+          {save.error && <InlineError>{save.error.message}</InlineError>}
+        </fieldset>
+
+        <div className="flex min-w-0 flex-col gap-3.5 @min-[800px]:sticky @min-[800px]:top-4">
+          <StagePreviewCard
+            data={data}
+            error={preview.error}
+            loading={preview.loading}
+            nights={nights}
+            onNightsChange={setNights}
+            dirty={dirty}
+            canSave={validation.success}
+            saving={busy}
+            onSave={() => save.mutate({ side, classifier: { engine: 'rules', ruleset: draft } })}
+            onDiscard={() => {
+              setDraft(saved)
+              setEditing(null)
+            }}
+          />
+          <ChangesCard
+            changes={changes}
+            disabled={busy}
+            onRevert={(classifier: StageClassifier | null) => save.mutate({ side, classifier })}
+          />
         </div>
-      ))}
-      <Button
-        variant="dashed"
-        size="sm"
-        icon={Plus}
-        disabled={rules.length >= 32}
-        onClick={() => onChange([...rules, { stage: 'wake', when: [NEW_CONDITION] }])}
-      >
-        {label}
-      </Button>
+      </div>
     </div>
   )
 }
 
-function RangeRow({ label, range, onChange }: {
-  label: string
-  range: { min: number, max: number }
-  onChange: (range: { min: number, max: number }) => void
-}) {
-  return (
-    <SettingRow label={label}>
-      <span className="flex items-center gap-1.5">
-        <NumberField label={`${label} minimum`} value={range.min} onChange={min => onChange({ ...range, min })} />
-        <span className="text-fg-3">–</span>
-        <NumberField label={`${label} maximum`} value={range.max} onChange={max => onChange({ ...range, max })} />
-      </span>
-    </SettingRow>
-  )
-}
-
-function TransitionList({ transitions, onChange }: { transitions: StageTransition[], onChange: (t: StageTransition[]) => void }) {
-  const set = (i: number, t: StageTransition) => onChange(transitions.map((x, j) => (j === i ? t : x)))
-  return (
-    <div className="flex flex-col gap-2">
-      <span className="text-[13px] text-fg-2">Transitions that must pass through another stage</span>
-      {transitions.map((t, i) => (
-        <div key={i} className="flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-2">
-            <SelectValue label={`Transition ${i + 1} from`} value={t.from} options={STAGE_OPTIONS} onChange={from => set(i, { ...t, from })} />
-            <span className="text-fg-3">→</span>
-            <SelectValue label={`Transition ${i + 1} to`} value={t.to} options={STAGE_OPTIONS} onChange={to => set(i, { ...t, to })} />
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="text-xs text-fg-3">via</span>
-            <SelectValue label={`Transition ${i + 1} via`} value={t.via} options={STAGE_OPTIONS} onChange={via => set(i, { ...t, via })} />
-            <GhostIcon icon={X} label={`Remove transition ${i + 1}`} onClick={() => onChange(transitions.filter((_, j) => j !== i))} />
-          </span>
-        </div>
-      ))}
-      <Button
-        variant="dashed"
-        size="sm"
-        icon={Plus}
-        disabled={transitions.length >= 16}
-        onClick={() => onChange([...transitions, { from: 'wake', to: 'deep', via: 'light' }])}
-      >
-        Transition
-      </Button>
-    </div>
-  )
-}
-
-const pct = (x: number) => `${Math.round(x * 100)}%`
-
-/** Last night classified with the saved rules and with the draft. */
-function StagePreview({ side, ruleset }: { side: Side, ruleset: StageRuleset | null }) {
+/**
+ * Debounced preview of the draft. Re-runs when the draft, the saved rules
+ * (after a save) or the night span change; an invalid draft keeps the last
+ * result.
+ */
+function useStagePreview(side: Side, ruleset: StageRuleset | null, saved: StageRuleset | null, nights: PreviewNights) {
   const preview = trpc.sleepStages.previewClassifier.useMutation()
   const { mutate } = preview
   const key = useMemo(() => (ruleset ? JSON.stringify(ruleset) : null), [ruleset])
+  const savedKey = useMemo(() => (saved ? JSON.stringify(saved) : null), [saved])
 
   useEffect(() => {
-    if (!key) return
-    const t = setTimeout(() => mutate({ side, classifier: { engine: 'rules', ruleset: JSON.parse(key) as StageRuleset } }), 400)
+    if (!key || !savedKey) return
+    const t = setTimeout(() => mutate({ side, nights, classifier: { engine: 'rules', ruleset: JSON.parse(key) as StageRuleset } }), 400)
     return () => clearTimeout(t)
-  }, [side, key, mutate])
+  }, [side, key, savedKey, nights, mutate])
 
-  const data = preview.data
-  return (
-    <Card>
-      <CardHeader
-        title="Preview"
-        subtitle={data?.enteredBedAt
-          ? `Latest night, ${new Date(data.enteredBedAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}`
-          : 'Latest night'}
-      />
-      {preview.error && <InlineError>{preview.error.message}</InlineError>}
-      {!data && !preview.error && <Skeleton className="h-[96px]" />}
-      {data && !data.saved && !data.candidate && <span className="text-[13px] text-fg-2">No night with vitals to preview yet.</span>}
-      {data && (data.saved || data.candidate) && (
-        <>
-          <PreviewRow label="Saved" stages={data.saved} />
-          <PreviewRow label="These rules" stages={data.candidate} />
-          {!data.hasReference && (
-            <span className="text-xs text-fg-3">Import Apple Watch stages from the iOS app to see how closely each set of rules agrees with it.</span>
-          )}
-        </>
-      )}
-    </Card>
-  )
+  return { data: preview.data, error: preview.error?.message ?? null, loading: preview.isPending }
 }
 
-function PreviewRow({ label, stages }: {
-  label: string
-  stages: { distribution: Record<SleepStage, number>, qualityScore: number, agreement: { accuracy: number, kappa: number | null } | null } | null
+/**
+ * Two sliders over the thresholds people change most: the movement that
+ * counts as wake and the HR ratio that counts as deep. Each moves the
+ * matching value in the rules below and reads out the per-night effect.
+ */
+function QuickAdjustCard({ draft, saved, preview, onChange }: {
+  draft: StageRuleset
+  saved: StageRuleset
+  preview: PreviewOutput | undefined
+  onChange: (r: StageRuleset) => void
 }) {
-  if (!stages) return null
-  const d = stages.distribution
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline gap-2 text-[13px]">
-        <span className="font-medium">{label}</span>
-        <span className="font-mono text-fg-2">{`Q ${stages.qualityScore}`}</span>
-        {stages.agreement && (
-          <span className="ml-auto font-mono text-xs text-fg-2">
-            {`Watch ${pct(stages.agreement.accuracy)}`}
-            {stages.agreement.kappa !== null && ` · κ ${stages.agreement.kappa.toFixed(2)}`}
-          </span>
-        )}
+  const wake = findQuickAdjust(draft, 'wake', 'movement')
+  const deep = findQuickAdjust(draft, 'deep', 'hrRatio')
+  if (!wake && !deep) return null
+
+  const effect = (stage: 'wake' | 'deep') => {
+    const a = preview?.saved?.durations[stage]
+    const b = preview?.candidate?.durations[stage]
+    if (a === undefined || b === undefined || a === b) return 'unchanged'
+    return `${formatSignedMinutes(b - a)} ${stage} / night`
+  }
+
+  const row = (target: QuickAdjust, title: string, sub: string, min: number, max: number, step: number, stage: 'wake' | 'deep') => {
+    const original = saved.rules[target.rule]?.when[target.condition]
+    const from = original && original.metric === target.metric ? original.value : null
+    return (
+      <div className="grid items-center gap-x-4 gap-y-1.5 min-[640px]:grid-cols-[200px_minmax(0,1fr)_200px]">
+        <div>
+          <div className="text-sm">{title}</div>
+          <div className="text-xs text-fg-2">{`Rule ${target.rule + 1} · ${sub}`}</div>
+        </div>
+        <Slider
+          label={title}
+          value={Math.min(max, Math.max(min, target.value))}
+          min={min}
+          max={max}
+          step={step}
+          onChange={v => onChange(withConditionValue(draft, target, v))}
+        />
+        <div className="font-mono text-xs text-fg-2 min-[640px]:text-right">
+          {from !== null && from !== target.value && `${formatMetricValue(target.metric, from)} → `}
+          {formatMetricValue(target.metric, target.value)}
+          {` · ${effect(stage)}`}
+        </div>
       </div>
-      <StageBar awake={d.wake} rem={d.rem} light={d.light} deep={d.deep} />
-      <span className="font-mono text-xs text-fg-3">
-        {`Wake ${d.wake}% · REM ${d.rem}% · Light ${d.light}% · Deep ${d.deep}%`}
-      </span>
-    </div>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader title="Quick adjust" subtitle="Moves the matching values in the rules below." />
+      {wake && row(wake, 'Wake sensitivity', 'movement threshold', 0, 400, 5, 'wake')}
+      {deep && row(deep, 'Deep sleep', 'HR ratio threshold', 0.8, 1, 0.005, 'deep')}
+    </Card>
   )
 }

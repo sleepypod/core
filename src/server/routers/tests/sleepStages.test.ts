@@ -62,10 +62,11 @@ describe('sleepStages router', () => {
   })
 
   /** One 60-minute night: HR dips in the middle 20 minutes, calm movement. */
-  function seedNight(side: 'left' | 'right' = 'left') {
+  function seedNight(side: 'left' | 'right' = 'left', startMinutes = 0) {
+    const at = (minutes: number) => new Date(BED.getTime() + (startMinutes + minutes) * MIN)
     const [record] = bio.insert(bioSchema.sleepRecords).values({
       side,
-      enteredBedAt: BED,
+      enteredBedAt: at(0),
       leftBedAt: at(60),
       sleepDurationSeconds: 3600,
       timesExitedBed: 0,
@@ -113,6 +114,29 @@ describe('sleepStages router', () => {
       await expect(caller.setClassifier({ side: 'left', classifier: bad as StageClassifier })).rejects.toThrow(/min must be less than or equal to max/)
     })
 
+    it('records each save with a summary and lists recent changes, latest first', async () => {
+      seedNight()
+      bio.insert(bioSchema.referenceStages).values({ side: 'left', source: 'apple_watch', start: BED, end: at(60), stage: 'light' }).run()
+      expect((await caller.getClassifier({ side: 'left' })).changes).toEqual([])
+
+      await caller.setClassifier({ side: 'left', classifier: movementOnly })
+      let changes = (await caller.getClassifier({ side: 'left' })).changes
+      expect(changes).toHaveLength(1)
+      expect(changes[0]).toMatchObject({ summary: 'Removed rule 2: Deep +4 more', before: null, agreementAfter: 1 })
+      expect(changes[0].agreementBefore).toBeLessThan(1)
+
+      // Saving the same thing again records nothing.
+      await caller.setClassifier({ side: 'left', classifier: movementOnly })
+      expect((await caller.getClassifier({ side: 'left' })).changes).toHaveLength(1)
+
+      await caller.setClassifier({ side: 'left', classifier: null })
+      changes = (await caller.getClassifier({ side: 'left' })).changes
+      expect(changes).toHaveLength(2)
+      expect(changes[0]).toMatchObject({ summary: 'Reset to default', before: movementOnly })
+      expect(changes[0].changedAt).toBeGreaterThanOrEqual(changes[1].changedAt)
+      expect((await caller.getClassifier({ side: 'right' })).changes).toEqual([])
+    })
+
     it('throws NOT_FOUND when the side has no settings row', async () => {
       mainRaw.prepare('DELETE FROM side_settings WHERE side = ?').run('left')
       await expect(caller.setClassifier({ side: 'left', classifier: movementOnly })).rejects.toThrow(/Side settings for left not found/)
@@ -122,7 +146,7 @@ describe('sleepStages router', () => {
   describe('previewClassifier', () => {
     it('returns empty results when the side has no nights', async () => {
       const out = await caller.previewClassifier({ side: 'left', classifier: movementOnly })
-      expect(out).toEqual({ sleepRecordId: null, enteredBedAt: null, leftBedAt: null, hasReference: false, saved: null, candidate: null })
+      expect(out).toEqual({ sleepRecordId: null, enteredBedAt: null, leftBedAt: null, nights: 0, hasReference: false, saved: null, candidate: null, changed: null })
     })
 
     it('throws NOT_FOUND for another side\'s night', async () => {
@@ -140,6 +164,36 @@ describe('sleepStages router', () => {
       expect(out.candidate?.distribution).toEqual({ wake: 0, light: 100, deep: 0, rem: 0 })
       expect(out.hasReference).toBe(false)
       expect(out.saved?.agreement).toBeNull()
+    })
+
+    it('reports per-rule statistics and where the candidate differs', async () => {
+      seedNight()
+      const out = await caller.previewClassifier({ side: 'left', classifier: DEFAULT_STAGE_CLASSIFIER })
+      expect(out.nights).toBe(1)
+      const stats = out.candidate?.stats
+      expect(stats).toMatchObject({ epochs: 12, nights: 1, lowSignalNights: 0, lowSignalRules: null })
+      const rules = stats?.rules ?? { hits: [], fallbackHits: 0 }
+      expect(rules.hits).toHaveLength(DEFAULT_STAGE_RULESET.rules.length)
+      expect(rules.hits.reduce((a, b) => a + b, 0) + rules.fallbackHits).toBe(12)
+      expect(stats?.metricRanges.heartRate).toEqual({ min: 60, max: 70 })
+      expect(out.candidate?.durations.deep).toBeGreaterThan(0)
+      expect(out.changed).toEqual({ segments: [], changed: 0, total: 12 })
+
+      const moved = await caller.previewClassifier({ side: 'left', classifier: movementOnly })
+      expect(moved.changed?.changed).toBeGreaterThan(0)
+      expect(moved.changed?.segments.length).toBeGreaterThan(0)
+    })
+
+    it('aggregates the latest N nights, latest first', async () => {
+      const older = seedNight('left', -24 * 60)
+      const latest = seedNight('left')
+      const out = await caller.previewClassifier({ side: 'left', nights: 7, classifier: DEFAULT_STAGE_CLASSIFIER })
+      expect(out.nights).toBe(2)
+      expect(out.sleepRecordId).toBe(latest.id)
+      expect(out.sleepRecordId).not.toBe(older.id)
+      expect(out.candidate?.stats).toMatchObject({ epochs: 24, nights: 2 })
+      expect(out.candidate?.totalSleepMs).toBe(60 * MIN)
+      expect(out.candidate?.blocks[0].start).toBe(BED.getTime())
     })
 
     it('scores both against reference stages', async () => {

@@ -629,6 +629,27 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
     "checks": 0,
     "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
+      "changed_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "before | sql:text | logical:json/SQLiteTextJson | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "after | sql:text | logical:json/SQLiteTextJson | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "summary | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "agreement_before | sql:real | logical:number/SQLiteReal | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "agreement_after | sql:real | logical:number/SQLiteReal | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "stageClassifierChanges",
+    "foreignKeys": [],
+    "indexes": [
+      "idx_stage_classifier_changes_side_changed_at | non-unique | columns:side,changed_at | where:none",
+    ],
+    "name": "stage_classifier_changes",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
       "component | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | unique:system_health_component_unique | not-autoincrement | enum:none",
       "status | sql:text | logical:string/SQLiteText | not-null | default:unknown | not-primary-key | not-unique | not-autoincrement | enum:healthy,degraded,down,unknown",
       "message | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",

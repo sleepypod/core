@@ -1,13 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import {
+  changedSegments,
+  classifyNights,
   classifySleepStages,
   mergeIntoBlocks,
+  runStageClassifier,
+  stageDurations,
+  summarizeRuns,
   calculateDistribution,
   calculateQualityScore,
   formatDurationHM,
   piezoCalibrationQuality,
   scoreAgainstReference,
   type SleepEpoch,
+  type SleepStage,
 } from '../sleep-stages'
 import { DEFAULT_STAGE_RULESET, MOVEMENT_ONLY_STAGE_RULESET, type StageRuleset } from '../sleep-stage-rules'
 
@@ -934,5 +940,94 @@ describe('scoreAgainstReference', () => {
     ]
     expect(scoreAgainstReference([epoch(0, 'light'), epoch(5, 'deep')], reference)).toEqual({ epochs: 2, accuracy: 1, kappa: 1 })
     expect(scoreAgainstReference([epoch(0, 'light')], reference)).toEqual({ epochs: 1, accuracy: 1, kappa: null })
+  })
+})
+
+describe('runStageClassifier statistics', () => {
+  const bare: StageRuleset = {
+    ...DEFAULT_STAGE_RULESET,
+    outliers: { ...DEFAULT_STAGE_RULESET.outliers, heartRateSpikeStdDevs: 0 },
+    smoothIsolatedEpochs: false,
+    transitions: [],
+    rules: [
+      { stage: 'wake', when: [{ metric: 'movement', op: '>', value: 200 }] },
+      { stage: 'deep', when: [{ metric: 'hrRatio', op: '<', value: 0.92 }] },
+      { stage: 'rem', when: [{ metric: 'hrRatio', op: '>=', value: 0.95 }, { metric: 'hrv', op: '<', value: 25 }] },
+      { stage: 'rem', when: [{ metric: 'hrRatio', op: '>=', value: 0.95 }, { metric: 'hrv', op: '<', value: 40 }] },
+    ],
+  }
+
+  it('counts hits, standalone matches and which earlier rule shadows a rule that never fires', () => {
+    const vitals = [vitalRow(0, 70, 20, 14), vitalRow(5, 70, 20, 14), vitalRow(10, 70, 20, 14), vitalRow(15, 60, 50, 14), vitalRow(20, 80, 20, 14), vitalRow(25, 80, 20, 14)]
+    const movement = [movRow(0, 300), movRow(5, 10), movRow(10, 10), movRow(15, 10), movRow(20, 10), movRow(25, 10)]
+    const { epochs, stats } = runStageClassifier(vitals, movement, 1, bare)
+    expect(epochs.map(e => e.stage)).toEqual(['wake', 'rem', 'rem', 'deep', 'rem', 'rem'])
+    expect(stats.epochs).toBe(6)
+    expect(stats.lowSignal).toBe(false)
+    expect(stats.ruleHits).toEqual([1, 1, 4, 0])
+    expect(stats.ruleMatches).toEqual([1, 1, 5, 5])
+    expect(stats.shadowedBy).toEqual([null, null, null, 2])
+    expect(stats.fallbackHits).toBe(0)
+    expect(stats.metricRanges.heartRate).toEqual({ min: 60, max: 80 })
+    expect(stats.metricRanges.hrv).toEqual({ min: 20, max: 50 })
+    expect(stats.metricRanges.movement).toEqual({ min: 10, max: 300 })
+    expect(stats.metricRanges.hrRatio?.min).toBeCloseTo(60 / (430 / 6), 5)
+    expect(stats.heartRateReadings).toBe(6)
+    expect(stats.spikesDropped).toBe(0)
+  })
+
+  it('counts epochs changed by smoothing and by the transition constraints', () => {
+    const smoothing: StageRuleset = { ...bare, smoothIsolatedEpochs: true }
+    const flat = [vitalRow(0, 70, 50, 14), vitalRow(5, 70, 50, 14), vitalRow(10, 70, 50, 14)]
+    const blip = runStageClassifier(flat, [movRow(0, 300), movRow(5, 10), movRow(10, 300)], 1, smoothing)
+    expect(blip.epochs.map(e => e.stage)).toEqual(['wake', 'wake', 'wake'])
+    expect(blip.stats.smoothed).toBe(1)
+    expect(blip.stats.fallbackHits).toBe(1)
+
+    const constrained: StageRuleset = { ...bare, transitions: [{ from: 'wake', to: 'deep', via: 'light' }] }
+    const dip = [vitalRow(0, 80, 50, 14), vitalRow(5, 80, 50, 14), vitalRow(10, 60, 50, 14), vitalRow(15, 60, 50, 14)]
+    const run = runStageClassifier(dip, [movRow(0, 300), movRow(5, 300)], 1, constrained)
+    expect(run.epochs.map(e => e.stage)).toEqual(['wake', 'wake', 'light', 'deep'])
+    expect(run.stats.transitionFixes).toBe(1)
+  })
+
+  it('reports an empty run and the low-signal list', () => {
+    expect(runStageClassifier([], [], 1, bare).stats).toMatchObject({ epochs: 0, ruleHits: [0, 0, 0, 0], lowSignal: false })
+    const low = runStageClassifier([vitalRow(0, 70, 50, 14)], [movRow(0, 300)], 0, bare)
+    expect(low.stats.lowSignal).toBe(true)
+    expect(low.stats.ruleHits).toEqual([1])
+  })
+
+  it('sums stats over nights, keeping normal and low-signal rules apart', () => {
+    const a = runStageClassifier([vitalRow(0, 70, 50, 14), vitalRow(5, 70, 50, 14)], [movRow(0, 300)], 1, bare).stats
+    const b = runStageClassifier([vitalRow(0, 70, 50, 14)], [movRow(0, 300)], 0, bare).stats
+    const s = summarizeRuns([a, b])
+    expect(s).toMatchObject({ epochs: 3, nights: 2, lowSignalNights: 1 })
+    expect(s.rules).toMatchObject({ epochs: 2, hits: [1, 0, 0, 0], fallbackHits: 1 })
+    expect(s.lowSignalRules).toMatchObject({ epochs: 1, hits: [1] })
+    expect(s.metricRanges.movement).toEqual({ min: 300, max: 300 })
+    expect(summarizeRuns([]).rules).toBeNull()
+  })
+
+  it('finds where two classifications of a night disagree', () => {
+    const mk = (stages: SleepStage[]): SleepEpoch[] => stages.map((stage, i) => ({ start: i * 300_000, duration: 300_000, stage, heartRate: null, hrv: null, breathingRate: null, movement: null }))
+    const diff = changedSegments(mk(['wake', 'light', 'light', 'deep', 'rem']), mk(['wake', 'deep', 'deep', 'deep', 'light']))
+    expect(diff).toEqual({ changed: 3, total: 5, segments: [{ start: 300_000, end: 900_000 }, { start: 1_200_000, end: 1_500_000 }] })
+    expect(stageDurations(mk(['wake', 'wake', 'deep']))).toEqual({ wake: 600_000, light: 0, deep: 300_000, rem: 0 })
+  })
+
+  it('aggregates several nights for a preview, latest first', () => {
+    const reference = [{ start: vitalRow(0, 70).timestamp.getTime(), end: vitalRow(60, 70).timestamp.getTime(), stage: 'wake' as const }]
+    const latest = { vitalsData: [vitalRow(0, 70, 50, 14), vitalRow(5, 70, 50, 14)], movementData: [movRow(0, 300), movRow(5, 300)], calibrationQuality: 1, reference }
+    const earlier = { vitalsData: [vitalRow(-1440, 70, 50, 14), vitalRow(-1435, 70, 50, 14)], movementData: [], calibrationQuality: 1, reference: [] }
+    const out = classifyNights([latest, earlier], bare)
+    expect(out).not.toBeNull()
+    expect(out?.latestEpochs.map(e => e.stage)).toEqual(['wake', 'wake'])
+    expect(out?.summary.blocks).toHaveLength(1)
+    expect(out?.summary.distribution).toEqual({ wake: 50, light: 50, deep: 0, rem: 0 })
+    expect(out?.summary.durations.wake).toBe(300_000)
+    expect(out?.summary.agreement).toMatchObject({ epochs: 2, accuracy: 1 })
+    expect(out?.summary.stats.nights).toBe(2)
+    expect(classifyNights([{ ...earlier, vitalsData: [] }], bare)).toBeNull()
   })
 })

@@ -243,6 +243,22 @@ const expectedTables: Record<string, TableSpec> = {
     ],
     indexes: [],
   },
+  stageClassifierChanges: {
+    name: 'stage_classifier_changes',
+    columns: [
+      { name: 'id', notNull: true, default: 'fn' },
+      { name: 'side', notNull: true, default: undefined },
+      { name: 'changed_at', notNull: true, default: 'sql' },
+      { name: 'before', notNull: false, default: undefined },
+      { name: 'after', notNull: false, default: undefined },
+      { name: 'summary', notNull: true, default: undefined },
+      { name: 'agreement_before', notNull: false, default: undefined },
+      { name: 'agreement_after', notNull: false, default: undefined },
+    ],
+    indexes: [
+      { name: 'idx_stage_classifier_changes_side_changed_at', unique: false, columns: ['side', 'changed_at'] },
+    ],
+  },
   tapGestures: {
     name: 'tap_gestures',
     columns: [

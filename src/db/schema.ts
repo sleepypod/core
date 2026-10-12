@@ -106,6 +106,29 @@ export const sideSettings = sqliteTable('side_settings', {
     .default(sql`(unixepoch())`),
 })
 
+/**
+ * Every save of a side's sleep stage classifier, so the editor can list
+ * recent changes with their effect and revert one. `before`/`after` are
+ * classifiers ({ engine, ruleset }) or null for the defaults.
+ */
+export const stageClassifierChanges = sqliteTable('stage_classifier_changes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  changedAt: integer('changed_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  before: text('before', { mode: 'json' }),
+  after: text('after', { mode: 'json' }),
+  // "Wake movement 200 → 240 +2 more"
+  summary: text('summary').notNull(),
+  // Agreement with reference stages (0–1) on the latest night, before and
+  // after the change; null when that night has no reference stages.
+  agreementBefore: real('agreement_before'),
+  agreementAfter: real('agreement_after'),
+}, t => [
+  index('idx_stage_classifier_changes_side_changed_at').on(t.side, t.changedAt),
+])
+
 export const tapGestures = sqliteTable('tap_gestures', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

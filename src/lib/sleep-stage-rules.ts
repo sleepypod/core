@@ -186,3 +186,68 @@ export function describeCondition(c: StageCondition): string {
   const unit = STAGE_METRIC_UNITS[c.metric]
   return `${STAGE_METRIC_LABELS[c.metric]} ${c.op} ${c.value}${unit ? ` ${unit}` : ''}`
 }
+
+const STAGE_NAMES: Record<SleepStageName, string> = { wake: 'Wake', light: 'Light', deep: 'Deep', rem: 'REM' }
+type SleepStageName = typeof SLEEP_STAGES[number]
+
+/** "Wake movement 200 → 240": the first thing that differs, for a change log. */
+export function describeRulesetChange(before: StageRuleset, after: StageRuleset): string[] {
+  const out: string[] = []
+  const range = (r: { min: number, max: number }) => `${r.min}–${r.max}`
+  const stageName = (s: SleepStageName) => STAGE_NAMES[s]
+  const metric = (m: StageMetric) => STAGE_METRIC_LABELS[m].toLowerCase().replace('hr ratio', 'HR ratio').replace('hrv', 'HRV')
+
+  const diffRules = (a: StageRule[], b: StageRule[], label: string) => {
+    const n = Math.max(a.length, b.length)
+    for (let i = 0; i < n; i++) {
+      const ra = a[i]
+      const rb = b[i]
+      if (!ra || !rb) {
+        if (rb) out.push(`Added ${label} ${i + 1}: ${stageName(rb.stage)}`)
+        if (ra) out.push(`Removed ${label} ${i + 1}: ${stageName(ra.stage)}`)
+        continue
+      }
+      if (ra.stage !== rb.stage) out.push(`${label[0].toUpperCase()}${label.slice(1)} ${i + 1}: ${stageName(ra.stage)} → ${stageName(rb.stage)}`)
+      const m = Math.max(ra.when.length, rb.when.length)
+      for (let k = 0; k < m; k++) {
+        const ca = ra.when[k]
+        const cb = rb.when[k]
+        if (!ca || !cb) {
+          if (cb) out.push(`${stageName(rb.stage)}: added ${describeCondition(cb).toLowerCase()}`)
+          if (ca) out.push(`${stageName(rb.stage)}: removed ${describeCondition(ca).toLowerCase()}`)
+          continue
+        }
+        if (ca.metric !== cb.metric || ca.op !== cb.op) {
+          out.push(`${stageName(rb.stage)}: ${describeCondition(ca)} → ${describeCondition(cb)}`)
+        }
+        else if (ca.value !== cb.value) {
+          const unit = STAGE_METRIC_UNITS[cb.metric]
+          out.push(`${stageName(rb.stage)} ${metric(cb.metric)} ${ca.value} → ${cb.value}${unit ? ` ${unit}` : ''}`)
+        }
+      }
+    }
+  }
+
+  diffRules(before.rules, after.rules, 'rule')
+  if (before.fallback !== after.fallback) out.push(`Otherwise ${stageName(before.fallback)} → ${stageName(after.fallback)}`)
+  const oa = before.outliers
+  const ob = after.outliers
+  if (range(oa.heartRate) !== range(ob.heartRate)) out.push(`Heart rate limits ${range(oa.heartRate)} → ${range(ob.heartRate)} bpm`)
+  if (range(oa.hrv) !== range(ob.hrv)) out.push(`HRV limits ${range(oa.hrv)} → ${range(ob.hrv)} ms`)
+  if (range(oa.breathingRate) !== range(ob.breathingRate)) out.push(`Breathing limits ${range(oa.breathingRate)} → ${range(ob.breathingRate)} br/min`)
+  if (oa.heartRateSpikeStdDevs !== ob.heartRateSpikeStdDevs) out.push(`HR spike filter ${oa.heartRateSpikeStdDevs} → ${ob.heartRateSpikeStdDevs} SD`)
+  if (before.lowSignalBelow !== after.lowSignalBelow) out.push(`Low signal below ${before.lowSignalBelow} → ${after.lowSignalBelow}`)
+  diffRules(before.lowSignalRules, after.lowSignalRules, 'low-signal rule')
+  if (before.smoothIsolatedEpochs !== after.smoothIsolatedEpochs) out.push(`Smoothing ${after.smoothIsolatedEpochs ? 'on' : 'off'}`)
+  if (JSON.stringify(before.transitions) !== JSON.stringify(after.transitions)) {
+    out.push(`Transitions ${before.transitions.length} → ${after.transitions.length}`)
+  }
+  return out
+}
+
+/** One line for a change log: the first difference, plus how many more. */
+export function summarizeRulesetChange(before: StageRuleset, after: StageRuleset): string {
+  const changes = describeRulesetChange(before, after)
+  if (changes.length === 0) return 'No change'
+  return changes.length === 1 ? changes[0] : `${changes[0]} +${changes.length - 1} more`
+}

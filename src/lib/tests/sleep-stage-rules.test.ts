@@ -3,11 +3,14 @@ import {
   DEFAULT_STAGE_CLASSIFIER,
   DEFAULT_STAGE_RULESET,
   describeCondition,
+  describeRulesetChange,
   MOVEMENT_ONLY_STAGE_RULESET,
   resolveStageClassifier,
   STAGE_RULESET_PRESETS,
   stageClassifierSchema,
   stageRulesetSchema,
+  summarizeRulesetChange,
+  type StageRuleset,
 } from '../sleep-stage-rules'
 
 describe('stage rulesets', () => {
@@ -67,5 +70,44 @@ describe('describeCondition', () => {
     expect(describeCondition({ metric: 'hrRatio', op: '<', value: 0.92 })).toBe('HR ratio < 0.92')
     expect(describeCondition({ metric: 'heartRate', op: '>=', value: 80 })).toBe('Heart rate >= 80 bpm')
     expect(describeCondition({ metric: 'movement', op: '>', value: 200 })).toBe('Movement > 200')
+  })
+})
+
+describe('describeRulesetChange', () => {
+  const base = DEFAULT_STAGE_RULESET
+
+  it('names a moved threshold with its unit', () => {
+    const after: StageRuleset = {
+      ...base,
+      rules: base.rules.map((r, i) => (i === 0 ? { ...r, when: [{ ...r.when[0], value: 240 }] } : i === 2 ? { ...r, when: r.when.map((c, k) => (k === 1 ? { ...c, value: 20 } : c)) } : r)),
+    }
+    expect(describeRulesetChange(base, after)).toEqual(['Wake movement 200 → 240', 'REM HRV 25 → 20 ms'])
+    expect(summarizeRulesetChange(base, after)).toBe('Wake movement 200 → 240 +1 more')
+  })
+
+  it('describes added and removed rules, conditions and the rest of the ruleset', () => {
+    const after: StageRuleset = {
+      ...base,
+      rules: [...base.rules.slice(0, 4), { stage: 'rem', when: [] }],
+      fallback: 'deep',
+      outliers: { ...base.outliers, heartRate: { min: 40, max: 130 }, heartRateSpikeStdDevs: 3 },
+      lowSignalBelow: 0.4,
+      smoothIsolatedEpochs: false,
+      transitions: base.transitions.slice(0, 2),
+    }
+    expect(describeRulesetChange(base, after)).toEqual([
+      'Rule 5: Wake → REM',
+      'REM: removed hr ratio >= 0.95',
+      'REM: removed movement > 100',
+      'Otherwise Light → Deep',
+      'Heart rate limits 45–130 → 40–130 bpm',
+      'HR spike filter 2 → 3 SD',
+      'Low signal below 0.3 → 0.4',
+      'Smoothing off',
+      'Transitions 4 → 2',
+    ])
+    expect(describeRulesetChange(base, { ...base, rules: [...base.rules, { stage: 'deep', when: [] }] })).toEqual(['Added rule 6: Deep'])
+    expect(describeRulesetChange(base, MOVEMENT_ONLY_STAGE_RULESET)[0]).toBe('Removed rule 2: Deep')
+    expect(summarizeRulesetChange(base, base)).toBe('No change')
   })
 })
