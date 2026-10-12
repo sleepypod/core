@@ -1053,8 +1053,10 @@ class SideProcessor:
         if cross_channel_rejected:
             # The other side owns this energy. Zeroing acr alone cannot end
             # presence (exit needs weak energy too), so count the window as
-            # weak and let the normal hysteresis exit instead of latching.
-            present = self._presence.update(0.0, 0.0)
+            # weak and let the normal hysteresis exit instead of latching,
+            # and never submit vitals computed from it meanwhile.
+            self._presence.update(0.0, 0.0)
+            present = False
         else:
             present = self._presence.update(med_std, acr_qual, relaxed=relaxed)
         # Piezo presence is vibration energy and rhythm; a prime or the pump

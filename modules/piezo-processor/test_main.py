@@ -1300,7 +1300,9 @@ class TestPumpCouplingGuardWithBedPresence:
                 states.append(proc._presence.state)
         assert states[0] == PresenceDetector.PRESENT
         assert states[-1] == PresenceDetector.ABSENT
-        assert len(seen) == proc._presence.exit_count
+        # Only the window before rejection produced vitals; the rejected
+        # windows advance the exit count but are never submitted.
+        assert len(seen) == 1
 
 
 class TestSideProcessorAbsenceThrottle:
