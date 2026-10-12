@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   timeFormat: '12h' as '12h' | '24h',
   shown: ['left', 'right'] as Array<'left' | 'right'>,
   reference: [] as Array<{ timestamp: Date, heartRate: number }>,
+  referenceOpts: undefined as Record<string, unknown> | undefined,
 }))
 
 vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => state.timeFormat }))
@@ -49,7 +50,12 @@ vi.mock('@/src/utils/trpc', () => ({
       },
       getFileCount: { useQuery: () => ({ data: { rawFiles: { left: 4, right: 4 }, totalSizeMB: 8.45 } }) },
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
-      getReferenceVitals: { useQuery: () => ({ data: state.reference }) },
+      getReferenceVitals: {
+        useQuery: (_input: unknown, opts: Record<string, unknown>) => {
+          state.referenceOpts = opts
+          return { data: state.reference }
+        },
+      },
     },
     settings: { getAll: { useQuery: () => ({ data: { sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } } }) } },
     health: {
@@ -176,6 +182,13 @@ describe('BiometricsPage', () => {
     finally {
       state.reference = []
     }
+  })
+
+  it('does not carry the previous side’s Watch samples across a side switch', () => {
+    // The pod line may keep its placeholder while the new side loads, but the
+    // Watch overlay must not: that would compare one person to the other.
+    render(<BiometricsPage />)
+    expect(state.referenceOpts).not.toHaveProperty('placeholderData')
   })
 
   it('drops the Occupied field from the sides card', () => {
