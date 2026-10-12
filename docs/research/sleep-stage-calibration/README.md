@@ -59,8 +59,11 @@ scripts/import-watch-health.py ~/Desktop/apple_health_export --pod <pod-ip> --si
 It posts `SleepAnalysis` segments to `POST /api/biometrics/reference-stages`
 and `HeartRate` samples to `POST /api/biometrics/reference-vitals`, in batches
 of 2000, for the last 30 days (`--days 0` for everything; `--dry-run` to count
-only). Both endpoints are first-write-wins on side + time + source, so
-re-running on a newer export only adds what is new. Watch heart rate is kept
+only). Heart rate is first-write-wins on side + time + source, so re-running
+on a newer export only adds what is new. Stages are stricter: the pod rejects
+a batch whose segment overlaps a stored one with different boundaries (say a
+night the iOS app already posted); the script skips that batch with a warning,
+still imports heart rate, and exits 1. Watch heart rate is kept
 in its own `reference_vitals` table and never mixed into the pod's `vitals`,
 which feed occupancy, sleep staging and the chart baselines.
 

@@ -11,10 +11,14 @@ parser as sleep-stage-dataset.py, keeps samples whose sourceName matches
   POST /api/biometrics/reference-stages   SleepAnalysis segments (wake/light/deep/rem)
   POST /api/biometrics/reference-vitals   HeartRate samples
 
-Both endpoints are idempotent (first write wins on side + time + source), so
-re-running on a newer export only adds what is new. Nothing is written to the
-pod's own `vitals` table: Watch heart rate lives in `reference_vitals`, and the
-Biometrics page draws it as a second line over the pod's heart rate.
+Heart rate is first-write-wins on side + time + source, so re-running on a
+newer export only adds what is new. Stages are stricter: a batch is rejected
+(HTTP 400) when a segment overlaps a stored one with different boundaries,
+e.g. a night the iOS app already posted. Such a batch is skipped with a
+warning, heart rate is still imported, and the run exits 1 at the end.
+Nothing is written to the pod's own `vitals` table: Watch heart rate lives in
+`reference_vitals`, and the Biometrics page draws it as a second line over the
+pod's heart rate.
 
 Options:
   --days N        only samples from the last N days (default 30; 0 = everything)
@@ -74,6 +78,14 @@ def chunks(items, n=BATCH):
         yield items[i:i + n]
 
 
+class Rejected(Exception):
+    """The pod answered 4xx: the batch is bad, the pod is fine."""
+
+    def __init__(self, url, code, body):
+        super().__init__(f'{url} returned {code}: {body[:500]}')
+        self.code = code
+
+
 def post_json(url, payload, timeout=30):
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
@@ -82,6 +94,8 @@ def post_json(url, payload, timeout=30):
             return json.loads(resp.read().decode('utf-8') or '{}')
     except urllib.error.HTTPError as e:
         body = e.read().decode('utf-8', 'replace')
+        if 400 <= e.code < 500:
+            raise Rejected(url, e.code, body)
         raise SystemExit(f'error: {url} returned {e.code}: {body[:500]}')
     except urllib.error.URLError as e:
         raise SystemExit(f'error: cannot reach {url}: {e.reason}')
@@ -116,11 +130,19 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
 
     url = base_url(pod)
     written = {'stages': 0, 'vitals': 0}
+    rejected = 0
     for batch in chunks(segs):
-        out = post(f'{url}/api/biometrics/reference-stages', {
-            'side': side, 'source': 'apple_watch',
-            'segments': [{'start': a, 'end': b, 'stage': st} for a, b, st in batch],
-        })
+        try:
+            out = post(f'{url}/api/biometrics/reference-stages', {
+                'side': side, 'source': 'apple_watch',
+                'segments': [{'start': a, 'end': b, 'stage': st} for a, b, st in batch],
+            })
+        except Rejected as e:
+            # A stored segment with different boundaries (iOS app, older
+            # import) blocks this batch; the rest of the run still goes in.
+            warn(f'skipped a batch of {len(batch)} stage segments ({span([s[0] for s in batch])}): {e}')
+            rejected += 1
+            continue
         written['stages'] += int(out.get('written', 0))
     for batch in chunks(samples):
         out = post(f'{url}/api/biometrics/reference-vitals', {
@@ -130,6 +152,8 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
         written['vitals'] += int(out.get('written', 0))
     print(f"wrote {written['stages']} new stage segments and {written['vitals']} new heart-rate samples to {url}",
           file=sys.stderr)
+    if rejected:
+        raise SystemExit(f'error: {rejected} stage batch(es) rejected by the pod; heart rate was still imported')
     return written
 
 

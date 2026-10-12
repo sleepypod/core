@@ -132,7 +132,7 @@ export const biometrics: DemoHandlers<'biometrics'> = {
         createdAt: new Date(v.t),
       }))
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-      .slice(0, input.limit ?? 5000)
+      .slice(-(input.limit ?? 5000))
   },
 
   getVitalsSummary: (input) => {

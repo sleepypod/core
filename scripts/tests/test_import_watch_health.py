@@ -60,6 +60,16 @@ class Recorder:
         return {'written': len(payload[key])}
 
 
+class RejectingRecorder(Recorder):
+    """Pod stand-in that refuses every stage batch like a stored-overlap 400."""
+
+    def __call__(self, url, payload):
+        if 'segments' in payload:
+            self.calls.append((url, payload))
+            raise iw.Rejected(url, 400, 'Segments overlap stored reference stages')
+        return super().__call__(url, payload)
+
+
 class ImportWatchHealthTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -140,6 +150,18 @@ class ImportWatchHealthTest(unittest.TestCase):
         self.assertEqual([(s['start'], s['end'], s['stage']) for s in segs], [
             (t(0), t(20), 'light'), (t(20), t(25), 'deep'), (t(25), t(28), 'rem'), (t(28), t(40), 'deep'),
         ])
+
+    def test_rejected_stage_batch_still_imports_heart_rate_and_exits_nonzero(self):
+        write_export(self.export, [(0, 20, 'AsleepCore')], [(1, 58), (6, 60)])
+        post = RejectingRecorder()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as cm:
+                iw.run(self.export, '192.168.1.88', 'left', post=post, now=self.now)
+        self.assertEqual([u.rsplit('/', 1)[1] for u, _ in post.calls], ['reference-stages', 'reference-vitals'])
+        self.assertEqual(len(post.calls[1][1]['samples']), 2)
+        self.assertIn('skipped a batch of 1 stage segments', err.getvalue())
+        self.assertIn('1 stage batch(es) rejected', str(cm.exception))
 
     def test_drops_implausible_heart_rates(self):
         write_export(self.export, [], [(1, 58), (2, 5), (3, 400)])

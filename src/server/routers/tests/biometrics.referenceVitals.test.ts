@@ -127,14 +127,14 @@ describe('biometrics reference vitals', () => {
       expect(out).toEqual([])
     })
 
-    it('applies the limit', async () => {
+    it('keeps the newest samples, oldest first, when the window exceeds the limit', async () => {
       const out = await caller.getReferenceVitals({
         side: 'left',
         startDate: new Date(T0 * 1000),
         endDate: new Date((T0 + 60 * MIN) * 1000),
         limit: 2,
       })
-      expect(out).toHaveLength(2)
+      expect(out.map(r => r.timestamp.getTime() / 1000)).toEqual([T0 + 5 * MIN, T0 + 10 * MIN])
     })
 
     it('rejects a reversed window', async () => {
