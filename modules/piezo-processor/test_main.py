@@ -1231,6 +1231,26 @@ class TestPumpCouplingGuardWithBedPresence:
         assert proc._presence.state == PresenceDetector.ABSENT
         assert seen == []
 
+    def test_cross_channel_rejected_side_is_not_relaxed_into_presence(self):
+        """Single-sleeper mode: both sides read the home side as occupied,
+        so the away side (coupling from the sleeper, weaker energy, rejected
+        by the other side's stronger signal) must stay ABSENT even though
+        its energy alone clears the relaxed re-entry bar."""
+        import main
+        proc, seen = self._proc(True, 0.3)
+        other = main.SideProcessor("right", main.DBHolder(TestWriteVitalsResilience()._make_db()))
+        other._last_med_std = proc._presence.enter_threshold * 2
+        other._last_acr_qual = 0.8
+        proc._other = other
+        np.random.seed(7)
+        sig = make_bcg_signal(62, 15, noise_level=0.05) * 0.6
+        with patch("main._autocorr_quality", return_value=0.3), \
+                patch("main.time.time", return_value=1_000_000.0):
+            proc.ingest(sig)
+        assert proc._last_acr_qual == 0.0
+        assert proc._presence.state == PresenceDetector.ABSENT
+        assert seen == []
+
 
 class TestSideProcessorAbsenceThrottle:
     """_maybe_write must update _last_write on 'no user' so return from

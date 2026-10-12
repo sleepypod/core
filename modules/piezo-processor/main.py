@@ -974,6 +974,7 @@ class SideProcessor:
                 for j in range(0, len(filt) - w + 1, w)]
         med_std = float(np.median(stds)) if stds else 0.0
         acr_qual = _autocorr_quality(hr_arr)
+        cross_channel_rejected = False
 
         # Cross-channel rejection: if the other side has stronger or similar
         # signal AND strong autocorrelation (someone is actually there), this
@@ -993,6 +994,7 @@ class SideProcessor:
                     and other_std > med_std * 0.7
                     and med_std < self._presence.enter_threshold):
                 acr_qual = 0.0
+                cross_channel_rejected = True
 
         # Cache AFTER suppression so the other side sees post-suppression values
         self._last_med_std = med_std
@@ -1033,10 +1035,15 @@ class SideProcessor:
                     )
                     return
 
-        if bed is True and self._presence.state == PresenceDetector.ABSENT:
+        # Cross-channel rejection already decided this side's energy is the
+        # other sleeper's coupling; an occupied bed must not relax it back in,
+        # or in single-sleeper mode (both sides read the home side as
+        # occupied) the away side submits phantom candidates.
+        relaxed = bed is True and not cross_channel_rejected
+        if relaxed and self._presence.state == PresenceDetector.ABSENT:
             log.debug("%s: bed reads occupied, relaxed piezo re-entry (med_std=%.0f, acr=%.2f)",
                       self.side, med_std, acr_qual)
-        present = self._presence.update(med_std, acr_qual, relaxed=bed is True)
+        present = self._presence.update(med_std, acr_qual, relaxed=relaxed)
         # Piezo presence is vibration energy and rhythm; a prime or the pump
         # shaking an empty bed passes it. Trust the capacitance-based
         # presence when the sleep-detector says nobody is there.
