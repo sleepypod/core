@@ -526,6 +526,13 @@ class PresenceDetector:
     Uses median std of 1-10 Hz filtered signal in 5-second windows as
     the primary feature, with autocorrelation quality as secondary.
     Requires 3 consecutive low windows to exit PRESENT state.
+
+    The enter/exit gap protects against an empty bed that vibrates (pump,
+    prime). When the capacitance sensor already confirms a body is in bed
+    (`relaxed=True`), that protection costs an hour of missed vitals per
+    night: a sleeper who rolls into a weak-signal position exits after three
+    windows and then has to move hard to re-enter. Relaxed re-entry uses the
+    exit criteria, so presence resumes as soon as the signal stops being weak.
     """
     ABSENT = 0
     PRESENT = 1
@@ -538,16 +545,26 @@ class PresenceDetector:
         self.exit_count = 3       # 3 consecutive low windows to declare absent
         self.acr_threshold = 0.45
 
-    def update(self, window_std: float, acr_qual: float) -> bool:
-        """Update state and return True if user is present."""
+    def _is_weak(self, window_std: float, acr_qual: float) -> bool:
+        return window_std < self.exit_threshold and acr_qual < self.acr_threshold * 0.5
+
+    def update(self, window_std: float, acr_qual: float, relaxed: bool = False) -> bool:
+        """Update state and return True if user is present.
+
+        `relaxed`: the bed is known occupied by another sensor; re-enter on
+        anything that would not count as an exit window."""
         if self.state == self.ABSENT:
-            if window_std > self.enter_threshold or acr_qual > self.acr_threshold:
+            if relaxed:
+                entered = not self._is_weak(window_std, acr_qual)
+            else:
+                entered = window_std > self.enter_threshold or acr_qual > self.acr_threshold
+            if entered:
                 self.state = self.PRESENT
                 self.consecutive_low = 0
                 return True
             return False
         else:
-            if window_std < self.exit_threshold and acr_qual < self.acr_threshold * 0.5:
+            if self._is_weak(window_std, acr_qual):
                 self.consecutive_low += 1
                 if self.consecutive_low >= self.exit_count:
                     self.state = self.ABSENT
@@ -981,6 +998,11 @@ class SideProcessor:
         self._last_med_std = med_std
         self._last_acr_qual = acr_qual
 
+        # The bed's own answer to "is anyone here" (sleep-detector capacitance
+        # presence), read once per cycle: True relaxes re-entry below, False
+        # vetoes piezo presence, None (unknown) leaves the piezo alone.
+        bed = self.bed_occupied() if self.bed_occupied is not None else None
+
         # Pump-coupling guard. PumpGate handles symmetric spikes (ramps)
         # but misses two steady-state modes: asymmetric (own-pump-on with
         # opposite idle — vibration couples into same-side piezo, no
@@ -989,7 +1011,15 @@ class SideProcessor:
         # cardiac band, both sides look "real"). In both, require elevated
         # energy AND strong autocorrelation to enter PRESENT; coupling
         # rarely produces both, only a real person does.
-        if self._pump_state is not None and self._presence.state == PresenceDetector.ABSENT:
+        #
+        # The guard answers "is this vibration a person or the pump". When
+        # the capacitance sensor says a person is in bed, that question is
+        # settled; on Pod 5 both pumps run all night, so without this bypass
+        # a sleeper who drifted to a weak-signal position stayed ABSENT for
+        # an hour at a time (05:57-07:01 on 2026-10-11) until a hard movement
+        # cleared the raised bar.
+        if (self._pump_state is not None and bed is not True
+                and self._presence.state == PresenceDetector.ABSENT):
             symmetric = self._pump_state.is_symmetric_active()
             asymmetric = self._pump_state.is_asymmetric_for(self.side)
             if symmetric or asymmetric:
@@ -1003,11 +1033,14 @@ class SideProcessor:
                     )
                     return
 
-        present = self._presence.update(med_std, acr_qual)
+        if bed is True and self._presence.state == PresenceDetector.ABSENT:
+            log.debug("%s: bed reads occupied, relaxed piezo re-entry (med_std=%.0f, acr=%.2f)",
+                      self.side, med_std, acr_qual)
+        present = self._presence.update(med_std, acr_qual, relaxed=bed is True)
         # Piezo presence is vibration energy and rhythm; a prime or the pump
         # shaking an empty bed passes it. Trust the capacitance-based
         # presence when the sleep-detector says nobody is there.
-        if present and self.bed_occupied is not None and self.bed_occupied() is False:
+        if present and bed is False:
             present = False
 
         if not present:

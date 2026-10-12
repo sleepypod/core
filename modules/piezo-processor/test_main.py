@@ -52,6 +52,7 @@ from main import (  # noqa: E402
     FrzHealthPumpState,
     PUMP_OFF_GUARD_S,
     PUMP_ACTIVE_RPM_MIN,
+    PUMP_COUPLING_STD_FACTOR,
     HRTracker,
     PresenceDetector,
     PumpGate,
@@ -1086,6 +1087,149 @@ class TestWriteVitalsResilience:
         assert wrote is True
         rows = good.execute("SELECT side FROM vitals").fetchall()
         assert rows == [("right",)]
+
+
+class TestPresenceDetectorRelaxedReentry:
+    """With the bed confirmed occupied by the capacitance sensor, re-entry
+    uses the exit criteria instead of the (much higher) enter threshold, so a
+    sleeper who went quiet resumes vitals without a hard movement."""
+
+    def _absent_after_quiet(self):
+        pd = PresenceDetector()
+        pd.update(1_000_000, 0.8)
+        for _ in range(pd.exit_count):
+            pd.update(50_000, 0.05)
+        assert pd.state == PresenceDetector.ABSENT
+        return pd
+
+    def test_moderate_signal_does_not_reenter_by_default(self):
+        pd = self._absent_after_quiet()
+        # Between exit (150k) and enter (400k), autocorr below 0.45.
+        assert pd.update(250_000, 0.3) is False
+        assert pd.state == PresenceDetector.ABSENT
+
+    def test_moderate_signal_reenters_when_relaxed(self):
+        pd = self._absent_after_quiet()
+        assert pd.update(250_000, 0.3, relaxed=True) is True
+        assert pd.state == PresenceDetector.PRESENT
+        assert pd.consecutive_low == 0
+
+    def test_relaxed_reentry_on_autocorrelation_alone(self):
+        pd = self._absent_after_quiet()
+        # Energy still weak, but rhythm above the exit bar (0.225).
+        assert pd.update(50_000, 0.3, relaxed=True) is True
+
+    def test_weak_window_stays_absent_even_when_relaxed(self):
+        pd = self._absent_after_quiet()
+        assert pd.update(100_000, 0.1, relaxed=True) is False
+        assert pd.state == PresenceDetector.ABSENT
+
+    def test_relaxed_flag_does_not_change_exit_behaviour(self):
+        pd = PresenceDetector()
+        pd.update(1_000_000, 0.8, relaxed=True)
+        for _ in range(pd.exit_count - 1):
+            assert pd.update(50_000, 0.05, relaxed=True) is True
+        assert pd.update(50_000, 0.05, relaxed=True) is False
+        assert pd.state == PresenceDetector.ABSENT
+
+    def test_first_entry_from_cold_start_is_also_relaxed(self):
+        pd = PresenceDetector()
+        assert pd.update(200_000, 0.1, relaxed=True) is True
+
+
+class TestPumpCouplingGuardWithBedPresence:
+    """Both pumps running (Pod 5 steady state) raise the piezo re-entry bar
+    to PUMP_COUPLING_STD_FACTOR x enter and acr > 0.6. That guard exists to
+    tell a person from pump vibration; when the capacitance sensor already
+    says a person is in bed it must step aside. Regression for the 05:57-07:01
+    blackout on 2026-10-11 (sleeper went quiet, cap-sense occupied all along,
+    pumps at 1941/2008 rpm, piezo stayed ABSENT until a hard movement)."""
+
+    def _pumps_both_on(self):
+        ps = FrzHealthPumpState()
+        ps.update({"type": "frzHealth",
+                   "left": {"pumpRpm": 1941}, "right": {"pumpRpm": 2008}})
+        assert ps.is_symmetric_active()
+        return ps
+
+    def _proc(self, bed, acr):
+        import main
+        conn = TestWriteVitalsResilience()._make_db()
+        proc = main.SideProcessor("left", main.DBHolder(conn), pump_state=self._pumps_both_on())
+        seen = []
+        proc.sink = lambda cand: seen.append(cand) or True
+        if bed != "unset":
+            proc.bed_occupied = lambda: bed
+        return proc, seen
+
+    def _moderate_signal(self, proc):
+        """A BCG signal whose filtered energy clears the normal enter
+        threshold but not the pump-coupling bar."""
+        import main
+        np.random.seed(7)
+        sig = make_bcg_signal(62, 15, noise_level=0.05)
+        filt = main._bandpass(sig, 1.0, 10.0, FS)
+        w = int(5 * FS)
+        med = float(np.median([np.std(filt[j:j + w]) for j in range(0, len(filt) - w + 1, w)]))
+        enter = proc._presence.enter_threshold
+        assert enter < med < enter * PUMP_COUPLING_STD_FACTOR, med
+        return sig
+
+    def _run(self, bed, acr=0.5):
+        import main
+        proc, seen = self._proc(bed, acr)
+        sig = self._moderate_signal(proc)
+        # Autocorrelation above the normal bar (0.45) but below the coupling bar (0.6).
+        with patch("main._autocorr_quality", return_value=acr), \
+                patch("main.time.time", return_value=1_000_000.0):
+            proc.ingest(sig)
+        return proc, seen
+
+    def test_guard_suppresses_moderate_signal_when_bed_presence_unknown(self):
+        proc, seen = self._run(None)
+        assert proc._presence.state == PresenceDetector.ABSENT
+        assert seen == []
+
+    def test_guard_suppresses_when_no_bed_presence_configured(self):
+        proc, seen = self._run("unset")
+        assert proc._presence.state == PresenceDetector.ABSENT
+        assert seen == []
+
+    def test_bed_occupied_bypasses_guard_and_resumes_vitals(self):
+        proc, seen = self._run(True)
+        assert proc._presence.state == PresenceDetector.PRESENT
+        assert len(seen) == 1
+        assert seen[0].heart_rate is not None
+
+    def test_bed_occupied_relaxes_reentry_below_the_normal_enter_bar(self):
+        import main
+        proc, seen = self._proc(True, 0.3)
+        np.random.seed(7)
+        sig = make_bcg_signal(62, 15, noise_level=0.05) * 0.6
+        filt = main._bandpass(sig, 1.0, 10.0, FS)
+        w = int(5 * FS)
+        med = float(np.median([np.std(filt[j:j + w]) for j in range(0, len(filt) - w + 1, w)]))
+        assert proc._presence.exit_threshold < med < proc._presence.enter_threshold, med
+        with patch("main._autocorr_quality", return_value=0.3), \
+                patch("main.time.time", return_value=1_000_000.0):
+            proc.ingest(sig)
+        assert proc._presence.state == PresenceDetector.PRESENT
+        assert len(seen) == 1
+
+    def test_bed_empty_never_relaxes_the_guard(self):
+        proc, seen = self._run(False, acr=0.9)
+        assert proc._presence.state == PresenceDetector.ABSENT
+        assert seen == []
+
+    def test_weak_signal_in_an_occupied_bed_writes_nothing(self):
+        import main
+        proc, seen = self._proc(True, 0.05)
+        sig = make_noise(15, amplitude=20_000)
+        with patch("main._autocorr_quality", return_value=0.05), \
+                patch("main.time.time", return_value=1_000_000.0):
+            proc.ingest(sig)
+        assert proc._presence.state == PresenceDetector.ABSENT
+        assert seen == []
 
 
 class TestSideProcessorAbsenceThrottle:
