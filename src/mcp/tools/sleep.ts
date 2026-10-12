@@ -1,7 +1,8 @@
 /**
- * Sleep and vitals tools. Everything here reads the biometrics database.
+ * Sleep and vitals tools, including imports into the reference biometrics tables.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
 import { days, isoDate, optionalSide, side } from '@/src/mcp/schemas'
@@ -33,7 +34,11 @@ export function registerSleepTools(server: McpServer) {
       try {
         stages = (await caller.biometrics.importReferenceStages({ side: sleeper, source: 'apple_watch', segments })).written
       }
-      catch { stageError = 'Stage import failed; stored stages were preserved. Check segment bounds/overlaps before retrying. Heart-rate samples were imported.' }
+      catch (error) {
+        stageError = error instanceof TRPCError && error.code === 'BAD_REQUEST'
+          ? `Stage import failed: ${error.message}`
+          : 'Stage import failed; stored stages were preserved. Check segment bounds/overlaps before retrying. See the vitals count for imported heart-rate samples.'
+      }
     }
     return jsonResult({ vitals: vitals.written, stages, stageError })
   }))

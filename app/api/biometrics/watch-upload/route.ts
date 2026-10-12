@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, open, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
+import { WATCH_IMPORT_TIMEOUT_MS, WATCH_UPLOAD_TIMEOUT_MS } from '@/src/utils/watchUploadLimits'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -20,7 +21,7 @@ export async function POST(request: Request): Promise<Response> {
   if (Number(request.headers.get('content-length')) > MAX_BYTES) return Response.json({ error: 'Upload exceeds 512 MiB' }, { status: 413 })
   if (shared.watchUploadBusy) return Response.json({ error: 'Another Watch import is running; retry when it finishes' }, { status: 409 })
   shared.watchUploadBusy = true
-  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(10 * 60_000)])
+  let signal = AbortSignal.any([request.signal, AbortSignal.timeout(WATCH_UPLOAD_TIMEOUT_MS)])
   let directory: string | undefined
   let tooLarge = false
   try {
@@ -47,6 +48,7 @@ export async function POST(request: Request): Promise<Response> {
       await file.close()
     }
     if (bytes === 0) return Response.json({ error: 'The uploaded file is empty' }, { status: 400 })
+    signal = AbortSignal.any([request.signal, AbortSignal.timeout(WATCH_IMPORT_TIMEOUT_MS)])
     const { side, days } = parsed.data
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = spawn('python3', [path.resolve('scripts/import-watch-health.py'), filename,

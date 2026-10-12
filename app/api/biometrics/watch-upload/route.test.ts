@@ -57,8 +57,54 @@ it('rejects malformed files and cleans up after parser failure', async () => {
   expect(await readdir(directory)).toEqual([])
 })
 
+it('gives import a fresh budget after staging and ignores the expired upload budget', async () => {
+  const upload = new AbortController()
+  const importer = new AbortController()
+  let staged = false
+  const timeout = vi.spyOn(AbortSignal, 'timeout')
+    .mockReturnValueOnce(upload.signal)
+    .mockImplementationOnce(() => {
+      expect(staged).toBe(true)
+      upload.abort(new DOMException('Upload budget expired', 'TimeoutError'))
+      return importer.signal
+    })
+  try {
+    const body = new ReadableStream({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode('<HealthData/>'))
+        staged = true
+        controller.close()
+      },
+    })
+    const request = new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body, duplex: 'half' } as RequestInit)
+    const response = await POST(request)
+    expect(response.status).toBe(200)
+    expect(timeout.mock.calls.map(call => call[0])).toEqual([30 * 60_000, 10 * 60_000])
+    expect(await readdir(directory)).toEqual([])
+  }
+  finally { timeout.mockRestore() }
+})
+
 it('rejects cross-origin requests, missing side, and oversized bodies before import', async () => {
   expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { origin: 'http://evil' }, body: 'x' }))).status).toBe(403)
   expect((await POST(new Request('http://pod/api/biometrics/watch-upload', { method: 'POST', body: 'x' }))).status).toBe(400)
   expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { 'content-length': String(513 * 1024 * 1024) }, body: 'x' }))).status).toBe(413)
+})
+
+it('still honors a client disconnect when switching to the import budget', async () => {
+  const client = new AbortController()
+  const timeout = vi.spyOn(AbortSignal, 'timeout')
+    .mockReturnValueOnce(new AbortController().signal)
+    .mockImplementationOnce(() => {
+      client.abort()
+      return new AbortController().signal
+    })
+  try {
+    const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', {
+      method: 'POST', body: '<HealthData/>', signal: client.signal,
+    }))
+    expect(response.status).toBe(408)
+    expect(await readdir(directory)).toEqual([])
+  }
+  finally { timeout.mockRestore() }
 })

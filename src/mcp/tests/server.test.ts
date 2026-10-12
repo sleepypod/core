@@ -612,8 +612,21 @@ it('imports Watch batches through the shared procedures and reports partial stag
       side: 'right', samples: [{ timestamp: 1791700000, heartRate: 60 }],
       segments: [{ start: 1791700000, end: 1791700060, stage: 'deep' }],
     } }) as CallToolResult
-    expect(JSON.parse(text(result))).toMatchObject({ vitals: 1, stages: 0, stageError: expect.any(String) })
+    expect(JSON.parse(text(result))).toMatchObject({ vitals: 1, stages: 0, stageError: 'Stage import failed: overlap' })
     expect(callerMock.biometrics.importReferenceVitals).toHaveBeenCalledWith({ side: 'right', source: 'apple_watch', samples: [{ timestamp: 1791700000, heartRate: 60 }] })
+  }
+  finally { await client.close() }
+})
+
+it('does not expose internal errors from Watch stage import', async () => {
+  callerMock.biometrics.importReferenceStages.mockRejectedValue(new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'private database path' }))
+  const client = await connect()
+  try {
+    const result = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'left', segments: [{ start: 1791700000, end: 1791700060, stage: 'deep' }],
+    } }) as CallToolResult
+    expect(JSON.parse(text(result))).toMatchObject({ vitals: 0, stages: 0, stageError: expect.stringContaining('stored stages were preserved') })
+    expect(text(result)).not.toContain('private database path')
   }
   finally { await client.close() }
 })

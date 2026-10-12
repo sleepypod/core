@@ -26,6 +26,7 @@ it('uploads for the named sleeper, reports partial conflicts, and refreshes char
   fireEvent.click(screen.getByRole('button', { name: 'Upload and sync' }))
   expect(xhr.open).toHaveBeenCalledWith('POST', '/api/biometrics/watch-upload?side=right&days=30')
   expect(xhr.send).toHaveBeenCalledWith(file)
+  expect(xhr.timeout).toBe(41 * 60_000)
   expect((screen.getByRole('button', { name: 'Upload and sync' }) as HTMLButtonElement).disabled).toBe(true)
   await act(async () => {
     xhr.onload?.()

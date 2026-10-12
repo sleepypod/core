@@ -47,6 +47,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "How did I sleep?" / "Resting HR last night?" / "How much deep sleep?" | `get_sleep_summary` | `biometrics.getLatestSleep`, `getSleepRecords`, `getSleepStages`, `getVitalsSummary`, `getMovementSummary` |
 | "Bedtime this week?" / "How many nights did I get up?" | `get_sleep_history` | `biometrics.getSleepRecords` |
 | "Is my HRV trending down?" / "Was last night unusual?" | `get_vitals_trend` | `biometrics.getVitalsBaseline`, `getVitalsSummary` |
+| "Import my Apple Watch data" | [`import_apple_watch_data`](#apple-watch-imports) | `biometrics.importReferenceVitals`, `biometrics.importReferenceStages` |
 
 ### Control tonight
 
@@ -154,5 +155,6 @@ storage and deleted on completion or failure. Only one upload/import runs at a t
 The response includes `vitals` and `stages` (new rows), `matchedVitals` and
 `matchedStages` (eligible records), and `rejectedStageBatches` (conflicting stage
 batches skipped while heart rate still imports). A disconnect or timeout can leave
-some batches imported; retrying the same export is safe. The ten-minute request
-limit includes upload and parsing. Like the existing API, this is LAN-only.
+some batches imported; retrying the same export is safe. Upload has a 30-minute
+budget, followed by a separate 10-minute import budget. The browser allows 41
+minutes for both phases and response cleanup. Like the existing API, this is LAN-only.

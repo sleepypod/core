@@ -158,6 +158,15 @@ it('selects a time window by dragging in either direction and ignores a click', 
   fireEvent.pointerDown(overlay, { clientX: 100, button: 0, pointerType: 'mouse' })
   fireEvent.pointerUp(overlay, { clientX: 101 })
   expect(selected).not.toHaveBeenCalled()
+  // Captured releases beyond either edge must use the visible, clamped brush width.
+  const plotWidth = Number(overlay.getAttribute('width'))
+  for (const [startX, endX] of [[4, -100], [plotWidth - 4, plotWidth + 100]]) {
+    fireEvent.pointerDown(overlay, { clientX: startX, button: 0, pointerType: 'mouse' })
+    fireEvent.pointerMove(overlay, { clientX: endX, pointerType: 'mouse' })
+    expect(screen.getByTestId('vitals-selection').getAttribute('width')).toBe('4')
+    fireEvent.pointerUp(overlay, { clientX: endX })
+    expect(selected).not.toHaveBeenCalled()
+  }
 })
 
 it('zooms all chart rows to the brush window and restores the full range on reset', () => {

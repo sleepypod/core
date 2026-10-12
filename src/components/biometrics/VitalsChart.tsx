@@ -351,7 +351,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
                 brushStart.current = null
                 setBrush(null)
                 if (startX == null) return
-                const endX = e.clientX - e.currentTarget.getBoundingClientRect().left
+                const endX = Math.max(0, Math.min(plotW, e.clientX - e.currentTarget.getBoundingClientRect().left))
                 if (Math.abs(endX - startX) < 8) return
                 const start = timeAtX(axis, Math.min(startX, endX))
                 const end = timeAtX(axis, Math.max(startX, endX))

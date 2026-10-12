@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { Upload } from 'lucide-react'
 import { Button, Modal } from '@/src/components/ds'
 import { trpc } from '@/src/utils/trpc'
+import { WATCH_REQUEST_TIMEOUT_MS } from '@/src/utils/watchUploadLimits'
 
 interface ImportResult { stages: number, vitals: number, rejectedStageBatches: number, matchedStages: number, matchedVitals: number }
 
@@ -31,7 +32,7 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
         const xhr = new XMLHttpRequest()
         xhr.open('POST', `/api/biometrics/watch-upload?side=${side}&days=${days}`)
         xhr.setRequestHeader('Content-Type', 'application/octet-stream')
-        xhr.timeout = 11 * 60_000
+        xhr.timeout = WATCH_REQUEST_TIMEOUT_MS
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) setProgress(Math.round(event.loaded / event.total * 100))
         }
