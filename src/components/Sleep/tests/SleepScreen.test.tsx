@@ -1,12 +1,15 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SleepScreen } from '../SleepScreen'
+import { DEFAULT_STAGE_RULESET } from '@/src/lib/sleep-stage-rules'
 
 const state = vi.hoisted(() => ({
   sleep: vi.fn(),
   stages: vi.fn(),
   vitals: vi.fn(),
   movement: vi.fn(),
+  calibration: vi.fn(),
+  classifier: vi.fn(),
   week: {
     isCurrentWeek: true,
     goToPreviousWeek: vi.fn(),
@@ -34,8 +37,8 @@ vi.mock('@/src/utils/trpc', () => ({
       getVitals: { useQuery: state.vitals },
       getMovement: { useQuery: state.movement },
     },
-    calibration: { getStatus: { useQuery: () => ({ data: undefined, isLoading: false }) } },
-    sleepStages: { getClassifier: { useQuery: () => ({ data: undefined, isLoading: false }) } },
+    calibration: { getStatus: { useQuery: state.calibration } },
+    sleepStages: { getClassifier: { useQuery: state.classifier } },
     settings: { getAll: { useQuery: () => ({ data: undefined }) } },
   },
 }))
@@ -87,6 +90,8 @@ beforeEach(() => {
   }))
   state.vitals.mockReturnValue({ data: [], isLoading: false })
   state.movement.mockReturnValue({ data: [], isLoading: false })
+  state.calibration.mockReturnValue({ data: undefined, isLoading: false })
+  state.classifier.mockReturnValue({ data: undefined, isLoading: false })
 })
 afterEach(() => {
   cleanup()
@@ -177,6 +182,17 @@ describe('SleepScreen week and month views', () => {
     expect(screen.getByText('Week averages').parentElement?.textContent).toContain('6h 45m')
     fireEvent.click(screen.getByRole('button', { name: /Mon 21/ }))
     expect(screen.getByText('Monday, Sep 21')).toBeTruthy()
+  })
+
+  it('classifies the week once the side\'s calibration and classifier are known', () => {
+    state.calibration.mockReturnValue({ data: { piezo: { qualityScore: 0.9 } }, isLoading: false })
+    state.classifier.mockReturnValue({ data: { classifier: { engine: 'rules', ruleset: DEFAULT_STAGE_RULESET } }, isLoading: false })
+    render(<SleepScreen />)
+    pick('Week')
+    expect(state.calibration).toHaveBeenCalledWith({ side: 'left' })
+    expect(state.classifier).toHaveBeenCalledWith({ side: 'left' })
+    expect(screen.getByText('Sleep timeline')).toBeTruthy()
+    expect(screen.getByText('11:20 PM → 6:50 AM · 7h 30m · quality 78')).toBeTruthy()
   })
 
   it('shows the month calendar, stats and nights list', () => {
