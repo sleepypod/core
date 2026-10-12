@@ -39,11 +39,26 @@ describe('vitals navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pan earlier' }))
     expect(region.scrollBy).toHaveBeenLastCalledWith({ left: -420, behavior: 'smooth' })
     region.scrollLeft = 200
-    fireEvent.pointerDown(region, { clientX: 200, pointerType: 'mouse', button: 0, pointerId: 1 })
+    fireEvent.pointerDown(region, { clientX: 200, pointerType: 'mouse', button: 0, pointerId: 1, shiftKey: true })
     fireEvent.pointerMove(region, { clientX: 100, pointerType: 'mouse', pointerId: 1 })
     expect(region.scrollLeft).toBe(300)
     fireEvent.pointerUp(region)
     fireEvent.pointerMove(region, { clientX: 50 })
     expect(region.scrollLeft).toBe(300)
   })
+})
+
+it('uses Ctrl+wheel for chart zoom without swallowing ordinary scrolling', () => {
+  render(<VitalsExplorer {...props} />)
+  const region = screen.getByRole('region', { name: 'Scrollable vitals chart' })
+  const wheel = new WheelEvent('wheel', { ctrlKey: true, deltaY: -100, cancelable: true, bubbles: true })
+  fireEvent(region, wheel)
+  expect(wheel.defaultPrevented).toBe(true)
+  const width = screen.getByTestId('chart-content').parentElement?.style.width
+  expect(Number.parseFloat(width ?? '0')).toBeGreaterThan(100)
+  const ordinary = new WheelEvent('wheel', { deltaY: -100, cancelable: true, bubbles: true })
+  fireEvent(region, ordinary)
+  expect(ordinary.defaultPrevented).toBe(false)
+  expect(screen.getByTestId('chart-content').parentElement?.style.width).toBe(width)
+  expect(screen.getAllByRole('button').slice(0, 3).map(b => b.textContent)).toEqual(['Zoom out', 'Zoom in', 'Reset zoom'])
 })

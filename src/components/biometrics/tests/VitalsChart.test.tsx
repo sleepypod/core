@@ -5,6 +5,7 @@
  */
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { VitalsExplorer } from '../VitalsExplorer'
 import { splitSessions } from '../biometricsLogic'
 import { nearestReference, referenceInSession, referenceRuns, VitalsChart, VitalsLegend } from '../VitalsChart'
 
@@ -132,4 +133,54 @@ describe('movement alignment', () => {
     expect(screen.getByTestId('movement-bar').textContent).toContain('3 position changes')
     expect(screen.getByText('changes / 5 min')).toBeTruthy()
   })
+})
+
+it('selects a time window by dragging in either direction and ignores a click', () => {
+  withWidth()
+  const selected = vi.fn()
+  const { container } = render(<VitalsChart sessions={sessions} bands={bands} stall={null} onSelectWindow={selected} />)
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  overlay.setPointerCapture = vi.fn()
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  fireEvent.pointerDown(overlay, { clientX: 100, button: 0, pointerType: 'mouse' })
+  fireEvent.pointerMove(overlay, { clientX: 300, pointerType: 'mouse' })
+  expect(screen.getByTestId('vitals-selection').getAttribute('width')).toBe('200')
+  fireEvent.pointerUp(overlay, { clientX: 300 })
+  expect(selected).toHaveBeenCalledOnce()
+  const window = selected.mock.calls[0][0]
+  expect(window.start).toBeGreaterThan(START)
+  expect(window.end).toBeGreaterThan(window.start)
+  selected.mockClear()
+  fireEvent.pointerDown(overlay, { clientX: 300, button: 0, pointerType: 'mouse' })
+  fireEvent.pointerUp(overlay, { clientX: 100 })
+  expect(selected).toHaveBeenCalledWith(window)
+  selected.mockClear()
+  fireEvent.pointerDown(overlay, { clientX: 100, button: 0, pointerType: 'mouse' })
+  fireEvent.pointerUp(overlay, { clientX: 101 })
+  expect(selected).not.toHaveBeenCalled()
+})
+
+it('zooms all chart rows to the brush window and restores the full range on reset', () => {
+  withWidth()
+  const { container } = render(
+    <VitalsExplorer
+      sessions={sessions}
+      bands={bands}
+      stall={null}
+      reference={[
+        { t: START + 30 * MIN, hr: 58 }, { t: START + 6 * 60 * MIN + 10 * MIN, hr: 62 },
+      ]}
+    />
+  )
+  expect(screen.getAllByTestId('vitals-reference')).toHaveLength(2)
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  overlay.setPointerCapture = vi.fn()
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  fireEvent.pointerDown(overlay, { clientX: 100, button: 0, pointerType: 'mouse' })
+  fireEvent.pointerUp(overlay, { clientX: 300 })
+  expect(screen.getByText(/Selected window/)).toBeTruthy()
+  expect(screen.getAllByTestId('vitals-reference')).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Reset zoom' }))
+  expect(screen.queryByText(/Selected window/)).toBeNull()
+  expect(screen.getAllByTestId('vitals-reference')).toHaveLength(2)
 })

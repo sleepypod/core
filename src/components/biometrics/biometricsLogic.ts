@@ -324,3 +324,18 @@ export function dateInputValue(ms: number): string {
   const d = new Date(ms)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+/** Map a brush edge through compressed gaps to the nearest session boundary. */
+export function timeAtX(axis: AxisLayout, x: number): number | null {
+  let best: { time: number, distance: number } | null = null
+  for (const seg of axis.segments) {
+    if (seg.kind !== 'session') continue
+    const clamped = Math.max(seg.x, Math.min(seg.x + seg.w, x))
+    const distance = Math.abs(clamped - x)
+    if (!best || distance < best.distance) best = {
+      distance,
+      time: seg.start + (seg.w ? (clamped - seg.x) / seg.w : 0) * (seg.end - seg.start),
+    }
+  }
+  return best?.time ?? null
+}

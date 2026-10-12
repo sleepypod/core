@@ -16,8 +16,8 @@ import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent } from 'react'
 import {
-  axisTicks, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, rollingMean, sessionHeader,
-  type MetricKey, type Session,
+  axisTicks, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, rollingMean, sessionHeader,
+  type MetricKey, type RangeWindow, type Session,
 } from './biometricsLogic'
 
 const LABEL_W = 130
@@ -98,7 +98,7 @@ export function referenceRuns(points: ReferencePoint[], gapMs = REFERENCE_GAP_MS
 const REFERENCE_TOL_MS = 5 * 60_000
 const REFERENCE_STROKE = 'var(--text-2)'
 
-export function VitalsChart({ sessions, stall, bands, reference = [], movement = [] }: {
+export function VitalsChart({ sessions, stall, bands, reference = [], movement = [], onSelectWindow }: {
   sessions: Session[]
   /** In bed with no vitals: from the last reading to now. */
   stall: { start: number, end: number } | null
@@ -106,6 +106,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
   /** Imported Apple Watch heart rate, time-sorted. */
   reference?: ReferencePoint[]
   movement?: Array<{ bucketStart: Date, eventCount: number }>
+  onSelectWindow?: (window: RangeWindow) => void
 }) {
   const PLOT_H = VITALS_H + 76
   const timeFormat = useTimeFormat()
@@ -121,6 +122,8 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
   const [hover, setHover] = useState<{ seg: number, idx: number } | null>(null)
   const referenceBySession = useMemo(() => sessions.map(s => referenceInSession(reference, s)), [sessions, reference])
 
+  const [brush, setBrush] = useState<{ start: number, end: number } | null>(null)
+  const brushStart = useRef<number | null>(null)
   const ticks = axisTicks(axis, timeFormat)
   const multiNight = sessions.length > 1 && (sessions.at(-1)?.end ?? 0) - sessions[0].start > 24 * 60 * 60_000
   const maxMovement = Math.max(1, ...movement.map(b => b.eventCount))
@@ -128,6 +131,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
   const onMove = (e: PointerEvent<SVGRectElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - box.left
+    if (brushStart.current != null) setBrush({ start: brushStart.current, end: Math.max(0, Math.min(plotW, x)) })
     const seg = axis.segments.find(s => s.kind === 'session' && x >= s.x && x <= s.x + s.w)
     if (!seg) return setHover(null)
     const session = sessions[seg.index]
@@ -325,15 +329,38 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
               </g>
             )}
 
+            {brush && <rect x={Math.min(brush.start, brush.end)} y={HEAD_H} width={Math.abs(brush.end - brush.start)} height={PLOT_H} fill="var(--text-2)" fillOpacity={0.15} stroke="var(--text-2)" pointerEvents="none" data-testid="vitals-selection" />}
             <rect
               x={0}
               y={HEAD_H}
               width={plotW}
               height={PLOT_H}
               fill="transparent"
-              style={{ touchAction: 'pan-x pan-y' }}
+              style={{ touchAction: 'pan-x pan-y', cursor: onSelectWindow ? 'crosshair' : undefined }}
               onPointerMove={onMove}
-              onPointerDown={onMove}
+              onPointerDown={(e) => {
+                onMove(e)
+                if (!onSelectWindow || e.shiftKey || e.button !== 0 || e.pointerType === 'touch') return
+                const x = e.clientX - e.currentTarget.getBoundingClientRect().left
+                brushStart.current = x
+                setBrush({ start: x, end: x })
+                e.currentTarget.setPointerCapture(e.pointerId)
+              }}
+              onPointerUp={(e) => {
+                const startX = brushStart.current
+                brushStart.current = null
+                setBrush(null)
+                if (startX == null) return
+                const endX = e.clientX - e.currentTarget.getBoundingClientRect().left
+                if (Math.abs(endX - startX) < 8) return
+                const start = timeAtX(axis, Math.min(startX, endX))
+                const end = timeAtX(axis, Math.max(startX, endX))
+                if (start != null && end != null && end > start) onSelectWindow?.({ start, end })
+              }}
+              onPointerCancel={() => {
+                brushStart.current = null
+                setBrush(null)
+              }}
               onPointerLeave={e => e.pointerType === 'mouse' && setHover(null)}
             />
           </g>
