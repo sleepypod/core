@@ -75,6 +75,20 @@ export function nearestReference(points: ReferencePoint[], t: number, tolMs = RE
   return best && Math.abs(best.t - t) <= tolMs ? best : null
 }
 
+/** Consecutive reference samples further apart than this are not joined. */
+export const REFERENCE_GAP_MS = 15 * 60_000
+
+/** Time-sorted samples split into runs with no gap over `gapMs`. */
+export function referenceRuns(points: ReferencePoint[], gapMs = REFERENCE_GAP_MS): ReferencePoint[][] {
+  const runs: ReferencePoint[][] = []
+  for (const p of points) {
+    const run = runs[runs.length - 1]
+    if (run && p.t - run[run.length - 1].t <= gapMs) run.push(p)
+    else runs.push([p])
+  }
+  return runs
+}
+
 const REFERENCE_TOL_MS = 5 * 60_000
 const REFERENCE_STROKE = 'var(--text-2)'
 
@@ -187,17 +201,39 @@ export function VitalsChart({ sessions, stall, bands, reference = [] }: {
                       </g>
                     )
                   })}
-                  {referenceBySession[seg.index]?.length > 0 && (
-                    <path
-                      data-testid="vitals-reference"
-                      d={pathOf(referenceBySession[seg.index].map(p => axis.xOf(seg, p.t)), referenceBySession[seg.index].map(p => yOf(0, p.hr)))}
-                      fill="none"
-                      stroke={REFERENCE_STROKE}
-                      strokeWidth={1.25}
-                      strokeDasharray="3 3"
-                      strokeLinejoin="round"
-                    />
-                  )}
+                  {referenceBySession[seg.index]?.length > 0 && (() => {
+                    // Lift the pen across sampling gaps (Watch taken off) and
+                    // mark samples with no neighbour, which a path cannot show.
+                    const runs = referenceRuns(referenceBySession[seg.index])
+                    const xs: number[] = []
+                    const ys: Array<number | null> = []
+                    runs.forEach((run, r) => {
+                      if (r > 0) {
+                        xs.push(0)
+                        ys.push(null)
+                      }
+                      for (const p of run) {
+                        xs.push(axis.xOf(seg, p.t))
+                        ys.push(yOf(0, p.hr))
+                      }
+                    })
+                    return (
+                      <>
+                        <path
+                          data-testid="vitals-reference"
+                          d={pathOf(xs, ys)}
+                          fill="none"
+                          stroke={REFERENCE_STROKE}
+                          strokeWidth={1.25}
+                          strokeDasharray="3 3"
+                          strokeLinejoin="round"
+                        />
+                        {runs.filter(run => run.length === 1).map(([p]) => (
+                          <circle key={p.t} data-testid="vitals-reference-dot" cx={axis.xOf(seg, p.t)} cy={yOf(0, p.hr)} r={1.5} fill={REFERENCE_STROKE} />
+                        ))}
+                      </>
+                    )
+                  })()}
                 </g>
               )
             })}

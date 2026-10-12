@@ -49,20 +49,23 @@ def warn(msg):
 
 
 def dedupe_segments(segments):
-    """Drop segments that overlap an earlier-kept one, keeping the later
-    start on a tie (matches sleep-stage-dataset.stage_lookup). Returns
-    [(start_s, end_s, stage)] sorted by start."""
-    segs = sorted(((int(s.timestamp()), int(e.timestamp()), st) for s, e, st in segments),
-                  key=lambda x: (x[0], -x[1]))
+    """Resolve overlaps exactly as sleep-stage-dataset.stage_lookup does (the
+    segment starting latest wins) by splitting at every segment boundary and
+    merging runs of the same stage, so the posted labels match the export-based
+    dataset. Returns non-overlapping [(start_s, end_s, stage)] sorted by start."""
+    if not segments:
+        return []
+    stage_at = _ds.stage_lookup(segments)
+    bounds = sorted({int(t.timestamp()) for s, e, _ in segments for t in (s, e)})
     out = []
-    for seg in segs:
-        if out and seg[0] < out[-1][1]:
-            # Overlap with the previous kept segment: trim or drop.
-            if seg[1] <= out[-1][1]:
-                continue
-            seg = (out[-1][1], seg[1], seg[2])
-        if seg[1] > seg[0]:
-            out.append(seg)
+    for a, b in zip(bounds, bounds[1:]):
+        stage = stage_at(a)
+        if stage is None:
+            continue
+        if out and out[-1][1] == a and out[-1][2] == stage:
+            out[-1] = (out[-1][0], b, stage)
+        else:
+            out.append((a, b, stage))
     return out
 
 

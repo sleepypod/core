@@ -172,6 +172,9 @@ def hr_from_db(conn, side, source='apple_watch'):
             ts /= 1000.0
         if math.isfinite(bpm):
             out.append((int(ts), bpm))
+    # SQL ordered the raw values; normalizing mixed second/millisecond rows can
+    # reorder them, and nearest() bisects, so sort again.
+    out.sort()
     return out
 
 

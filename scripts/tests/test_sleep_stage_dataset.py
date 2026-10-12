@@ -261,6 +261,10 @@ class JoinTest(Fixture):
         conn.execute("INSERT INTO reference_vitals VALUES ('left', 'apple_watch', ?, 'nan')", (int(T0.timestamp()) + 60,))
         conn.execute("INSERT INTO reference_vitals VALUES ('right', 'apple_watch', ?, 70.0)", (int(T0.timestamp()),))
         self.assertEqual(ds.hr_from_db(conn, 'left'), [(int(T0.timestamp()), 61.0)])
+        # A later sample stored in seconds sorts before an earlier one stored in
+        # milliseconds in SQL; the normalized list must still be time-ordered.
+        conn.execute("INSERT INTO reference_vitals VALUES ('left', 'apple_watch', ?, 63.0)", (int(T0.timestamp()) - 60,))
+        self.assertEqual(ds.hr_from_db(conn, 'left'), [(int(T0.timestamp()) - 60, 63.0), (int(T0.timestamp()), 61.0)])
 
     @staticmethod
     def _restore_tz(old_tz):

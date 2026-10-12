@@ -6,7 +6,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { splitSessions } from '../biometricsLogic'
-import { nearestReference, referenceInSession, VitalsChart, VitalsLegend } from '../VitalsChart'
+import { nearestReference, referenceInSession, referenceRuns, VitalsChart, VitalsLegend } from '../VitalsChart'
 
 vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => '12h' }))
 
@@ -50,6 +50,21 @@ describe('VitalsChart reference overlay', () => {
     expect(paths[0].getAttribute('d')).toMatch(/^M.*L/)
   })
 
+  it('lifts the pen across a sampling gap and dots an isolated sample', () => {
+    withWidth()
+    const reference = [
+      { t: START + 10 * MIN, hr: 58 },
+      { t: START + 12 * MIN, hr: 57 },
+      // Watch off for an hour: the line must not bridge it.
+      { t: START + 75 * MIN, hr: 61 },
+    ]
+    render(<VitalsChart sessions={sessions} stall={null} bands={bands} reference={reference} />)
+    const d = screen.getByTestId('vitals-reference').getAttribute('d') ?? ''
+    expect(d.match(/M/g)).toHaveLength(2)
+    expect(d.match(/L/g)).toHaveLength(1)
+    expect(screen.getAllByTestId('vitals-reference-dot')).toHaveLength(1)
+  })
+
   it('draws nothing extra without reference samples', () => {
     withWidth()
     render(<VitalsChart sessions={sessions} stall={null} bands={bands} />)
@@ -73,6 +88,12 @@ describe('reference helpers', () => {
     const s = { start: 1000, end: 2000 }
     const pts = [{ t: 999, hr: 1 }, { t: 1000, hr: 2 }, { t: 1500, hr: 3 }, { t: 2000, hr: 4 }, { t: 2001, hr: 5 }]
     expect(referenceInSession(pts, s).map(p => p.hr)).toEqual([2, 3, 4])
+  })
+
+  it('referenceRuns splits only at gaps over the limit', () => {
+    const pts = [{ t: 0, hr: 1 }, { t: 15 * MIN, hr: 2 }, { t: 15 * MIN + 1, hr: 3 }, { t: 40 * MIN, hr: 4 }]
+    expect(referenceRuns(pts, 15 * MIN).map(run => run.map(p => p.hr))).toEqual([[1, 2, 3], [4]])
+    expect(referenceRuns([], 15 * MIN)).toEqual([])
   })
 
   it('nearestReference picks the closest sample and respects the tolerance', () => {

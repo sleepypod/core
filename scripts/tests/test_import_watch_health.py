@@ -129,13 +129,17 @@ class ImportWatchHealthTest(unittest.TestCase):
         self.assertEqual([u.rsplit('/', 1)[1] for u, _ in post.calls], ['reference-vitals'])
 
     def test_overlapping_segments_are_trimmed_so_the_api_accepts_the_batch(self):
-        # Two sources' segments for the same minutes; later start wins.
+        # Two sources' segments for the same minutes; the later start wins over
+        # the overlap, including a fully contained segment, matching stage_lookup.
         write_export(self.export, [(0, 30, 'AsleepCore'), (20, 40, 'AsleepDeep'), (25, 28, 'AsleepREM')], [])
         post, _, _ = self.run_import()
         segs = post.calls[0][1]['segments']
         for a, b in zip(segs, segs[1:]):
             self.assertLessEqual(a['end'], b['start'])
-        self.assertEqual([s['stage'] for s in segs], ['light', 'deep'])
+        t = lambda m: int((T0 + timedelta(minutes=m)).timestamp())
+        self.assertEqual([(s['start'], s['end'], s['stage']) for s in segs], [
+            (t(0), t(20), 'light'), (t(20), t(25), 'deep'), (t(25), t(28), 'rem'), (t(28), t(40), 'deep'),
+        ])
 
     def test_drops_implausible_heart_rates(self):
         write_export(self.export, [], [(1, 58), (2, 5), (3, 400)])
