@@ -82,14 +82,14 @@ def night_of(dt):
 
 # ── Health export ──────────────────────────────────────────────────────────
 
-def parse_export(path, source_pattern='Watch'):
+def parse_export(path, source_pattern='Watch', cutoff=None):
     """Stream export.xml and return (stage_segments, hr_samples) for sources
     matching source_pattern.
 
     stage_segments: [(start_dt, end_dt, stage)] in file order (aware datetimes)
     hr_samples:     [(unix_s, bpm)] sorted by time
     """
-    if os.path.isdir(path):
+    if isinstance(path, (str, os.PathLike)) and os.path.isdir(path):
         path = os.path.join(path, 'export.xml')
     source_re = re.compile(source_pattern)
     segments, hr = [], []
@@ -102,6 +102,8 @@ def parse_export(path, source_pattern='Watch'):
             start = datetime.strptime(a['startDate'], '%Y-%m-%d %H:%M:%S %z')
             end = datetime.strptime(a['endDate'], '%Y-%m-%d %H:%M:%S %z')
         except (KeyError, ValueError):
+            return
+        if cutoff is not None and end.timestamp() < cutoff:
             return
         if kind == HK_SLEEP:
             stage = HK_STAGE.get(a.get('value', ''))

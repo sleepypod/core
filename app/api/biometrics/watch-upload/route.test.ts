@@ -1,0 +1,64 @@
+// @vitest-environment node
+import { createServer, type Server } from 'node:http'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeAll, expect, it, vi } from 'vitest'
+import { POST } from './route'
+
+let directory: string
+let server: Server
+const seen = new Set<number>()
+const requests: Array<{ side: string, source: string }> = []
+beforeAll(async () => {
+  directory = await mkdtemp(join(tmpdir(), 'watch-upload-test-'))
+  vi.stubEnv('WATCH_UPLOAD_DIR', directory)
+  server = createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    const data = JSON.parse(body)
+    requests.push(data)
+    let written = 0
+    for (const sample of data.samples ?? []) {
+      if (!seen.has(sample.timestamp)) {
+        seen.add(sample.timestamp)
+        written++
+      }
+    }
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ written }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('missing test port')
+  vi.stubEnv('PORT', String(address.port))
+})
+afterAll(async () => {
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  await rm(directory, { recursive: true, force: true })
+  vi.unstubAllEnvs()
+})
+
+it('streams XML through the real importer, routes to the selected side, dedupes, and removes the file', async () => {
+  const date = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +0000')
+  const xml = `<HealthData><Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" startDate="${date}" endDate="${date}" value="62" unit="count/min" /></HealthData>`
+  const request = () => new Request('http://pod/api/biometrics/watch-upload?side=right&days=7', { method: 'POST', body: xml })
+  const response = await POST(request())
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ vitals: 1, stages: 0, matchedVitals: 1 })
+  expect(requests[0]).toMatchObject({ side: 'right', source: 'apple_watch' })
+  expect(await (await POST(request())).json()).toMatchObject({ vitals: 0, matchedVitals: 1 })
+  expect(await readdir(directory)).toEqual([])
+})
+
+it('rejects malformed files and cleans up after parser failure', async () => {
+  const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body: '<HealthData><broken' }))
+  expect(response.status).toBe(422)
+  expect(await readdir(directory)).toEqual([])
+})
+
+it('rejects cross-origin requests, missing side, and oversized bodies before import', async () => {
+  expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { origin: 'http://evil' }, body: 'x' }))).status).toBe(403)
+  expect((await POST(new Request('http://pod/api/biometrics/watch-upload', { method: 'POST', body: 'x' }))).status).toBe(400)
+  expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { 'content-length': String(513 * 1024 * 1024) }, body: 'x' }))).status).toBe(413)
+})

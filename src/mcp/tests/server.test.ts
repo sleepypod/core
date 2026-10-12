@@ -24,7 +24,7 @@ const callerMock = vi.hoisted(() => {
     },
     biometrics: {
       getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
-      getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(),
+      getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceStages: fn(),
     },
     environment: {
       getSummary: fn(), getAmbientLightSummary: fn(), getLatestBedTemp: fn(), getLatestFreezerTemp: fn(),
@@ -110,6 +110,7 @@ describe('sleepypod MCP server', () => {
       'get_sleep_history',
       'get_sleep_summary',
       'get_vitals_trend',
+      'import_apple_watch_data',
       'manage_alarm',
       'manage_automation',
       'manage_schedule',
@@ -600,4 +601,19 @@ describe('sleepypod MCP server', () => {
     if (!('text' in content)) throw new Error('expected text content')
     expect(JSON.parse(content.text)).toMatchObject({ left: { powered: true } })
   })
+})
+
+it('imports Watch batches through the shared procedures and reports partial stage failure', async () => {
+  callerMock.biometrics.importReferenceVitals.mockResolvedValue({ written: 1 })
+  callerMock.biometrics.importReferenceStages.mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST', message: 'overlap' }))
+  const client = await connect()
+  try {
+    const result = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'right', samples: [{ timestamp: 1791700000, heartRate: 60 }],
+      segments: [{ start: 1791700000, end: 1791700060, stage: 'deep' }],
+    } }) as CallToolResult
+    expect(JSON.parse(text(result))).toMatchObject({ vitals: 1, stages: 0, stageError: expect.any(String) })
+    expect(callerMock.biometrics.importReferenceVitals).toHaveBeenCalledWith({ side: 'right', source: 'apple_watch', samples: [{ timestamp: 1791700000, heartRate: 60 }] })
+  }
+  finally { await client.close() }
 })

@@ -11,6 +11,33 @@ const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: 
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export function registerSleepTools(server: McpServer) {
+  server.registerTool('import_apple_watch_data', {
+    title: 'Import Apple Watch heart rate and sleep stages',
+    description: 'Sync extracted Apple Health records to one sleeper. Send at most 2000 samples/segments per call; repeat calls are safe. '
+      + 'For a complete export.zip or export.xml, stream the file with POST /api/biometrics/watch-upload?side=left|right&days=30 '
+      + '(application/octet-stream, 512 MiB maximum, days 1..90) instead of placing the export in model context. '
+      + 'Stage conflicts are reported without blocking heart-rate import. Records remain separate from pod measurements.',
+    inputSchema: {
+      side,
+      samples: z.array(z.object({ timestamp: z.number().int().min(1_000_000_000).max(4_102_444_800), heartRate: z.number().min(20).max(250) })).max(2000).default([]),
+      segments: z.array(z.object({ start: z.number().int().min(1_000_000_000).max(4_102_444_800), end: z.number().int().min(1_000_000_000).max(4_102_444_800), stage: z.enum(['wake', 'light', 'deep', 'rem']) })).max(2000).default([]),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async ({ side: sleeper, samples, segments }) => runTool(async () => {
+    if (!samples.length && !segments.length) throw new Error('Provide samples or segments. Timestamps are Unix seconds.')
+    const caller = getCaller()
+    const vitals = samples.length ? await caller.biometrics.importReferenceVitals({ side: sleeper, source: 'apple_watch', samples }) : { written: 0 }
+    let stages = 0
+    let stageError: string | null = null
+    if (segments.length) {
+      try {
+        stages = (await caller.biometrics.importReferenceStages({ side: sleeper, source: 'apple_watch', segments })).written
+      }
+      catch { stageError = 'Stage import failed; stored stages were preserved. Check segment bounds/overlaps before retrying. Heart-rate samples were imported.' }
+    }
+    return jsonResult({ vitals: vitals.written, stages, stageError })
+  }))
+
   server.registerTool('get_sleep_summary', {
     title: 'Summarize a night of sleep',
     description:

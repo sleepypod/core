@@ -26,6 +26,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { OccupancyCheck } from '@/src/components/diagnostics/OccupancyCheck'
 import { RawDataButton } from './RawDataButton'
 import { referenceInSession, type ReferencePoint, VitalsLegend } from './VitalsChart'
+import { WatchUpload } from './WatchUpload'
 import { VitalsExplorer } from './VitalsExplorer'
 import {
   baselineBand, clock, dateInputValue, fmtDuration, formatRangeLabel, METRICS, metricStats, nightWindow, rangeWindow, SESSION_GAP_MS, splitSessions, STALE_MS,
@@ -220,6 +221,8 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
           Latest
         </Button>
       </div>
+
+      <WatchUpload key={side} side={side} name={sideName(side)} />
 
       <SummaryRow summary={summaryQ.data ?? null} loading={summaryQ.isLoading} />
 

@@ -124,3 +124,35 @@ app/api/mcp/route.ts   Next.js route handler (stateless Streamable HTTP)
 2. Register it in the matching `tools/*.ts` with `title`, a description that says when to use it and when not to, and truthful `annotations`.
 3. Call procedures through `getCaller()` inside `runTool`.
 4. Add a case to `tests/server.test.ts` and a row to the catalogue above.
+
+### Apple Watch imports
+
+`import_apple_watch_data` imports extracted Watch heart-rate `samples` and/or sleep-stage
+`segments` for an explicit `side`. Timestamps are Unix seconds; each array accepts up to
+2,000 records. It uses the existing reference-vitals and reference-stages procedures,
+so repeats skip duplicates and never overwrite pod measurements. Check `stageError`
+for partial success before reporting completion.
+
+For a full Apple Health export, use the upload API instead of passing a large archive
+through model context. The Biometrics page exposes the same flow under **Upload Apple
+Watch data**:
+
+```sh
+curl --fail-with-body -X POST \
+  'http://POD:3000/api/biometrics/watch-upload?side=left&days=30' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @export.zip
+```
+
+The body is raw `export.zip` or `export.xml`, not multipart. `side` is required;
+`days` defaults to 30 and accepts 1–90. Uploads are limited to 512 MiB and ZIP XML
+members to 1 GiB uncompressed. Only Apple Watch heart rate and sleep stages in the
+chosen period are imported. A ZIP must contain `apple_health_export/export.xml` or
+`export.xml`; unrelated members are never extracted. Files are staged on persistent
+storage and deleted on completion or failure. Only one upload/import runs at a time.
+
+The response includes `vitals` and `stages` (new rows), `matchedVitals` and
+`matchedStages` (eligible records), and `rejectedStageBatches` (conflicting stage
+batches skipped while heart rate still imports). A disconnect or timeout can leave
+some batches imported; retrying the same export is safe. The ten-minute request
+limit includes upload and parsing. Like the existing API, this is LAN-only.

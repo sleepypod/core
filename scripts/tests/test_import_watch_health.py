@@ -186,5 +186,30 @@ class ImportWatchHealthTest(unittest.TestCase):
                 iw.main([os.path.join(self.tmp.name, 'missing.xml'), '--pod', 'x', '--side', 'left'])
 
 
+
+class WatchZipImportTest(unittest.TestCase):
+    def test_zip_import_and_partial_conflicts_are_reported(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            xml = os.path.join(directory, 'export.xml')
+            write_export(xml, [(0, 10, 'AsleepCore')], [(5, 62)])
+            archive = os.path.join(directory, 'export.zip')
+            with zipfile.ZipFile(archive, 'w') as output:
+                output.write(xml, 'apple_health_export/export.xml')
+            result = iw.run(archive, 'pod', 'left', days=0, report=True, post=RejectingRecorder())
+            self.assertEqual(result['vitals'], 1)
+            self.assertEqual(result['rejectedStageBatches'], 1)
+            self.assertEqual(result['matchedStages'], 1)
+
+    def test_zip_does_not_extract_arbitrary_paths(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            archive = os.path.join(directory, 'export.zip')
+            with zipfile.ZipFile(archive, 'w') as output:
+                output.writestr('../export.xml', '<HealthData/>')
+            with self.assertRaisesRegex(ValueError, 'exactly one'):
+                iw.run(archive, 'pod', 'left', report=True, post=Recorder())
+
+
 if __name__ == '__main__':
     unittest.main()

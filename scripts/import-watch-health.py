@@ -31,6 +31,8 @@ import json
 import os
 import sys
 import time
+import zipfile
+from contextlib import contextmanager
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -107,11 +109,29 @@ def base_url(pod):
     return f'http://{pod}:3000' if ':' not in pod else f'http://{pod}'
 
 
+@contextmanager
+def export_stream(export):
+    """Read only the Health XML member; never extract arbitrary ZIP paths."""
+    if zipfile.is_zipfile(export):
+        with zipfile.ZipFile(export) as archive:
+            entries = [entry for entry in archive.infolist()
+                       if entry.filename in ('export.xml', 'apple_health_export/export.xml')]
+            if len(entries) != 1:
+                raise ValueError('ZIP must contain exactly one apple_health_export/export.xml or export.xml')
+            if entries[0].file_size > 1024 * 1024 * 1024:
+                raise ValueError('Expanded export.xml exceeds 1 GiB; export a smaller date range')
+            with archive.open(entries[0]) as xml:
+                yield xml
+    else:
+        yield export
+
+
 def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
-        stages=True, hr=True, post=post_json, now=None):
-    segments, hr_samples = parse_export(export, source_pattern)
+        stages=True, hr=True, post=post_json, now=None, report=False):
     now = time.time() if now is None else now
     cutoff = now - days * 86400 if days > 0 else float('-inf')
+    with export_stream(export) as xml:
+        segments, hr_samples = parse_export(xml, source_pattern, cutoff=cutoff)
 
     segs = [s for s in dedupe_segments(segments) if s[1] >= cutoff] if stages else []
     samples = [(t, bpm) for t, bpm in hr_samples if t >= cutoff and 20 <= bpm <= 250] if hr else []
@@ -152,6 +172,8 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
         written['vitals'] += int(out.get('written', 0))
     print(f"wrote {written['stages']} new stage segments and {written['vitals']} new heart-rate samples to {url}",
           file=sys.stderr)
+    if report:
+        return {**written, 'rejectedStageBatches': rejected, 'matchedStages': len(segs), 'matchedVitals': len(samples)}
     if rejected:
         raise SystemExit(f'error: {rejected} stage batch(es) rejected by the pod; heart rate was still imported')
     return written
@@ -164,6 +186,7 @@ def main(argv=None):
     ap.add_argument('--side', choices=('left', 'right'), required=True, help='the side the Watch wearer sleeps on')
     ap.add_argument('--source', default='Watch', help='regex on export sourceName (default: Watch)')
     ap.add_argument('--days', type=int, default=30, help='only the last N days (default 30; 0 = all)')
+    ap.add_argument('--json', action='store_true', help='return import counts and partial stage conflicts as JSON')
     ap.add_argument('--dry-run', action='store_true', help='parse and count only')
     group = ap.add_mutually_exclusive_group()
     group.add_argument('--stages-only', action='store_true')
@@ -173,8 +196,10 @@ def main(argv=None):
     export = os.path.join(args.export, 'export.xml') if os.path.isdir(args.export) else args.export
     if not os.path.exists(export):
         ap.error(f'{export} not found')
-    run(export, args.pod, args.side, args.source, args.days, args.dry_run,
-        stages=not args.hr_only, hr=not args.stages_only)
+    result = run(export, args.pod, args.side, args.source, args.days, args.dry_run,
+        stages=not args.hr_only, hr=not args.stages_only, report=args.json)
+    if args.json:
+        print(json.dumps(result))
     return 0
 
 
