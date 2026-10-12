@@ -113,3 +113,23 @@ describe('VitalsLegend', () => {
     expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
   })
 })
+
+describe('movement alignment', () => {
+  it('plots position changes in their own row, restricted to visible sessions', () => {
+    withWidth()
+    render(
+      <VitalsChart
+        sessions={sessions}
+        bands={bands}
+        stall={null}
+        movement={[
+          { bucketStart: new Date(START + 10 * MIN), eventCount: 3 },
+          { bucketStart: new Date(START + 4 * 60 * MIN), eventCount: 8 },
+        ]}
+      />
+    )
+    expect(screen.getAllByTestId('movement-bar')).toHaveLength(1)
+    expect(screen.getByTestId('movement-bar').textContent).toContain('3 position changes')
+    expect(screen.getByText('changes / 5 min')).toBeTruthy()
+  })
+})

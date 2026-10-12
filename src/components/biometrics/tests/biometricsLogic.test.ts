@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BREAK_PX, baselineBand, clampTo, fmtDuration, fmtGap, formatRangeLabel, layoutAxis, metricStats, nearestIndex,
+  axisTicks, BREAK_PX, baselineBand, clampTo, fmtDuration, fmtGap, formatRangeLabel, layoutAxis, metricStats, nearestIndex,
   nightWindow, percentile, rangeWindow, rollingMean, segmentTicks, sessionHeader, splitSessions, STALL_PX,
   type VitalPoint,
 } from '../biometricsLogic'
@@ -109,4 +109,35 @@ it('keeps full 24-hour labels on the vitals axis across midnight', () => {
   const ticks = segmentTicks({ start, end: start + 3 * 3600000, w: 600 }, 46, '24h')
   expect(ticks.map(t => t.label)).toContain('00:00')
   expect(ticks.map(t => t.label)).toContain('01:00')
+})
+
+describe('multi-night axis readability', () => {
+  const nights = Array.from({ length: 30 }, (_, i) => ({ start: at(i + 1, 22), end: at(i + 2, 6) }))
+  it('keeps 30 sessions inside even a narrow plot without gaps eating the data', () => {
+    const axis = layoutAxis(nights, 396, null)
+    const last = axis.segments.at(-1)
+    expect((last?.x ?? 0) + (last?.w ?? 0)).toBeCloseTo(396)
+    expect(axis.segments.reduce((total, seg) => total + seg.w, 0)).toBeGreaterThanOrEqual(396 * 0.79)
+  })
+  it('shows sparse dates rather than a forced time label for every night', () => {
+    const ticks = axisTicks(layoutAxis(nights, 700, null))
+    expect(ticks.length).toBeGreaterThan(2)
+    expect(ticks.length).toBeLessThan(11)
+    expect(ticks.every(tick => tick.label.startsWith('Sep '))).toBe(true)
+    for (let i = 1; i < ticks.length; i++) expect(ticks[i].x - ticks[i - 1].x).toBeGreaterThanOrEqual(72)
+  })
+  it('retains the selected clock format when showing a single night', () => {
+    const axis = layoutAxis([nights[0]], 700, null)
+    expect(axisTicks(axis, '24h').some(tick => tick.label === '22:00')).toBe(true)
+    expect(axisTicks(axis, '12h').some(tick => tick.label.includes('AM'))).toBe(true)
+  })
+})
+
+it('keeps night boundaries at local noon across daylight saving changes', () => {
+  for (const [month, day] of [[2, 7], [9, 31]]) {
+    const start = new Date(2026, month, day, 12).getTime()
+    const end = new Date(2026, month, day + 1, 12).getTime()
+    expect(nightWindow(start)).toEqual({ start, end })
+    expect(nightWindow(end + 30 * MIN).start).toBe(end)
+  }
 })

@@ -147,18 +147,18 @@ describe('BiometricsPage', () => {
     expect(screen.getByTestId('sessions-card').textContent).toContain('585 records · 4+4 raw files · 8.45 MB')
   })
 
-  it('zooms the chart to a session’s night when its row is clicked', () => {
+  it('zooms the chart to the complete session when its row is clicked', () => {
     render(<BiometricsPage />)
     fireEvent.click(screen.getAllByTestId('session-row')[1])
     const last = state.vitals.mock.calls.at(-1)?.[0] as { startDate: Date, endDate: Date }
-    expect(last.startDate).toEqual(new Date(2026, 8, 26, 12))
-    expect(last.endDate).toEqual(new Date(2026, 8, 27, 12))
+    expect(last.startDate).toEqual(new Date(2026, 8, 27, 4, 5))
+    expect(last.endDate).toEqual(new Date(2026, 8, 27, 8, 22))
     for (const tab of screen.getAllByRole('tab', { name: 'Night' })) expect(tab.getAttribute('aria-selected')).toBe('true')
   })
 
   it.each([
-    ['12h', ['4:05', '5 AM', '2 PM'], 'in bed 6h 09m · no vitals since 3:05 PM'],
-    ['24h', ['04:05', '05:00', '14:00'], 'in bed 6h 09m · no vitals since 15:05'],
+    ['12h', ['Sep 27', 'Sep 28'], 'in bed 6h 09m · no vitals since 3:05 PM'],
+    ['24h', ['Sep 27', 'Sep 28'], 'in bed 6h 09m · no vitals since 15:05'],
   ] as const)('labels the vitals axis and session times in the %s clock', (format, ticks, since) => {
     state.timeFormat = format
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, toJSON: () => ({}) })
@@ -211,4 +211,55 @@ describe('BiometricsPage', () => {
       state.shown = ['left', 'right']
     }
   })
+})
+
+describe('biometrics date navigation', () => {
+  it('selects an older night, steps through nights, and returns to the latest range', () => {
+    render(<BiometricsPage />)
+    fireEvent.click(screen.getAllByRole('tab', { name: 'Night' })[0])
+    fireEvent.change(screen.getByLabelText('Biometrics date'), { target: { value: '2026-09-10' } })
+    expect(state.vitals.mock.calls.at(-1)?.[0].startDate).toEqual(new Date(2026, 8, 10, 12))
+    fireEvent.click(screen.getByRole('button', { name: 'Previous night' }))
+    expect(state.vitals.mock.calls.at(-1)?.[0].startDate).toEqual(new Date(2026, 8, 9, 12))
+    fireEvent.click(screen.getByRole('button', { name: 'Next night' }))
+    expect(state.vitals.mock.calls.at(-1)?.[0].startDate).toEqual(new Date(2026, 8, 10, 12))
+    fireEvent.click(screen.getByRole('button', { name: 'Latest' }))
+    expect(state.vitals.mock.calls.at(-1)?.[0].startDate).toEqual(new Date(2026, 8, 28, 12))
+  })
+
+  it('focuses session detail and restores the original week', () => {
+    render(<BiometricsPage />)
+    fireEvent.click(screen.getAllByTestId('session-row')[1])
+    expect(document.activeElement).toBe(screen.getByLabelText('Vitals detail'))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to range' }))
+    expect(state.vitals.mock.calls.at(-1)?.[0].startDate).toEqual(new Date(2026, 8, 22))
+    expect(screen.getAllByRole('tab', { name: 'Week' })[0].getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('shows Watch summaries only for sessions with matching data', () => {
+    state.reference = [{ timestamp: new Date(2026, 8, 27, 5), heartRate: 58 }]
+    render(<BiometricsPage />)
+    const rows = screen.getAllByTestId('session-row')
+    expect(rows[0].textContent).not.toContain('Watch')
+    expect(rows[1].textContent).toContain('Watch 58 bpm')
+    state.reference = []
+  })
+
+  it('requests a complete month including dense 30-second readings', () => {
+    render(<BiometricsPage />)
+    fireEvent.click(screen.getAllByRole('tab', { name: 'Month' })[0])
+    const input = state.vitals.mock.calls.at(-1)?.[0]
+    expect(input.startDate).toEqual(new Date(2026, 7, 30))
+    expect(input.endDate).toEqual(new Date(2026, 8, 29))
+    expect(input.limit).toBeGreaterThanOrEqual(30 * 24 * 120)
+  })
+})
+
+it('keeps the whole selected session when it crosses noon', () => {
+  state.vitals.mockReturnValue({ data: session(new Date(2026, 8, 27, 11).getTime(), 181), isLoading: false })
+  render(<BiometricsPage />)
+  fireEvent.click(screen.getByTestId('session-row'))
+  const input = state.vitals.mock.calls.at(-1)?.[0]
+  expect(input.startDate).toEqual(new Date(2026, 8, 27, 11))
+  expect(input.endDate).toEqual(new Date(2026, 8, 27, 14))
 })

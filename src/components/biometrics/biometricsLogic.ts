@@ -55,9 +55,10 @@ function startOfDay(ms: number): Date {
 
 /** The noon-to-noon night a moment belongs to (bed at 1 AM is the night before). */
 export function nightWindow(ms: number): RangeWindow {
-  const d = new Date(ms - 12 * HOUR)
+  const d = new Date(ms)
+  if (d.getHours() < 12) d.setDate(d.getDate() - 1)
   const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime()
-  return { start, end: start + DAY }
+  return { start, end: new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 12).getTime() }
 }
 
 /**
@@ -227,8 +228,9 @@ export interface AxisLayout {
  */
 export function layoutAxis(sessions: Array<{ start: number, end: number }>, width: number, stall: { start: number, end: number } | null): AxisLayout {
   const breaks = Math.max(0, sessions.length - 1)
-  const stallW = stall ? STALL_PX : 0
-  const available = Math.max(0, width - breaks * BREAK_PX - stallW)
+  const stallW = stall ? Math.min(STALL_PX, width / 3) : 0
+  const breakW = breaks ? Math.min(BREAK_PX, width * 0.2 / breaks) : 0
+  const available = Math.max(0, width - breaks * breakW - stallW)
   const durations = sessions.map(s => Math.max(MINUTE, s.end - s.start))
   const total = durations.reduce((a, b) => a + b, 0) || 1
   const raw = durations.map(d => Math.max(MIN_SEGMENT_PX, (d / total) * available))
@@ -238,14 +240,14 @@ export function layoutAxis(sessions: Array<{ start: number, end: number }>, widt
   let x = 0
   sessions.forEach((s, i) => {
     if (i > 0) {
-      gaps.push({ x: x + BREAK_PX / 2, gapMs: s.start - sessions[i - 1].end })
-      x += BREAK_PX
+      gaps.push({ x: x + breakW / 2, gapMs: s.start - sessions[i - 1].end })
+      x += breakW
     }
     const w = raw[i] * scale
     segments.push({ kind: 'session', x, w, start: s.start, end: s.end, index: i })
     x += w
   })
-  if (stall) segments.push({ kind: 'stall', x, w: STALL_PX, start: stall.start, end: stall.end, index: sessions.length })
+  if (stall) segments.push({ kind: 'stall', x, w: stallW, start: stall.start, end: stall.end, index: sessions.length })
   const xOf = (seg: Segment, t: number) => {
     const span = Math.max(1, seg.end - seg.start)
     return seg.x + (Math.min(Math.max(t, seg.start), seg.end) - seg.start) / span * seg.w
@@ -297,4 +299,28 @@ export function nearestIndex(points: VitalPoint[], t: number): number {
 /** Clamp to a metric's chart domain rather than letting values overflow the row. */
 export function clampTo(v: number, [lo, hi]: [number, number]): number {
   return Math.min(hi, Math.max(lo, v))
+}
+
+/** Sparse labels across the entire compressed axis, not one forced label per session. */
+export function axisTicks(axis: AxisLayout, timeFormat: TimeFormat = '12h'): Array<{ x: number, label: string }> {
+  const segments = axis.segments.filter(s => s.kind === 'session')
+  const multiNight = new Set(segments.map(s => nightWindow(s.start).start)).size > 1
+  const candidates = segments.flatMap(seg => multiNight
+    ? [
+        { x: seg.x, label: new Date(seg.start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) },
+        ...(seg.w >= 240 ? segmentTicks(seg, 72, timeFormat).filter(t => axis.xOf(seg, t.t) - seg.x >= 80 && seg.x + seg.w - axis.xOf(seg, t.t) >= 72).map(t => ({ x: axis.xOf(seg, t.t), label: t.label })) : []),
+      ]
+    : segmentTicks(seg, 72, timeFormat).map(t => ({ x: axis.xOf(seg, t.t), label: t.label })))
+  const ticks: Array<{ x: number, label: string }> = []
+  for (const tick of candidates) {
+    const last = ticks.at(-1)
+    if (!last || (tick.x - last.x >= 72 && (!multiNight || tick.label !== last.label))) ticks.push(tick)
+  }
+  return ticks
+}
+
+/** Calendar date for the native date picker (never UTC-sliced). */
+export function dateInputValue(ms: number): string {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

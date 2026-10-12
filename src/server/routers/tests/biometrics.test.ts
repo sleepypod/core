@@ -219,6 +219,12 @@ describe('biometrics.getSleepRecords', () => {
 })
 
 describe('biometrics.getVitals', () => {
+  it('allows a full month at 30-second cadence while bounding the response', async () => {
+    dbState.rowsQueue.push([])
+    await expect(caller.getVitals({ side: 'left', limit: 86400 })).resolves.toEqual([])
+    await expect(caller.getVitals({ limit: 100001 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
   it('returns rows', async () => {
     dbState.rowsQueue.push([
       { id: 1, side: 'left', timestamp: new Date(0), heartRate: 60, hrv: 50, breathingRate: 14 },

@@ -9,7 +9,7 @@
 
 import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { ArrowRight, ChevronRight, HeartPulse, List } from 'lucide-react'
@@ -25,9 +25,10 @@ import { useShownSides } from '@/src/providers/SideProvider'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { OccupancyCheck } from '@/src/components/diagnostics/OccupancyCheck'
 import { RawDataButton } from './RawDataButton'
-import { VitalsChart, VitalsLegend } from './VitalsChart'
+import { referenceInSession, type ReferencePoint, VitalsLegend } from './VitalsChart'
+import { VitalsExplorer } from './VitalsExplorer'
 import {
-  baselineBand, clock, fmtDuration, formatRangeLabel, METRICS, metricStats, nightWindow, rangeWindow, SESSION_GAP_MS, splitSessions, STALE_MS,
+  baselineBand, clock, dateInputValue, fmtDuration, formatRangeLabel, METRICS, metricStats, nightWindow, rangeWindow, SESSION_GAP_MS, splitSessions, STALE_MS,
   type BiometricsRange, type MetricDef, type MetricKey, type RangeWindow, type Session, type VitalPoint,
 } from './biometricsLogic'
 
@@ -54,14 +55,17 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   const { side, toggleSide } = useBiometricsSide()
   const { leftName, rightName, sideName } = useSideNames()
   const [range, setRange] = useState<BiometricsRange>('week')
-  // A session picked from the table pins the chart to that night.
+  // A selected session retains its full bounds, including sessions that cross noon.
   const [focus, setFocus] = useState<RangeWindow | null>(null)
+  const [anchor, setAnchor] = useState<number | null>(null)
+  const chartRef = useRef<HTMLDivElement>(null)
   const [rawLogOpen, setRawLogOpen] = useState(false)
-  const win = focus ?? rangeWindow(range, now)
+  const win = focus ?? rangeWindow(range, anchor ?? now)
+  const activeRange = focus ? 'night' : range
   const startDate = new Date(win.start)
   const endDate = new Date(win.end)
 
-  const vitalsQ = trpc.biometrics.getVitals.useQuery({ side, startDate, endDate, limit: 20000 }, { refetchInterval: 60_000, placeholderData: prev => prev })
+  const vitalsQ = trpc.biometrics.getVitals.useQuery({ side, startDate, endDate, limit: 100000 }, { refetchInterval: 60_000 })
   const summaryQ = trpc.biometrics.getVitalsSummary.useQuery({ side, startDate, endDate }, { refetchInterval: 60_000 })
   const latestQ = trpc.biometrics.getVitals.useQuery({ side, limit: 1 }, { refetchInterval: 30_000 })
   const occupancyQ = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 10_000 })
@@ -79,7 +83,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   const sessions = splitSessions(points)
   const bands = { hr: baselineBand(points, 'hr'), hrv: baselineBand(points, 'hrv'), br: baselineBand(points, 'br') }
   const reference = ((referenceQ.data ?? []) as Array<{ timestamp: Date | string, heartRate: number }>)
-    .map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate }))
+    .map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate })).sort((a, b) => a.t - b.t)
 
   const lastVitalAt = latestQ.data?.[0] ? new Date(latestQ.data[0].timestamp).getTime() : null
   const occupied = occupancyQ.data?.[side].occupied ?? false
@@ -96,8 +100,9 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
     setRange(next)
   }
   const zoomTo = (s: Session) => {
-    setRange('night')
-    setFocus(nightWindow(s.start))
+    setFocus({ start: s.start, end: Math.max(s.start + 60_000, s.end) })
+    chartRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    chartRef.current?.focus({ preventScroll: true })
   }
 
   return (
@@ -123,13 +128,13 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
                 }}
               />
             )}
-            <SegmentedControl ariaLabel="Range" className="max-[899px]:hidden" options={RANGES} value={range} onChange={pickRange} />
+            <SegmentedControl ariaLabel="Range" className="max-[899px]:hidden" options={RANGES} value={activeRange} onChange={pickRange} />
           </>
         )}
       />
       <div className="flex flex-col gap-3.5 min-[900px]:hidden">
         {sectionSwitch}
-        <SegmentedControl ariaLabel="Range" full options={RANGES} value={range} onChange={pickRange} />
+        <SegmentedControl ariaLabel="Range" full options={RANGES} value={activeRange} onChange={pickRange} />
       </div>
 
       {occupied && suspect && latestQ.isSuccess && (
@@ -159,17 +164,74 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
         </div>
       )}
 
+      <div className="flex flex-wrap items-center gap-3" aria-label="Date navigation">
+        <Button
+          size="sm"
+          onClick={() => {
+            const d = new Date(focus ? nightWindow(focus.start).start : anchor ?? now)
+            d.setDate(d.getDate() - (activeRange === 'night' ? 1 : activeRange === 'week' ? 7 : 30))
+            setAnchor(d.getTime())
+            setRange(activeRange)
+            setFocus(null)
+          }}
+        >
+          Previous
+          {' '}
+          {activeRange}
+        </Button>
+        <label className="flex items-center gap-2 text-sm text-fg-2">
+          {activeRange === 'night' ? 'Night starting' : 'Through date'}
+          <input
+            type="date"
+            aria-label="Biometrics date"
+            className="rounded border border-line bg-surface px-3 py-2 text-fg"
+            value={dateInputValue(focus ? nightWindow(focus.start).start : range === 'night' ? win.start : anchor ?? now)}
+            onChange={(e) => {
+              if (!e.target.value) return
+              const d = new Date(`${e.target.value}T12:00:00`)
+              if (!Number.isFinite(d.getTime())) return
+              setAnchor(d.getTime())
+              setRange(activeRange)
+              setFocus(null)
+            }}
+          />
+        </label>
+        <Button
+          size="sm"
+          onClick={() => {
+            const d = new Date(focus ? nightWindow(focus.start).start : anchor ?? now)
+            d.setDate(d.getDate() + (activeRange === 'night' ? 1 : activeRange === 'week' ? 7 : 30))
+            setAnchor(d.getTime())
+            setRange(activeRange)
+            setFocus(null)
+          }}
+        >
+          Next
+          {' '}
+          {activeRange}
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            setAnchor(null)
+            setFocus(null)
+          }}
+        >
+          Latest
+        </Button>
+      </div>
+
       <SummaryRow summary={summaryQ.data ?? null} loading={summaryQ.isLoading} />
 
-      <div className="flex min-w-0 flex-col gap-4 rounded-card border border-line bg-surface px-[18px] py-4 min-[900px]:px-6">
+      <div ref={chartRef} tabIndex={-1} aria-label="Vitals detail" className="scroll-mt-4 flex min-w-0 flex-col gap-4 rounded-card border border-line bg-surface px-[18px] py-4 min-[900px]:px-6">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="text-[15px] font-medium">Vitals</span>
+          <span className="text-[15px] font-medium">{focus ? 'Session vitals' : 'Vitals'}</span>
           <span className="font-mono text-xs text-fg-2">
             {`${rangeLabel} · ${sessions.length} session${sessions.length === 1 ? '' : 's'} with data`}
           </span>
           {focus && (
             <button type="button" onClick={() => setFocus(null)} className="cursor-pointer border-0 bg-transparent p-0 font-mono text-xs text-link hover:underline">
-              clear
+              Back to range
             </button>
           )}
           <span className="ml-auto font-mono text-xs text-fg-3">empty stretches removed</span>
@@ -179,11 +241,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
           : sessions.length === 0 && !stall
             ? <div className="grid h-[200px] place-items-center text-[13px] text-fg-3">No vitals in this range</div>
             : (
-                <div className="-mx-[18px] overflow-x-auto px-[18px]">
-                  <div className="min-w-[560px]">
-                    <VitalsChart sessions={sessions} stall={stall} bands={bands} reference={reference} />
-                  </div>
-                </div>
+                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} reference={reference} movement={movementQ.data ?? []} />
               )}
         <VitalsLegend bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
       </div>
@@ -198,6 +256,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
         stale={stale}
         lastVitalAt={lastVitalAt}
         movement={movementQ.data ?? []}
+        reference={reference}
         onSelect={zoomTo}
         footer={(
           <>
@@ -341,7 +400,7 @@ function MetricCell({ metric, points }: { metric: MetricDef, points: VitalPoint[
 
 const HEAD: Record<MetricKey, string> = { hr: 'Heart rate · bpm', hrv: 'HRV · ms', br: 'Breathing · /min' }
 
-function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, movement, onSelect, footer }: {
+function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, movement, reference, onSelect, footer }: {
   sessions: Session[]
   rangeLabel: string
   now: number
@@ -350,6 +409,7 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
   stale: boolean
   lastVitalAt: number | null
   movement: Array<{ bucketStart: Date, eventCount: number }>
+  reference: ReferencePoint[]
   onSelect: (s: Session) => void
   footer: ReactNode
 }) {
@@ -405,7 +465,21 @@ function SessionsCard({ sessions, rangeLabel, now, ongoing, stale, lastVitalAt, 
                         </span>
                       )}
                 </div>
-                {METRICS.map(m => <MetricCell key={m.key} metric={m} points={s.points} />)}
+                {METRICS.map(m => (
+                  <div key={m.key} className="flex flex-col gap-2">
+                    <MetricCell metric={m} points={s.points} />
+                    {m.key === 'hr' && (() => {
+                      const watch = referenceInSession(reference, s)
+                      return watch.length > 0
+                        ? (
+                            <span className="font-mono text-[11px] text-fg-2">
+                              {`Watch ${Math.round(watch.reduce((sum, p) => sum + p.hr, 0) / watch.length)} bpm · ${watch.length} samples`}
+                            </span>
+                          )
+                        : null
+                    })()}
+                  </div>
+                ))}
                 <span className="text-right font-mono text-[15px] tabular-nums">{s.points.length}</span>
                 <ChevronRight size={16} className="text-fg-3 group-hover:text-fg-2" />
               </button>
