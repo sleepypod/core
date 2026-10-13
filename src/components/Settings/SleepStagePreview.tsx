@@ -19,10 +19,9 @@ const pct = (fraction: number) => `${Math.round(fraction * 100)}%`
  * The saved rules against the draft over the previewed nights: stage split
  * and quality of each, where they disagree, and what the draft would change.
  */
-export function StagePreviewCard({ data, error, loading, nights, onNightsChange, dirty, canSave, saving, onSave, onDiscard }: {
+export function StagePreviewCard({ data, error, nights, onNightsChange, dirty, canSave, saving, onSave, onDiscard }: {
   data: PreviewOutput | undefined
   error: string | null
-  loading: boolean
   nights: PreviewNights
   onNightsChange: (n: PreviewNights) => void
   dirty: boolean
@@ -59,24 +58,22 @@ export function StagePreviewCard({ data, error, loading, nights, onNightsChange,
         {!data && !error && <Skeleton className="h-[120px]" />}
         {data && !saved && !candidate && <span className="text-[13px] text-fg-2">No night with vitals to preview yet.</span>}
         {data && (saved || candidate) && (
-          <div className={loading ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
-            <div className="flex flex-col gap-3.5">
-              <PreviewRow label="Saved" stages={saved} />
-              <PreviewRow label="These rules" stages={candidate} />
-              {data.changed && data.enteredBedAt !== null && data.leftBedAt !== null && (
-                <ChangedStrip changed={data.changed} start={data.enteredBedAt} end={data.leftBedAt} />
-              )}
-              <div className="h-px bg-line" />
-              <div className="flex flex-col gap-2">
-                {deltaRow(`Wake${perNight}`, saved ? formatDurationHM(saved.durations.wake) : null, candidate ? formatDurationHM(candidate.durations.wake) : null)}
-                {deltaRow(`Deep${perNight}`, saved ? formatDurationHM(saved.durations.deep) : null, candidate ? formatDurationHM(candidate.durations.deep) : null)}
-                {data.hasReference
-                  ? deltaRow('Agreement with watch', saved?.agreement ? pct(saved.agreement.accuracy) : null, candidate?.agreement ? pct(candidate.agreement.accuracy) : null)
-                  : <span className="text-xs text-fg-3">Import Apple Watch stages from the iOS app to see how closely each set of rules agrees with it.</span>}
-              </div>
-              <div className="flex gap-3 font-mono text-[11px]">
-                {(['wake', 'rem', 'light', 'deep'] as const).map(s => <span key={s} style={{ color: STAGE_COLOR[s] }}>{STAGE_LABELS[s]}</span>)}
-              </div>
+          <div className="flex flex-col gap-3.5">
+            <PreviewRow label="Saved" stages={saved} />
+            <PreviewRow label="These rules" stages={candidate} />
+            {data.changed && data.enteredBedAt !== null && data.leftBedAt !== null && (
+              <ChangedStrip changed={data.changed} start={data.enteredBedAt} end={data.leftBedAt} />
+            )}
+            <div className="h-px bg-line" />
+            <div className="flex flex-col gap-2">
+              {deltaRow(`Wake${perNight}`, saved ? formatDurationHM(saved.durations.wake) : null, candidate ? formatDurationHM(candidate.durations.wake) : null)}
+              {deltaRow(`Deep${perNight}`, saved ? formatDurationHM(saved.durations.deep) : null, candidate ? formatDurationHM(candidate.durations.deep) : null)}
+              {data.hasReference
+                ? deltaRow('Agreement with watch', saved?.agreement ? pct(saved.agreement.accuracy) : null, candidate?.agreement ? pct(candidate.agreement.accuracy) : null)
+                : <span className="text-xs text-fg-3">Import Apple Watch stages from the iOS app to see how closely each set of rules agrees with it.</span>}
+            </div>
+            <div className="flex gap-3 font-mono text-[11px]">
+              {(['wake', 'rem', 'light', 'deep'] as const).map(s => <span key={s} style={{ color: STAGE_COLOR[s] }}>{STAGE_LABELS[s]}</span>)}
             </div>
           </div>
         )}

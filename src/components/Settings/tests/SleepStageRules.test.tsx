@@ -602,13 +602,15 @@ describe('SleepStageRules', () => {
     expect(screen.getByText('No night with vitals to preview yet.')).toBeTruthy()
   })
 
-  it('shows the preview error and dims the preview while it reloads', () => {
+  it('shows the preview error and keeps the last result steady while it reloads', () => {
     trpcMock.state.previewError = { message: 'Preview failed' }
     trpcMock.state.previewPending = true
     trpcMock.state.preview = PREVIEW
     renderRules()
     expect(screen.getByText('Preview failed')).toBeTruthy()
-    expect(screen.getByText('These rules').closest('.opacity-60')).not.toBeNull()
+    // No dimming or placeholder while the next preview computes: the card must not visibly redraw per edit.
+    expect(screen.getByText('These rules').closest('.opacity-60')).toBeNull()
+    expect(screen.getByText('Q 89 · κ 0.77')).toBeTruthy()
   })
 
   it('tones each change by its effect on watch agreement and disables revert while saving', () => {

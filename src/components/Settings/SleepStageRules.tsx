@@ -238,7 +238,6 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
           <StagePreviewCard
             data={data}
             error={preview.error}
-            loading={preview.loading}
             nights={nights}
             onNightsChange={setNights}
             dirty={dirty}
@@ -278,7 +277,7 @@ function useStagePreview(side: Side, ruleset: StageRuleset | null, saved: StageR
     return () => clearTimeout(t)
   }, [side, key, savedKey, nights, mutate])
 
-  return { data: preview.data, error: preview.error?.message ?? null, loading: preview.isPending }
+  return { data: preview.data, error: preview.error?.message ?? null }
 }
 
 /**
