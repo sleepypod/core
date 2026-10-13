@@ -5,7 +5,7 @@ import { getCurrentDay } from '@/src/components/Schedule/DaySelector'
 import { trpc } from '@/src/utils/trpc'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSide } from '@/src/providers/SideProvider'
-import { simplifySetPoints } from '@/src/lib/scheduleGrouping'
+import { planCurveSave } from '@/src/lib/sleepCurve/savePlan'
 
 type Side = 'left' | 'right'
 
@@ -516,61 +516,24 @@ export function useSchedule() {
         | undefined
         : undefined
 
-      const daysToClear = new Set<DayOfWeek>([...originalDays, ...targetDays])
-      const tempDeletes = [
-        ...allData.temperature.filter(t => daysToClear.has(t.dayOfWeek)).map(t => t.id),
-        ...(otherData?.temperature.filter(t => daysToClear.has(t.dayOfWeek)).map(t => t.id) ?? []),
-      ]
-      const powerDeletes = [
-        ...allData.power.filter(p => daysToClear.has(p.dayOfWeek)).map(p => p.id),
-        ...(otherData?.power.filter(p => daysToClear.has(p.dayOfWeek)).map(p => p.id) ?? []),
-      ]
-
-      const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
-      const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, endAction?: 'turn_off' | 'maintain', onTemperature: number, enabled: boolean }> = []
-
-      // Derive on/off times from set points (chronological with overnight wrap).
-      // Rows inside a flat hold are dropped; they never change what the Pod does.
-      const sortedPoints = simplifySetPoints(setPoints)
-      const onTime = sortedPoints[0]?.time
-      const offTime = sortedPoints[sortedPoints.length - 1]?.time
-      const onTemperature = sortedPoints[0]?.temperature
-      const canCreatePower = onTime && offTime && onTemperature !== undefined && (onTime !== offTime || endAction === 'maintain')
-
-      for (const writeSide of activeSides) {
-        for (const day of targetDays) {
-          for (const sp of sortedPoints) {
-            tempCreates.push({
-              side: writeSide,
-              dayOfWeek: day,
-              time: sp.time,
-              temperature: Math.round(sp.temperature),
-              enabled: true,
-            })
-          }
-          if (canCreatePower) {
-            powerCreates.push({
-              side: writeSide,
-              dayOfWeek: day,
-              onTime,
-              offTime,
-              endAction,
-              onTemperature: Math.round(Math.max(55, Math.min(110, onTemperature))),
-              enabled: true,
-            })
-          }
-        }
-      }
+      const { deletes, creates } = planCurveSave({
+        sides: activeSides,
+        targetDays,
+        clearDays: originalDays,
+        setPoints,
+        endAction,
+        existing: {
+          temperature: [...allData.temperature, ...(otherData?.temperature ?? [])],
+          power: [...allData.power, ...(otherData?.power ?? [])],
+        },
+      })
 
       const hasChanges
-        = tempDeletes.length > 0 || tempCreates.length > 0
-          || powerDeletes.length > 0 || powerCreates.length > 0
+        = deletes.temperature.length > 0 || creates.temperature.length > 0
+          || deletes.power.length > 0 || creates.power.length > 0
       if (!hasChanges) return
 
-      await batchUpdate.mutateAsync({
-        deletes: { temperature: tempDeletes, power: powerDeletes },
-        creates: { temperature: tempCreates, power: powerCreates },
-      })
+      await batchUpdate.mutateAsync({ deletes, creates })
     },
     [allSchedulesQuery.data, otherSchedulesQuery.data, activeSides, batchUpdate]
   )

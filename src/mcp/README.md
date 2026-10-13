@@ -22,7 +22,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 
 ## Design rules
 
-- **Intent-shaped, not endpoint-shaped.** 26 tools cover ~110 procedures. A tool is one thing a person would ask for.
+- **Intent-shaped, not endpoint-shaped.** 27 tools cover ~110 procedures. A tool is one thing a person would ask for.
 - **CRUD collapses into an `action` enum** (`manage_schedule`, `manage_alarm`, `manage_automation`, `pod_maintenance`).
 - **Temperatures accept the caller's unit** (`unit: "F" | "C"`, default = device setting) and are converted to the 55-110°F hardware setpoint in `units.ts`.
 - **Errors come back as `isError` text** with the TRPC code, so the model can explain "pump stall guard tripped" instead of retrying blindly.
@@ -69,6 +69,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 |---|---|---|
 | "What's my schedule?" / "Why didn't it turn on?" | `get_schedules` | `schedules.getAll`, `settings.getAll` |
 | "Every weekday cool to 66 at 10pm" / "Wake me 7am with vibration" / "Delete Monday's alarm" | `manage_schedule` | `schedules.create/update/delete{Temperature,Power,Alarm}Schedule` |
+| "Given my sleep data, build me a curve for weeknights" (preview, then apply) | [`apply_sleep_curve`](#sleep-curves) | `schedules.getAll`, `settings.getAll`, `schedules.batchUpdate` |
 
 ### Settings
 
@@ -101,6 +102,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | resource | `sleepypod://settings` | Device and side settings. |
 | prompt | `morning_report` | Summarize last night for both sides and flag anything degraded. |
 | prompt | `bedtime` | Turn a plain-language request for one side into the right tool calls. |
+| prompt | `design_sleep_curve` | Gather sleep history, vitals and room data, design a recurring curve with the curve-wizard guidance, preview it, apply on agreement. |
 
 ## Deliberately not exposed
 
@@ -189,3 +191,15 @@ logged), and can be reverted by saving that previous ruleset again (`before: nul
 means `reset: true`). Pass the preview's `candidateRuleset` as `ruleset` to save exactly what was
 previewed; overrides are re-resolved against the rules saved at save time. A `CONFLICT` means
 another save landed first: re-read with `get_sleep_stage_rules` and retry.
+
+### Sleep curves
+
+`apply_sleep_curve` saves a whole curve (2-48 `setPoints`) for `side` `left`, `right` or `both` on a list of
+`days`, through `planCurveSave` in `src/lib/sleepCurve/savePlan.ts`, the same planner the Schedule screen's
+curve editor uses. Each target day's temperature and power rows are replaced in one `schedules.batchUpdate`
+transaction; alarms are kept. Flat-hold set points are dropped, and the power window runs from the first to
+the last set point (`endAction: "maintain"` holds the last temperature). `mode: "preview"` writes nothing and
+returns the simplified curve, `powerWindow`, the rows it `replaces` per side and day, `keptAlarms` and
+`warnings` (away mode, no on/off window); `mode: "apply"` with the same arguments saves exactly that.
+The `design_sleep_curve` prompt chains the data tools into a preview using `CURVE_DESIGN_GUIDANCE`, the
+sleep-science text the copy/paste AI curve wizard also sends.

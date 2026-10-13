@@ -9,6 +9,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
+import { CURVE_DESIGN_GUIDANCE } from '@/src/lib/sleepCurve/curvePrompt'
 import { getCaller } from '@/src/mcp/caller'
 import { registerAutomationTools } from '@/src/mcp/tools/automations'
 import { registerControlTools } from '@/src/mcp/tools/control'
@@ -25,6 +26,7 @@ The bed has two independent sides ("left" and "right"), each with its own temper
 Temperature control precedence, highest first: manual hold (set_temperature) > run-once curve > automation > schedule.
 Start with get_pod_status for anything about the present, get_sleep_summary for last night, and diagnose_pod when something seems wrong.
 Confirm with the user before prime_pod, pod_maintenance and manage_schedule delete.
+Run apply_sleep_curve with mode "preview" and show the result before calling it with mode "apply".
 Run preview_sleep_stage_rules before set_sleep_stage_rules and apply a tuned ruleset only when it improves kappa against the reference stages; a reset or rollback the user asks for does not need to.
 Nights without reference stages cannot be scored (see get_sleep_stage_rules coverage); import Apple Watch stages with import_apple_watch_data first.
 Every classifier change is recorded in the change log with the ruleset before it, and can be reverted by setting that previous ruleset again.`
@@ -92,8 +94,37 @@ export function createSleepypodMcpServer(): McpServer {
         type: 'text',
         text: `Set up the ${side} side for tonight. The sleeper says: "${request}". First call get_pod_status and `
           + 'get_schedules to see the current state and unit. If the request is for tonight only, use run_once_curve '
-          + 'with a wake time; if it is a one-off temperature now, use set_temperature; if it should repeat, use '
-          + 'manage_schedule. Explain the plan in one or two sentences before applying it.',
+          + 'with a wake time; if it is a one-off temperature now, use set_temperature; if a whole curve should repeat, '
+          + 'use apply_sleep_curve; for a single recurring change, use manage_schedule. Explain the plan in one or two '
+          + 'sentences before applying it.',
+      },
+    }],
+  }))
+
+  server.registerPrompt('design_sleep_curve', {
+    title: 'Design a sleep curve',
+    description: 'Build a recurring temperature curve for a side from its sleep data and the sleeper\'s preferences.',
+    argsSchema: {
+      side: z.enum(['left', 'right', 'both']).describe('Which side, or both.'),
+      request: z.string().optional().describe('What the sleeper wants, in their words (e.g. "I run hot, wake at 6:30").'),
+    },
+  }, ({ side, request }) => ({
+    messages: [{
+      role: 'user',
+      content: {
+        type: 'text',
+        text: `Design a recurring nightly temperature curve for the ${side === 'both' ? 'left and right sides' : `${side} side`}. `
+          + (request ? `The sleeper says: "${request}". ` : '')
+          + 'First gather data: get_schedules (current curve, unit, away mode), get_sleep_history for the last 14 days '
+          + '(typical bedtime, wake time, wake-ups), get_vitals_trend (heart rate and HRV against baseline) and '
+          + 'get_environment (room temperature). Use the sleeper\'s words over the data where they disagree, and say '
+          + 'what you inferred from the data.\n\n'
+          + `${CURVE_DESIGN_GUIDANCE}\n\n`
+          + 'Build 8-15 set points from about 45 minutes before bedtime to 30 minutes after wake: warm-up, cooling ramp '
+          + 'after bedtime, coldest hold through the first deep-sleep hours, gradual pre-wake warming, return toward '
+          + 'neutral. If weekday and weekend sleep times differ, design one curve per group of days. Call '
+          + 'apply_sleep_curve with mode "preview", show the curve, the on/off window and what it replaces in a short '
+          + 'table with a sentence of reasoning, and call it with mode "apply" only after the sleeper agrees.',
       },
     }],
   }))

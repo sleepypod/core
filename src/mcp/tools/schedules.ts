@@ -1,6 +1,7 @@
 /**
  * Recurring schedule tools. One read tool, one write tool with an action
- * enum, instead of the router's ten procedures.
+ * enum, instead of the router's ten procedures, plus apply_sleep_curve for
+ * writing a whole curve across sides and days in one batch.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -16,7 +17,8 @@ import {
   vibrationIntensity,
   vibrationPattern,
 } from '@/src/mcp/schemas'
-import { resolveUnit, toSetpointF } from '@/src/mcp/units'
+import { fromSetpointF, resolveUnit, toSetpointF } from '@/src/mcp/units'
+import { planCurveSave } from '@/src/lib/sleepCurve/savePlan'
 
 export function registerScheduleTools(server: McpServer) {
   server.registerTool('get_schedules', {
@@ -141,5 +143,113 @@ export function registerScheduleTools(server: McpServer) {
       alarmTemperature: temp,
       enabled: input.enabled,
     }))
+  }))
+
+  server.registerTool('apply_sleep_curve', {
+    title: 'Preview or save a recurring temperature curve',
+    description:
+      'Save a whole night\'s temperature curve as the recurring schedule for one or both sides on the given days, '
+      + 'the same way the Schedule screen\'s curve editor does. Each day\'s temperature and power schedules are '
+      + 'replaced; alarms are kept. The side turns on at the first set point and off at the last (overnight curves wrap '
+      + 'past midnight); endAction "maintain" holds the last temperature instead of turning off. Set points inside a '
+      + 'flat hold are dropped. Each row fires on its own weekday, so on "monday" a 01:00 point fires early Monday '
+      + 'morning (the end of Sunday night). Call with mode "preview" first: it saves nothing and returns the simplified curve, the '
+      + 'on/off window, the schedules it would replace and warnings. Show that to the user, then call again with mode '
+      + '"apply" and the same arguments. Design guidance: 8-15 points from about 45 min before bedtime to 30 min after '
+      + 'wake; warm-up, cooling ramp, coldest hold in the first deep-sleep hours, gradual pre-wake warming; water takes '
+      + '15-20 min to settle; neutral is about 82.5°F. Base it on get_sleep_history, get_vitals_trend and '
+      + 'get_schedules when the user asks for a curve from their data. For tonight only, use run_once_curve instead. '
+      + 'Temperatures use the given unit or the device default.',
+    inputSchema: {
+      mode: z.enum(['preview', 'apply']).describe('"preview" is a dry run; "apply" saves.'),
+      side: z.enum(['left', 'right', 'both']).describe('Which side to write, or "both" for the same curve on each.'),
+      days: z.array(dayOfWeek).min(1).max(7).describe('Days of week this curve runs on, e.g. ["monday","tuesday"].'),
+      setPoints: z.array(z.object({ time: timeOfDay, temperature })).min(2).max(48)
+        .describe('Set points in any order; each holds until the next one fires.'),
+      endAction: z.enum(['turn_off', 'maintain']).optional().describe('After the last set point: turn off (default) or keep holding it.'),
+      unit,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  }, async input => runTool(async () => {
+    const caller = getCaller()
+    const resolved = await resolveUnit(input.unit)
+    const sides = input.side === 'both' ? (['left', 'right'] as const) : [input.side]
+    const days = [...new Set(input.days)]
+
+    const seen = new Set<string>()
+    const setPointsF = input.setPoints.map((p) => {
+      if (seen.has(p.time)) throw new Error(`Two set points at ${p.time}; give one temperature per time`)
+      seen.add(p.time)
+      const f = toSetpointF(p.temperature, resolved)
+      if (f < 55 || f > 110) throw new Error(`${p.temperature}°${resolved} at ${p.time} is outside the hardware range 55-110°F (13-43°C)`)
+      return { time: p.time, temperature: f }
+    })
+
+    const settings = await caller.settings.getAll({})
+    const current = await Promise.all(sides.map(async sd => ({ side: sd, ...(await caller.schedules.getAll({ side: sd, unit: resolved })) })))
+    const plan = planCurveSave({
+      sides: [...sides],
+      targetDays: days,
+      setPoints: setPointsF,
+      endAction: input.endAction,
+      existing: {
+        temperature: current.flatMap(c => c.temperature),
+        power: current.flatMap(c => c.power),
+      },
+    })
+
+    const daySet = new Set<string>(days)
+    const replaces: Record<string, unknown> = {}
+    for (const c of current) {
+      const perDay: Record<string, unknown> = {}
+      for (const day of days) {
+        const temps = c.temperature.filter(t => t.dayOfWeek === day)
+        const power = c.power.filter(p => p.dayOfWeek === day)
+        if (temps.length === 0 && power.length === 0) continue
+        perDay[day] = {
+          setPoints: temps.map(t => ({ time: t.time, temperature: t.temperature, enabled: t.enabled }))
+            .sort((a, b) => a.time.localeCompare(b.time)),
+          power: power.map(p => ({ onTime: p.onTime, offTime: p.offTime, onTemperature: p.onTemperature, endAction: p.endAction, enabled: p.enabled })),
+        }
+      }
+      replaces[c.side] = perDay
+    }
+
+    const warnings: string[] = []
+    if (!plan.power) warnings.push('No on/off window: the first and last set points share a time. Add a later point or use endAction "maintain".')
+    for (const sd of sides) {
+      if (settings.sides[sd].awayMode) warnings.push(`Away mode is on for ${sd}: schedules will not fire until it is turned off.`)
+    }
+    const keptAlarms = current.reduce((n, c) => n + c.alarm.filter(a => daySet.has(a.dayOfWeek)).length, 0)
+
+    const summary = {
+      unit: resolved,
+      sides,
+      days,
+      setPoints: plan.setPoints.map(p => ({ time: p.time, temperature: fromSetpointF(p.temperature, resolved) })),
+      droppedFlatPoints: setPointsF.length - plan.setPoints.length,
+      powerWindow: plan.power && { ...plan.power, onTemperature: fromSetpointF(plan.power.onTemperature, resolved) },
+      replaces,
+      keptAlarms,
+      warnings,
+    }
+
+    if (input.mode === 'preview') {
+      return jsonResult({
+        dryRun: true,
+        ...summary,
+        rowsToDelete: plan.deletes.temperature.length + plan.deletes.power.length,
+        rowsToCreate: plan.creates.temperature.length + plan.creates.power.length,
+        apply: 'Call apply_sleep_curve with mode "apply" and the same arguments to save exactly this.',
+      })
+    }
+
+    await caller.schedules.batchUpdate({ deletes: plan.deletes, creates: plan.creates })
+    return jsonResult({
+      saved: true,
+      ...summary,
+      rowsDeleted: plan.deletes.temperature.length + plan.deletes.power.length,
+      rowsCreated: plan.creates.temperature.length + plan.creates.power.length,
+    })
   }))
 }

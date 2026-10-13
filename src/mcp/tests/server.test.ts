@@ -20,7 +20,7 @@ const callerMock = vi.hoisted(() => {
     schedules: {
       getAll: fn(), createTemperatureSchedule: fn(), createPowerSchedule: fn(), createAlarmSchedule: fn(),
       updateTemperatureSchedule: fn(), updatePowerSchedule: fn(), updateAlarmSchedule: fn(),
-      deleteTemperatureSchedule: fn(), deletePowerSchedule: fn(), deleteAlarmSchedule: fn(),
+      deleteTemperatureSchedule: fn(), deletePowerSchedule: fn(), deleteAlarmSchedule: fn(), batchUpdate: fn(),
     },
     biometrics: {
       getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
@@ -102,6 +102,7 @@ describe('sleepypod MCP server', () => {
     const client = await connect()
     const { tools } = await client.listTools()
     expect(tools.map(t => t.name).sort()).toEqual([
+      'apply_sleep_curve',
       'diagnose_pod',
       'get_automations',
       'get_bed_occupancy',
@@ -136,7 +137,7 @@ describe('sleepypod MCP server', () => {
     const { resources } = await client.listResources()
     expect(resources.map(r => r.uri).sort()).toEqual(['sleepypod://settings', 'sleepypod://status'])
     const { prompts } = await client.listPrompts()
-    expect(prompts.map(p => p.name).sort()).toEqual(['bedtime', 'morning_report'])
+    expect(prompts.map(p => p.name).sort()).toEqual(['bedtime', 'design_sleep_curve', 'morning_report'])
   })
 
   it('get_pod_status compacts the hardware status per side', async () => {
@@ -334,6 +335,91 @@ describe('sleepypod MCP server', () => {
     expect(result.isError).toBe(true)
     expect(text(result)).toContain('cannot be changed on update')
     expect(callerMock.schedules.updateAlarmSchedule).not.toHaveBeenCalled()
+  })
+
+  describe('apply_sleep_curve', () => {
+    const row = (id: number, dayOfWeek: string, time: string, temperature: number) => ({ id, side: 'left', dayOfWeek, time, temperature, enabled: true })
+    const curve = [
+      { time: '06:30', temperature: 26 },
+      { time: '22:00', temperature: 24 },
+      { time: '23:00', temperature: 20 },
+      { time: '23:30', temperature: 20 },
+      { time: '01:00', temperature: 20 },
+    ]
+
+    beforeEach(() => {
+      callerMock.schedules.getAll.mockImplementation(async ({ side }: { side: string }) => side === 'left'
+        ? {
+            temperature: [row(1, 'monday', '22:00', 20), row(2, 'tuesday', '22:00', 20)],
+            power: [{ id: 7, side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '07:00', endAction: 'turn_off', onTemperature: 20, enabled: true }],
+            alarm: [{ id: 9, side: 'left', dayOfWeek: 'monday', time: '07:00' }],
+          }
+        : { temperature: [{ ...row(3, 'monday', '21:00', 18), side: 'right' }], power: [], alarm: [] })
+      callerMock.schedules.batchUpdate.mockResolvedValue({ success: true })
+    })
+
+    it('previews without writing: simplified curve, on/off window and replaced rows', async () => {
+      const client = await connect()
+      const result = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['monday', 'monday'], setPoints: curve, unit: 'C' },
+      }) as CallToolResult
+      expect(result.isError).toBeFalsy()
+      expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
+      expect(callerMock.schedules.getAll).toHaveBeenCalledWith({ side: 'left', unit: 'C' })
+      const body = parse(result) as Record<string, unknown>
+      expect(body).toMatchObject({
+        dryRun: true,
+        unit: 'C',
+        sides: ['left'],
+        days: ['monday'],
+        droppedFlatPoints: 1,
+        powerWindow: { onTime: '22:00', offTime: '06:30', endAction: 'turn_off' },
+        replaces: { left: { monday: { setPoints: [{ time: '22:00', temperature: 20 }], power: [{ onTime: '22:00', offTime: '07:00' }] } } },
+        keptAlarms: 1,
+        rowsToDelete: 2,
+        rowsToCreate: 5,
+        warnings: [],
+      })
+      expect((body.setPoints as Array<{ time: string }>).map(p => p.time)).toEqual(['22:00', '23:00', '01:00', '06:30'])
+      expect((body.replaces as Record<string, unknown>).left).not.toHaveProperty('tuesday')
+    })
+
+    it('applies to both sides in one batch, replacing only the target days', async () => {
+      const client = await connect()
+      const result = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'apply', side: 'both', days: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }], endAction: 'maintain' },
+      }) as CallToolResult
+      expect(result.isError).toBeFalsy()
+      expect(callerMock.schedules.batchUpdate).toHaveBeenCalledTimes(1)
+      const batch = callerMock.schedules.batchUpdate.mock.calls[0][0]
+      expect(batch.deletes).toEqual({ temperature: [1, 3], power: [7] })
+      expect(batch.creates.temperature).toHaveLength(4)
+      expect(batch.creates.power).toEqual([
+        { side: 'left', dayOfWeek: 'monday', onTime: '22:00', offTime: '06:30', onTemperature: 70, endAction: 'maintain', enabled: true },
+        { side: 'right', dayOfWeek: 'monday', onTime: '22:00', offTime: '06:30', onTemperature: 70, endAction: 'maintain', enabled: true },
+      ])
+      expect(parse(result)).toMatchObject({ saved: true, rowsDeleted: 3, rowsCreated: 6, warnings: ['Away mode is on for right: schedules will not fire until it is turned off.'] })
+    })
+
+    it('rejects out-of-range and duplicate set points before reading schedules', async () => {
+      const client = await connect()
+      const hot = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'apply', side: 'left', days: ['monday'], setPoints: [{ time: '22:00', temperature: 50 }, { time: '06:30', temperature: 80 }] },
+      }) as CallToolResult
+      expect(hot.isError).toBe(true)
+      expect(text(hot)).toContain('outside the hardware range')
+      const dup = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'apply', side: 'left', days: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '22:00', temperature: 72 }] },
+      }) as CallToolResult
+      expect(dup.isError).toBe(true)
+      expect(text(dup)).toContain('Two set points at 22:00')
+      expect(callerMock.schedules.getAll).not.toHaveBeenCalled()
+      expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
+    })
   })
 
   it('get_schedules reports both sides with away mode and always-on', async () => {
@@ -617,6 +703,14 @@ describe('sleepypod MCP server', () => {
     if (block.type !== 'text') throw new Error('expected text')
     expect(block.text).toContain('left side')
     expect(block.text).toContain('cool please')
+
+    const design = await client.getPrompt({ name: 'design_sleep_curve', arguments: { side: 'both', request: 'I run hot' } })
+    const designBlock = design.messages[0].content
+    if (designBlock.type !== 'text') throw new Error('expected text')
+    expect(designBlock.text).toContain('left and right sides')
+    expect(designBlock.text).toContain('I run hot')
+    expect(designBlock.text).toContain('Water temperature range: 55°F to 110°F')
+    expect(designBlock.text).toContain('mode "preview"')
   })
 
   it('serves the status resource', async () => {
