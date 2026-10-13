@@ -6,7 +6,7 @@ import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
 import { days, isoDate, optionalSide, side } from '@/src/mcp/schemas'
-import { STAGE_RULESET_PRESETS, stageRulesetSchema, type StageClassifier, type StageRuleset } from '@/src/lib/sleep-stage-rules'
+import { STAGE_RULESET_PRESETS, stageRulesetSchema, type StageClassifier, type StageRule, type StageRuleset } from '@/src/lib/sleep-stage-rules'
 import { scoreAgainstReference, type SleepStage, type StageAgreement } from '@/src/lib/sleep-stages'
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -26,7 +26,9 @@ const presetId = z.enum(PRESET_IDS).optional()
 const ruleset = stageRulesetSchema.optional()
   .describe('A complete ruleset, as returned by get_sleep_stage_rules under classifier.ruleset.')
 const overrides = z.array(z.object({
-  ruleIndex: z.number().int().min(0).describe('Index into the saved classifier\'s rules array.'),
+  list: z.enum(['rules', 'lowSignalRules']).default('rules')
+    .describe('Which rule list to edit: "rules" (normal nights) or "lowSignalRules" (nights whose piezo calibration quality is below the ruleset\'s lowSignalBelow).'),
+  ruleIndex: z.number().int().min(0).describe('Index into that list of the saved classifier.'),
   conditionIndex: z.number().int().min(0).describe('Index into that rule\'s when array.'),
   value: z.number().finite().describe('New threshold for that condition, in the metric\'s unit.'),
 })).min(1).max(32).optional()
@@ -139,8 +141,10 @@ export function registerSleepTools(server: McpServer) {
   server.registerTool('get_sleep_stage_rules', {
     title: 'Sleep stage rules and reference coverage',
     description:
-      'How one or both sides classify sleep stages: the saved classifier (ruleset with indexed rules and conditions), '
-      + 'whether it is the default, the available preset ids, recent changes, and reference coverage: how many of '
+      'How one or both sides classify sleep stages: the saved classifier (ruleset with indexed rules and conditions; '
+      + 'nights with piezo calibration quality below lowSignalBelow use lowSignalRules instead of rules), '
+      + 'whether it is the default, the available preset ids, recent changes (each with the ruleset before it, for rollback), '
+      + 'and reference coverage: how many of '
       + `the last ${COVERAGE_DAYS} nights have Apple Watch stages, how many reference epochs, and the latest reference date. `
       + 'Read this before preview_sleep_stage_rules or set_sleep_stage_rules; a side with zero coverage cannot be scored.',
     inputSchema: { side: optionalSide },
@@ -154,7 +158,7 @@ export function registerSleepTools(server: McpServer) {
         classifier: rules.classifier,
         isDefault: rules.isDefault,
         presets: rules.presets.map(p => ({ id: p.id, label: p.label, description: p.description })),
-        recentChanges: rules.changes.slice(0, 5).map(c => ({ id: c.id, changedAt: new Date(c.changedAt), summary: c.summary, agreementBefore: c.agreementBefore, agreementAfter: c.agreementAfter })),
+        recentChanges: rules.changes.slice(0, 5).map(c => ({ id: c.id, changedAt: new Date(c.changedAt), summary: c.summary, before: c.before, agreementBefore: c.agreementBefore, agreementAfter: c.agreementAfter })),
         referenceCoverage: coverage,
         hint: coverage.nights === 0 ? IMPORT_HINT : null,
       }
@@ -170,7 +174,8 @@ export function registerSleepTools(server: McpServer) {
       + '(accuracy, kappa, confusion matrix, per-stage recall), mean minutes per stage per night, and how many epochs of the '
       + 'latest night change stage. Judge a candidate by kappa, not accuracy alone: a ruleset that predicts one stage everywhere '
       + 'can score high accuracy with kappa near 0. Agreement is null when the nights have no reference stages. '
-      + 'To apply the winner, call set_sleep_stage_rules with the same arguments.',
+      + 'To apply the winner, pass the returned candidateRuleset to set_sleep_stage_rules as ruleset: overrides are '
+      + 're-resolved against whatever is saved at that moment, so the exact previewed ruleset is the safe thing to save.',
     inputSchema: {
       side,
       nights: z.number().int().min(1).max(14).default(7).describe('How many recent nights to score (1-14, default 7).'),
@@ -189,6 +194,7 @@ export function registerSleepTools(server: McpServer) {
       side: s,
       dryRun: true,
       candidateSource: candidate.source,
+      candidateRuleset: candidate.classifier.ruleset,
       nights: preview.nights,
       hasReference: preview.hasReference,
       hint: preview.nights === 0 ? 'No sleep records for this side yet.' : preview.hasReference ? null : IMPORT_HINT,
@@ -197,7 +203,7 @@ export function registerSleepTools(server: McpServer) {
       kappaDelta: saved?.agreement?.kappa != null && cand?.agreement?.kappa != null ? cand.agreement.kappa - saved.agreement.kappa : null,
       epochsChanged: preview.changed?.changed ?? 0,
       epochsTotal: preview.changed?.total ?? 0,
-      apply: 'Call set_sleep_stage_rules with the same presetId/ruleset/overrides to save this candidate.',
+      apply: 'Call set_sleep_stage_rules with ruleset: candidateRuleset to save exactly this candidate.',
     })
   }))
 
@@ -206,8 +212,10 @@ export function registerSleepTools(server: McpServer) {
     description:
       'Save the side\'s sleep stage classifier. Give exactly one of presetId, ruleset, overrides, or reset: true (back to the '
       + 'defaults). Run preview_sleep_stage_rules first and apply only when the candidate improves kappa against the reference '
-      + 'stages, not accuracy alone. Every save is recorded in the change log (summary plus agreement before and after on the '
-      + 'latest night) and can be reverted by saving the previous ruleset again. Stages are classified on read, so every stored '
+      + 'stages, not accuracy alone; prefer passing its candidateRuleset as ruleset, since overrides are re-resolved against the '
+      + 'rules saved at save time. Every change is recorded in the change log (summary, the ruleset before, and agreement before '
+      + 'and after on the latest night) and can be reverted by saving that previous ruleset again (before: null means reset: true). '
+      + 'Stages are classified on read, so every stored '
       + 'night re-scores with the new rules. A CONFLICT means another save landed first: call get_sleep_stage_rules and retry.',
     inputSchema: {
       side,
@@ -235,7 +243,7 @@ export function registerSleepTools(server: McpServer) {
     const after = await caller.sleepStages.getClassifier({ side: s })
     const latest = after.changes[0]
     const change = latest && latest.id !== lastChangeId
-      ? { id: latest.id, changedAt: new Date(latest.changedAt), summary: latest.summary, agreementBefore: latest.agreementBefore, agreementAfter: latest.agreementAfter }
+      ? { id: latest.id, changedAt: new Date(latest.changedAt), summary: latest.summary, before: latest.before, agreementBefore: latest.agreementBefore, agreementAfter: latest.agreementAfter }
       : null
     return jsonResult({
       side: s,
@@ -330,7 +338,7 @@ async function referenceCoverage(sleeper: 'left' | 'right') {
 interface CandidateInput {
   presetId?: keyof typeof STAGE_RULESET_PRESETS
   ruleset?: StageRuleset
-  overrides?: { ruleIndex: number, conditionIndex: number, value: number }[]
+  overrides?: { list: 'rules' | 'lowSignalRules', ruleIndex: number, conditionIndex: number, value: number }[]
   reset?: boolean
 }
 
@@ -354,15 +362,16 @@ async function resolveCandidate(sleeper: 'left' | 'right', input: CandidateInput
     source = 'ruleset'
   }
   else if (input.overrides !== undefined) {
-    const rules = current.classifier.ruleset.rules.map(r => ({ ...r, when: r.when.map(c => ({ ...c })) }))
+    const copy = (rs: StageRule[]) => rs.map(r => ({ ...r, when: r.when.map(c => ({ ...c })) }))
+    const lists = { rules: copy(current.classifier.ruleset.rules), lowSignalRules: copy(current.classifier.ruleset.lowSignalRules) }
     for (const o of input.overrides) {
-      const condition = rules[o.ruleIndex]?.when[o.conditionIndex]
+      const condition = lists[o.list][o.ruleIndex]?.when[o.conditionIndex]
       if (!condition) {
-        throw new Error(`No condition at rules[${o.ruleIndex}].when[${o.conditionIndex}] in the saved ruleset; call get_sleep_stage_rules for the current indexes.`)
+        throw new Error(`No condition at ${o.list}[${o.ruleIndex}].when[${o.conditionIndex}] in the saved ruleset; call get_sleep_stage_rules for the current indexes.`)
       }
       condition.value = o.value
     }
-    classifier = { engine: 'rules', ruleset: { ...current.classifier.ruleset, rules } }
+    classifier = { engine: 'rules', ruleset: { ...current.classifier.ruleset, ...lists } }
     source = `overrides:${input.overrides.length}`
   }
   else if (input.reset) {

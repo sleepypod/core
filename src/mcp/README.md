@@ -164,19 +164,24 @@ minutes for both phases and response cleanup. Like the existing API, this is LAN
 
 ### Sleep stage tuning
 
-`get_sleep_stage_rules` returns each side's saved classifier with indexed `rules[i].when[j]`
-conditions, the preset ids, the last five change-log entries, and reference coverage for the
-last 14 days (`nights` with Apple Watch stages, `segments`, 5-minute `epochs`, `latestReferenceAt`).
-A side with `nights: 0` cannot be scored; import first.
+`get_sleep_stage_rules` returns each side's saved classifier with indexed `rules[i].when[j]` and
+`lowSignalRules[i].when[j]` conditions (nights whose piezo calibration quality is below
+`lowSignalBelow` use the low-signal list), the preset ids, the last five change-log entries (each
+with the classifier `before` it, for rollback), and reference coverage for the last 14 days
+(`nights` with Apple Watch stages, `segments`, 5-minute `epochs`, `latestReferenceAt`, and
+`truncated` when a query hit its row cap). A side with `nights: 0` cannot be scored; import first.
 
 `preview_sleep_stage_rules` is a dry run. Give exactly one of `presetId`, a full `ruleset`, or
-`overrides` (`[{ ruleIndex, conditionIndex, value }]` applied to the saved rules) and up to 14
-`nights`. It returns the saved and candidate agreement with the reference (accuracy, Cohen's
-kappa, a `confusion[reference][predicted]` epoch matrix and per-stage `recall`), mean stage
-minutes per night, `kappaDelta` and the epochs of the latest night that change stage. Judge by
-kappa: predicting one stage everywhere can score high accuracy with kappa near 0.
+`overrides` (`[{ list?, ruleIndex, conditionIndex, value }]` applied to the saved rules; `list`
+defaults to `rules`) and up to 14 `nights`. It returns the resolved `candidateRuleset`, the saved
+and candidate agreement with the reference (accuracy, Cohen's kappa, a
+`confusion[reference][predicted]` epoch matrix and per-stage `recall`), mean stage minutes per
+night, `kappaDelta` and the epochs of the latest night that change stage. Judge by kappa:
+predicting one stage everywhere can score high accuracy with kappa near 0.
 
 `set_sleep_stage_rules` takes the same arguments plus `reset: true` and saves through
-`sleepStages.setClassifier`, so the change is logged with agreement before and after and can be
-reverted by saving the previous ruleset again. A `CONFLICT` means another save landed first:
-re-read with `get_sleep_stage_rules` and retry.
+`sleepStages.setClassifier`, so each change is logged with the ruleset before it and agreement
+before and after, and can be reverted by saving that previous ruleset again (`before: null`
+means `reset: true`). Pass the preview's `candidateRuleset` as `ruleset` to save exactly what was
+previewed; overrides are re-resolved against the rules saved at save time. A `CONFLICT` means
+another save landed first: re-read with `get_sleep_stage_rules` and retry.

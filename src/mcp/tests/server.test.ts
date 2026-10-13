@@ -747,7 +747,7 @@ describe('sleep stage tuning tools', () => {
     expect(both[0]).toMatchObject({
       isDefault: true,
       presets: [{ id: 'default' }, { id: 'movementOnly' }],
-      recentChanges: [{ id: 7, summary: CHANGE.summary, agreementBefore: 0.5, agreementAfter: 0.7 }],
+      recentChanges: [{ id: 7, summary: CHANGE.summary, before: DEFAULT_STAGE_CLASSIFIER, agreementBefore: 0.5, agreementAfter: 0.7 }],
       referenceCoverage: { days: 14, nights: 1, segments: 1, epochs: 72, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch' },
       hint: null,
     })
@@ -772,7 +772,7 @@ describe('sleep stage tuning tools', () => {
 
     const result = parse(await call('preview_sleep_stage_rules', { side: 'left', nights: 3, presetId: 'movementOnly' }))
     expect(result).toMatchObject({
-      dryRun: true, candidateSource: 'preset:movementOnly', nights: 3, hasReference: true, hint: null,
+      dryRun: true, candidateSource: 'preset:movementOnly', candidateRuleset: STAGE_RULESET_PRESETS.movementOnly.ruleset, nights: 3, hasReference: true, hint: null,
       saved: { agreement: { kappa: 0.2, confusion: AGREEMENT.confusion, recall: AGREEMENT.recall }, stageMinutesPerNight: { wake: 48, light: 240, deep: 96, rem: 96 } },
       candidate: { agreement: { kappa: 0.45 }, stageMinutesPerNight: { deep: 120 } },
       kappaDelta: 0.25, epochsChanged: 12, epochsTotal: 96,
@@ -802,6 +802,14 @@ describe('sleep stage tuning tools', () => {
     const bad = await call('preview_sleep_stage_rules', { side: 'left', overrides: [{ ruleIndex: 99, conditionIndex: 0, value: 1 }] })
     expect(bad.isError).toBe(true)
     expect(text(bad)).toContain('rules[99].when[0]')
+
+    const low = await call('preview_sleep_stage_rules', { side: 'left', overrides: [{ list: 'lowSignalRules', ruleIndex: 0, conditionIndex: 0, value: 150 }] })
+    expect(low.isError).toBeFalsy()
+    const lowSent = callerMock.sleepStages.previewClassifier.mock.calls[1][0]
+    expect(lowSent.classifier.ruleset.lowSignalRules[0].when[0]).toEqual({ ...DEFAULT_STAGE_RULESET.lowSignalRules[0].when[0], value: 150 })
+    expect(lowSent.classifier.ruleset.rules).toEqual(DEFAULT_STAGE_RULESET.rules)
+    const lowBad = await call('preview_sleep_stage_rules', { side: 'left', overrides: [{ list: 'lowSignalRules', ruleIndex: 5, conditionIndex: 0, value: 1 }] })
+    expect(text(lowBad)).toContain('lowSignalRules[5].when[0]')
   })
 
   it('preview_sleep_stage_rules rejects several candidates at once and none at all', async () => {
@@ -825,7 +833,7 @@ describe('sleep stage tuning tools', () => {
     const result = parse(await call('set_sleep_stage_rules', { side: 'left', presetId: 'movementOnly' }))
     expect(result).toMatchObject({
       candidateSource: 'preset:movementOnly', isDefault: false, classifier: movementOnly,
-      change: { id: 8, summary: 'Switched to Movement only', agreementBefore: 0.1, agreementAfter: 0.4 },
+      change: { id: 8, summary: 'Switched to Movement only', before: DEFAULT_STAGE_CLASSIFIER, agreementBefore: 0.1, agreementAfter: 0.4 },
       message: 'Saved: Switched to Movement only',
     })
     expect(callerMock.sleepStages.setClassifier).toHaveBeenCalledWith({ side: 'left', classifier: movementOnly })
