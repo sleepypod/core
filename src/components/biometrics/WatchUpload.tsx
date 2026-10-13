@@ -1,7 +1,7 @@
 'use client'
 
-import { useRef, useState } from 'react'
-import { Upload } from 'lucide-react'
+import { useId, useRef, useState } from 'react'
+import { FileUp, Upload } from 'lucide-react'
 import { Button, Modal } from '@/src/components/ds'
 import { trpc } from '@/src/utils/trpc'
 import { WATCH_REQUEST_TIMEOUT_MS } from '@/src/utils/watchUploadLimits'
@@ -16,6 +16,8 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
   const [result, setResult] = useState<ImportResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const busy = useRef(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const fileNameId = useId()
   const utils = trpc.useUtils()
   const upload = async () => {
     if (!file || busy.current) return
@@ -87,21 +89,28 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
             <a href="https://support.apple.com/guide/iphone/share-your-health-data-iph5ede58c3d/ios" target="_blank" rel="noreferrer" className="inline-block text-link underline">Apple’s export guide</a>
           </section>
           <p className="text-xs text-fg-2">The full export is sent to your pod, which imports only Watch heart rate and sleep stages and removes the uploaded file after processing. ZIP or extracted export.xml, up to 512 MiB.</p>
-          <label className="flex flex-col gap-2 text-sm">
+          <div className="flex flex-col gap-2 text-sm">
             Health export
+            {/* Hidden native picker; the Choose file button opens it and is the keyboard and screen-reader target. */}
             <input
+              ref={fileInput}
               aria-label="Health export"
               type="file"
               accept=".zip,.xml"
+              tabIndex={-1}
               disabled={progress !== null}
               onChange={(event) => {
                 setFile(event.target.files?.[0] ?? null)
                 setError(null)
                 setResult(null)
               }}
-              className="rounded border border-line p-2"
+              className="sr-only"
             />
-          </label>
+            <div className="flex min-w-0 items-center gap-3">
+              <Button icon={FileUp} disabled={progress !== null} aria-describedby={fileNameId} onClick={() => fileInput.current?.click()}>Choose file</Button>
+              <span id={fileNameId} className="min-w-0 truncate text-fg-2">{file?.name ?? 'No file selected'}</span>
+            </div>
+          </div>
           <label className="flex items-center justify-between gap-3 text-sm">
             Import period
             <select aria-label="Import period" value={days} disabled={progress !== null} onChange={event => setDays(event.target.value)} className="rounded border border-line bg-surface p-2">

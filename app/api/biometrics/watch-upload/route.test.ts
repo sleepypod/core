@@ -85,8 +85,19 @@ it('gives import a fresh budget after staging and ignores the expired upload bud
   finally { timeout.mockRestore() }
 })
 
+it('accepts a same-origin browser upload even though Next reports the 0.0.0.0 bind address in request.url', async () => {
+  const response = await POST(new Request('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', {
+    method: 'POST', headers: { origin: 'http://192.168.1.88:3000', host: '192.168.1.88:3000' }, body: '<HealthData/>',
+  }))
+  expect(response.status).toBe(200)
+  expect(await readdir(directory)).toEqual([])
+})
+
 it('rejects cross-origin requests, missing side, and oversized bodies before import', async () => {
-  expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { origin: 'http://evil' }, body: 'x' }))).status).toBe(403)
+  for (const origin of ['http://evil', 'http://192.168.1.88:8080', 'null']) {
+    const response = await POST(new Request('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { origin, host: '192.168.1.88:3000' }, body: 'x' }))
+    expect(response.status).toBe(403)
+  }
   expect((await POST(new Request('http://pod/api/biometrics/watch-upload', { method: 'POST', body: 'x' }))).status).toBe(400)
   expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { 'content-length': String(513 * 1024 * 1024) }, body: 'x' }))).status).toBe(413)
 })

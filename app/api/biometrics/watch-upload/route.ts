@@ -11,10 +11,24 @@ const options = z.object({ side: z.enum(['left', 'right']), days: z.coerce.numbe
 const resultSchema = z.object({ stages: z.number(), vitals: z.number(), rejectedStageBatches: z.number(), matchedStages: z.number(), matchedVitals: z.number() })
 const shared = globalThis as typeof globalThis & { watchUploadBusy?: boolean }
 
+/**
+ * Next builds request.url from the bind address (http://0.0.0.0:3000 on the pod), so a browser's Origin
+ * never matches it. Compare against the Host the browser actually sent, as /api/mcp does.
+ */
+function isSameOrigin(request: Request): boolean {
+  const origin = request.headers.get('origin')
+  if (origin === null) return true
+  try {
+    return new URL(origin).host === request.headers.get('host')
+  }
+  catch {
+    return false
+  }
+}
+
 /** Raw export.zip/export.xml body, streamed to flash. Uses the same importer as the CLI. */
 export async function POST(request: Request): Promise<Response> {
-  const origin = request.headers.get('origin')
-  if (origin && origin !== new URL(request.url).origin) return Response.json({ error: 'Cross-origin upload is not allowed' }, { status: 403 })
+  if (!isSameOrigin(request)) return Response.json({ error: 'Cross-origin upload is not allowed' }, { status: 403 })
   const parsed = options.safeParse(Object.fromEntries(new URL(request.url).searchParams))
   if (!parsed.success) return Response.json({ error: 'Specify side=left|right and days=1..90' }, { status: 400 })
   if (!request.body) return Response.json({ error: 'Send export.zip or export.xml as the request body' }, { status: 400 })

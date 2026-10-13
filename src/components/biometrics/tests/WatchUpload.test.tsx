@@ -106,3 +106,27 @@ it('rejects an oversized file before sending it', () => {
   expect(screen.getByRole('alert').textContent).toContain('smaller than 512 MiB')
   expect(xhr.send).not.toHaveBeenCalled()
 })
+
+it('shows a placeholder until a file is chosen', () => {
+  render(<WatchUpload side="left" name="Sleeper" />)
+  fireEvent.click(screen.getByRole('button', { name: 'Upload Apple Watch data' }))
+  expect(screen.getByText('No file selected')).toBeTruthy()
+})
+
+it('opens the hidden file picker from a styled button and names the selected file', () => {
+  const xhr = startUpload(false)
+  const input = screen.getByLabelText('Health export') as HTMLInputElement
+  const choose = screen.getByRole('button', { name: 'Choose file' }) as HTMLButtonElement
+  expect(input.className).toContain('sr-only')
+  expect(input.tabIndex).toBe(-1)
+  const click = vi.spyOn(input, 'click').mockImplementation(() => {})
+  fireEvent.click(choose)
+  expect(click).toHaveBeenCalledOnce()
+  const description = choose.getAttribute('aria-describedby')
+  expect(description && document.getElementById(description)?.textContent).toBe('export.zip')
+  fireEvent.click(screen.getByRole('button', { name: 'Upload and sync' }))
+  expect(xhr.send).toHaveBeenCalled()
+  expect(choose.disabled).toBe(true)
+  fireEvent.click(choose)
+  expect(click).toHaveBeenCalledOnce()
+})
