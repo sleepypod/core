@@ -12,10 +12,10 @@ export const curveTemplates: DemoHandlers<'curveTemplates'> = {
     const now = new Date()
     const existing = templates.find(t => t.name === input.name)
     if (existing) {
-      Object.assign(existing, { ...input, reasoning: input.reasoning ?? '', updatedAt: now })
+      Object.assign(existing, { ...input, notes: input.notes ?? '', updatedAt: now })
       return existing
     }
-    const created: Template = { id: nextId++, ...input, reasoning: input.reasoning ?? '', createdAt: now, updatedAt: now }
+    const created: Template = { id: nextId++, ...input, notes: input.notes ?? '', createdAt: now, updatedAt: now }
     templates.push(created)
     return created
   },

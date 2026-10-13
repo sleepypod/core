@@ -22,7 +22,7 @@ vi.mock('@/src/utils/trpc', () => ({
 const { useCurveTemplates } = await import('@/src/hooks/useCurveTemplates')
 
 const row = (name: string) => ({
-  id: 1, name, bedtime: '22:00', wake: '07:00', points: { '22:00': 78, '07:00': 80 }, reasoning: '',
+  id: 1, name, bedtime: '22:00', wake: '07:00', points: { '22:00': 78, '07:00': 80 }, notes: '',
   createdAt: new Date(5), updatedAt: new Date(5),
 })
 const local = (name: string) => ({ name, bedtime: '23:00', wake: '06:00', points: { '23:00': 75, '06:00': 82 }, reasoning: 'r', createdAt: 1 })
@@ -38,9 +38,9 @@ beforeEach(() => {
 describe('useCurveTemplates', () => {
   it('maps pod rows to templates and saves or deletes by name', async () => {
     const { result } = renderHook(() => useCurveTemplates(true))
-    expect(result.current.templates).toEqual([{ name: 'On Pod', bedtime: '22:00', wake: '07:00', points: { '22:00': 78, '07:00': 80 }, reasoning: '', createdAt: 5 }])
+    expect(result.current.templates).toEqual([{ name: 'On Pod', bedtime: '22:00', wake: '07:00', points: { '22:00': 78, '07:00': 80 }, notes: '', createdAt: 5 }])
     await act(() => result.current.save({ name: 'New', bedtime: '22:00', wake: '07:00', points: { '22:00': 70 }, reasoning: 'x' }))
-    expect(state.save).toHaveBeenCalledWith({ name: 'New', bedtime: '22:00', wake: '07:00', points: { '22:00': 70 }, reasoning: 'x' })
+    expect(state.save).toHaveBeenCalledWith({ name: 'New', bedtime: '22:00', wake: '07:00', points: { '22:00': 70 }, notes: 'x' })
     await act(() => result.current.remove('On Pod'))
     expect(state.remove).toHaveBeenCalledWith({ name: 'On Pod' })
   })

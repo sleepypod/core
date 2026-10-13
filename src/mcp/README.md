@@ -203,12 +203,15 @@ transaction; alarms are kept. Flat-hold set points are dropped, and the power wi
 the last set point (`endAction: "maintain"` holds the last temperature). `mode: "preview"` writes nothing and
 returns the simplified curve, `powerWindow`, the rows it `replaces` per side and day, `keptAlarms` and
 `warnings` (away mode, no on/off window); `mode: "apply"` with the same arguments saves exactly that.
-Instead of `setPoints` it accepts `curveName`, a saved curve.
+Instead of `setPoints` it accepts `curveName`, a saved curve. Optional `notes` (up to 1,000 characters) are
+written to every target day (`schedule_notes` table, `schedules.getNotes` / `batchUpdate.notes`) and shown on
+the curve's card; they replace the days' previous notes, default to the saved curve's notes with `curveName`,
+and appear per day in `get_schedules` and in the preview's `replaces`.
 
 Saved curves (`curve_templates` table, `curveTemplates` router) are named set point lists in °F with a
-bedtime, wake and reasoning, not tied to a side or day. `manage_saved_curve` saves (replacing a curve of the
+bedtime, wake and notes, not tied to a side or day. `manage_saved_curve` saves (replacing a curve of the
 same name) or deletes one; `get_saved_curves` lists them. The Schedule screen lists them under "Saved curves"
-(opening one starts a new curve with its set points), the AI curve wizard saves into the same table,
+(opening one starts a new curve with its set points and notes), the AI curve wizard saves into the same table,
 and curves older versions kept in browser localStorage move to the pod on first load.
 The `design_sleep_curve` prompt chains the data tools into a preview using `CURVE_DESIGN_GUIDANCE`, the
 sleep-science text the copy/paste AI curve wizard also sends.

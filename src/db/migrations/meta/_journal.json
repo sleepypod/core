@@ -176,6 +176,13 @@
       "when": 1791931740488,
       "tag": "0024_curve_templates",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1791932976043,
+      "tag": "0025_schedule_notes",
+      "breakpoints": true
     }
   ]
 }

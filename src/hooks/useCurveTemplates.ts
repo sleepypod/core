@@ -2,8 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { trpc } from '@/src/utils/trpc'
-import type { CurveTemplate, GeneratedCurve } from '@/src/lib/sleepCurve/curvePrompt'
+import type { GeneratedCurve } from '@/src/lib/sleepCurve/curvePrompt'
 import { loadTemplates, removeLocalTemplates } from '@/src/lib/sleepCurve/curvePrompt'
+
+/** A saved curve as the Schedule screen shows it; set points are °F. */
+export interface SavedCurve {
+  name: string
+  bedtime: string
+  wake: string
+  points: Record<string, number>
+  notes: string
+  createdAt: number
+}
 
 /**
  * Saved curves, stored on the pod so every browser and the MCP server see the
@@ -27,7 +37,7 @@ export function useCurveTemplates(enabled = true) {
     if (local.length === 0) return
     const toMove = local.filter(t => !onPod.has(t.name.trim()))
     void Promise.allSettled(toMove.map(t => saveAsync({
-      name: t.name, bedtime: t.bedtime, wake: t.wake, points: t.points, reasoning: t.reasoning,
+      name: t.name, bedtime: t.bedtime, wake: t.wake, points: t.points, notes: t.reasoning,
     }))).then((results) => {
       // Drop the ones the pod already has or just accepted; keep any it rejected.
       const rejected = new Set(toMove.filter((_, i) => results[i].status === 'rejected').map(t => t.name))
@@ -35,15 +45,16 @@ export function useCurveTemplates(enabled = true) {
     })
   }, [enabled, query.data, saveAsync])
 
-  const templates = useMemo<CurveTemplate[]>(
+  const templates = useMemo<SavedCurve[]>(
     () => (query.data ?? []).map(t => ({
-      name: t.name, bedtime: t.bedtime, wake: t.wake, points: t.points, reasoning: t.reasoning, createdAt: t.createdAt.getTime(),
+      name: t.name, bedtime: t.bedtime, wake: t.wake, points: t.points, notes: t.notes, createdAt: t.createdAt.getTime(),
     })),
     [query.data],
   )
 
+  // A wizard curve's reasoning becomes the saved curve's notes.
   const save = useCallback((curve: GeneratedCurve) => saveAsync({
-    name: curve.name, bedtime: curve.bedtime, wake: curve.wake, points: curve.points, reasoning: curve.reasoning,
+    name: curve.name, bedtime: curve.bedtime, wake: curve.wake, points: curve.points, notes: curve.reasoning,
   }), [saveAsync])
 
   const { mutateAsync: deleteAsync } = deleteMutation

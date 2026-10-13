@@ -18,6 +18,8 @@ let nextId = 1
 let temperature: TempRow[] = []
 let power: PowerRow[] = []
 let alarm: AlarmRow[] = []
+// Curve notes keyed "side:day".
+const notes = new Map<string, string>()
 
 /** Night set points belong to the evening's day, post-midnight times included. */
 const CURVES: Record<Side, { weeknight: [string, number][], weekend: [string, number][] }> = {
@@ -89,6 +91,9 @@ export const schedules: DemoHandlers<'schedules'> = {
 
   getByDay: input => collection(input.side, input.unit, input.dayOfWeek),
 
+  getNotes: input => [...notes].filter(([key]) => key.startsWith(`${input.side}:`))
+    .map(([key, text]) => ({ dayOfWeek: key.split(':')[1] as DayOfWeek, notes: text })),
+
   createTemperatureSchedule: (input) => {
     const row: TempRow = { ...input, enabled: input.enabled ?? true, ...stamp() }
     temperature.push(row)
@@ -141,6 +146,12 @@ export const schedules: DemoHandlers<'schedules'> = {
     for (const { id, ...changes } of input.updates?.temperature ?? []) update(temperature, 'Temperature', id, changes)
     for (const { id, ...changes } of input.updates?.power ?? []) update(power, 'Power', id, changes)
     for (const { id, ...changes } of input.updates?.alarm ?? []) update(alarm, 'Alarm', id, changes)
+
+    for (const n of input.notes ?? []) {
+      const text = n.notes?.trim()
+      if (text) notes.set(`${n.side}:${n.dayOfWeek}`, text)
+      else notes.delete(`${n.side}:${n.dayOfWeek}`)
+    }
 
     return { success: true }
   },

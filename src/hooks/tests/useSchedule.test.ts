@@ -1813,6 +1813,7 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
 
     expect(trpcMock.batchMutate).toHaveBeenCalledWith({
       deletes: { temperature: [], power: [51] },
+      notes: [{ side: 'left', dayOfWeek: 'monday', notes: null }],
     })
   })
 

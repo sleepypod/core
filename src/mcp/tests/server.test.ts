@@ -20,7 +20,7 @@ const callerMock = vi.hoisted(() => {
     schedules: {
       getAll: fn(), createTemperatureSchedule: fn(), createPowerSchedule: fn(), createAlarmSchedule: fn(),
       updateTemperatureSchedule: fn(), updatePowerSchedule: fn(), updateAlarmSchedule: fn(),
-      deleteTemperatureSchedule: fn(), deletePowerSchedule: fn(), deleteAlarmSchedule: fn(), batchUpdate: fn(),
+      deleteTemperatureSchedule: fn(), deletePowerSchedule: fn(), deleteAlarmSchedule: fn(), batchUpdate: fn(), getNotes: fn(),
     },
     biometrics: {
       getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
@@ -97,6 +97,7 @@ describe('sleepypod MCP server', () => {
       gestures: { left: [], right: [] },
     })
     callerMock.device.getStatus.mockResolvedValue(STATUS)
+    callerMock.schedules.getNotes.mockResolvedValue([])
   })
 
   it('exposes the curated tool, resource and prompt surface', async () => {
@@ -444,6 +445,33 @@ describe('sleepypod MCP server', () => {
       expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
     })
 
+    it('writes notes for every target day, shows the notes it replaces, and defaults to a saved curve\'s notes', async () => {
+      callerMock.schedules.getNotes.mockImplementation(async ({ side }: { side: string }) => side === 'left' ? [{ dayOfWeek: 'monday', notes: 'Old curve' }] : [])
+      const client = await connect()
+      const preview = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }], notes: ' From 14 nights ' },
+      }) as CallToolResult
+      expect(parse(preview)).toMatchObject({ notes: 'From 14 nights', replaces: { left: { monday: { notes: 'Old curve' } } } })
+
+      await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'apply', side: 'both', days: ['monday', 'tuesday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }], notes: 'From 14 nights' },
+      })
+      expect(callerMock.schedules.batchUpdate.mock.calls[0][0].notes).toEqual([
+        { side: 'left', dayOfWeek: 'monday', notes: 'From 14 nights' },
+        { side: 'left', dayOfWeek: 'tuesday', notes: 'From 14 nights' },
+        { side: 'right', dayOfWeek: 'monday', notes: 'From 14 nights' },
+        { side: 'right', dayOfWeek: 'tuesday', notes: 'From 14 nights' },
+      ])
+
+      callerMock.curveTemplates.list.mockResolvedValue([{ name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 83, '10:30': 85 }, notes: 'Warm sleeper' }])
+      await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'apply', side: 'left', days: ['friday'], curveName: 'Late Warm' } })
+      expect(callerMock.schedules.batchUpdate.mock.calls[1][0].notes).toEqual([{ side: 'left', dayOfWeek: 'friday', notes: 'Warm sleeper' }])
+      await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'apply', side: 'left', days: ['friday'], curveName: 'Late Warm', notes: '' } })
+      expect(callerMock.schedules.batchUpdate.mock.calls[2][0].notes).toEqual([{ side: 'left', dayOfWeek: 'friday', notes: null }])
+    })
+
     it('rejects out-of-range and duplicate set points before reading schedules', async () => {
       const client = await connect()
       const hot = await client.callTool({
@@ -465,7 +493,7 @@ describe('sleepypod MCP server', () => {
 
   it('get_saved_curves lists saved curves chronologically in the requested unit', async () => {
     callerMock.curveTemplates.list.mockResolvedValue([{
-      id: 1, name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '10:30': 86, '23:30': 77 }, reasoning: 'r',
+      id: 1, name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '10:30': 86, '23:30': 77 }, notes: 'r',
       createdAt: new Date('2026-10-13T00:00:00Z'), updatedAt: new Date('2026-10-13T01:00:00Z'),
     }])
     const client = await connect()
@@ -473,7 +501,7 @@ describe('sleepypod MCP server', () => {
     expect(parse(result)).toEqual({
       unit: 'C',
       curves: [{
-        name: 'Late Warm', bedtime: '01:30', wake: '10:30', reasoning: 'r', updatedAt: '2026-10-13T01:00:00.000Z',
+        name: 'Late Warm', bedtime: '01:30', wake: '10:30', notes: 'r', updatedAt: '2026-10-13T01:00:00.000Z',
         setPoints: [{ time: '23:30', temperature: 25 }, { time: '10:30', temperature: 30 }],
       }],
     })
@@ -488,7 +516,7 @@ describe('sleepypod MCP server', () => {
       arguments: { action: 'save', name: 'Late Warm', bedtime: '01:30', wake: '10:30', setPoints: [{ time: '00:45', temperature: 28 }, { time: '10:30', temperature: 29.5 }], unit: 'C' },
     }) as CallToolResult
     expect(callerMock.curveTemplates.save).toHaveBeenCalledWith({
-      name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 82, '10:30': 85 }, reasoning: '',
+      name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 82, '10:30': 85 }, notes: '',
     })
     expect(parse(saved)).toEqual({ saved: true, name: 'Late Warm', bedtime: '01:30', wake: '10:30', setPointCount: 2, replacedExisting: true })
 

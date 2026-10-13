@@ -19,7 +19,7 @@ vi.mock('@/src/db', () => ({
 const { curveTemplatesRouter } = await import('@/src/server/routers/curveTemplates')
 const caller = curveTemplatesRouter.createCaller({})
 
-const LATE_WARM = { name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 83, '02:30': 78, '11:00': 82 }, reasoning: 'Warm sleeper.' }
+const LATE_WARM = { name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 83, '02:30': 78, '11:00': 82 }, notes: 'Warm sleeper.' }
 
 describe('curveTemplates router', () => {
   let raw: Database.Database
@@ -46,7 +46,7 @@ describe('curveTemplates router', () => {
     expect((await caller.list({})).map(t => t.name)).toEqual(['Deep Cool', 'Late Warm'])
 
     vi.setSystemTime(new Date('2026-10-13T22:00:00Z'))
-    const replaced = await caller.save({ ...LATE_WARM, points: { '01:00': 80, '10:00': 84 }, reasoning: '' })
+    const replaced = await caller.save({ ...LATE_WARM, points: { '01:00': 80, '10:00': 84 }, notes: '' })
     expect(replaced.id).toBe(saved.id)
     expect(replaced.createdAt).toEqual(saved.createdAt)
     const list = await caller.list({})

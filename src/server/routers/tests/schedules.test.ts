@@ -76,6 +76,14 @@ const SCHEMA_SQL = `
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    CREATE TABLE IF NOT EXISTS schedule_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      side TEXT NOT NULL,
+      day_of_week TEXT NOT NULL,
+      notes TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_notes_side_day ON schedule_notes (side, day_of_week);
   `
 
 function createTables() {
@@ -87,6 +95,7 @@ function clearTables() {
     DELETE FROM temperature_schedules;
     DELETE FROM power_schedules;
     DELETE FROM alarm_schedules;
+    DELETE FROM schedule_notes;
   `)
 }
 
@@ -118,6 +127,38 @@ describe('schedules.batchUpdate', () => {
   beforeEach(() => {
     clearTables()
     resetSchedulerMocks()
+  })
+
+  it('writes, replaces and clears curve notes per side and day in the same batch', async () => {
+    await caller.batchUpdate({
+      notes: [
+        { side: 'left', dayOfWeek: 'monday', notes: '  Late Warm  ' },
+        { side: 'left', dayOfWeek: 'tuesday', notes: 'Late Warm' },
+        { side: 'right', dayOfWeek: 'monday', notes: 'Heidi' },
+      ],
+    })
+    expect(await caller.getNotes({ side: 'left' })).toEqual([
+      { dayOfWeek: 'monday', notes: 'Late Warm' },
+      { dayOfWeek: 'tuesday', notes: 'Late Warm' },
+    ])
+
+    await caller.batchUpdate({
+      notes: [
+        { side: 'left', dayOfWeek: 'monday', notes: 'Cooler' },
+        { side: 'left', dayOfWeek: 'tuesday', notes: '   ' },
+        { side: 'right', dayOfWeek: 'monday', notes: null },
+      ],
+    })
+    expect(await caller.getNotes({ side: 'left' })).toEqual([{ dayOfWeek: 'monday', notes: 'Cooler' }])
+    expect(await caller.getNotes({ side: 'right' })).toEqual([])
+  })
+
+  it('rolls notes back with the rest of a failed batch', async () => {
+    await expect(caller.batchUpdate({
+      notes: [{ side: 'left', dayOfWeek: 'monday', notes: 'kept?' }],
+      deletes: { temperature: [99999] },
+    })).rejects.toThrow('not found')
+    expect(await caller.getNotes({ side: 'left' })).toEqual([])
   })
 
   it('creates schedules across all types in one call', async () => {
@@ -1272,6 +1313,7 @@ describe('schedules openapi meta + input schema contract', () => {
     deleteAlarmSchedule: { method: 'DELETE', path: '/schedules/alarm', protect: false, tags: ['Schedules'] },
     batchUpdate: { method: 'POST', path: '/schedules/batch', protect: false, tags: ['Schedules'] },
     getByDay: { method: 'GET', path: '/schedules/by-day', protect: false, tags: ['Schedules'] },
+    getNotes: { method: 'GET', path: '/schedules/notes', protect: false, tags: ['Schedules'] },
   }
 
   const tempCreate = { side: 'left', dayOfWeek: 'monday', time: '22:00', temperature: 68 }
@@ -1449,12 +1491,12 @@ describe('schedules openapi meta + input schema contract', () => {
     const empty = { temperature: [], power: [], alarm: [] }
 
     // Omitting a group entirely exercises the outer `.default({...})`.
-    expect(schema.parse({})).toEqual({ deletes: empty, creates: empty, updates: empty })
+    expect(schema.parse({})).toEqual({ deletes: empty, creates: empty, updates: empty, notes: [] })
 
     // Supplying an empty group exercises the per-list `.default([])`, which the
     // outer default would otherwise mask.
     expect(schema.parse({ deletes: {}, creates: {}, updates: {} }))
-      .toEqual({ deletes: empty, creates: empty, updates: empty })
+      .toEqual({ deletes: empty, creates: empty, updates: empty, notes: [] })
   })
 })
 

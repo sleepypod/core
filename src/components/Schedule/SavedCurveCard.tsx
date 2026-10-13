@@ -5,12 +5,12 @@ import { CalendarPlus, Trash2 } from 'lucide-react'
 import { Card, GhostIcon } from '@/src/components/ds'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
-import type { CurveTemplate } from '@/src/lib/sleepCurve/curvePrompt'
+import type { SavedCurve } from '@/src/hooks/useCurveTemplates'
 import { formatTempRange, formatWindow } from './CurveCard'
 import { MiniCurve } from './CurveChart'
 
 /** Set points of a saved curve as the editor and charts take them. */
-export function templateSetPoints(template: Pick<CurveTemplate, 'points'>): Array<{ time: string, temperature: number }> {
+export function templateSetPoints(template: Pick<SavedCurve, 'points'>): Array<{ time: string, temperature: number }> {
   return Object.entries(template.points).map(([time, temperature]) => ({ time, temperature }))
 }
 
@@ -19,7 +19,7 @@ export function templateSetPoints(template: Pick<CurveTemplate, 'points'>): Arra
  * opens the curve editor with those set points so the sleeper picks days.
  */
 export function SavedCurveCard({ template, onUse, onDelete }: {
-  template: CurveTemplate
+  template: SavedCurve
   onUse: () => void
   onDelete: () => void
 }) {
@@ -41,6 +41,7 @@ export function SavedCurveCard({ template, onUse, onDelete }: {
         </div>
       </div>
       <MiniCurve setPoints={setPoints} className="hidden min-[900px]:block" />
+      {template.notes && <p className="line-clamp-2 text-xs text-fg-2">{template.notes}</p>}
       <span className="font-mono text-xs text-fg-2">
         {[formatWindow(setPoints, timeFormat), formatTempRange(setPoints, unit, false)].filter(Boolean).join(' · ')}
       </span>

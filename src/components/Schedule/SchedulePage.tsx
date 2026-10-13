@@ -35,6 +35,7 @@ interface EditingCurve {
   days: DayOfWeek[]
   endAction?: 'turn_off' | 'maintain'
   setPoints: Array<{ time: string, temperature: number }>
+  notes?: string
 }
 
 interface SchedulePageProps {
@@ -76,6 +77,9 @@ export function SchedulePage({ curve, curveSide, fromBoth = false, savedCurve }:
   const { nextEvent } = useScheduleActive()
   const { leftName, rightName } = useSideNames()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
+  const { data: notesData } = trpc.schedules.getNotes.useQuery({ side })
+  // A curve's days normally share one note; show the first one set.
+  const notesFor = (days: DayOfWeek[]) => days.map(d => notesData?.find(n => n.dayOfWeek === d)?.notes).find(Boolean)
   const both = selectedSide === 'both'
   const otherSide: Side = side === 'left' ? 'right' : 'left'
   const other = trpc.schedules.getAll.useQuery({ side: otherSide }, { enabled: both })
@@ -209,8 +213,8 @@ export function SchedulePage({ curve, curveSide, fromBoth = false, savedCurve }:
     const editorKey = `${curve}:${side}:${savedCurve ?? ''}`
     const template = curve === 'new' && savedCurve !== undefined ? saved.templates.find(t => t.name === savedCurve) : undefined
     const found: EditingCurve | null = curve === 'new'
-      ? { days: [], setPoints: template ? templateSetPoints(template) : [], endAction: settings?.device.defaultScheduleEndAction ?? 'turn_off' }
-      : group ? { days: group.days, setPoints: group.setPoints, endAction: group.endAction } : null
+      ? { days: [], setPoints: template ? templateSetPoints(template) : [], endAction: settings?.device.defaultScheduleEndAction ?? 'turn_off', notes: template?.notes }
+      : group ? { days: group.days, setPoints: group.setPoints, endAction: group.endAction, notes: notesFor(group.days) } : null
     if (found && openedCurve?.key !== editorKey) setOpenedCurve({ key: editorKey, editor: found })
     const editor = openedCurve?.key === editorKey ? openedCurve.editor : found
     if (!editor) {
@@ -236,6 +240,7 @@ export function SchedulePage({ curve, curveSide, fromBoth = false, savedCurve }:
         initialEndAction={editor.endAction}
         initialDays={editor.days}
         initialSetPoints={editor.setPoints}
+        initialNotes={editor.notes}
       />
     )
   }
@@ -342,6 +347,7 @@ export function SchedulePage({ curve, curveSide, fromBoth = false, savedCurve }:
               isActive={featured.key === activeCurveKey}
               nextEvent={featured.key === activeCurveKey ? nextEvent : null}
               bed={bed}
+              notes={notesFor(featured.days)}
             />
           )}
 
@@ -351,6 +357,7 @@ export function SchedulePage({ curve, curveSide, fromBoth = false, savedCurve }:
                 <CurveCard
                   key={group.key}
                   group={group}
+                  notes={notesFor(group.days)}
                   onEdit={() => handleEdit(group)}
                   onDelete={() => handleDelete(group)}
                 />

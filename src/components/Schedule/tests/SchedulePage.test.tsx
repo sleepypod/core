@@ -23,6 +23,7 @@ const m = vi.hoisted(() => ({
   thermalHistory: { data: undefined as unknown },
   thermalHistoryInput: [] as unknown[],
   push: vi.fn(),
+  notes: [] as Array<{ dayOfWeek: string, notes: string }>,
   saved: { templates: [] as unknown[], isLoading: false, isDeleting: false, remove: vi.fn() },
 }))
 vi.mock('@/src/hooks/useCurveTemplates', () => ({ useCurveTemplates: () => m.saved }))
@@ -35,7 +36,7 @@ vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ 
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     settings: { getAll: { useQuery: () => ({ data: { device: { defaultScheduleEndAction: m.defaultAction } } }) } },
-    schedules: { getAll: { useQuery: () => m.query } },
+    schedules: { getAll: { useQuery: () => m.query }, getNotes: { useQuery: () => ({ data: m.notes }) } },
     health: {
       system: { useQuery: () => m.health },
       thermalHistory: { useQuery: (input: unknown, opts: unknown) => {
@@ -53,8 +54,8 @@ vi.mock('../AlarmSection', () => ({
   AlarmSection: ({ side, selectedSide }: { side: string, selectedSide: string }) => <div data-testid="alarms">{`${side}/${selectedSide}`}</div>,
 }))
 vi.mock('../CurveEditor', () => ({
-  CurveEditor: ({ onClose, initialDays, initialEndAction, initialSetPoints }: { onClose: () => void, initialDays: string[], initialEndAction?: string, initialSetPoints: Array<{ time: string }> }) => (
-    <div data-testid="editor" data-end-action={initialEndAction} data-points={initialSetPoints.map(p => p.time).join(',')}>
+  CurveEditor: ({ onClose, initialDays, initialEndAction, initialSetPoints, initialNotes }: { onClose: () => void, initialDays: string[], initialEndAction?: string, initialSetPoints: Array<{ time: string }>, initialNotes?: string }) => (
+    <div data-testid="editor" data-end-action={initialEndAction} data-points={initialSetPoints.map(p => p.time).join(',')} data-notes={initialNotes ?? ''}>
       {initialDays.join(',') || 'new'}
       <button type="button" onClick={onClose}>close editor</button>
     </div>
@@ -72,6 +73,7 @@ const DATA = {
 }
 
 beforeEach(() => {
+  m.notes = []
   m.saved.templates = []
   m.saved.isLoading = false
   m.saved.remove.mockReset().mockResolvedValue({ deleted: true })
@@ -330,13 +332,14 @@ it('falls back to turning off for new curves before the default setting loads', 
 })
 
 describe('saved curves', () => {
-  const LATE_WARM = { name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 83, '02:30': 78, '11:00': 82 }, reasoning: '', createdAt: 1 }
+  const LATE_WARM = { name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 83, '02:30': 78, '11:00': 82 }, notes: 'Kept warm.', createdAt: 1 }
 
   it('lists saved curves under the day curves, opens one in a new curve and deletes after confirming', async () => {
     m.saved.templates = [LATE_WARM]
     const s = render(<SchedulePage />)
     expect(s.getByText('Saved curves')).toBeTruthy()
     expect(s.getByText('Late Warm')).toBeTruthy()
+    expect(s.getByText('Kept warm.')).toBeTruthy()
     fireEvent.click(s.getByRole('button', { name: 'Use Late Warm' }))
     expect(m.push).toHaveBeenLastCalledWith('/en/schedule/new?side=left&saved=Late+Warm')
 
@@ -362,7 +365,19 @@ describe('saved curves', () => {
     const editor = render(<SchedulePage curve="new" savedCurve="Late Warm" />).getByTestId('editor')
     expect(editor.textContent).toContain('new')
     expect(editor.getAttribute('data-points')).toBe('00:45,02:30,11:00')
+    expect(editor.getAttribute('data-notes')).toBe('Kept warm.')
     cleanup()
     expect(render(<SchedulePage curve="new" savedCurve="Gone" />).getByTestId('editor').getAttribute('data-points')).toBe('')
+  })
+})
+
+describe('curve notes', () => {
+  it('shows the first note among a curve\'s days on its card and opens the editor with it', () => {
+    m.notes = [{ dayOfWeek: 'tuesday', notes: 'Weeknights: cooler first half' }, { dayOfWeek: 'sunday', notes: 'Weekend sleep-in' }]
+    const s = render(<SchedulePage />)
+    expect(s.getAllByText('Weeknights: cooler first half').length).toBeGreaterThan(0)
+    expect(s.getByText('Weekend sleep-in')).toBeTruthy()
+    cleanup()
+    expect(render(<SchedulePage curve="mon-tue-wed-thu-fri" />).getByTestId('editor').getAttribute('data-notes')).toBe('Weeknights: cooler first half')
   })
 })

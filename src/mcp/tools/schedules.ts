@@ -44,7 +44,7 @@ export function registerScheduleTools(server: McpServer) {
     description:
       'All recurring schedules for one or both sides, grouped as temperature (set a temp at a time), power '
       + '(on/off window with a temp) and alarm (vibration wake-up with a temp), each with its id, day of week, '
-      + 'time and enabled flag. Also returns per-side away mode and always-on so you can explain why a '
+      + 'time and enabled flag, plus curve notes per day. Also returns per-side away mode and always-on so you can explain why a '
       + 'schedule is not firing. Temperatures in the requested or device-default unit.',
     inputSchema: { side: optionalSide, unit },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -61,6 +61,7 @@ export function registerScheduleTools(server: McpServer) {
         awayMode: sideSettings.awayMode,
         alwaysOn: sideSettings.alwaysOn,
         ...schedules,
+        notes: await caller.schedules.getNotes({ side: sd }),
       }
     }
     return jsonResult(result)
@@ -177,7 +178,9 @@ export function registerScheduleTools(server: McpServer) {
       + 'wake; warm-up, cooling ramp, coldest hold in the first deep-sleep hours, gradual pre-wake warming; water takes '
       + '15-20 min to settle; neutral is about 82.5°F. Base it on get_sleep_history, get_vitals_trend and '
       + 'get_schedules when the user asks for a curve from their data. Give setPoints, or curveName to apply a saved '
-      + 'curve from get_saved_curves. For tonight only, use run_once_curve instead. '
+      + 'curve from get_saved_curves. Add notes saying what the curve is based on and what to watch (shown on the '
+      + 'curve\'s card; replaces the days\' previous notes; a saved curve\'s notes are used when omitted). '
+      + 'For tonight only, use run_once_curve instead. '
       + 'Temperatures use the given unit or the device default.',
     inputSchema: {
       mode: z.enum(['preview', 'apply']).describe('"preview" is a dry run; "apply" saves.'),
@@ -186,6 +189,7 @@ export function registerScheduleTools(server: McpServer) {
       setPoints: curveSetPoints.optional()
         .describe('Set points in any order; each holds until the next one fires. Omit when giving curveName.'),
       curveName: z.string().optional().describe('Apply this saved curve (see get_saved_curves) instead of setPoints.'),
+      notes: z.string().max(1000).optional().describe('Short note for the curve, e.g. what data it is based on.'),
       endAction: z.enum(['turn_off', 'maintain']).optional().describe('After the last set point: turn off (default) or keep holding it.'),
       unit,
     },
@@ -198,6 +202,7 @@ export function registerScheduleTools(server: McpServer) {
 
     if ((input.setPoints === undefined) === (input.curveName === undefined)) throw new Error('Give exactly one of setPoints or curveName')
     let setPointsF: Array<{ time: string, temperature: number }>
+    let notes = input.notes
     if (input.setPoints) {
       setPointsF = toSetPointsF(input.setPoints, resolved)
     }
@@ -206,15 +211,21 @@ export function registerScheduleTools(server: McpServer) {
       const saved = (await caller.curveTemplates.list({})).find(t => t.name === name)
       if (!saved) throw new Error(`No saved curve named "${name}"; call get_saved_curves for the names`)
       setPointsF = Object.entries(saved.points).map(([time, temp]) => ({ time, temperature: temp }))
+      notes ??= saved.notes
     }
 
     const settings = await caller.settings.getAll({})
-    const current = await Promise.all(sides.map(async sd => ({ side: sd, ...(await caller.schedules.getAll({ side: sd, unit: resolved })) })))
+    const current = await Promise.all(sides.map(async sd => ({
+      side: sd,
+      ...(await caller.schedules.getAll({ side: sd, unit: resolved })),
+      notes: await caller.schedules.getNotes({ side: sd }),
+    })))
     const plan = planCurveSave({
       sides: [...sides],
       targetDays: days,
       setPoints: setPointsF,
       endAction: input.endAction,
+      notes,
       existing: {
         temperature: current.flatMap(c => c.temperature),
         power: current.flatMap(c => c.power),
@@ -233,11 +244,13 @@ export function registerScheduleTools(server: McpServer) {
       for (const day of days) {
         const temps = c.temperature.filter(t => t.dayOfWeek === day)
         const power = c.power.filter(p => p.dayOfWeek === day)
-        if (temps.length === 0 && power.length === 0) continue
+        const note = c.notes.find(n => n.dayOfWeek === day)?.notes
+        if (temps.length === 0 && power.length === 0 && !note) continue
         perDay[day] = {
           setPoints: temps.map(t => ({ time: t.time, temperature: t.temperature, enabled: t.enabled }))
             .sort((a, b) => a.time.localeCompare(b.time)),
           power: power.map(p => ({ onTime: p.onTime, offTime: p.offTime, onTemperature: p.onTemperature, endAction: p.endAction, enabled: p.enabled })),
+          ...(note && { notes: note }),
         }
       }
       replaces[c.side] = perDay
@@ -258,6 +271,7 @@ export function registerScheduleTools(server: McpServer) {
       setPoints: plan.setPoints.map(p => ({ time: p.time, temperature: fromSetpointF(p.temperature, resolved) })),
       droppedFlatPoints: setPointsF.length - plan.setPoints.length,
       powerWindow: plan.power && { ...plan.power, onTemperature: fromSetpointF(plan.power.onTemperature, resolved) },
+      notes: notes?.trim() || null,
       replaces,
       keptAlarms,
       warnings,
@@ -273,7 +287,7 @@ export function registerScheduleTools(server: McpServer) {
       })
     }
 
-    await caller.schedules.batchUpdate({ deletes: plan.deletes, creates: plan.creates })
+    await caller.schedules.batchUpdate({ deletes: plan.deletes, creates: plan.creates, notes: plan.notes })
     return jsonResult({
       saved: true,
       ...summary,
@@ -302,7 +316,7 @@ export function registerScheduleTools(server: McpServer) {
         wake: c.wake,
         setPoints: sortChronological(Object.entries(c.points).map(([time, temp]) => ({ time, temperature: temp })))
           .map(p => ({ time: p.time, temperature: fromSetpointF(p.temperature, resolved) })),
-        reasoning: c.reasoning,
+        notes: c.notes,
         updatedAt: c.updatedAt.toISOString(),
       })),
     })
@@ -322,7 +336,7 @@ export function registerScheduleTools(server: McpServer) {
       bedtime: timeOfDay.optional().describe('Required for save.'),
       wake: timeOfDay.optional().describe('Required for save.'),
       setPoints: curveSetPoints.optional().describe('Required for save. 2-48 points in any order.'),
-      reasoning: z.string().max(2000).optional().describe('One or two sentences on why the curve looks the way it does.'),
+      notes: z.string().max(2000).optional().describe('Optional note: why the curve looks the way it does, what data it is based on.'),
       unit,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
@@ -337,7 +351,7 @@ export function registerScheduleTools(server: McpServer) {
     const points = Object.fromEntries(toSetPointsF(input.setPoints, resolved).map(p => [p.time, p.temperature]))
     const replacedExisting = (await caller.curveTemplates.list({})).some(t => t.name === input.name.trim())
     const saved = await caller.curveTemplates.save({
-      name: input.name, bedtime: input.bedtime, wake: input.wake, points, reasoning: input.reasoning ?? '',
+      name: input.name, bedtime: input.bedtime, wake: input.wake, points, notes: input.notes ?? '',
     })
     return jsonResult({
       saved: true,

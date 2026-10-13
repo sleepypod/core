@@ -406,6 +406,8 @@ export function useSchedule() {
           await batchUpdate.mutateAsync({
             deletes: { temperature: tempDeletes, power: powerDeletes, alarm: alarmDeletes },
             creates: { temperature: tempCreates, power: powerCreates, alarm: alarmCreates },
+            // Copied days join the source's curve, which shows the first note among its days.
+            notes: targetDays.map(dayOfWeek => ({ side, dayOfWeek, notes: null })),
           })
         }
 
@@ -496,11 +498,13 @@ export function useSchedule() {
       setPoints,
       originalDays = [],
       endAction = 'turn_off',
+      notes,
     }: {
       targetDays: DayOfWeek[]
       setPoints: Array<{ time: string, temperature: number }>
       originalDays?: DayOfWeek[]
       endAction?: 'turn_off' | 'maintain'
+      notes?: string
     }): Promise<void> => {
       if (targetDays.length === 0 && originalDays.length === 0) return
 
@@ -516,24 +520,26 @@ export function useSchedule() {
         | undefined
         : undefined
 
-      const { deletes, creates } = planCurveSave({
+      const plan = planCurveSave({
         sides: activeSides,
         targetDays,
         clearDays: originalDays,
         setPoints,
         endAction,
+        notes,
         existing: {
           temperature: [...allData.temperature, ...(otherData?.temperature ?? [])],
           power: [...allData.power, ...(otherData?.power ?? [])],
         },
       })
 
+      const { deletes, creates } = plan
       const hasChanges
         = deletes.temperature.length > 0 || creates.temperature.length > 0
           || deletes.power.length > 0 || creates.power.length > 0
       if (!hasChanges) return
 
-      await batchUpdate.mutateAsync({ deletes, creates })
+      await batchUpdate.mutateAsync({ deletes, creates, notes: plan.notes })
     },
     [allSchedulesQuery.data, otherSchedulesQuery.data, activeSides, batchUpdate]
   )
@@ -571,6 +577,7 @@ export function useSchedule() {
 
       await batchUpdate.mutateAsync({
         deletes: { temperature: tempDeletes, power: powerDeletes },
+        notes: activeSides.flatMap(s => days.map(dayOfWeek => ({ side: s, dayOfWeek, notes: null }))),
       })
     },
     [allSchedulesQuery.data, otherSchedulesQuery.data, activeSides, batchUpdate]

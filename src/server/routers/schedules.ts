@@ -6,6 +6,7 @@ import {
   temperatureSchedules,
   powerSchedules,
   alarmSchedules,
+  scheduleNotes,
 } from '@/src/db/schema'
 import { eq, and } from 'drizzle-orm'
 import {
@@ -595,6 +596,29 @@ export const schedulesRouter = router({
    * Batch update schedules — deletes, creates, and updates in one transaction with one scheduler reload.
    * Used by bulk operations (apply to other days, toggle all) to avoid N+1 API calls.
    */
+  /**
+   * Curve notes for one side, one row per day that has a note.
+   */
+  getNotes: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/schedules/notes', protect: false, tags: ['Schedules'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.array(z.object({ dayOfWeek: dayOfWeekSchema, notes: z.string() })))
+    .query(({ input }) => {
+      try {
+        return db.select({ dayOfWeek: scheduleNotes.dayOfWeek, notes: scheduleNotes.notes })
+          .from(scheduleNotes)
+          .where(eq(scheduleNotes.side, input.side))
+          .all()
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to fetch schedule notes: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
   batchUpdate: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/schedules/batch', protect: false, tags: ['Schedules'] } })
     .input(
@@ -659,6 +683,12 @@ export const schedulesRouter = router({
             enabled: z.boolean().optional(),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
+        // Curve notes per side and day; null or blank clears the day's note.
+        notes: z.array(z.object({
+          side: sideSchema,
+          dayOfWeek: dayOfWeekSchema,
+          notes: z.string().max(1000).nullable(),
+        })).max(14).default([]),
       })
     )
     .output(z.object({ success: z.boolean() }))
@@ -716,6 +746,18 @@ export const schedulesRouter = router({
             const [updated] = tx.update(alarmSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(alarmSchedules.id, id)).returning().all()
             if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Alarm schedule with ID ${id} not found` })
             upsertAlarm.push(updated)
+          }
+
+          for (const { side, dayOfWeek, notes } of input.notes) {
+            const text = notes?.trim()
+            if (text) {
+              tx.insert(scheduleNotes).values({ side, dayOfWeek, notes: text, updatedAt: new Date() })
+                .onConflictDoUpdate({ target: [scheduleNotes.side, scheduleNotes.dayOfWeek], set: { notes: text, updatedAt: new Date() } })
+                .run()
+            }
+            else {
+              tx.delete(scheduleNotes).where(and(eq(scheduleNotes.side, side), eq(scheduleNotes.dayOfWeek, dayOfWeek))).run()
+            }
           }
         })
 

@@ -188,6 +188,25 @@ export const temperatureSchedules = sqliteTable('temperature_schedules', {
   index('idx_temp_schedules_side_day_time').on(t.side, t.dayOfWeek, t.time),
 ])
 
+/**
+ * Optional note for a side's curve on one day. A curve is the set of days
+ * sharing set points, so saving a curve writes the same note to each of its
+ * days; the Schedule screen shows the first day's.
+ */
+export const scheduleNotes = sqliteTable('schedule_notes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  dayOfWeek: text('day_of_week', {
+    enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+  }).notNull(),
+  notes: text('notes').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+}, t => [
+  uniqueIndex('idx_schedule_notes_side_day').on(t.side, t.dayOfWeek),
+])
+
 export const powerSchedules = sqliteTable('power_schedules', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
@@ -310,7 +329,8 @@ export const curveTemplates = sqliteTable('curve_templates', {
   bedtime: text('bedtime').notNull(), // HH:mm
   wake: text('wake').notNull(), // HH:mm
   points: text('points', { mode: 'json' }).notNull().$type<Record<string, number>>(), // {"HH:mm": tempF}
-  reasoning: text('reasoning').notNull().default(''),
+  // Column predates the notes name (it held the AI wizard's reasoning).
+  notes: text('reasoning').notNull().default(''),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

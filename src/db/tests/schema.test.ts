@@ -294,6 +294,19 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'idx_temp_schedules_side_day_time', unique: false, columns: ['side', 'day_of_week', 'time'] },
     ],
   },
+  scheduleNotes: {
+    name: 'schedule_notes',
+    columns: [
+      { name: 'id', notNull: true, default: 'fn' },
+      { name: 'side', notNull: true, default: undefined },
+      { name: 'day_of_week', notNull: true, default: undefined },
+      { name: 'notes', notNull: true, default: undefined },
+      { name: 'updated_at', notNull: true, default: 'sql' },
+    ],
+    indexes: [
+      { name: 'idx_schedule_notes_side_day', unique: true, columns: ['side', 'day_of_week'] },
+    ],
+  },
   powerSchedules: {
     name: 'power_schedules',
     columns: [

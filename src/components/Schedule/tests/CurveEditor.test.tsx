@@ -88,6 +88,7 @@ describe('CurveEditor', () => {
       setPoints: [{ time: '23:15', temperature: 84 }, { time: '07:00', temperature: 84 }],
       originalDays: ['monday'],
       endAction: 'turn_off',
+      notes: '',
     })
   })
 
@@ -198,6 +199,15 @@ it('loads an imported AI curve into the local editor and saves only after review
   expect(rows(s)).toHaveLength(3)
   fireEvent.click(saveCurveButton(s))
   await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ setPoints: expect.arrayContaining([{ time: '02:00', temperature: 75 }]) })))
+})
+
+it('edits the optional note and saves it with the curve', async () => {
+  const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} initialNotes="Old note" />)
+  const notes = s.getByLabelText(/Notes/) as HTMLTextAreaElement
+  expect(notes.value).toBe('Old note')
+  fireEvent.change(notes, { target: { value: 'Based on 14 nights' } })
+  fireEvent.click(saveCurveButton(s))
+  await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ notes: 'Based on 14 nights' })))
 })
 
 it('subscribes to desktop layout changes and removes the listener on unmount', () => {

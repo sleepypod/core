@@ -34,6 +34,8 @@ interface CurveEditorProps {
   initialEndAction?: ScheduleEndAction
   /** Initial set points. Empty array = create mode with empty list. */
   initialSetPoints?: Array<{ time: string, temperature: number }>
+  /** The curve's optional note. */
+  initialNotes?: string
 }
 
 interface PresetDef {
@@ -81,6 +83,7 @@ export function CurveEditor({
   initialDays = [],
   initialSetPoints = [],
   initialEndAction = 'turn_off',
+  initialNotes = '',
 }: CurveEditorProps) {
   const { saveCurve, detectCurveConflicts, isMutating, allSchedules } = useSchedule()
   const { unit } = useTemperatureUnit()
@@ -108,6 +111,7 @@ export function CurveEditor({
     simplifySetPoints(initialSetPoints).map((p, i) => ({ id: -(i + 1), time: p.time, temperature: p.temperature })),
   )
   const [endAction, setEndAction] = useState(initialEndAction)
+  const [notes, setNotes] = useState(initialNotes)
   const [bedtime, setBedtime] = useState(initial.bedtime)
   const [wakeTime, setWakeTime] = useState(initial.wake)
   const [minTemp, setMinTemp] = useState(initial.min)
@@ -242,6 +246,7 @@ export function CurveEditor({
         setPoints: points.map(p => ({ time: p.time, temperature: p.temperature })),
         originalDays: initialDays,
         endAction,
+        notes,
       })
       setPendingConflict(null)
       onClose()
@@ -250,7 +255,7 @@ export function CurveEditor({
       setPendingConflict(null)
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [days, points, initialDays, endAction, detectCurveConflicts, saveCurve, onClose])
+  }, [days, points, initialDays, endAction, notes, detectCurveConflicts, saveCurve, onClose])
 
   const editingPoint = editingId !== null ? points.find(p => p.id === editingId) ?? null : null
   const title = isEdit ? 'Edit curve' : 'New curve'
@@ -350,6 +355,22 @@ export function CurveEditor({
                 ? 'Keeps the final temperature until you turn it off or another schedule or automation takes over. Auto-off limits still apply.'
                 : 'Turns the Pod off at the final set point.'}
             </p>
+          </Card>
+
+          <Card className="order-3 min-[900px]:order-none">
+            <label htmlFor="curve-notes" className="text-sm">
+              Notes
+              <span className="text-fg-3"> (optional)</span>
+            </label>
+            <textarea
+              id="curve-notes"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              maxLength={1000}
+              rows={3}
+              placeholder="Why this curve, what to try next…"
+              className="w-full rounded-ctl border border-line-2 bg-field px-3 py-[9px] text-sm text-fg outline-none placeholder:text-fg-3 focus:border-fg-3"
+            />
           </Card>
 
           <Card className="order-5 min-[900px]:order-none">
