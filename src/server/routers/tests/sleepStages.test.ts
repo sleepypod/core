@@ -109,7 +109,7 @@ describe('sleepStages router', () => {
       expect(out.classifier).toEqual(DEFAULT_STAGE_CLASSIFIER)
       expect(out.isDefault).toBe(true)
       expect(out.engines.map(e => e.id)).toEqual(['rules'])
-      expect(out.presets.map(p => p.id)).toEqual(['default', 'movementOnly'])
+      expect(out.presets.map(p => p.id)).toEqual(['default', 'movementOnly', 'hrvFirst'])
     })
 
     it('falls back to the defaults when the stored value no longer validates', async () => {

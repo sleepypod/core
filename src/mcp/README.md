@@ -169,7 +169,10 @@ minutes for both phases and response cleanup. Like the existing API, this is LAN
 `lowSignalBelow` use the low-signal list), the preset ids, the last five change-log entries (each
 with the classifier `before` it, for rollback), and reference coverage for the last 14 days
 (`nights` with Apple Watch stages, `segments`, 5-minute `epochs`, `latestReferenceAt`, and
-`truncated` when a query hit its row cap). A side with `nights: 0` cannot be scored; import first.
+`truncated` when a query hit its row cap). `heartRateAgreement` compares the pod's heart-rate
+estimate with the watch at matching times (Pearson correlation, mean absolute error); when it is
+weak the HR-ratio rules classify noise and the `hint` points at the `hrvFirst` preset. A side with
+`nights: 0` cannot be scored; import first.
 
 `preview_sleep_stage_rules` is a dry run. Give exactly one of `presetId`, a full `ruleset`, or
 `overrides` (`[{ list?, ruleIndex, conditionIndex, value }]` applied to the saved rules; `list`

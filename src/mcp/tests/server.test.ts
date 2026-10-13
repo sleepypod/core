@@ -25,7 +25,7 @@ const callerMock = vi.hoisted(() => {
     biometrics: {
       getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
       getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceStages: fn(),
-      getReferenceStages: fn(),
+      getReferenceStages: fn(), getReferenceVitals: fn(), getVitals: fn(),
     },
     sleepStages: { getClassifier: fn(), previewClassifier: fn(), setClassifier: fn() },
     environment: {
@@ -703,6 +703,8 @@ describe('sleep stage tuning tools', () => {
     callerMock.sleepStages.getClassifier.mockResolvedValue(classifierState())
     callerMock.biometrics.getReferenceStages.mockResolvedValue([])
     callerMock.biometrics.getSleepRecords.mockResolvedValue([])
+    callerMock.biometrics.getReferenceVitals.mockResolvedValue([])
+    callerMock.biometrics.getVitals.mockResolvedValue([])
   })
 
   async function call(name: string, args: Record<string, unknown>) {
@@ -746,9 +748,9 @@ describe('sleep stage tuning tools', () => {
     expect(both.map(r => r.side)).toEqual(['left', 'right'])
     expect(both[0]).toMatchObject({
       isDefault: true,
-      presets: [{ id: 'default' }, { id: 'movementOnly' }],
+      presets: [{ id: 'default' }, { id: 'movementOnly' }, { id: 'hrvFirst' }],
       recentChanges: [{ id: 7, summary: CHANGE.summary, before: DEFAULT_STAGE_CLASSIFIER, accuracyBefore: 0.5, accuracyAfter: 0.7 }],
-      referenceCoverage: { days: 14, nights: 1, segments: 1, epochs: 72, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch' },
+      referenceCoverage: { days: 14, nights: 1, segments: 1, epochs: 72, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch', heartRateAgreement: null },
       hint: null,
     })
     expect((both[0].classifier as { ruleset: unknown }).ruleset).toEqual(DEFAULT_STAGE_RULESET)
@@ -911,6 +913,27 @@ describe('sleep stage tuning tools', () => {
     const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
     expect(result).toMatchObject({ referenceCoverage: { nights: 100, segments: 1, truncated: true }, hint: expect.stringContaining('lower bounds') })
     expect(callerMock.biometrics.getSleepRecords).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }))
+  })
+
+  it('get_sleep_stage_rules reports pod-vs-watch heart-rate agreement and warns when it is weak', async () => {
+    const t0 = Date.now() - 2 * 24 * 3_600_000
+    const watch = Array.from({ length: 12 }, (_, i) => ({ id: i, side: 'left', source: 'apple_watch', timestamp: new Date(t0 + i * 300_000), heartRate: 50 + i, createdAt: new Date() }))
+    const pod = watch.map((w, i) => ({ id: i, side: 'left', timestamp: new Date(w.timestamp.getTime() + 20_000), heartRate: 90 - i, hrv: null, breathingRate: null }))
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([segment])
+    callerMock.biometrics.getSleepRecords.mockResolvedValue([record])
+    callerMock.biometrics.getReferenceVitals.mockResolvedValue(watch)
+    callerMock.biometrics.getVitals.mockResolvedValue([...pod, { id: 99, side: 'left', timestamp: new Date(t0 + 3_600_000), heartRate: 200, hrv: null, breathingRate: null }])
+
+    const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
+    expect(result).toMatchObject({
+      referenceCoverage: { heartRateAgreement: { pairs: 12, correlation: -1, watchMeanBpm: 55.5, podMeanBpm: 84.5 } },
+      hint: expect.stringContaining('hrvFirst'),
+    })
+    expect(callerMock.biometrics.getVitals).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', limit: 100000 }))
+
+    callerMock.biometrics.getVitals.mockResolvedValue(watch.map((w, i) => ({ id: i, side: 'left', timestamp: w.timestamp, heartRate: w.heartRate + 1, hrv: null, breathingRate: null })))
+    const good = parse(await call('get_sleep_stage_rules', { side: 'left' }))
+    expect(good).toMatchObject({ referenceCoverage: { heartRateAgreement: { correlation: 1, meanAbsErrorBpm: 1 } }, hint: null })
   })
 
   it('get_sleep_stage_rules clips segment durations to the coverage window', async () => {

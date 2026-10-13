@@ -16,6 +16,11 @@ const EPOCH_MS = 5 * 60 * 1000
 const COVERAGE_DAYS = 14
 const SEGMENT_LIMIT = 20000
 const RECORD_LIMIT = 100
+const VITALS_LIMIT = 100000
+/** Pod and watch heart-rate readings this close in time are compared. */
+const HR_MATCH_S = 60
+/** Below this pod-vs-watch heart-rate correlation, HR-ratio rules classify noise. */
+const HR_WEAK_CORRELATION = 0.5
 
 const PRESET_IDS = Object.keys(STAGE_RULESET_PRESETS) as [keyof typeof STAGE_RULESET_PRESETS, ...(keyof typeof STAGE_RULESET_PRESETS)[]]
 
@@ -147,7 +152,9 @@ export function registerSleepTools(server: McpServer) {
       + 'whether it is the default, the available preset ids, recent changes (each with the ruleset before it, for rollback, '
       + 'and accuracy before/after on the latest night), '
       + 'and reference coverage: how many of '
-      + `the last ${COVERAGE_DAYS} nights have Apple Watch stages, how many reference epochs, and the latest reference date. `
+      + `the last ${COVERAGE_DAYS} nights have Apple Watch stages, how many reference epochs, the latest reference date, and how well `
+      + 'the pod\'s heart-rate estimate tracks the watch (heartRateAgreement). A weak correlation there means HR-ratio rules '
+      + 'cannot separate stages and tuning their thresholds is pointless; try the hrvFirst preset instead. '
       + 'Read this before preview_sleep_stage_rules or set_sleep_stage_rules; a side with zero coverage cannot be scored.',
     inputSchema: { side: optionalSide },
     annotations: READ_ONLY,
@@ -166,7 +173,9 @@ export function registerSleepTools(server: McpServer) {
           ? IMPORT_HINT
           : coverage.truncated
             ? 'Coverage queries hit their row cap: counts are lower bounds and latestReferenceAt may be stale (oldest rows are kept).'
-            : null,
+            : coverage.heartRateAgreement && coverage.heartRateAgreement.correlation < HR_WEAK_CORRELATION
+              ? `Pod heart rate correlates only ${coverage.heartRateAgreement.correlation.toFixed(2)} with the watch, so hrRatio rules classify noise. Preview the hrvFirst preset or HRV-based overrides; fixing heart-rate extraction matters more than thresholds.`
+              : null,
       }
     }))
     return jsonResult(s ? result[0] : result)
@@ -336,10 +345,12 @@ async function referenceCoverage(sleeper: 'left' | 'right') {
   const caller = getCaller()
   const endDate = new Date()
   const startDate = new Date(endDate.getTime() - COVERAGE_DAYS * DAY_MS)
-  const [segments, records] = await Promise.all([
+  const [segments, records, watchHr] = await Promise.all([
     caller.biometrics.getReferenceStages({ side: sleeper, startDate, endDate, limit: SEGMENT_LIMIT }),
     caller.biometrics.getSleepRecords({ side: sleeper, startDate, endDate, limit: RECORD_LIMIT }),
+    caller.biometrics.getReferenceVitals({ side: sleeper, startDate, endDate, limit: SEGMENT_LIMIT }),
   ])
+  const podHr = watchHr.length ? await caller.biometrics.getVitals({ side: sleeper, startDate, endDate, limit: VITALS_LIMIT }) : []
   const overlaps = (r: { enteredBedAt: Date, leftBedAt: Date | null }) => {
     const end = r.leftBedAt ?? endDate
     return segments.some(seg => seg.start < end && seg.end > r.enteredBedAt)
@@ -356,6 +367,49 @@ async function referenceCoverage(sleeper: 'left' | 'right') {
     source: segments[0]?.source ?? null,
     /** True when either query hit its row cap, so the counts above are lower bounds. */
     truncated: segments.length >= SEGMENT_LIMIT || records.length >= RECORD_LIMIT,
+    heartRateAgreement: heartRateAgreement(podHr, watchHr),
+  }
+}
+
+/**
+ * How well the pod's heart-rate estimate tracks the watch: Pearson correlation
+ * and mean absolute error over readings within HR_MATCH_S of each other. Null
+ * without enough pairs. Stage rules on hrRatio only work when this is high.
+ */
+function heartRateAgreement(pod: { timestamp: Date, heartRate: number | null }[], watch: { timestamp: Date, heartRate: number }[]) {
+  const podSorted = pod.filter((v): v is { timestamp: Date, heartRate: number } => v.heartRate != null).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+  const pairs: [number, number][] = []
+  let i = 0
+  for (const w of [...watch].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())) {
+    const t = w.timestamp.getTime()
+    while (i < podSorted.length && podSorted[i].timestamp.getTime() < t - HR_MATCH_S * 1000) i++
+    let best: { timestamp: Date, heartRate: number } | null = null
+    for (let j = i; j < podSorted.length && podSorted[j].timestamp.getTime() <= t + HR_MATCH_S * 1000; j++) {
+      if (!best || Math.abs(podSorted[j].timestamp.getTime() - t) < Math.abs(best.timestamp.getTime() - t)) best = podSorted[j]
+    }
+    if (best) pairs.push([w.heartRate, best.heartRate])
+  }
+  if (pairs.length < 10) return null
+  const n = pairs.length
+  const mw = pairs.reduce((s, [w]) => s + w, 0) / n
+  const mp = pairs.reduce((s, [, p]) => s + p, 0) / n
+  let cov = 0
+  let vw = 0
+  let vp = 0
+  let abs = 0
+  for (const [w, p] of pairs) {
+    cov += (w - mw) * (p - mp)
+    vw += (w - mw) ** 2
+    vp += (p - mp) ** 2
+    abs += Math.abs(w - p)
+  }
+  const denom = Math.sqrt(vw * vp)
+  return {
+    pairs: n,
+    correlation: denom === 0 ? 0 : Math.round((cov / denom) * 1000) / 1000,
+    meanAbsErrorBpm: Math.round((abs / n) * 10) / 10,
+    watchMeanBpm: Math.round(mw * 10) / 10,
+    podMeanBpm: Math.round(mp * 10) / 10,
   }
 }
 

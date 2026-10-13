@@ -162,9 +162,26 @@ export const MOVEMENT_ONLY_STAGE_RULESET: StageRuleset = {
   rules: DEFAULT_STAGE_RULESET.lowSignalRules,
 }
 
+/**
+ * HRV first: stages ordered by HRV alone (deep lowest, REM and wake highest),
+ * for pods whose heart-rate estimate tracks the sleeper poorly and makes the
+ * HR-ratio rules classify noise. Thresholds come from Apple Watch reference
+ * nights on a Pod 5 (median HRV deep 21, light 33, REM 42, wake 50).
+ */
+export const HRV_FIRST_STAGE_RULESET: StageRuleset = {
+  ...DEFAULT_STAGE_RULESET,
+  rules: [
+    { stage: 'wake', when: [{ metric: 'movement', op: '>', value: 200 }] },
+    { stage: 'wake', when: [{ metric: 'hrv', op: '>', value: 55 }] },
+    { stage: 'deep', when: [{ metric: 'hrv', op: '<', value: 28 }] },
+    { stage: 'rem', when: [{ metric: 'hrv', op: '>', value: 38 }] },
+  ],
+}
+
 export const STAGE_RULESET_PRESETS = {
   default: { label: 'Default', description: 'Heart rate, HRV and movement (iOS SleepAnalyzer port)', ruleset: DEFAULT_STAGE_RULESET },
   movementOnly: { label: 'Movement only', description: 'Wake or light from movement alone, ignoring heart signals', ruleset: MOVEMENT_ONLY_STAGE_RULESET },
+  hrvFirst: { label: 'HRV first', description: 'Stages from HRV alone (deep lowest, REM and wake highest); for pods whose heart-rate estimate tracks the watch poorly', ruleset: HRV_FIRST_STAGE_RULESET },
 } as const satisfies Record<string, { label: string, description: string, ruleset: StageRuleset }>
 export type StageRulesetPreset = keyof typeof STAGE_RULESET_PRESETS
 
