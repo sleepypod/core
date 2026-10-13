@@ -19,14 +19,12 @@ import {
 import { cn } from '@/lib/utils'
 import { Alert, Button, GhostIcon, Modal, SectionLabel, Stepper } from '@/src/components/ds'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
+import { useCurveTemplates } from '@/src/hooks/useCurveTemplates'
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 import {
   generatePrompt,
   parseAIResponse,
   EXAMPLE_SUGGESTIONS,
-  loadTemplates,
-  saveTemplate,
-  deleteTemplate,
 } from '@/src/lib/sleepCurve/curvePrompt'
 import type { GeneratedCurve, CurveTemplate, ParseResult } from '@/src/lib/sleepCurve/curvePrompt'
 import { CurveChart } from './CurveChart'
@@ -70,15 +68,10 @@ export function AICurveWizard({ open, onClose, onApply }: AICurveWizardProps) {
   // Step 4: Preview
   const [curve, setCurve] = useState<GeneratedCurve | null>(null)
   const [editablePoints, setEditablePoints] = useState<Array<{ time: string, tempF: number }>>([])
-  const [savedTemplates, setSavedTemplates] = useState<CurveTemplate[]>([])
+  const { templates: savedTemplates, save: saveTemplate, remove: deleteTemplate, isSaving } = useCurveTemplates(open)
+  const [templateError, setTemplateError] = useState<string | null>(null)
 
   /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (open) {
-      setSavedTemplates(loadTemplates())
-    }
-  }, [open])
-
   useEffect(() => {
     if (!open) {
       setStep(0)
@@ -90,6 +83,7 @@ export function AICurveWizard({ open, onClose, onApply }: AICurveWizardProps) {
       setParseResult(null)
       setCurve(null)
       setEditablePoints([])
+      setTemplateError(null)
     }
   }, [open])
 
@@ -202,18 +196,22 @@ export function AICurveWizard({ open, onClose, onApply }: AICurveWizardProps) {
   }, [])
 
   const handleDeleteTemplate = useCallback((name: string) => {
-    deleteTemplate(name)
-    setSavedTemplates(loadTemplates())
-  }, [])
+    deleteTemplate(name).catch(() => { /* list stays as is; the row remains to retry */ })
+  }, [deleteTemplate])
 
-  const handleSaveTemplate = useCallback(() => {
+  const handleSaveTemplate = useCallback(async () => {
     if (!curve) return
     const pointsObj: Record<string, number> = {}
     for (const p of editablePoints) pointsObj[p.time] = p.tempF
     const updated: GeneratedCurve = { ...curve, points: pointsObj }
-    saveTemplate(updated)
-    setSavedTemplates(loadTemplates())
-  }, [curve, editablePoints])
+    setTemplateError(null)
+    try {
+      await saveTemplate(updated)
+    }
+    catch (err) {
+      setTemplateError(err instanceof Error ? err.message : 'Save failed')
+    }
+  }, [curve, editablePoints, saveTemplate])
 
   const updatePoint = useCallback((idx: number, field: 'time' | 'tempF', value: string | number) => {
     setEditablePoints((prev) => {
@@ -280,7 +278,7 @@ export function AICurveWizard({ open, onClose, onApply }: AICurveWizardProps) {
             )}
             {step === 3 && (
               <>
-                <Button icon={Save} onClick={handleSaveTemplate}>Save template</Button>
+                <Button icon={Save} onClick={() => void handleSaveTemplate()} disabled={isSaving}>Save template</Button>
                 <Button variant="primary" onClick={handleApply} disabled={editablePoints.length < 3}>
                   Use curve
                 </Button>
@@ -343,6 +341,7 @@ export function AICurveWizard({ open, onClose, onApply }: AICurveWizardProps) {
           onRemovePoint={removePoint}
         />
       )}
+      {step === 3 && templateError && <Alert tone="danger">{`Could not save the curve: ${templateError}`}</Alert>}
     </Modal>
   )
 }

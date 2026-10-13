@@ -39,6 +39,7 @@ describe('appRouter public surface', () => {
       'automations',
       'databases',
       'sleepStages',
+      'curveTemplates',
     ])
   })
 })

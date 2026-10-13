@@ -22,7 +22,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 
 ## Design rules
 
-- **Intent-shaped, not endpoint-shaped.** 27 tools cover ~110 procedures. A tool is one thing a person would ask for.
+- **Intent-shaped, not endpoint-shaped.** 29 tools cover ~110 procedures. A tool is one thing a person would ask for.
 - **CRUD collapses into an `action` enum** (`manage_schedule`, `manage_alarm`, `manage_automation`, `pod_maintenance`).
 - **Temperatures accept the caller's unit** (`unit: "F" | "C"`, default = device setting) and are converted to the 55-110°F hardware setpoint in `units.ts`.
 - **Errors come back as `isError` text** with the TRPC code, so the model can explain "pump stall guard tripped" instead of retrying blindly.
@@ -69,7 +69,9 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 |---|---|---|
 | "What's my schedule?" / "Why didn't it turn on?" | `get_schedules` | `schedules.getAll`, `settings.getAll` |
 | "Every weekday cool to 66 at 10pm" / "Wake me 7am with vibration" / "Delete Monday's alarm" | `manage_schedule` | `schedules.create/update/delete{Temperature,Power,Alarm}Schedule` |
-| "Given my sleep data, build me a curve for weeknights" (preview, then apply) | [`apply_sleep_curve`](#sleep-curves) | `schedules.getAll`, `settings.getAll`, `schedules.batchUpdate` |
+| "Given my sleep data, build me a curve for weeknights" / "Put Late Warm on weekends" (preview, then apply) | [`apply_sleep_curve`](#sleep-curves) | `schedules.getAll`, `settings.getAll`, `schedules.batchUpdate`, `curveTemplates.list` |
+| "What curves have I saved?" | `get_saved_curves` | `curveTemplates.list` |
+| "Save that as Late Warm" / "Delete my Deep Cool curve" | [`manage_saved_curve`](#sleep-curves) | `curveTemplates.list`, `save`, `delete` |
 
 ### Settings
 
@@ -201,5 +203,11 @@ transaction; alarms are kept. Flat-hold set points are dropped, and the power wi
 the last set point (`endAction: "maintain"` holds the last temperature). `mode: "preview"` writes nothing and
 returns the simplified curve, `powerWindow`, the rows it `replaces` per side and day, `keptAlarms` and
 `warnings` (away mode, no on/off window); `mode: "apply"` with the same arguments saves exactly that.
+Instead of `setPoints` it accepts `curveName`, a saved curve.
+
+Saved curves (`curve_templates` table, `curveTemplates` router) are named set point lists in °F with a
+bedtime, wake and reasoning, not tied to a side or day. `manage_saved_curve` saves (replacing a curve of the
+same name) or deletes one; `get_saved_curves` lists them. The AI curve wizard's "Saved curves" list reads the
+same table, and moves curves that older versions kept in browser localStorage to the pod on first open.
 The `design_sleep_curve` prompt chains the data tools into a preview using `CURVE_DESIGN_GUIDANCE`, the
 sleep-science text the copy/paste AI curve wizard also sends.

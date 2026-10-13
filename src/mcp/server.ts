@@ -124,7 +124,8 @@ export function createSleepypodMcpServer(): McpServer {
           + 'after bedtime, coldest hold through the first deep-sleep hours, gradual pre-wake warming, return toward '
           + 'neutral. If weekday and weekend sleep times differ, design one curve per group of days. Call '
           + 'apply_sleep_curve with mode "preview", show the curve, the on/off window and what it replaces in a short '
-          + 'table with a sentence of reasoning, and call it with mode "apply" only after the sleeper agrees.',
+          + 'table with a sentence of reasoning, and call it with mode "apply" only after the sleeper agrees. To keep a '
+          + 'curve without scheduling it, or when asked for a named curve, save it with manage_saved_curve.',
       },
     }],
   }))

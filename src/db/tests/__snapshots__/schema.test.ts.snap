@@ -496,6 +496,27 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
   {
     "checks": 0,
     "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "name | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "bedtime | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "wake | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "points | sql:text | logical:json/SQLiteTextJson | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "reasoning | sql:text | logical:string/SQLiteText | not-null | default: | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "created_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "updated_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "curveTemplates",
+    "foreignKeys": [],
+    "indexes": [
+      "idx_curve_templates_name | unique | columns:name | where:none",
+    ],
+    "name": "curve_templates",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:fn:1 | primary-key | not-unique | not-autoincrement | enum:none",
       "bed_mode | sql:text | logical:string/SQLiteText | not-null | default:two | not-primary-key | not-unique | not-autoincrement | enum:two,solo-left,solo-right",
       "unused_zone_mode | sql:text | logical:string/SQLiteText | not-null | default:off | not-primary-key | not-unique | not-autoincrement | enum:follow,off,independent",

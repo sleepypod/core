@@ -154,7 +154,9 @@ export function parseAIResponse(raw: string): ParseResult {
   }
 }
 
-// ─── Template Persistence (localStorage) ─────────────────────────────
+// ─── Legacy browser templates ────────────────────────────────────────
+// Saved curves now live on the pod (curveTemplates router). Older versions
+// kept them in localStorage; useCurveTemplates moves them over once.
 
 const STORAGE_KEY = 'sleepypod_curve_templates'
 
@@ -169,24 +171,12 @@ export function loadTemplates(): CurveTemplate[] {
   }
 }
 
-export function saveTemplate(curve: GeneratedCurve): CurveTemplate {
-  const templates = loadTemplates()
-  const template: CurveTemplate = { ...curve, createdAt: Date.now() }
-
-  // Replace if same name exists, otherwise prepend
-  const idx = templates.findIndex(t => t.name === curve.name)
-  if (idx >= 0) {
-    templates[idx] = template
+export function removeLocalTemplates(names: string[]): void {
+  const drop = new Set(names)
+  const remaining = loadTemplates().filter(t => !drop.has(t.name))
+  try {
+    if (remaining.length === 0) localStorage.removeItem(STORAGE_KEY)
+    else localStorage.setItem(STORAGE_KEY, JSON.stringify(remaining))
   }
-  else {
-    templates.unshift(template)
-  }
-
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(templates))
-  return template
-}
-
-export function deleteTemplate(name: string): void {
-  const templates = loadTemplates().filter(t => t.name !== name)
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(templates))
+  catch { /* storage unavailable; the pod copy is what the UI reads */ }
 }

@@ -19,6 +19,7 @@ import { archivePushRouter } from './archivePush'
 import { automationsRouter } from './automations'
 import { databasesRouter } from './databases'
 import { sleepStagesRouter } from './sleepStages'
+import { curveTemplatesRouter } from './curveTemplates'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -49,6 +50,7 @@ export const appRouter = router({
   automations: automationsRouter,
   databases: databasesRouter,
   sleepStages: sleepStagesRouter,
+  curveTemplates: curveTemplatesRouter,
 })
 
 export type AppRouter = typeof appRouter

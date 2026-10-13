@@ -42,6 +42,7 @@ const callerMock = vi.hoisted(() => {
       delete: fn(), create: fn(), update: fn(),
     },
     databases: { checkIntegrity: fn() },
+    curveTemplates: { list: fn(), save: fn(), delete: fn() },
   }
 })
 
@@ -109,6 +110,7 @@ describe('sleepypod MCP server', () => {
       'get_environment',
       'get_logs',
       'get_pod_status',
+      'get_saved_curves',
       'get_schedules',
       'get_settings',
       'get_sleep_history',
@@ -118,6 +120,7 @@ describe('sleepypod MCP server', () => {
       'import_apple_watch_data',
       'manage_alarm',
       'manage_automation',
+      'manage_saved_curve',
       'manage_schedule',
       'pod_maintenance',
       'preview_sleep_stage_rules',
@@ -418,6 +421,29 @@ describe('sleepypod MCP server', () => {
       expect(text(result)).toContain('1001 temperature deletes exceed the 1000-row batch limit')
     })
 
+    it('applies a saved curve by name and requires exactly one curve source', async () => {
+      callerMock.curveTemplates.list.mockResolvedValue([{ name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '10:30': 85, '00:45': 83, '02:30': 78 } }])
+      const client = await connect()
+      const result = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: ' Late Warm ' },
+      }) as CallToolResult
+      expect(parse(result)).toMatchObject({
+        curveName: 'Late Warm',
+        setPoints: [{ time: '00:45', temperature: 83 }, { time: '02:30', temperature: 78 }, { time: '10:30', temperature: 85 }],
+        powerWindow: { onTime: '00:45', offTime: '10:30' },
+      })
+
+      const missing = await client.callTool({ name: 'apply_sleep_curve', arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Nope' } }) as CallToolResult
+      expect(text(missing)).toContain('No saved curve named "Nope"')
+      const both = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['friday'], curveName: 'Late Warm', setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:00', temperature: 80 }] },
+      }) as CallToolResult
+      expect(text(both)).toContain('exactly one of setPoints or curveName')
+      expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
+    })
+
     it('rejects out-of-range and duplicate set points before reading schedules', async () => {
       const client = await connect()
       const hot = await client.callTool({
@@ -435,6 +461,45 @@ describe('sleepypod MCP server', () => {
       expect(callerMock.schedules.getAll).not.toHaveBeenCalled()
       expect(callerMock.schedules.batchUpdate).not.toHaveBeenCalled()
     })
+  })
+
+  it('get_saved_curves lists saved curves chronologically in the requested unit', async () => {
+    callerMock.curveTemplates.list.mockResolvedValue([{
+      id: 1, name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '10:30': 86, '23:30': 77 }, reasoning: 'r',
+      createdAt: new Date('2026-10-13T00:00:00Z'), updatedAt: new Date('2026-10-13T01:00:00Z'),
+    }])
+    const client = await connect()
+    const result = await client.callTool({ name: 'get_saved_curves', arguments: { unit: 'C' } }) as CallToolResult
+    expect(parse(result)).toEqual({
+      unit: 'C',
+      curves: [{
+        name: 'Late Warm', bedtime: '01:30', wake: '10:30', reasoning: 'r', updatedAt: '2026-10-13T01:00:00.000Z',
+        setPoints: [{ time: '23:30', temperature: 25 }, { time: '10:30', temperature: 30 }],
+      }],
+    })
+  })
+
+  it('manage_saved_curve saves in °F, reports replacement and deletes by name', async () => {
+    callerMock.curveTemplates.list.mockResolvedValue([{ name: 'Late Warm' }])
+    callerMock.curveTemplates.save.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, name: 'Late Warm' }))
+    const client = await connect()
+    const saved = await client.callTool({
+      name: 'manage_saved_curve',
+      arguments: { action: 'save', name: 'Late Warm', bedtime: '01:30', wake: '10:30', setPoints: [{ time: '00:45', temperature: 28 }, { time: '10:30', temperature: 29.5 }], unit: 'C' },
+    }) as CallToolResult
+    expect(callerMock.curveTemplates.save).toHaveBeenCalledWith({
+      name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 82, '10:30': 85 }, reasoning: '',
+    })
+    expect(parse(saved)).toEqual({ saved: true, name: 'Late Warm', bedtime: '01:30', wake: '10:30', setPointCount: 2, replacedExisting: true })
+
+    const incomplete = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'save', name: 'X', bedtime: '01:30' } }) as CallToolResult
+    expect(text(incomplete)).toContain('save needs bedtime, wake and setPoints')
+
+    callerMock.curveTemplates.delete.mockResolvedValueOnce({ deleted: true }).mockResolvedValueOnce({ deleted: false })
+    const del = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'delete', name: 'Late Warm' } }) as CallToolResult
+    expect(text(del)).toBe('Deleted saved curve "Late Warm".')
+    const none = await client.callTool({ name: 'manage_saved_curve', arguments: { action: 'delete', name: 'Late Warm' } }) as CallToolResult
+    expect(text(none)).toBe('No saved curve named "Late Warm".')
   })
 
   it('get_schedules reports both sides with away mode and always-on', async () => {

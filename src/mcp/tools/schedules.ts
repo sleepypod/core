@@ -18,7 +18,23 @@ import {
   vibrationPattern,
 } from '@/src/mcp/schemas'
 import { fromSetpointF, resolveUnit, toSetpointF } from '@/src/mcp/units'
+import { sortChronological } from '@/src/lib/scheduleGrouping'
 import { planCurveSave } from '@/src/lib/sleepCurve/savePlan'
+import type { TempUnit } from '@/src/lib/tempUtils'
+
+const curveSetPoints = z.array(z.object({ time: timeOfDay, temperature })).min(2).max(48)
+
+/** Caller-unit set points to integer °F, rejecting duplicate times and out-of-range values. */
+function toSetPointsF(points: Array<{ time: string, temperature: number }>, unit: TempUnit) {
+  const seen = new Set<string>()
+  return points.map((p) => {
+    if (seen.has(p.time)) throw new Error(`Two set points at ${p.time}; give one temperature per time`)
+    seen.add(p.time)
+    const f = toSetpointF(p.temperature, unit)
+    if (f < 55 || f > 110) throw new Error(`${p.temperature}°${unit} at ${p.time} is outside the hardware range 55-110°F (13-43°C)`)
+    return { time: p.time, temperature: f }
+  })
+}
 
 const BATCH_ROW_LIMIT = 1000
 
@@ -160,14 +176,16 @@ export function registerScheduleTools(server: McpServer) {
       + '"apply" and the same arguments. Design guidance: 8-15 points from about 45 min before bedtime to 30 min after '
       + 'wake; warm-up, cooling ramp, coldest hold in the first deep-sleep hours, gradual pre-wake warming; water takes '
       + '15-20 min to settle; neutral is about 82.5°F. Base it on get_sleep_history, get_vitals_trend and '
-      + 'get_schedules when the user asks for a curve from their data. For tonight only, use run_once_curve instead. '
+      + 'get_schedules when the user asks for a curve from their data. Give setPoints, or curveName to apply a saved '
+      + 'curve from get_saved_curves. For tonight only, use run_once_curve instead. '
       + 'Temperatures use the given unit or the device default.',
     inputSchema: {
       mode: z.enum(['preview', 'apply']).describe('"preview" is a dry run; "apply" saves.'),
       side: z.enum(['left', 'right', 'both']).describe('Which side to write, or "both" for the same curve on each.'),
       days: z.array(dayOfWeek).min(1).max(7).describe('Days of week this curve runs on, e.g. ["monday","tuesday"].'),
-      setPoints: z.array(z.object({ time: timeOfDay, temperature })).min(2).max(48)
-        .describe('Set points in any order; each holds until the next one fires.'),
+      setPoints: curveSetPoints.optional()
+        .describe('Set points in any order; each holds until the next one fires. Omit when giving curveName.'),
+      curveName: z.string().optional().describe('Apply this saved curve (see get_saved_curves) instead of setPoints.'),
       endAction: z.enum(['turn_off', 'maintain']).optional().describe('After the last set point: turn off (default) or keep holding it.'),
       unit,
     },
@@ -178,14 +196,17 @@ export function registerScheduleTools(server: McpServer) {
     const sides = input.side === 'both' ? (['left', 'right'] as const) : [input.side]
     const days = [...new Set(input.days)]
 
-    const seen = new Set<string>()
-    const setPointsF = input.setPoints.map((p) => {
-      if (seen.has(p.time)) throw new Error(`Two set points at ${p.time}; give one temperature per time`)
-      seen.add(p.time)
-      const f = toSetpointF(p.temperature, resolved)
-      if (f < 55 || f > 110) throw new Error(`${p.temperature}°${resolved} at ${p.time} is outside the hardware range 55-110°F (13-43°C)`)
-      return { time: p.time, temperature: f }
-    })
+    if ((input.setPoints === undefined) === (input.curveName === undefined)) throw new Error('Give exactly one of setPoints or curveName')
+    let setPointsF: Array<{ time: string, temperature: number }>
+    if (input.setPoints) {
+      setPointsF = toSetPointsF(input.setPoints, resolved)
+    }
+    else {
+      const name = (input.curveName ?? '').trim()
+      const saved = (await caller.curveTemplates.list({})).find(t => t.name === name)
+      if (!saved) throw new Error(`No saved curve named "${name}"; call get_saved_curves for the names`)
+      setPointsF = Object.entries(saved.points).map(([time, temp]) => ({ time, temperature: temp }))
+    }
 
     const settings = await caller.settings.getAll({})
     const current = await Promise.all(sides.map(async sd => ({ side: sd, ...(await caller.schedules.getAll({ side: sd, unit: resolved })) })))
@@ -231,6 +252,7 @@ export function registerScheduleTools(server: McpServer) {
 
     const summary = {
       unit: resolved,
+      ...(input.curveName !== undefined && { curveName: input.curveName.trim() }),
       sides,
       days,
       setPoints: plan.setPoints.map(p => ({ time: p.time, temperature: fromSetpointF(p.temperature, resolved) })),
@@ -257,6 +279,73 @@ export function registerScheduleTools(server: McpServer) {
       ...summary,
       rowsDeleted: plan.deletes.temperature.length + plan.deletes.power.length,
       rowsCreated: plan.creates.temperature.length + plan.creates.power.length,
+    })
+  }))
+
+  server.registerTool('get_saved_curves', {
+    title: 'List saved curves',
+    description:
+      'Named curves saved on the pod (by the Schedule screen\'s AI curve wizard or by manage_saved_curve), newest first. '
+      + 'A saved curve is not tied to a side or day and does nothing until applied: pass its name to apply_sleep_curve as '
+      + 'curveName, or load it in the wizard. Set points are in chronological order from bedtime; temperatures in the '
+      + 'requested or device-default unit.',
+    inputSchema: { unit },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async ({ unit: u }) => runTool(async () => {
+    const resolved = await resolveUnit(u)
+    const curves = await getCaller().curveTemplates.list({})
+    return jsonResult({
+      unit: resolved,
+      curves: curves.map(c => ({
+        name: c.name,
+        bedtime: c.bedtime,
+        wake: c.wake,
+        setPoints: sortChronological(Object.entries(c.points).map(([time, temp]) => ({ time, temperature: temp })))
+          .map(p => ({ time: p.time, temperature: fromSetpointF(p.temperature, resolved) })),
+        reasoning: c.reasoning,
+        updatedAt: c.updatedAt.toISOString(),
+      })),
+    })
+  }))
+
+  server.registerTool('manage_saved_curve', {
+    title: 'Save or delete a named curve',
+    description:
+      'Save a curve under a name (up to 30 characters) so it can be reused, without touching any schedule; saving an '
+      + 'existing name replaces it. It then shows under "Saved curves" in the Schedule screen\'s AI curve wizard and can '
+      + 'be applied with apply_sleep_curve curveName. "delete" removes the saved curve only; schedules already written '
+      + 'from it stay. bedtime and wake label the curve and anchor the editor; set points usually run from about 45 '
+      + 'min before bedtime to 30 min after wake. Temperatures use the given unit or the device default.',
+    inputSchema: {
+      action: z.enum(['save', 'delete']),
+      name: z.string().min(1).max(30).describe('Curve name, e.g. "Late Warm". Exact match for delete.'),
+      bedtime: timeOfDay.optional().describe('Required for save.'),
+      wake: timeOfDay.optional().describe('Required for save.'),
+      setPoints: curveSetPoints.optional().describe('Required for save. 2-48 points in any order.'),
+      reasoning: z.string().max(2000).optional().describe('One or two sentences on why the curve looks the way it does.'),
+      unit,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  }, async input => runTool(async () => {
+    const caller = getCaller()
+    if (input.action === 'delete') {
+      const { deleted } = await caller.curveTemplates.delete({ name: input.name })
+      return textResult(deleted ? `Deleted saved curve "${input.name.trim()}".` : `No saved curve named "${input.name.trim()}".`)
+    }
+    if (!input.bedtime || !input.wake || !input.setPoints) throw new Error('save needs bedtime, wake and setPoints')
+    const resolved = await resolveUnit(input.unit)
+    const points = Object.fromEntries(toSetPointsF(input.setPoints, resolved).map(p => [p.time, p.temperature]))
+    const replacedExisting = (await caller.curveTemplates.list({})).some(t => t.name === input.name.trim())
+    const saved = await caller.curveTemplates.save({
+      name: input.name, bedtime: input.bedtime, wake: input.wake, points, reasoning: input.reasoning ?? '',
+    })
+    return jsonResult({
+      saved: true,
+      name: saved.name,
+      bedtime: saved.bedtime,
+      wake: saved.wake,
+      setPointCount: Object.keys(saved.points).length,
+      replacedExisting,
     })
   }))
 }

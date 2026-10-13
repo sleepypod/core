@@ -20,6 +20,14 @@ vi.mock('@/src/hooks/useSchedule', () => ({
 vi.mock('@/src/providers/SideProvider', () => ({ useSide: () => ({ selectedSide: 'left' }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Jon', rightName: 'Heidi' }) }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
+vi.mock('@/src/hooks/useCurveTemplates', () => ({
+  useCurveTemplates: () => ({
+    templates: [{ reasoning: '', name: 'Test AI curve', bedtime: '22:00', wake: '07:00', points: { '22:00': 80, '02:00': 75, '07:00': 82 }, createdAt: 1 }],
+    save: vi.fn(),
+    remove: vi.fn(),
+    isSaving: false,
+  }),
+}))
 
 const INITIAL = [
   { time: '07:00', temperature: 84 },
@@ -183,8 +191,6 @@ it('updates a point from its dialog and keyboard chart, and can cancel a day con
 })
 
 it('loads an AI template into the local editor and saves only after review', async () => {
-  const { saveTemplate } = await import('@/src/lib/sleepCurve/curvePrompt')
-  saveTemplate({ reasoning: '', name: 'Test AI curve', bedtime: '22:00', wake: '07:00', points: { '22:00': 80, '02:00': 75, '07:00': 82 } })
   const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
   fireEvent.click(s.getByRole('button', { name: 'Custom AI curve' }))
   fireEvent.click(s.getByRole('button', { name: /^Test AI curve/ }))
@@ -194,7 +200,6 @@ it('loads an AI template into the local editor and saves only after review', asy
   expect(rows(s)).toHaveLength(3)
   fireEvent.click(saveCurveButton(s))
   await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ setPoints: expect.arrayContaining([{ time: '02:00', temperature: 75 }]) })))
-  localStorage.clear()
 })
 
 it('subscribes to desktop layout changes and removes the listener on unmount', () => {

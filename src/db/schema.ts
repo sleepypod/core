@@ -301,6 +301,27 @@ export const systemHealth = sqliteTable('system_health', {
 })
 
 // ============================================================================
+// Saved curves (named set point lists, not tied to any day or side)
+// ============================================================================
+
+export const curveTemplates = sqliteTable('curve_templates', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  bedtime: text('bedtime').notNull(), // HH:mm
+  wake: text('wake').notNull(), // HH:mm
+  points: text('points', { mode: 'json' }).notNull().$type<Record<string, number>>(), // {"HH:mm": tempF}
+  reasoning: text('reasoning').notNull().default(''),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+}, t => [
+  uniqueIndex('idx_curve_templates_name').on(t.name),
+])
+
+// ============================================================================
 // Run-Once Sessions (one-off curve application)
 // ============================================================================
 

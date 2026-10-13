@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  deleteTemplate,
   EXAMPLE_SUGGESTIONS,
   generatePrompt,
   loadTemplates,
+  removeLocalTemplates,
   parseAIResponse,
-  saveTemplate,
   type GeneratedCurve,
 } from './curvePrompt'
 
@@ -204,7 +203,7 @@ describe('parseAIResponse', () => {
   })
 })
 
-describe('curve template persistence', () => {
+describe('legacy browser curve templates', () => {
   it('returns an empty list on the server, missing storage, malformed JSON, or storage failure', () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem')
     vi.stubGlobal('window', undefined)
@@ -223,38 +222,7 @@ describe('curve template persistence', () => {
     expect(loadTemplates()).toEqual([])
   })
 
-  it('prepends new templates and replaces an exact-name match in place', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-07-20T08:00:00.000Z'))
-    const older = { ...VALID_CURVE, name: 'Older', createdAt: 1 }
-    const matching = { ...VALID_CURVE, name: VALID_CURVE.name, createdAt: 2 }
-    localStorage.setItem('sleepypod_curve_templates', JSON.stringify([older, matching]))
-
-    const replaced = saveTemplate({ ...VALID_CURVE, reasoning: 'Updated' })
-    expect(replaced).toEqual({
-      ...VALID_CURVE,
-      reasoning: 'Updated',
-      createdAt: Date.now(),
-    })
-    expect(loadTemplates()).toEqual([older, replaced])
-
-    const added = saveTemplate({ ...VALID_CURVE, name: 'New Curve' })
-    expect(loadTemplates()[0]).toEqual(added)
-  })
-
-  it('replaces an exact-name match at the first array position', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-07-20T08:00:00.000Z'))
-    const matching = { ...VALID_CURVE, createdAt: 1 }
-    const trailing = { ...VALID_CURVE, name: 'Trailing', createdAt: 2 }
-    localStorage.setItem('sleepypod_curve_templates', JSON.stringify([matching, trailing]))
-
-    const replacement = saveTemplate({ ...VALID_CURVE, reasoning: 'Updated first' })
-
-    expect(loadTemplates()).toEqual([replacement, trailing])
-  })
-
-  it('deletes only templates whose names match exactly', () => {
+  it('removes only the named legacy templates and clears the key once empty', () => {
     const templates = [
       { ...VALID_CURVE, name: 'Keep', createdAt: 1 },
       { ...VALID_CURVE, name: 'Delete', createdAt: 2 },
@@ -262,9 +230,11 @@ describe('curve template persistence', () => {
     ]
     localStorage.setItem('sleepypod_curve_templates', JSON.stringify(templates))
 
-    deleteTemplate('Delete')
-
+    removeLocalTemplates(['Delete'])
     expect(loadTemplates().map(template => template.name)).toEqual(['Keep', 'Delete Later'])
+
+    removeLocalTemplates(['Keep', 'Delete Later'])
+    expect(localStorage.getItem('sleepypod_curve_templates')).toBeNull()
   })
 })
 

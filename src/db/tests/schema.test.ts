@@ -358,6 +358,22 @@ const expectedTables: Record<string, TableSpec> = {
     ],
     indexes: [],
   },
+  curveTemplates: {
+    name: 'curve_templates',
+    columns: [
+      { name: 'id', notNull: true, default: 'fn' },
+      { name: 'name', notNull: true, default: undefined },
+      { name: 'bedtime', notNull: true, default: undefined },
+      { name: 'wake', notNull: true, default: undefined },
+      { name: 'points', notNull: true, default: undefined },
+      { name: 'reasoning', notNull: true, default: '' },
+      { name: 'created_at', notNull: true, default: 'sql' },
+      { name: 'updated_at', notNull: true, default: 'sql' },
+    ],
+    indexes: [
+      { name: 'idx_curve_templates_name', unique: true, columns: ['name'] },
+    ],
+  },
   runOnceSessions: {
     name: 'run_once_sessions',
     columns: [
