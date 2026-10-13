@@ -932,7 +932,7 @@ describe('scoreAgainstReference', () => {
   it('scores accuracy and kappa over covered epochs only', () => {
     const epochs = [epoch(0, 'light'), epoch(5, 'deep'), epoch(10, 'light'), epoch(15, 'deep'), epoch(30, 'rem')]
     const reference = [{ start: 0, end: 20 * 60_000, stage: 'light' as const }]
-    expect(scoreAgainstReference(epochs, reference)).toEqual({ epochs: 4, accuracy: 0.5, kappa: 0 })
+    expect(scoreAgainstReference(epochs, reference)).toMatchObject({ epochs: 4, accuracy: 0.5, kappa: 0 })
   })
 
   it('reports perfect agreement as kappa 1 and total chance agreement as null', () => {
@@ -940,8 +940,50 @@ describe('scoreAgainstReference', () => {
       { start: 0, end: 5 * 60_000, stage: 'light' as const },
       { start: 5 * 60_000, end: 10 * 60_000, stage: 'deep' as const },
     ]
-    expect(scoreAgainstReference([epoch(0, 'light'), epoch(5, 'deep')], reference)).toEqual({ epochs: 2, accuracy: 1, kappa: 1 })
-    expect(scoreAgainstReference([epoch(0, 'light')], reference)).toEqual({ epochs: 1, accuracy: 1, kappa: null })
+    expect(scoreAgainstReference([epoch(0, 'light'), epoch(5, 'deep')], reference)).toMatchObject({ epochs: 2, accuracy: 1, kappa: 1 })
+    expect(scoreAgainstReference([epoch(0, 'light')], reference)).toMatchObject({ epochs: 1, accuracy: 1, kappa: null })
+  })
+
+  describe('confusion matrix and recall', () => {
+    // Reference: 3 light (0-15), 2 deep (15-25), 1 rem (25-30). No wake.
+    const reference = [
+      { start: 0, end: 15 * 60_000, stage: 'light' as const },
+      { start: 15 * 60_000, end: 25 * 60_000, stage: 'deep' as const },
+      { start: 25 * 60_000, end: 30 * 60_000, stage: 'rem' as const },
+    ]
+    // Predicted: light, light, deep | deep, wake | rem
+    const epochs = [epoch(0, 'light'), epoch(5, 'light'), epoch(10, 'deep'), epoch(15, 'deep'), epoch(20, 'wake'), epoch(25, 'rem')]
+    const scored = scoreAgainstReference(epochs, reference)
+    if (!scored) throw new Error('expected a scored agreement')
+    const result = scored
+
+    it('keys the matrix reference stage -> predicted stage', () => {
+      expect(result.confusion).toEqual({
+        wake: { wake: 0, light: 0, deep: 0, rem: 0 },
+        light: { wake: 0, light: 2, deep: 1, rem: 0 },
+        deep: { wake: 1, light: 0, deep: 1, rem: 0 },
+        rem: { wake: 0, light: 0, deep: 0, rem: 1 },
+      })
+    })
+
+    it('rows sum to the reference epoch counts and the whole matrix to covered epochs', () => {
+      const rowSum = (row: Record<string, number>) => Object.values(row).reduce((a, b) => a + b, 0)
+      expect(rowSum(result.confusion.light)).toBe(3)
+      expect(rowSum(result.confusion.deep)).toBe(2)
+      expect(rowSum(result.confusion.rem)).toBe(1)
+      expect(rowSum(result.confusion.wake)).toBe(0)
+      expect(Object.values(result.confusion).reduce((sum, row) => sum + rowSum(row), 0)).toBe(result.epochs)
+    })
+
+    it('reports recall per reference stage and null for stages the reference lacks', () => {
+      expect(result.recall).toEqual({ wake: null, light: 2 / 3, deep: 0.5, rem: 1 })
+      expect(result.accuracy).toBeCloseTo(4 / 6)
+    })
+
+    it('keeps epochs, accuracy and kappa unchanged for existing callers', () => {
+      const { epochs: n, accuracy, kappa } = result
+      expect({ n, accuracy, kappa }).toEqual({ n: 6, accuracy: 4 / 6, kappa: expect.any(Number) })
+    })
   })
 })
 

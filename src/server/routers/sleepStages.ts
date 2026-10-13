@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_STAGE_CLASSIFIER,
   resolveStageClassifier,
+  SLEEP_STAGES,
   stageClassifierSchema,
   STAGE_ENGINES,
   STAGE_METRICS,
@@ -120,6 +121,8 @@ const agreementSchema = z.object({
   epochs: z.number(),
   accuracy: z.number(),
   kappa: z.number().nullable(),
+  confusion: z.object(Object.fromEntries(SLEEP_STAGES.map(s => [s, stageNumbers])) as Record<typeof SLEEP_STAGES[number], typeof stageNumbers>),
+  recall: z.object({ wake: z.number().nullable(), light: z.number().nullable(), deep: z.number().nullable(), rem: z.number().nullable() }),
 }).nullable()
 
 const nightStagesSchema = z.object({
