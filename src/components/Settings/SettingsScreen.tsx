@@ -126,7 +126,7 @@ function SectionBody({ section, side, onSideChange }: {
     case 'gestures':
       return <TapGestureConfig filterSide={side} onSideChange={onSideChange} />
     case 'sleep-stages':
-      return <SleepStageRules side={side} onSideChange={onSideChange} />
+      return <SleepStageRules key={side} side={side} onSideChange={onSideChange} />
     case 'appearance':
       return (
         <WithSettings>

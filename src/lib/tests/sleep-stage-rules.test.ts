@@ -97,8 +97,8 @@ describe('describeRulesetChange', () => {
     }
     expect(describeRulesetChange(base, after)).toEqual([
       'Rule 5: Wake → REM',
-      'REM: removed hr ratio >= 0.95',
-      'REM: removed movement > 100',
+      'Wake: removed hr ratio >= 0.95',
+      'Wake: removed movement > 100',
       'Otherwise Light → Deep',
       'Heart rate limits 45–130 → 40–130 bpm',
       'HR spike filter 2 → 3 SD',

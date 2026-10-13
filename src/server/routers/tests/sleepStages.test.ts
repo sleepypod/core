@@ -180,6 +180,28 @@ describe('sleepStages router', () => {
       expect((await caller.getClassifier({ side: 'right' })).changes).toEqual([])
     })
 
+    it('rejects with CONFLICT and writes nothing when another save lands first', async () => {
+      // The agreement lookups read biometrics.db between the first read and
+      // the write; a save that slips in there must not be overwritten.
+      const realBio = dbHolder.bio as { select: (...args: unknown[]) => unknown }
+      let raced = false
+      dbHolder.bio = new Proxy(realBio, {
+        get(target, prop, receiver) {
+          if (prop === 'select' && !raced) {
+            raced = true
+            mainRaw.prepare('UPDATE side_settings SET stage_classifier = ? WHERE side = ?').run(JSON.stringify(DEFAULT_STAGE_CLASSIFIER), 'left')
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      })
+      const error = await rejectionOf(caller.setClassifier({ side: 'left', classifier: movementOnly }))
+      expect(error.code).toBe('CONFLICT')
+      expect(error.message).toBe('Stage classifier for left changed during save; reload and try again')
+      expect((await caller.getClassifier({ side: 'left' })).isDefault).toBe(false)
+      expect((await caller.getClassifier({ side: 'left' })).classifier).toEqual(DEFAULT_STAGE_CLASSIFIER)
+      expect((await caller.getClassifier({ side: 'left' })).changes).toEqual([])
+    })
+
     it('throws NOT_FOUND when the side has no settings row', async () => {
       mainRaw.prepare('DELETE FROM side_settings WHERE side = ?').run('left')
       const error = await rejectionOf(caller.setClassifier({ side: 'left', classifier: movementOnly }))

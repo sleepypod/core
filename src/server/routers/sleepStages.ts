@@ -270,26 +270,42 @@ export const sleepStagesRouter = router({
           ? null
           : resolveStageClassifier(row.stageClassifier)
 
-        await db
-          .update(sideSettings)
-          .set({ stageClassifier: input.classifier, updatedAt: new Date() })
-          .where(eq(sideSettings.side, input.side))
-
         const before = storedBefore ?? DEFAULT_STAGE_CLASSIFIER
         const after = input.classifier ?? DEFAULT_STAGE_CLASSIFIER
         const summary = input.classifier === null
           ? (storedBefore === null ? 'No change' : 'Reset to default')
           : summarizeRulesetChange(before.ruleset, after.ruleset)
-        if (summary !== 'No change') {
-          await db.insert(stageClassifierChanges).values({
-            side: input.side,
-            before: storedBefore,
-            after: input.classifier,
-            summary,
-            agreementBefore: await latestAgreement(input.side, before),
-            agreementAfter: await latestAgreement(input.side, after),
-          })
-        }
+        // Agreements read biometrics.db asynchronously, so compute them before
+        // the write; the transaction then re-reads the classifier so a save that
+        // raced in between cannot be logged against a stale "before".
+        const agreementBefore = summary === 'No change' ? null : await latestAgreement(input.side, before)
+        const agreementAfter = summary === 'No change' ? null : await latestAgreement(input.side, after)
+        const rawBefore = JSON.stringify(row.stageClassifier)
+
+        db.transaction((tx) => {
+          const current = tx
+            .select({ stageClassifier: sideSettings.stageClassifier })
+            .from(sideSettings)
+            .where(eq(sideSettings.side, input.side))
+            .get()
+          if (!current || JSON.stringify(current.stageClassifier) !== rawBefore) {
+            throw new TRPCError({ code: 'CONFLICT', message: `Stage classifier for ${input.side} changed during save; reload and try again` })
+          }
+          tx.update(sideSettings)
+            .set({ stageClassifier: input.classifier, updatedAt: new Date() })
+            .where(eq(sideSettings.side, input.side))
+            .run()
+          if (summary !== 'No change') {
+            tx.insert(stageClassifierChanges).values({
+              side: input.side,
+              before: storedBefore,
+              after: input.classifier,
+              summary,
+              agreementBefore,
+              agreementAfter,
+            }).run()
+          }
+        })
 
         return {
           classifier: after,

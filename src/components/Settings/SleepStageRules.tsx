@@ -262,8 +262,8 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
 
 /**
  * Debounced preview of the draft. Re-runs when the draft, the saved rules
- * (after a save) or the night span change; an invalid draft keeps the last
- * result.
+ * (after a save) or the night span change; an invalid draft shows no
+ * result until it is valid again.
  */
 function useStagePreview(side: Side, ruleset: StageRuleset | null, saved: StageRuleset | null, nights: PreviewNights) {
   const preview = trpc.sleepStages.previewClassifier.useMutation()
@@ -273,7 +273,7 @@ function useStagePreview(side: Side, ruleset: StageRuleset | null, saved: StageR
   // on screen until the next one lands.
   const [last, setLast] = useState<PreviewOutput | undefined>(undefined)
   if (preview.data && preview.data !== last) setLast(preview.data)
-  const data = preview.data ?? last
+  const data = ruleset ? preview.data ?? last : undefined
   const key = useMemo(() => (ruleset ? JSON.stringify(ruleset) : null), [ruleset])
   const savedKey = useMemo(() => (saved ? JSON.stringify(saved) : null), [saved])
 

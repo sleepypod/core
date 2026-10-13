@@ -214,7 +214,7 @@ export function describeRulesetChange(before: StageRuleset, after: StageRuleset)
         const cb = rb.when[k]
         if (!ca || !cb) {
           if (cb) out.push(`${stageName(rb.stage)}: added ${describeCondition(cb).toLowerCase()}`)
-          if (ca) out.push(`${stageName(rb.stage)}: removed ${describeCondition(ca).toLowerCase()}`)
+          if (ca) out.push(`${stageName(ra.stage)}: removed ${describeCondition(ca).toLowerCase()}`)
           continue
         }
         if (ca.metric !== cb.metric || ca.op !== cb.op) {

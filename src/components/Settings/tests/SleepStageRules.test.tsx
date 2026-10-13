@@ -341,6 +341,18 @@ describe('SleepStageRules', () => {
     expect(trpcMock.previewMutate).not.toHaveBeenCalled()
   })
 
+  it('hides the last preview while the draft is invalid', () => {
+    trpcMock.state.preview = PREVIEW
+    renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByText('Q 89 · κ 0.77')).toBeTruthy()
+    open('HRV (ms) limits')
+    fireEvent.change(screen.getByLabelText('HRV (ms) minimum'), { target: { value: '400' } })
+    expect(screen.queryByText('Q 89 · κ 0.77')).toBeNull()
+    fireEvent.change(screen.getByLabelText('HRV (ms) minimum'), { target: { value: '5' } })
+    expect(screen.getByText('Q 89 · κ 0.77')).toBeTruthy()
+  })
+
   it('lists recent changes with their effect and reverts one', () => {
     const before: StageClassifier = { engine: 'rules', ruleset: MOVEMENT_ONLY_STAGE_RULESET }
     trpcMock.state.changes = [
