@@ -682,10 +682,12 @@ export function classifyNights(
   nights: NightInputs[],
   ruleset: StageRuleset,
 ): { summary: NightsSummary, latestEpochs: SleepEpoch[] } | null {
-  const runs = nights
-    .map(n => ({ ...runStageClassifier(n.vitalsData, n.movementData, n.calibrationQuality, ruleset), night: n }))
-    .filter(r => r.epochs.length > 0)
+  const allRuns = nights.map(n => ({ ...runStageClassifier(n.vitalsData, n.movementData, n.calibrationQuality, ruleset), night: n }))
+  // Aggregates skip nights without vitals, but the latest night stays the
+  // latest night: a preview must not describe an older night as "last night".
+  const runs = allRuns.filter(r => r.epochs.length > 0)
   if (runs.length === 0) return null
+  const latest = allRuns[0]
 
   const allEpochs = runs.flatMap(r => r.epochs)
   const allReference = runs.flatMap(r => r.night.reference)
@@ -694,9 +696,9 @@ export function classifyNights(
   const perNight = (ms: number) => Math.round(ms / runs.length)
 
   return {
-    latestEpochs: runs[0].epochs,
+    latestEpochs: latest.epochs,
     summary: {
-      blocks: mergeIntoBlocks(runs[0].epochs),
+      blocks: mergeIntoBlocks(latest.epochs),
       distribution: calculateDistribution(allEpochs),
       qualityScore: Math.round(quality),
       totalSleepMs: perNight(allEpochs.reduce((sum, e) => sum + e.duration, 0)),

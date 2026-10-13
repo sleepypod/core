@@ -1074,6 +1074,16 @@ describe('runStageClassifier statistics', () => {
     expect(out?.summary.stats.nights).toBe(2)
     expect(classifyNights([{ ...earlier, vitalsData: [] }], bare)).toBeNull()
   })
+
+  it('keeps an empty latest night as the latest night instead of promoting an older one', () => {
+    const latest = { vitalsData: [], movementData: [], calibrationQuality: 1, reference: [] }
+    const earlier = { vitalsData: [vitalRow(-1440, 70, 50, 14), vitalRow(-1435, 70, 50, 14)], movementData: [], calibrationQuality: 1, reference: [] }
+    const out = classifyNights([latest, earlier], bare)
+    expect(out?.latestEpochs).toEqual([])
+    expect(out?.summary.blocks).toEqual([])
+    expect(out?.summary.stats.nights).toBe(1)
+    expect(out?.summary.distribution.light).toBe(100)
+  })
 })
 
 describe('runStageClassifier — shadowing by several earlier rules', () => {

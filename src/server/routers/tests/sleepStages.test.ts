@@ -363,6 +363,9 @@ describe('sleepStages router', () => {
       const out = await caller.previewClassifier({ side: 'left', classifier: movementOnly })
       expect(out.hasReference).toBe(true)
       expect(out.candidate?.agreement).toMatchObject({ epochs: 12, accuracy: 1 })
+      // The confusion matrix and recall must survive the router's output schema.
+      expect(out.candidate?.agreement?.confusion.light).toEqual({ wake: 0, light: 12, deep: 0, rem: 0 })
+      expect(out.candidate?.agreement?.recall).toEqual({ wake: null, light: 1, deep: null, rem: null })
       expect(out.saved?.agreement?.accuracy).toBeLessThan(1)
     })
   })

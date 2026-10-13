@@ -22,7 +22,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 
 ## Design rules
 
-- **Intent-shaped, not endpoint-shaped.** 25 tools cover ~110 procedures. A tool is one thing a person would ask for.
+- **Intent-shaped, not endpoint-shaped.** 26 tools cover ~110 procedures. A tool is one thing a person would ask for.
 - **CRUD collapses into an `action` enum** (`manage_schedule`, `manage_alarm`, `manage_automation`, `pod_maintenance`).
 - **Temperatures accept the caller's unit** (`unit: "F" | "C"`, default = device setting) and are converted to the 55-110°F hardware setpoint in `units.ts`.
 - **Errors come back as `isError` text** with the TRPC code, so the model can explain "pump stall guard tripped" instead of retrying blindly.
@@ -180,8 +180,9 @@ night, `kappaDelta` and the epochs of the latest night that change stage. Judge 
 predicting one stage everywhere can score high accuracy with kappa near 0.
 
 `set_sleep_stage_rules` takes the same arguments plus `reset: true` and saves through
-`sleepStages.setClassifier`, so each change is logged with the ruleset before it and agreement
-before and after, and can be reverted by saving that previous ruleset again (`before: null`
+`sleepStages.setClassifier`, so each change is logged with the ruleset before it and accuracy
+before and after on the latest night (`accuracyBefore`/`accuracyAfter`; no-op saves are not
+logged), and can be reverted by saving that previous ruleset again (`before: null`
 means `reset: true`). Pass the preview's `candidateRuleset` as `ruleset` to save exactly what was
 previewed; overrides are re-resolved against the rules saved at save time. A `CONFLICT` means
 another save landed first: re-read with `get_sleep_stage_rules` and retry.

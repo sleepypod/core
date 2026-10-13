@@ -4,7 +4,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
-import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
+import { getCaller, jsonResult, runTool, type Caller } from '@/src/mcp/caller'
 import { days, isoDate, optionalSide, side } from '@/src/mcp/schemas'
 import { STAGE_RULESET_PRESETS, stageRulesetSchema, type StageClassifier, type StageRule, type StageRuleset } from '@/src/lib/sleep-stage-rules'
 import { scoreAgainstReference, type SleepStage, type StageAgreement } from '@/src/lib/sleep-stages'
@@ -19,7 +19,8 @@ const RECORD_LIMIT = 100
 
 const PRESET_IDS = Object.keys(STAGE_RULESET_PRESETS) as [keyof typeof STAGE_RULESET_PRESETS, ...(keyof typeof STAGE_RULESET_PRESETS)[]]
 
-const IMPORT_HINT = 'No reference stages for this side. Run import_apple_watch_data (or POST /api/biometrics/watch-upload) first; a side without reference coverage cannot be scored.'
+const IMPORT_HINT = `No sleep records overlapping reference stages in the last ${COVERAGE_DAYS} days. Run import_apple_watch_data (or POST /api/biometrics/watch-upload) first; nights without reference stages cannot be scored.`
+const UNCOVERED_HINT = 'Reference stages exist for these nights but cover none of the classified epochs, so agreement is null. Check the imported segment times.'
 
 const presetId = z.enum(PRESET_IDS).optional()
   .describe(`A built-in ruleset preset: ${PRESET_IDS.join(', ')}. Ids come from get_sleep_stage_rules.`)
@@ -143,7 +144,8 @@ export function registerSleepTools(server: McpServer) {
     description:
       'How one or both sides classify sleep stages: the saved classifier (ruleset with indexed rules and conditions; '
       + 'nights with piezo calibration quality below lowSignalBelow use lowSignalRules instead of rules), '
-      + 'whether it is the default, the available preset ids, recent changes (each with the ruleset before it, for rollback), '
+      + 'whether it is the default, the available preset ids, recent changes (each with the ruleset before it, for rollback, '
+      + 'and accuracy before/after on the latest night), '
       + 'and reference coverage: how many of '
       + `the last ${COVERAGE_DAYS} nights have Apple Watch stages, how many reference epochs, and the latest reference date. `
       + 'Read this before preview_sleep_stage_rules or set_sleep_stage_rules; a side with zero coverage cannot be scored.',
@@ -158,9 +160,13 @@ export function registerSleepTools(server: McpServer) {
         classifier: rules.classifier,
         isDefault: rules.isDefault,
         presets: rules.presets.map(p => ({ id: p.id, label: p.label, description: p.description })),
-        recentChanges: rules.changes.slice(0, 5).map(c => ({ id: c.id, changedAt: new Date(c.changedAt), summary: c.summary, before: c.before, agreementBefore: c.agreementBefore, agreementAfter: c.agreementAfter })),
+        recentChanges: rules.changes.slice(0, 5).map(changeView),
         referenceCoverage: coverage,
-        hint: coverage.nights === 0 ? IMPORT_HINT : null,
+        hint: coverage.nights === 0
+          ? IMPORT_HINT
+          : coverage.truncated
+            ? 'Coverage queries hit their row cap: counts are lower bounds and latestReferenceAt may be stale (oldest rows are kept).'
+            : null,
       }
     }))
     return jsonResult(s ? result[0] : result)
@@ -197,7 +203,11 @@ export function registerSleepTools(server: McpServer) {
       candidateRuleset: candidate.classifier.ruleset,
       nights: preview.nights,
       hasReference: preview.hasReference,
-      hint: preview.nights === 0 ? 'No sleep records for this side yet.' : preview.hasReference ? null : IMPORT_HINT,
+      hint: preview.nights === 0
+        ? 'No sleep records for this side yet.'
+        : !preview.hasReference
+            ? IMPORT_HINT
+            : saved?.agreement || cand?.agreement ? null : UNCOVERED_HINT,
       saved: saved && { agreement: agreementView(saved.agreement), stageMinutesPerNight: minutes(saved.durations) },
       candidate: cand && { agreement: agreementView(cand.agreement), stageMinutesPerNight: minutes(cand.durations) },
       kappaDelta: saved?.agreement?.kappa != null && cand?.agreement?.kappa != null ? cand.agreement.kappa - saved.agreement.kappa : null,
@@ -213,8 +223,9 @@ export function registerSleepTools(server: McpServer) {
       'Save the side\'s sleep stage classifier. Give exactly one of presetId, ruleset, overrides, or reset: true (back to the '
       + 'defaults). Run preview_sleep_stage_rules first and apply only when the candidate improves kappa against the reference '
       + 'stages, not accuracy alone; prefer passing its candidateRuleset as ruleset, since overrides are re-resolved against the '
-      + 'rules saved at save time. Every change is recorded in the change log (summary, the ruleset before, and agreement before '
-      + 'and after on the latest night) and can be reverted by saving that previous ruleset again (before: null means reset: true). '
+      + 'rules saved at save time. A user-requested reset or rollback does not need to improve kappa. Every change is recorded '
+      + 'in the change log (summary, the ruleset before, and accuracy before and after on the latest night; a no-op save is not '
+      + 'logged) and can be reverted by saving that previous ruleset again (before: null means reset: true). '
       + 'Stages are classified on read, so every stored '
       + 'night re-scores with the new rules. A CONFLICT means another save landed first: call get_sleep_stage_rules and retry.',
     inputSchema: {
@@ -242,16 +253,21 @@ export function registerSleepTools(server: McpServer) {
     }
     const after = await caller.sleepStages.getClassifier({ side: s })
     const latest = after.changes[0]
-    const change = latest && latest.id !== lastChangeId
-      ? { id: latest.id, changedAt: new Date(latest.changedAt), summary: latest.summary, before: latest.before, agreementBefore: latest.agreementBefore, agreementAfter: latest.agreementAfter }
-      : null
+    // Another save can land between setClassifier and this read; only trust the
+    // newest entry when the stored classifier is still the one we sent.
+    const stillOurs = JSON.stringify(after.classifier) === JSON.stringify(saved.classifier)
+    const change = latest && latest.id !== lastChangeId && stillOurs ? changeView(latest) : null
     return jsonResult({
       side: s,
       candidateSource: candidate.source,
       classifier: saved.classifier,
       isDefault: saved.isDefault,
       change,
-      message: change ? `Saved: ${change.summary}` : 'No change: the side already used this ruleset.',
+      message: change
+        ? `Saved: ${change.summary}`
+        : stillOurs
+          ? 'No change: the side already used this ruleset.'
+          : 'Saved, but another save landed right after; call get_sleep_stage_rules to see the current ruleset and change log.',
     })
   }))
 
@@ -300,6 +316,13 @@ async function summarize(record: SleepRecord) {
   }
 }
 
+type ChangeEntry = Awaited<ReturnType<Caller['sleepStages']['getClassifier']>>['changes'][number]
+
+/** Change-log entry for the model: the agreement numbers are accuracy on the latest night, not kappa. */
+function changeView(c: ChangeEntry) {
+  return { id: c.id, changedAt: new Date(c.changedAt), summary: c.summary, before: c.before, accuracyBefore: c.agreementBefore, accuracyAfter: c.agreementAfter }
+}
+
 function agreementView(a: StageAgreement | null) {
   return a && { epochs: a.epochs, accuracy: a.accuracy, kappa: a.kappa, confusion: a.confusion, recall: a.recall }
 }
@@ -321,7 +344,8 @@ async function referenceCoverage(sleeper: 'left' | 'right') {
     const end = r.leftBedAt ?? endDate
     return segments.some(seg => seg.start < end && seg.end > r.enteredBedAt)
   }
-  const coveredMs = segments.reduce((sum, seg) => sum + (seg.end.getTime() - seg.start.getTime()), 0)
+  // Segments may straddle the window; count only the part inside it.
+  const coveredMs = segments.reduce((sum, seg) => sum + Math.max(0, Math.min(seg.end.getTime(), endDate.getTime()) - Math.max(seg.start.getTime(), startDate.getTime())), 0)
   const latest = segments.reduce<Date | null>((max, seg) => max && max > seg.end ? max : seg.end, null)
   return {
     days: COVERAGE_DAYS,

@@ -747,7 +747,7 @@ describe('sleep stage tuning tools', () => {
     expect(both[0]).toMatchObject({
       isDefault: true,
       presets: [{ id: 'default' }, { id: 'movementOnly' }],
-      recentChanges: [{ id: 7, summary: CHANGE.summary, before: DEFAULT_STAGE_CLASSIFIER, agreementBefore: 0.5, agreementAfter: 0.7 }],
+      recentChanges: [{ id: 7, summary: CHANGE.summary, before: DEFAULT_STAGE_CLASSIFIER, accuracyBefore: 0.5, accuracyAfter: 0.7 }],
       referenceCoverage: { days: 14, nights: 1, segments: 1, epochs: 72, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch' },
       hint: null,
     })
@@ -833,7 +833,7 @@ describe('sleep stage tuning tools', () => {
     const result = parse(await call('set_sleep_stage_rules', { side: 'left', presetId: 'movementOnly' }))
     expect(result).toMatchObject({
       candidateSource: 'preset:movementOnly', isDefault: false, classifier: movementOnly,
-      change: { id: 8, summary: 'Switched to Movement only', before: DEFAULT_STAGE_CLASSIFIER, agreementBefore: 0.1, agreementAfter: 0.4 },
+      change: { id: 8, summary: 'Switched to Movement only', before: DEFAULT_STAGE_CLASSIFIER, accuracyBefore: 0.1, accuracyAfter: 0.4 },
       message: 'Saved: Switched to Movement only',
     })
     expect(callerMock.sleepStages.setClassifier).toHaveBeenCalledWith({ side: 'left', classifier: movementOnly })
@@ -909,8 +909,36 @@ describe('sleep stage tuning tools', () => {
     callerMock.biometrics.getSleepRecords.mockResolvedValue(Array.from({ length: 100 }, (_, i) => ({ ...record, id: i + 1 })))
 
     const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
-    expect(result).toMatchObject({ referenceCoverage: { nights: 100, segments: 1, truncated: true } })
+    expect(result).toMatchObject({ referenceCoverage: { nights: 100, segments: 1, truncated: true }, hint: expect.stringContaining('lower bounds') })
     expect(callerMock.biometrics.getSleepRecords).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }))
+  })
+
+  it('get_sleep_stage_rules clips segment durations to the coverage window', async () => {
+    const straddling = { ...segment, start: new Date(Date.now() - 20 * 24 * 3_600_000), end: new Date(Date.now() - 14 * 24 * 3_600_000 + 10 * 60_000) }
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([straddling])
+    callerMock.biometrics.getSleepRecords.mockResolvedValue([])
+    const result = parse(await call('get_sleep_stage_rules', { side: 'left' })) as { referenceCoverage: { epochs: number, segments: number } }
+    expect(result.referenceCoverage.segments).toBe(1)
+    expect(result.referenceCoverage.epochs).toBe(2)
+  })
+
+  it('preview_sleep_stage_rules explains a null agreement when reference covers no classified epoch', async () => {
+    callerMock.sleepStages.previewClassifier.mockResolvedValue({
+      sleepRecordId: 42, enteredBedAt: 0, leftBedAt: 0, nights: 1, hasReference: true,
+      saved: { ...STAGES, agreement: null }, candidate: { ...STAGES, agreement: null }, changed: { segments: [], changed: 0, total: 96 },
+    })
+    const result = parse(await call('preview_sleep_stage_rules', { side: 'left', presetId: 'default' }))
+    expect(result).toMatchObject({ hasReference: true, hint: expect.stringContaining('cover none of the classified epochs') })
+  })
+
+  it('set_sleep_stage_rules does not claim another writer\'s change entry', async () => {
+    const movementOnly = { engine: 'rules', ruleset: STAGE_RULESET_PRESETS.movementOnly.ruleset }
+    callerMock.sleepStages.getClassifier
+      .mockResolvedValueOnce(classifierState([CHANGE]))
+      .mockResolvedValueOnce(classifierState([{ ...CHANGE, id: 9, summary: 'Reset to default' }, CHANGE]))
+    callerMock.sleepStages.setClassifier.mockResolvedValue({ classifier: movementOnly, isDefault: false })
+    const result = parse(await call('set_sleep_stage_rules', { side: 'left', presetId: 'movementOnly' }))
+    expect(result).toMatchObject({ classifier: movementOnly, change: null, message: expect.stringContaining('another save landed') })
   })
 
   it('preview_sleep_stage_rules accepts a full ruleset and reports a side with no nights', async () => {
