@@ -489,6 +489,21 @@ describe('sleepypod MCP server', () => {
     expect(callerMock.biometrics.getVitalsSummary).toHaveBeenCalledWith({ side: 'left', startDate: new Date('2026-09-20') })
   })
 
+  it('get_sleep_history defaults to 7 days and get_vitals_trend forwards an endDate alone', async () => {
+    const client = await connect()
+    callerMock.biometrics.getSleepRecords.mockResolvedValue([])
+    callerMock.biometrics.getVitalsBaseline.mockResolvedValue({})
+    callerMock.biometrics.getVitalsSummary.mockResolvedValue({})
+    const before = Date.now()
+    await client.callTool({ name: 'get_sleep_history', arguments: { side: 'left' } })
+    const { startDate, endDate } = callerMock.biometrics.getSleepRecords.mock.calls[0][0]
+    expect(endDate.getTime() - startDate.getTime()).toBe(7 * 24 * 60 * 60 * 1000)
+    expect(endDate.getTime()).toBeGreaterThanOrEqual(before)
+
+    await client.callTool({ name: 'get_vitals_trend', arguments: { side: 'left', endDate: '2026-09-29' } })
+    expect(callerMock.biometrics.getVitalsSummary).toHaveBeenCalledWith({ side: 'left', endDate: new Date('2026-09-29') })
+  })
+
   it('get_environment rejects a half-specified range', async () => {
     const client = await connect()
     const result = await client.callTool({ name: 'get_environment', arguments: { endDate: '2026-09-29' } }) as CallToolResult
@@ -846,5 +861,65 @@ describe('sleep stage tuning tools', () => {
     expect(conflict.isError).toBe(true)
     expect(text(conflict)).toContain('CONFLICT (retryable)')
     expect(text(conflict)).toContain('get_sleep_stage_rules')
+  })
+
+  it('get_sleep_summary flags reference stages that cover none of the pod epochs on an in-bed night', async () => {
+    callerMock.biometrics.getLatestSleep.mockResolvedValue({ ...record, leftBedAt: null })
+    callerMock.biometrics.getSleepStages.mockResolvedValue({
+      blocks: [], distribution: {},
+      epochs: [{ start: enteredBedAt.getTime(), duration: 300_000, stage: 'light', heartRate: null, hrv: null, breathingRate: null, movement: null }],
+    })
+    callerMock.biometrics.getVitalsSummary.mockResolvedValue({})
+    callerMock.biometrics.getMovementSummary.mockResolvedValue({})
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([segment])
+
+    const result = parse(await call('get_sleep_summary', { side: 'left' }))
+    expect(result).toMatchObject({
+      record: { leftBedAt: null, inBed: true },
+      referenceAgreement: null,
+      referenceHint: expect.stringContaining('cover none'),
+    })
+    const { endDate } = callerMock.biometrics.getVitalsSummary.mock.calls[0][0]
+    expect(endDate.getTime()).toBeGreaterThan(leftBedAt.getTime())
+  })
+
+  it('get_sleep_stage_rules counts an in-bed night and picks the latest of several reference segments', async () => {
+    const earlier = { ...segment, id: 2, start: new Date('2026-10-11T06:00:00Z'), end: new Date('2026-10-11T12:00:00Z') }
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([segment, earlier])
+    callerMock.biometrics.getSleepRecords.mockResolvedValue([{ ...record, leftBedAt: null }])
+
+    const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
+    expect(result).toMatchObject({
+      side: 'left',
+      referenceCoverage: { nights: 1, segments: 2, epochs: 144, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch' },
+      hint: null,
+    })
+  })
+
+  it('preview_sleep_stage_rules accepts a full ruleset and reports a side with no nights', async () => {
+    callerMock.sleepStages.previewClassifier.mockResolvedValue({
+      sleepRecordId: null, enteredBedAt: null, leftBedAt: null, nights: 0, hasReference: false, saved: null, candidate: null, changed: null,
+    })
+
+    const result = parse(await call('preview_sleep_stage_rules', { side: 'right', ruleset: STAGE_RULESET_PRESETS.movementOnly.ruleset }))
+    expect(result).toMatchObject({
+      side: 'right', candidateSource: 'ruleset', nights: 0, hasReference: false,
+      hint: 'No sleep records for this side yet.',
+      saved: null, candidate: null, kappaDelta: null, epochsChanged: 0, epochsTotal: 0,
+    })
+    expect(callerMock.sleepStages.previewClassifier).toHaveBeenCalledWith({
+      side: 'right', nights: 7, classifier: { engine: 'rules', ruleset: STAGE_RULESET_PRESETS.movementOnly.ruleset },
+    })
+  })
+
+  it('set_sleep_stage_rules saves a full ruleset and rethrows errors other than CONFLICT', async () => {
+    callerMock.sleepStages.setClassifier.mockRejectedValue(new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'disk full' }))
+    const result = await call('set_sleep_stage_rules', { side: 'left', ruleset: STAGE_RULESET_PRESETS.movementOnly.ruleset })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('INTERNAL_SERVER_ERROR')
+    expect(text(result)).not.toContain('CONFLICT (retryable)')
+    expect(callerMock.sleepStages.setClassifier).toHaveBeenCalledWith({
+      side: 'left', classifier: { engine: 'rules', ruleset: STAGE_RULESET_PRESETS.movementOnly.ruleset },
+    })
   })
 })
