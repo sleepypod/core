@@ -1,19 +1,16 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AICurveWizard } from '../AICurveWizard'
-import type { CurveTemplate } from '@/src/lib/sleepCurve/curvePrompt'
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
 const mock = vi.hoisted(() => ({ timeFormat: '12h' as '12h' | '24h' }))
-const store = vi.hoisted(() => ({ templates: [] as CurveTemplate[], save: vi.fn(), remove: vi.fn() }))
+const store = vi.hoisted(() => ({ save: vi.fn() }))
 vi.mock('@/src/hooks/useCurveTemplates', () => ({
-  useCurveTemplates: () => ({ templates: store.templates, save: store.save, remove: store.remove, isSaving: false }),
+  useCurveTemplates: () => ({ save: store.save, isSaving: false }),
 }))
 vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => mock.timeFormat }))
 const curve = { name: 'Cool night', bedtime: '22:00', wake: '07:00', points: { '22:00': 78, '02:00': 72, '07:00': 80 }, reasoning: 'Cool overnight, warm before waking.' }
 beforeEach(() => {
-  store.templates = []
   store.save.mockReset().mockResolvedValue(undefined)
-  store.remove.mockReset().mockResolvedValue(undefined)
   vi.useFakeTimers()
 })
 afterEach(() => {
@@ -38,7 +35,7 @@ it('imports, edits, saves and applies a curve without writing the schedule direc
   fireEvent.click(screen.getByRole('button', { name: 'Increase set point 1 temperature' }))
   fireEvent.click(screen.getByRole('button', { name: 'Remove set point 4' }))
   expect(screen.getByRole('button', { name: 'Remove set point 1' }).hasAttribute('disabled')).toBe(true)
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save template' })))
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save to saved curves' })))
   expect(store.save).toHaveBeenCalledWith(expect.objectContaining({ name: curve.name, points: expect.objectContaining({ '01:00': 73 }) }))
   expect(onApply).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Use curve' }))
@@ -65,21 +62,14 @@ it('generates and copies a prompt and navigates previously visited steps', async
   fireEvent.click(screen.getByRole('button', { name: '1. Describe' }))
   expect(screen.getByLabelText('Sleep preferences')).toBeTruthy()
 })
-it('loads and deletes saved templates', () => {
-  store.templates = [{ ...curve, createdAt: 1 }]
-  render(<AICurveWizard open onApply={vi.fn()} onClose={vi.fn()} />)
-  fireEvent.click(screen.getByRole('button', { name: /Cool night.*22:00/ }))
-  expect(screen.getByRole('button', { name: 'Use curve' })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: '1. Describe' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Delete Cool night' }))
-  expect(store.remove).toHaveBeenCalledWith('Cool night')
-})
-it('shows why a template could not be saved', async () => {
-  store.templates = [{ ...curve, createdAt: 1 }]
+it('shows why a curve could not be saved', async () => {
   store.save.mockRejectedValue(new Error('pod unreachable'))
   render(<AICurveWizard open onApply={vi.fn()} onClose={vi.fn()} />)
-  fireEvent.click(screen.getByRole('button', { name: /Cool night.*22:00/ }))
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save template' })))
+  fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+  fireEvent.change(screen.getByLabelText('AI response JSON'), { target: { value: JSON.stringify(curve) } })
+  act(() => vi.advanceTimersByTime(500))
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save to saved curves' })))
   expect(screen.getByText('Could not save the curve: pod unreachable')).toBeTruthy()
 })
 it('edits preview set point times with 24-hour selects when the pod uses a 24-hour clock', () => {

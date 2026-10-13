@@ -8,15 +8,16 @@ const SIDES: SideSelection[] = ['left', 'right', 'both']
 
 export default async function ScheduleCurve({ params, searchParams }: {
   params: Promise<{ curve: string }>
-  searchParams: Promise<{ side?: string | string[], from?: string | string[] }>
+  searchParams: Promise<{ side?: string | string[], from?: string | string[], saved?: string | string[] }>
 }) {
   const { curve } = await params
-  const { side, from } = await searchParams
+  const { side, from, saved } = await searchParams
   return (
     <SchedulePage
       curve={curve}
       curveSide={SIDES.find(s => s === side)}
       fromBoth={from === 'both'}
+      savedCurve={typeof saved === 'string' ? saved : undefined}
     />
   )
 }

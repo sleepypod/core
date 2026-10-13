@@ -49,5 +49,5 @@ export function useCurveTemplates(enabled = true) {
   const { mutateAsync: deleteAsync } = deleteMutation
   const remove = useCallback((name: string) => deleteAsync({ name }), [deleteAsync])
 
-  return { templates, save, remove, isSaving: saveMutation.isPending }
+  return { templates, save, remove, isLoading: query.isLoading, isSaving: saveMutation.isPending, isDeleting: deleteMutation.isPending }
 }

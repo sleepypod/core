@@ -20,14 +20,7 @@ vi.mock('@/src/hooks/useSchedule', () => ({
 vi.mock('@/src/providers/SideProvider', () => ({ useSide: () => ({ selectedSide: 'left' }) }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Jon', rightName: 'Heidi' }) }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
-vi.mock('@/src/hooks/useCurveTemplates', () => ({
-  useCurveTemplates: () => ({
-    templates: [{ reasoning: '', name: 'Test AI curve', bedtime: '22:00', wake: '07:00', points: { '22:00': 80, '02:00': 75, '07:00': 82 }, createdAt: 1 }],
-    save: vi.fn(),
-    remove: vi.fn(),
-    isSaving: false,
-  }),
-}))
+vi.mock('@/src/hooks/useCurveTemplates', () => ({ useCurveTemplates: () => ({ save: vi.fn(), isSaving: false }) }))
 
 const INITIAL = [
   { time: '07:00', temperature: 84 },
@@ -190,10 +183,15 @@ it('updates a point from its dialog and keyboard chart, and can cancel a day con
   expect(m.saveCurve).not.toHaveBeenCalled()
 })
 
-it('loads an AI template into the local editor and saves only after review', async () => {
+it('loads an imported AI curve into the local editor and saves only after review', async () => {
   const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
   fireEvent.click(s.getByRole('button', { name: 'Custom AI curve' }))
-  fireEvent.click(s.getByRole('button', { name: /^Test AI curve/ }))
+  fireEvent.click(s.getByRole('button', { name: 'Import' }))
+  fireEvent.change(s.getByLabelText('AI response JSON'), {
+    target: { value: JSON.stringify({ name: 'Test AI curve', bedtime: '22:00', wake: '07:00', points: { '22:00': 80, '02:00': 75, '07:00': 82 }, reasoning: '' }) },
+  })
+  await waitFor(() => expect((s.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(s.getByRole('button', { name: 'Next' }))
   fireEvent.click(s.getByRole('button', { name: 'Use curve' }))
   expect(s.queryByRole('dialog')).toBeNull()
   expect(m.saveCurve).not.toHaveBeenCalled()
