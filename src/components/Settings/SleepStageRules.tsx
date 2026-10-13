@@ -107,7 +107,7 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
             label="Start from preset"
             value=""
             disabled={busy}
-            options={[{ value: '', label: 'Load preset…' }, ...presets.map(p => ({ value: p.id, label: p.label }))]}
+            options={[{ value: '', label: 'Load preset' }, ...presets.map(p => ({ value: p.id, label: p.label }))]}
             onChange={(id) => {
               const preset = presets.find(p => p.id === id)
               if (!preset) return
@@ -268,6 +268,12 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
 function useStagePreview(side: Side, ruleset: StageRuleset | null, saved: StageRuleset | null, nights: PreviewNights) {
   const preview = trpc.sleepStages.previewClassifier.useMutation()
   const { mutate } = preview
+  // useMutation drops `data` the moment the next request starts, which would
+  // swap the card for a skeleton on every slider tick. Keep the last result
+  // on screen until the next one lands.
+  const [last, setLast] = useState<PreviewOutput | undefined>(undefined)
+  if (preview.data && preview.data !== last) setLast(preview.data)
+  const data = preview.data ?? last
   const key = useMemo(() => (ruleset ? JSON.stringify(ruleset) : null), [ruleset])
   const savedKey = useMemo(() => (saved ? JSON.stringify(saved) : null), [saved])
 
@@ -277,7 +283,7 @@ function useStagePreview(side: Side, ruleset: StageRuleset | null, saved: StageR
     return () => clearTimeout(t)
   }, [side, key, savedKey, nights, mutate])
 
-  return { data: preview.data, error: preview.error?.message ?? null }
+  return { data, error: preview.error?.message ?? null }
 }
 
 /**

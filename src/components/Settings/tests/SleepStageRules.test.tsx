@@ -613,6 +613,19 @@ describe('SleepStageRules', () => {
     expect(screen.getByText('Q 89 · κ 0.77')).toBeTruthy()
   })
 
+  it('keeps the last preview on screen while the mutation has dropped its data for the next request', () => {
+    trpcMock.state.preview = PREVIEW
+    const { rerender } = renderRules()
+    act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByText('Q 89 · κ 0.77')).toBeTruthy()
+    // Like useMutation at the start of the next call: data gone, pending.
+    trpcMock.state.preview = undefined
+    trpcMock.state.previewPending = true
+    rerender(<SleepStageRules side="left" onSideChange={vi.fn()} />)
+    expect(screen.queryByText('Q 89 · κ 0.77')).toBeTruthy()
+    expect(screen.queryByText('No night with vitals to preview yet.')).toBeNull()
+  })
+
   it('tones each change by its effect on watch agreement and disables revert while saving', () => {
     trpcMock.state.savePending = true
     trpcMock.state.changes = [
