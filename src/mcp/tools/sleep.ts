@@ -14,6 +14,8 @@ const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: 
 const DAY_MS = 24 * 60 * 60 * 1000
 const EPOCH_MS = 5 * 60 * 1000
 const COVERAGE_DAYS = 14
+const SEGMENT_LIMIT = 20000
+const RECORD_LIMIT = 100
 
 const PRESET_IDS = Object.keys(STAGE_RULESET_PRESETS) as [keyof typeof STAGE_RULESET_PRESETS, ...(keyof typeof STAGE_RULESET_PRESETS)[]]
 
@@ -304,8 +306,8 @@ async function referenceCoverage(sleeper: 'left' | 'right') {
   const endDate = new Date()
   const startDate = new Date(endDate.getTime() - COVERAGE_DAYS * DAY_MS)
   const [segments, records] = await Promise.all([
-    caller.biometrics.getReferenceStages({ side: sleeper, startDate, endDate, limit: 20000 }),
-    caller.biometrics.getSleepRecords({ side: sleeper, startDate, endDate, limit: 100 }),
+    caller.biometrics.getReferenceStages({ side: sleeper, startDate, endDate, limit: SEGMENT_LIMIT }),
+    caller.biometrics.getSleepRecords({ side: sleeper, startDate, endDate, limit: RECORD_LIMIT }),
   ])
   const overlaps = (r: { enteredBedAt: Date, leftBedAt: Date | null }) => {
     const end = r.leftBedAt ?? endDate
@@ -320,6 +322,8 @@ async function referenceCoverage(sleeper: 'left' | 'right') {
     epochs: Math.round(coveredMs / EPOCH_MS),
     latestReferenceAt: latest,
     source: segments[0]?.source ?? null,
+    /** True when either query hit its row cap, so the counts above are lower bounds. */
+    truncated: segments.length >= SEGMENT_LIMIT || records.length >= RECORD_LIMIT,
   }
 }
 

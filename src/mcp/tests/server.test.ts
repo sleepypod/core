@@ -891,9 +891,18 @@ describe('sleep stage tuning tools', () => {
     const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
     expect(result).toMatchObject({
       side: 'left',
-      referenceCoverage: { nights: 1, segments: 2, epochs: 144, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch' },
+      referenceCoverage: { nights: 1, segments: 2, epochs: 144, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch', truncated: false },
       hint: null,
     })
+  })
+
+  it('get_sleep_stage_rules marks coverage as truncated when a query hits its row cap', async () => {
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([segment])
+    callerMock.biometrics.getSleepRecords.mockResolvedValue(Array.from({ length: 100 }, (_, i) => ({ ...record, id: i + 1 })))
+
+    const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
+    expect(result).toMatchObject({ referenceCoverage: { nights: 100, segments: 1, truncated: true } })
+    expect(callerMock.biometrics.getSleepRecords).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }))
   })
 
   it('preview_sleep_stage_rules accepts a full ruleset and reports a side with no nights', async () => {
