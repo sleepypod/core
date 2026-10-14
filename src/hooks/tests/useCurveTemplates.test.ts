@@ -41,6 +41,8 @@ describe('useCurveTemplates', () => {
     expect(result.current.templates).toEqual([{ name: 'On Pod', bedtime: '22:00', wake: '07:00', points: { '22:00': 78, '07:00': 80 }, notes: '', createdAt: 5 }])
     await act(() => result.current.save({ name: 'New', bedtime: '22:00', wake: '07:00', points: { '22:00': 70 }, reasoning: 'x' }))
     expect(state.save).toHaveBeenCalledWith({ name: 'New', bedtime: '22:00', wake: '07:00', points: { '22:00': 70 }, notes: 'x' })
+    await act(() => result.current.save({ name: 'Long', bedtime: '22:00', wake: '07:00', points: { '22:00': 70 }, reasoning: 'y'.repeat(1500) }))
+    expect(state.save.mock.lastCall?.[0].notes).toHaveLength(1000)
     await act(() => result.current.remove('On Pod'))
     expect(state.remove).toHaveBeenCalledWith({ name: 'On Pod' })
   })

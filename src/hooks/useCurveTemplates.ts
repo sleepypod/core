@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import type { GeneratedCurve } from '@/src/lib/sleepCurve/curvePrompt'
 import { loadTemplates, removeLocalTemplates } from '@/src/lib/sleepCurve/curvePrompt'
+import { CURVE_NOTES_MAX } from '@/src/lib/sleepCurve/savePlan'
 
 /** A saved curve as the Schedule screen shows it; set points are °F. */
 export interface SavedCurve {
@@ -37,7 +38,7 @@ export function useCurveTemplates(enabled = true) {
     if (local.length === 0) return
     const toMove = local.filter(t => !onPod.has(t.name.trim()))
     void Promise.allSettled(toMove.map(t => saveAsync({
-      name: t.name, bedtime: t.bedtime, wake: t.wake, points: t.points, notes: t.reasoning,
+      name: t.name, bedtime: t.bedtime, wake: t.wake, points: t.points, notes: t.reasoning.slice(0, CURVE_NOTES_MAX),
     }))).then((results) => {
       // Drop the ones the pod already has or just accepted; keep any it rejected.
       const rejected = new Set(toMove.filter((_, i) => results[i].status === 'rejected').map(t => t.name))
@@ -52,9 +53,9 @@ export function useCurveTemplates(enabled = true) {
     [query.data],
   )
 
-  // A wizard curve's reasoning becomes the saved curve's notes.
+  // A wizard curve's reasoning becomes the saved curve's notes; the AI's text has no length limit of its own.
   const save = useCallback((curve: GeneratedCurve) => saveAsync({
-    name: curve.name, bedtime: curve.bedtime, wake: curve.wake, points: curve.points, notes: curve.reasoning,
+    name: curve.name, bedtime: curve.bedtime, wake: curve.wake, points: curve.points, notes: curve.reasoning.slice(0, CURVE_NOTES_MAX),
   }), [saveAsync])
 
   const { mutateAsync: deleteAsync } = deleteMutation

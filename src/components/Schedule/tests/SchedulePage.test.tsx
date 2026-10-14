@@ -24,6 +24,7 @@ const m = vi.hoisted(() => ({
   thermalHistoryInput: [] as unknown[],
   push: vi.fn(),
   notes: [] as Array<{ dayOfWeek: string, notes: string }>,
+  notesLoading: false,
   saved: { templates: [] as unknown[], isLoading: false, isDeleting: false, remove: vi.fn() },
 }))
 vi.mock('@/src/hooks/useCurveTemplates', () => ({ useCurveTemplates: () => m.saved }))
@@ -36,7 +37,7 @@ vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ 
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     settings: { getAll: { useQuery: () => ({ data: { device: { defaultScheduleEndAction: m.defaultAction } } }) } },
-    schedules: { getAll: { useQuery: () => m.query }, getNotes: { useQuery: () => ({ data: m.notes }) } },
+    schedules: { getAll: { useQuery: () => m.query }, getNotes: { useQuery: () => ({ data: m.notesLoading ? undefined : m.notes, isLoading: m.notesLoading }) } },
     health: {
       system: { useQuery: () => m.health },
       thermalHistory: { useQuery: (input: unknown, opts: unknown) => {
@@ -74,6 +75,7 @@ const DATA = {
 
 beforeEach(() => {
   m.notes = []
+  m.notesLoading = false
   m.saved.templates = []
   m.saved.isLoading = false
   m.saved.remove.mockReset().mockResolvedValue({ deleted: true })
@@ -379,5 +381,12 @@ describe('curve notes', () => {
     expect(s.getByText('Weekend sleep-in')).toBeTruthy()
     cleanup()
     expect(render(<SchedulePage curve="mon-tue-wed-thu-fri" />).getByTestId('editor').getAttribute('data-notes')).toBe('Weeknights: cooler first half')
+  })
+
+  it('waits for notes before opening an existing curve so saving cannot clear an unloaded note', () => {
+    m.notesLoading = true
+    expect(render(<SchedulePage curve="mon-tue-wed-thu-fri" />).queryByTestId('editor')).toBeNull()
+    cleanup()
+    expect(render(<SchedulePage curve="new" />).getByTestId('editor')).toBeTruthy()
   })
 })

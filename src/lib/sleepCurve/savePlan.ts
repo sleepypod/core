@@ -8,6 +8,9 @@ import { simplifySetPoints } from '@/src/lib/scheduleGrouping'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
 
 type Side = 'left' | 'right'
+
+/** Longest curve note, shared by day notes and saved curves so either can be applied as the other. */
+export const CURVE_NOTES_MAX = 1000
 export type CurveEndAction = 'turn_off' | 'maintain'
 
 interface ExistingRow {
@@ -88,7 +91,7 @@ export function planCurveSave({
     }
   }
 
-  const note = notes?.trim() || null
+  const note = notes?.trim().slice(0, CURVE_NOTES_MAX) || null
   const targets = new Set(targetDays)
   const noteRows = sides.flatMap(side => [...daysToClear].map(dayOfWeek => ({
     side, dayOfWeek, notes: targets.has(dayOfWeek) ? note : null,

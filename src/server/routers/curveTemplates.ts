@@ -5,6 +5,7 @@ import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { curveTemplates } from '@/src/db/schema'
 import { temperatureSchema, timeStringSchema } from '@/src/server/validation-schemas'
+import { CURVE_NOTES_MAX } from '@/src/lib/sleepCurve/savePlan'
 
 /**
  * Saved curves: named set point lists (°F) that are not tied to a side or a
@@ -60,7 +61,7 @@ export const curveTemplatesRouter = router({
       bedtime: timeStringSchema,
       wake: timeStringSchema,
       points: pointsSchema,
-      notes: z.string().max(2000).default(''),
+      notes: z.string().max(CURVE_NOTES_MAX).default(''),
     }).strict())
     .output(curveTemplateOutput)
     .mutation(({ input }) => {

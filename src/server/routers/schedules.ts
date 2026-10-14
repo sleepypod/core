@@ -67,6 +67,7 @@ const schedulesCollectionOutput = z.object({
 })
 import { getJobManager } from '@/src/scheduler'
 import { toC } from '@/src/lib/tempUtils'
+import { CURVE_NOTES_MAX } from '@/src/lib/sleepCurve/savePlan'
 
 type TemperatureRow = typeof temperatureSchedules.$inferSelect
 type PowerRow = typeof powerSchedules.$inferSelect
@@ -593,10 +594,6 @@ export const schedulesRouter = router({
     }),
 
   /**
-   * Batch update schedules — deletes, creates, and updates in one transaction with one scheduler reload.
-   * Used by bulk operations (apply to other days, toggle all) to avoid N+1 API calls.
-   */
-  /**
    * Curve notes for one side, one row per day that has a note.
    */
   getNotes: publicProcedure
@@ -619,6 +616,10 @@ export const schedulesRouter = router({
       }
     }),
 
+  /**
+   * Batch update schedules — deletes, creates, and updates in one transaction with one scheduler reload.
+   * Used by bulk operations (apply to other days, toggle all) to avoid N+1 API calls.
+   */
   batchUpdate: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/schedules/batch', protect: false, tags: ['Schedules'] } })
     .input(
@@ -687,7 +688,7 @@ export const schedulesRouter = router({
         notes: z.array(z.object({
           side: sideSchema,
           dayOfWeek: dayOfWeekSchema,
-          notes: z.string().max(1000).nullable(),
+          notes: z.string().max(CURVE_NOTES_MAX).nullable(),
         })).max(14).default([]),
       })
     )

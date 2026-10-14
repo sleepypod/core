@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planCurveSave } from './savePlan'
+import { CURVE_NOTES_MAX, planCurveSave } from './savePlan'
 
 const existing = {
   temperature: [{ id: 1, dayOfWeek: 'monday' }, { id: 2, dayOfWeek: 'tuesday' }, { id: 3, dayOfWeek: 'wednesday' }],
@@ -56,5 +56,7 @@ describe('planCurveSave', () => {
     ])
     const blank = planCurveSave({ sides: ['left'], targetDays: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }], notes: ' ', existing: { temperature: [], power: [] } })
     expect(blank.notes).toEqual([{ side: 'left', dayOfWeek: 'monday', notes: null }])
+    const long = planCurveSave({ sides: ['left'], targetDays: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }], notes: 'x'.repeat(CURVE_NOTES_MAX + 5), existing: { temperature: [], power: [] } })
+    expect(long.notes[0].notes).toHaveLength(CURVE_NOTES_MAX)
   })
 })

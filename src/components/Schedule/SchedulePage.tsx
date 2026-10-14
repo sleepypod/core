@@ -77,7 +77,7 @@ export function SchedulePage({ curve, curveSide, fromBoth = false, savedCurve }:
   const { nextEvent } = useScheduleActive()
   const { leftName, rightName } = useSideNames()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
-  const { data: notesData } = trpc.schedules.getNotes.useQuery({ side })
+  const { data: notesData, isLoading: notesLoading } = trpc.schedules.getNotes.useQuery({ side })
   // A curve's days normally share one note; show the first one set.
   const notesFor = (days: DayOfWeek[]) => days.map(d => notesData?.find(n => n.dayOfWeek === d)?.notes).find(Boolean)
   const both = selectedSide === 'both'
@@ -207,7 +207,8 @@ export function SchedulePage({ curve, curveSide, fromBoth = false, savedCurve }:
     const group = linkedDays ? visibleGroups.find(g => sameDays(g.days, linkedDays)) : undefined
     const sideReady = !wantSide || chosenSide === wantSide
     const savedLoading = curve === 'new' && savedCurve !== undefined && saved.isLoading
-    if (!sideReady || savedLoading || (curve === 'new' ? settingsLoading : isLoading && !data)) {
+    // The editor keeps its first notes, so an existing curve waits for them; saving an unloaded note would clear it.
+    if (!sideReady || savedLoading || (curve === 'new' ? settingsLoading : (isLoading && !data) || notesLoading)) {
       return <Skeleton className="h-[520px]" />
     }
     const editorKey = `${curve}:${side}:${savedCurve ?? ''}`

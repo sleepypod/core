@@ -23,6 +23,7 @@ import {
   timeStringToMinutes,
 } from '@/src/lib/sleepCurve/generate'
 import { rebaseSetPoints } from '@/src/lib/sleepCurve/rebase'
+import { CURVE_NOTES_MAX } from '@/src/lib/sleepCurve/savePlan'
 import { type ScheduleEndAction, simplifySetPoints, sortChronological } from '@/src/lib/scheduleGrouping'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
@@ -357,22 +358,6 @@ export function CurveEditor({
             </p>
           </Card>
 
-          <Card className="order-3 min-[900px]:order-none">
-            <label htmlFor="curve-notes" className="text-sm">
-              Notes
-              <span className="text-fg-3"> (optional)</span>
-            </label>
-            <textarea
-              id="curve-notes"
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              maxLength={1000}
-              rows={3}
-              placeholder="Why this curve, what to try next…"
-              className="w-full rounded-ctl border border-line-2 bg-field px-3 py-[9px] text-sm text-fg outline-none placeholder:text-fg-3 focus:border-fg-3"
-            />
-          </Card>
-
           <Card className="order-5 min-[900px]:order-none">
             <SectionLabel>Range</SectionLabel>
             <div className="flex items-center justify-between gap-2.5">
@@ -455,6 +440,22 @@ export function CurveEditor({
                     Start from a preset or add set points manually
                   </p>
                 )}
+          </Card>
+
+          <Card className={cn('order-3 min-[900px]:order-none', innerCard)}>
+            <label htmlFor="curve-notes" className="text-sm">
+              Notes
+              <span className="text-fg-3"> (optional)</span>
+            </label>
+            <textarea
+              id="curve-notes"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              maxLength={CURVE_NOTES_MAX}
+              rows={3}
+              placeholder="Why this curve, what to try next…"
+              className="w-full rounded-ctl border border-line-2 bg-field px-3 py-[9px] text-sm text-fg outline-none placeholder:text-fg-3 focus:border-fg-3"
+            />
           </Card>
 
           <Card className={cn('order-4 min-[900px]:order-none', innerCard)}>

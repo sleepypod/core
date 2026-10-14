@@ -19,7 +19,7 @@ import {
 } from '@/src/mcp/schemas'
 import { fromSetpointF, resolveUnit, toSetpointF } from '@/src/mcp/units'
 import { sortChronological } from '@/src/lib/scheduleGrouping'
-import { planCurveSave } from '@/src/lib/sleepCurve/savePlan'
+import { CURVE_NOTES_MAX, planCurveSave } from '@/src/lib/sleepCurve/savePlan'
 import type { TempUnit } from '@/src/lib/tempUtils'
 
 const curveSetPoints = z.array(z.object({ time: timeOfDay, temperature })).min(2).max(48)
@@ -189,7 +189,7 @@ export function registerScheduleTools(server: McpServer) {
       setPoints: curveSetPoints.optional()
         .describe('Set points in any order; each holds until the next one fires. Omit when giving curveName.'),
       curveName: z.string().optional().describe('Apply this saved curve (see get_saved_curves) instead of setPoints.'),
-      notes: z.string().max(1000).optional().describe('Short note for the curve, e.g. what data it is based on.'),
+      notes: z.string().max(CURVE_NOTES_MAX).optional().describe('Short note for the curve, e.g. what data it is based on.'),
       endAction: z.enum(['turn_off', 'maintain']).optional().describe('After the last set point: turn off (default) or keep holding it.'),
       unit,
     },
@@ -271,7 +271,7 @@ export function registerScheduleTools(server: McpServer) {
       setPoints: plan.setPoints.map(p => ({ time: p.time, temperature: fromSetpointF(p.temperature, resolved) })),
       droppedFlatPoints: setPointsF.length - plan.setPoints.length,
       powerWindow: plan.power && { ...plan.power, onTemperature: fromSetpointF(plan.power.onTemperature, resolved) },
-      notes: notes?.trim() || null,
+      notes: plan.notes.find(n => n.notes)?.notes ?? null,
       replaces,
       keptAlarms,
       warnings,
@@ -336,7 +336,7 @@ export function registerScheduleTools(server: McpServer) {
       bedtime: timeOfDay.optional().describe('Required for save.'),
       wake: timeOfDay.optional().describe('Required for save.'),
       setPoints: curveSetPoints.optional().describe('Required for save. 2-48 points in any order.'),
-      notes: z.string().max(2000).optional().describe('Optional note: why the curve looks the way it does, what data it is based on.'),
+      notes: z.string().max(CURVE_NOTES_MAX).optional().describe('Optional note: why the curve looks the way it does, what data it is based on.'),
       unit,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
