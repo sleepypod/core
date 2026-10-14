@@ -403,6 +403,21 @@ describe('sleepypod MCP server', () => {
       expect(parse(result)).toMatchObject({ saved: true, rowsDeleted: 3, rowsCreated: 6, warnings: ['Away mode is on for right: schedules will not fire until it is turned off.'] })
     })
 
+    it('fails the preview when the batch would exceed the 1,000-row limit', async () => {
+      callerMock.schedules.getAll.mockResolvedValue({
+        temperature: Array.from({ length: 1001 }, (_, i) => row(i + 1, 'monday', '22:00', 20)),
+        power: [],
+        alarm: [],
+      })
+      const client = await connect()
+      const result = await client.callTool({
+        name: 'apply_sleep_curve',
+        arguments: { mode: 'preview', side: 'left', days: ['monday'], setPoints: [{ time: '22:00', temperature: 70 }, { time: '06:30', temperature: 80 }] },
+      }) as CallToolResult
+      expect(result.isError).toBe(true)
+      expect(text(result)).toContain('1001 temperature deletes exceed the 1000-row batch limit')
+    })
+
     it('rejects out-of-range and duplicate set points before reading schedules', async () => {
       const client = await connect()
       const hot = await client.callTool({

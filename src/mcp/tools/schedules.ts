@@ -20,6 +20,8 @@ import {
 import { fromSetpointF, resolveUnit, toSetpointF } from '@/src/mcp/units'
 import { planCurveSave } from '@/src/lib/sleepCurve/savePlan'
 
+const BATCH_ROW_LIMIT = 1000
+
 export function registerScheduleTools(server: McpServer) {
   server.registerTool('get_schedules', {
     title: 'List schedules',
@@ -197,6 +199,11 @@ export function registerScheduleTools(server: McpServer) {
         power: current.flatMap(c => c.power),
       },
     })
+    // schedules.batchUpdate caps each list at 1,000 rows; fail the preview rather than only the apply.
+    const lists = { 'temperature deletes': plan.deletes.temperature, 'power deletes': plan.deletes.power, 'temperature creates': plan.creates.temperature, 'power creates': plan.creates.power }
+    for (const [label, rows] of Object.entries(lists)) {
+      if (rows.length > BATCH_ROW_LIMIT) throw new Error(`${rows.length} ${label} exceed the ${BATCH_ROW_LIMIT}-row batch limit; apply the curve to fewer days at a time`)
+    }
 
     const daySet = new Set<string>(days)
     const replaces: Record<string, unknown> = {}
