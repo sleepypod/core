@@ -207,7 +207,8 @@ Instead of `setPoints` it accepts `curveName`, a saved curve.
 
 Saved curves (`curve_templates` table, `curveTemplates` router) are named set point lists in °F with a
 bedtime, wake and reasoning, not tied to a side or day. `manage_saved_curve` saves (replacing a curve of the
-same name) or deletes one; `get_saved_curves` lists them. The AI curve wizard's "Saved curves" list reads the
-same table, and moves curves that older versions kept in browser localStorage to the pod on first open.
+same name) or deletes one; `get_saved_curves` lists them. The Schedule screen lists them under "Saved curves"
+(opening one starts a new curve with its set points), the AI curve wizard saves into the same table,
+and curves older versions kept in browser localStorage move to the pod on first load.
 The `design_sleep_curve` prompt chains the data tools into a preview using `CURVE_DESIGN_GUIDANCE`, the
 sleep-science text the copy/paste AI curve wizard also sends.

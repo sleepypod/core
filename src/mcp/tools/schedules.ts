@@ -285,9 +285,9 @@ export function registerScheduleTools(server: McpServer) {
   server.registerTool('get_saved_curves', {
     title: 'List saved curves',
     description:
-      'Named curves saved on the pod (by the Schedule screen\'s AI curve wizard or by manage_saved_curve), newest first. '
+      'Named curves saved on the pod (by the AI curve wizard or by manage_saved_curve), newest first. '
       + 'A saved curve is not tied to a side or day and does nothing until applied: pass its name to apply_sleep_curve as '
-      + 'curveName, or load it in the wizard. Set points are in chronological order from bedtime; temperatures in the '
+      + 'curveName, or open it from "Saved curves" on the Schedule screen. Set points are in chronological order from bedtime; temperatures in the '
       + 'requested or device-default unit.',
     inputSchema: { unit },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -312,7 +312,7 @@ export function registerScheduleTools(server: McpServer) {
     title: 'Save or delete a named curve',
     description:
       'Save a curve under a name (up to 30 characters) so it can be reused, without touching any schedule; saving an '
-      + 'existing name replaces it. It then shows under "Saved curves" in the Schedule screen\'s AI curve wizard and can '
+      + 'existing name replaces it. It then shows under "Saved curves" on the Schedule screen and can '
       + 'be applied with apply_sleep_curve curveName. "delete" removes the saved curve only; schedules already written '
       + 'from it stay. bedtime and wake label the curve and anchor the editor; set points usually run from about 45 '
       + 'min before bedtime to 30 min after wake. Temperatures use the given unit or the device default.',
