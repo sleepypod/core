@@ -227,6 +227,17 @@ sp-logs                # tail service logs (journalctl -f)
 sp-update [branch]     # self-update from GitHub (handles iptables)
 ```
 
+## Accessing the Pod by Hostname
+
+The API has no authentication, so the server rejects any `Host` header that isn't a pod address (HTTP 403). This stops DNS-rebinding pages. These work out of the box: IP addresses (`http://192.168.1.88:3000`), `localhost`, single-label names (`eight-pod`), and names ending in `.local`, `.lan`, `.home.arpa`, `.internal` or `.localhost`. To reach the pod through another name, such as a Tailscale MagicDNS name or a reverse proxy, list it in `SLEEPYPOD_ALLOWED_HOSTS`. Entries are comma-separated, and each is an exact host or `*.suffix`:
+
+```bash
+sudo mkdir -p /etc/systemd/system/sleepypod.service.d
+printf '[Service]\nEnvironment="SLEEPYPOD_ALLOWED_HOSTS=pod.tail1234.ts.net,*.example.com"\n' \
+  | sudo tee /etc/systemd/system/sleepypod.service.d/allowed-hosts.conf
+sudo systemctl daemon-reload && sp-restart
+```
+
 ## Network Security (Telemetry Blocking)
 
 The pod runs two stock processes that continuously attempt to phone home:
