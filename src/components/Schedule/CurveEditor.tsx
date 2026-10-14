@@ -4,15 +4,16 @@ import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 're
 import { Check, ChevronLeft, Flame, Loader2, Plus, Scale, Snowflake, Sparkles } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button, Card, DayPicker, InlineError, PageHeader, SectionLabel, Stepper } from '@/src/components/ds'
+import { Button, Card, DayPicker, InlineError, PageHeader, SectionLabel, Stepper, TextField, Toggle } from '@/src/components/ds'
 import { AICurveWizard } from './AICurveWizard'
 import { CurveChart } from './CurveChart'
 import { SetPointCard, type EditorSetPoint } from './SetPointCard'
 import { SetPointEditor } from './SetPointEditor'
 import { TimeInput } from './TimeInput'
 import { ConfirmDialog } from './ConfirmDialog'
-import { DAY_PICKER_LABELS, DAY_SHORT, daysToIndexes, formatDayRange, indexesToDays } from './scheduleFormat'
-import { useSchedule } from '@/src/hooks/useSchedule'
+import { DAY_PICKER_LABELS, daysToIndexes, formatDayRange, indexesToDays } from './scheduleFormat'
+import { describeMoves } from './SavedCurveCard'
+import { useCurveTemplates } from '@/src/hooks/useCurveTemplates'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useSide } from '@/src/providers/SideProvider'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
@@ -25,6 +26,7 @@ import {
 import { rebaseSetPoints } from '@/src/lib/sleepCurve/rebase'
 import { CURVE_NOTES_MAX } from '@/src/lib/sleepCurve/savePlan'
 import { type ScheduleEndAction, simplifySetPoints, sortChronological } from '@/src/lib/scheduleGrouping'
+import { type CurveDays, type DayMove, hasDays, type LibrarySide, NO_DAYS, normalizeDays, planClaims, setPointsToPoints, uniqueCurveName } from '@/src/lib/scheduleLibrary'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 
@@ -37,6 +39,13 @@ interface CurveEditorProps {
   initialSetPoints?: Array<{ time: string, temperature: number }>
   /** The curve's optional note. */
   initialNotes?: string
+  /** The library curve being edited; absent for a new curve. */
+  curveId?: number
+  initialName?: string
+  /** Whether the curve runs on its days; new curves start on. */
+  initialActive?: boolean
+  /** The curve's days on every side; the side being edited is replaced on save, the other kept. */
+  curveDays?: CurveDays
 }
 
 interface PresetDef {
@@ -74,10 +83,16 @@ function useIsDesktop() {
   )
 }
 
+/** "Mon–Fri curve", or with a number when that name is taken. */
+function defaultName(days: Iterable<DayOfWeek>, taken: Set<string>): string {
+  return uniqueCurveName(`${formatDayRange(days, { named: true }) || 'New'} curve`, taken)
+}
+
 /**
  * Curve editor subpage (in-page, replaces the schedule list while open).
  * Desktop: 300px settings column + chart and set-point rows. Phone: stacked.
- * Local state until "Save" — then writes via `useSchedule.saveCurve` (one batch).
+ * Local state until "Save" — then saves the curve to the library with its
+ * days and on/off state in one call (`curveTemplates.put`).
  */
 export function CurveEditor({
   onClose,
@@ -85,16 +100,22 @@ export function CurveEditor({
   initialSetPoints = [],
   initialEndAction = 'turn_off',
   initialNotes = '',
+  curveId,
+  initialName = '',
+  initialActive = true,
+  curveDays,
 }: CurveEditorProps) {
-  const { saveCurve, detectCurveConflicts, isMutating, allSchedules } = useSchedule()
+  const library = useCurveTemplates()
+  const isMutating = library.isSaving
   const { unit } = useTemperatureUnit()
   const { selectedSide: chosenSide, singleScheduleSide } = useSide()
   // One side away: curves go on the sleeper's side.
   const selectedSide = singleScheduleSide ?? chosenSide
+  const editSides = useMemo<LibrarySide[]>(() => (selectedSide === 'both' ? ['left', 'right'] : [selectedSide]), [selectedSide])
   const { leftName, rightName } = useSideNames()
   const isDesktop = useIsDesktop()
 
-  const isEdit = initialDays.length > 0
+  const isEdit = curveId !== undefined || initialDays.length > 0
   const [initial] = useState(() => {
     const sorted = sortChronological(initialSetPoints)
     const temps = initialSetPoints.map(p => p.temperature)
@@ -113,6 +134,8 @@ export function CurveEditor({
   )
   const [endAction, setEndAction] = useState(initialEndAction)
   const [notes, setNotes] = useState(initialNotes)
+  const [name, setName] = useState(initialName)
+  const [active, setActive] = useState(initialActive)
   const [bedtime, setBedtime] = useState(initial.bedtime)
   const [wakeTime, setWakeTime] = useState(initial.wake)
   const [minTemp, setMinTemp] = useState(initial.min)
@@ -120,7 +143,7 @@ export function CurveEditor({
   const [activePreset, setActivePreset] = useState<CoolingIntensity | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [pendingConflict, setPendingConflict] = useState<DayOfWeek[] | null>(null)
+  const [pendingMoves, setPendingMoves] = useState<DayMove[] | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [aiWizardOpen, setAIWizardOpen] = useState(false)
   const idCounter = useRef(-1000)
@@ -140,12 +163,18 @@ export function CurveEditor({
   const autoOnId = orderedPoints[0]?.id ?? null
   const autoOffId = endAction === 'turn_off' && orderedPoints.length > 1 ? orderedPoints[orderedPoints.length - 1].id : null
 
-  // Days outside this curve that another curve already schedules.
-  const otherCurveDays = useMemo(() => {
-    const scheduled = new Set((allSchedules?.temperature ?? []).filter(t => t.enabled).map(t => t.dayOfWeek))
-    const original = new Set(initialDays)
-    return [...scheduled].filter(d => !original.has(d) && !days.has(d))
-  }, [allSchedules, initialDays, days])
+  // The curve's days after saving: the edited side(s) get the picked days, the other side keeps its own.
+  const nextDays = useMemo(() => {
+    const next = { ...(curveDays ?? NO_DAYS) }
+    for (const side of editSides) next[side] = [...days]
+    return normalizeDays(next)
+  }, [curveDays, editSides, days])
+  const runs = active && hasDays(nextDays)
+  // Days the other active curves give up when this one saves.
+  const moves = useMemo(
+    () => planClaims(library.templates, curveId ?? null, nextDays, runs).moves,
+    [library.templates, curveId, nextDays, runs],
+  )
 
   const editPoints = useCallback((fn: (prev: EditorSetPoint[]) => EditorSetPoint[]) => {
     setPoints(fn)
@@ -223,46 +252,44 @@ export function CurveEditor({
   }, [bedtime, wakeTime, minTemp, maxTemp])
 
   const performSave = useCallback(async (force = false) => {
-    const targetDays = Array.from(days)
-    if (targetDays.length === 0) {
-      setSaveError('Pick at least one day')
-      return
-    }
-    if (points.length === 0) {
-      setSaveError('Add at least one set point')
+    if (points.length < 2) {
+      setSaveError('Add at least two set points')
       return
     }
 
-    if (!force) {
-      const conflicts = detectCurveConflicts(targetDays, initialDays)
-      if (conflicts.length > 0) {
-        setPendingConflict(conflicts)
-        return
-      }
+    if (!force && moves.length > 0) {
+      setPendingMoves(moves)
+      return
     }
 
+    const taken = new Set(library.templates.filter(t => t.id !== curveId).map(t => t.name))
+    const sorted = sortChronological(points)
     try {
-      await saveCurve({
-        targetDays,
-        setPoints: points.map(p => ({ time: p.time, temperature: p.temperature })),
-        originalDays: initialDays,
-        endAction,
+      await library.put({
+        id: curveId,
+        name: name.trim() || defaultName(days, taken),
+        bedtime: sorted[0].time,
+        wake: sorted[sorted.length - 1].time,
+        points: setPointsToPoints(points),
         notes,
+        endAction,
+        days: nextDays,
+        active,
       })
-      setPendingConflict(null)
+      setPendingMoves(null)
       onClose()
     }
     catch (err) {
-      setPendingConflict(null)
+      setPendingMoves(null)
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [days, points, initialDays, endAction, notes, detectCurveConflicts, saveCurve, onClose])
+  }, [points, moves, library, curveId, name, days, notes, endAction, nextDays, active, onClose])
 
   const editingPoint = editingId !== null ? points.find(p => p.id === editingId) ?? null : null
   const title = isEdit ? 'Edit curve' : 'New curve'
   const sideLabel = selectedSide === 'both' ? 'Both sides' : selectedSide === 'left' ? leftName : rightName
   const daysLabel = formatDayRange(days)
-  const canSave = !isMutating && days.size > 0 && points.length > 0
+  const canSave = !isMutating && points.length > 0
   const toDisplay = (f: number) => Math.round(setpointFToDisplay(f, unit) ?? f)
   const toF = (v: number) => clampTemp(displayToSetpointF(v, unit) ?? v)
   const saveLabel = isMutating ? 'Saving…' : 'Save curve'
@@ -319,17 +346,33 @@ export function CurveEditor({
       <div className="flex flex-col gap-3 min-[900px]:grid min-[900px]:grid-cols-[300px_minmax(0,1fr)] min-[900px]:items-start min-[900px]:gap-3.5">
         <div className="contents min-[900px]:flex min-[900px]:min-w-0 min-[900px]:flex-col min-[900px]:gap-3">
           <Card className="order-1 min-[900px]:order-none">
+            <TextField
+              label="Name"
+              mono={false}
+              value={name}
+              maxLength={30}
+              placeholder={defaultName(days, new Set())}
+              onChange={setName}
+            />
             <SectionLabel>Days</SectionLabel>
             <DayPicker
               value={daysToIndexes(days)}
               onChange={v => setDays(new Set(indexesToDays(v)))}
               labels={DAY_PICKER_LABELS}
             />
-            {otherCurveDays.length > 0 && (
-              <span className="text-xs text-fg-2">
-                {`${formatDayRange(otherCurveDays)} ${otherCurveDays.length === 1 ? 'uses' : 'use'} another curve`}
-              </span>
-            )}
+            <div className="flex items-center justify-between gap-2.5">
+              <span className="text-sm">Run on these days</span>
+              <Toggle on={active} onChange={setActive} label="Run on these days" />
+            </div>
+            <span className="text-xs text-fg-2">
+              {!active
+                ? 'Saved to your curves without running. Turn it on any time.'
+                : !hasDays(nextDays)
+                    ? 'Pick days to run it. Without days it is saved without running.'
+                    : moves.length > 0
+                      ? `${describeMoves(moves, { left: leftName, right: rightName }, editSides)}.`
+                      : 'Other curves keep their days.'}
+            </span>
           </Card>
 
           <Card className="order-3 min-[900px]:order-none">
@@ -509,15 +552,13 @@ export function CurveEditor({
       />
 
       <ConfirmDialog
-        open={pendingConflict !== null}
+        open={pendingMoves !== null}
         title="Move days from another curve?"
-        message={pendingConflict
-          ? `${pendingConflict.map(d => DAY_SHORT[d]).join(', ')} ${pendingConflict.length === 1 ? 'is' : 'are'} already part of another curve. Saving will move ${pendingConflict.length === 1 ? 'it' : 'them'} to this curve.`
-          : ''}
+        message={pendingMoves ? `${describeMoves(pendingMoves, { left: leftName, right: rightName }, editSides)}. Saving moves them to this curve.` : ''}
         confirmLabel={isMutating ? 'Saving…' : 'Move & save'}
         busy={isMutating}
         onConfirm={() => void performSave(true)}
-        onCancel={() => setPendingConflict(null)}
+        onCancel={() => setPendingMoves(null)}
       />
     </div>
   )

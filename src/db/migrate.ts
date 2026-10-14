@@ -1,7 +1,31 @@
 import path from 'node:path'
+import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { db, sqlite } from './index'
 import { biometricsDb, closeBiometricsDatabase } from './biometrics'
+
+/**
+ * Schedules that predate the schedule library join it once. Migration 0028
+ * leaves a marker table that is dropped in the same transaction as the
+ * adoption, so a failed attempt is retried on the next start. Failures are
+ * logged, not thrown: the schedules keep running exactly as before.
+ */
+async function adoptPreLibrarySchedules() {
+  try {
+    const pending = sqlite.prepare('SELECT 1 FROM sqlite_master WHERE type = \'table\' AND name = \'schedule_library_adoption\'').get()
+    if (!pending) return
+    const { adoptUnmanagedSchedules } = await import('@/src/server/scheduleLibrary')
+    const adopted = db.transaction((tx) => {
+      const count = adoptUnmanagedSchedules(tx)
+      tx.run(sql`DROP TABLE schedule_library_adoption`)
+      return count
+    })
+    console.log(`✓ Added ${adopted} existing schedule${adopted === 1 ? '' : 's'} to the schedule library`)
+  }
+  catch (error) {
+    console.error('✗ Adding existing schedules to the schedule library failed; retrying on next start:', error)
+  }
+}
 
 /**
  * Run pending database migrations for all databases.
@@ -14,6 +38,7 @@ export async function runMigrations() {
     migrate(db, {
       migrationsFolder: path.resolve(process.cwd(), 'src/db/migrations'),
     })
+    await adoptPreLibrarySchedules()
 
     migrate(biometricsDb, {
       migrationsFolder: path.resolve(process.cwd(), 'src/db/biometrics-migrations'),

@@ -20,7 +20,10 @@ const mocks = vi.hoisted(() => {
       select: vi.fn(),
       transaction: vi.fn(),
     },
-    sqlite: { close: vi.fn() },
+    sqlite: { close: vi.fn(), prepare: vi.fn() },
+    marker: undefined as unknown,
+    adoptUnmanagedSchedules: vi.fn(),
+    txRun: vi.fn(),
     biometricsDb: { name: 'biometrics-db' },
     closeBiometricsDatabase: vi.fn(),
     migrate: vi.fn(),
@@ -49,6 +52,10 @@ vi.mock('../biometrics', () => ({
 
 vi.mock('../schema', () => mocks.schema)
 
+vi.mock('@/src/server/scheduleLibrary', () => ({
+  adoptUnmanagedSchedules: mocks.adoptUnmanagedSchedules,
+}))
+
 const originalArgv1 = process.argv[1]
 const migrateModulePath = fileURLToPath(new URL('../migrate.ts', import.meta.url))
 
@@ -62,6 +69,11 @@ describe('database migration module', () => {
   beforeEach(() => {
     mocks.migrate.mockReset()
     mocks.sqlite.close.mockReset()
+    mocks.sqlite.prepare.mockReset()
+    mocks.adoptUnmanagedSchedules.mockReset()
+    mocks.txRun.mockReset()
+    mocks.marker = undefined
+    mocks.sqlite.prepare.mockImplementation(() => ({ get: () => mocks.marker }))
     mocks.closeBiometricsDatabase.mockReset()
     mocks.db.select.mockReset()
     mocks.db.transaction.mockReset()
@@ -220,5 +232,90 @@ describe('database migration module', () => {
     expect(error).toHaveBeenCalledWith('✗ Database setup failed:', failure)
     expect(mocks.closeBiometricsDatabase).toHaveBeenCalledTimes(1)
     expect(mocks.sqlite.close).toHaveBeenCalledTimes(1)
+  })
+
+  describe('adding pre-library schedules to the schedule library', () => {
+    const adoptionTx = () => ({ insert: mocks.insert, run: mocks.txRun })
+
+    beforeEach(() => {
+      mocks.db.transaction.mockImplementation((callback: (tx: ReturnType<typeof adoptionTx>) => unknown) => callback(adoptionTx()))
+    })
+
+    it('adopts and drops the marker in one transaction, between the two migration runs', async () => {
+      mocks.marker = { 1: 1 }
+      mocks.adoptUnmanagedSchedules.mockImplementation(() => {
+        expect(mocks.migrate).toHaveBeenCalledTimes(1)
+        return 2
+      })
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { runMigrations } = await importMigrate()
+
+      await runMigrations()
+
+      expect(mocks.sqlite.prepare).toHaveBeenCalledWith('SELECT 1 FROM sqlite_master WHERE type = \'table\' AND name = \'schedule_library_adoption\'')
+      expect(mocks.db.transaction).toHaveBeenCalledTimes(1)
+      expect(mocks.adoptUnmanagedSchedules).toHaveBeenCalledWith(expect.objectContaining({ run: mocks.txRun }))
+      expect(mocks.txRun).toHaveBeenCalledTimes(1)
+      const dropped = mocks.txRun.mock.calls[0][0] as { queryChunks: Array<{ value?: string[] }> }
+      expect(dropped.queryChunks.flatMap(c => c.value ?? []).join('')).toBe('DROP TABLE schedule_library_adoption')
+      expect(mocks.migrate).toHaveBeenCalledTimes(2)
+      expect(log).toHaveBeenCalledWith('✓ Added 2 existing schedules to the schedule library')
+      expect(log).toHaveBeenLastCalledWith('✓ Database migrations completed successfully')
+    })
+
+    it('says "schedule" for a single adoption', async () => {
+      mocks.marker = { 1: 1 }
+      mocks.adoptUnmanagedSchedules.mockReturnValue(1)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { runMigrations } = await importMigrate()
+
+      await runMigrations()
+
+      expect(log).toHaveBeenCalledWith('✓ Added 1 existing schedule to the schedule library')
+    })
+
+    it('does nothing once the marker is gone', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { runMigrations } = await importMigrate()
+
+      await runMigrations()
+
+      expect(mocks.sqlite.prepare).toHaveBeenCalledTimes(1)
+      expect(mocks.db.transaction).not.toHaveBeenCalled()
+      expect(mocks.adoptUnmanagedSchedules).not.toHaveBeenCalled()
+      expect(mocks.migrate).toHaveBeenCalledTimes(2)
+    })
+
+    it('logs a failed adoption, keeps the marker and still finishes migrating', async () => {
+      mocks.marker = { 1: 1 }
+      const failure = new Error('adoption exploded')
+      mocks.adoptUnmanagedSchedules.mockImplementation(() => {
+        throw failure
+      })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { runMigrations } = await importMigrate()
+
+      await expect(runMigrations()).resolves.toBeUndefined()
+
+      expect(mocks.txRun).not.toHaveBeenCalled()
+      expect(error).toHaveBeenCalledWith('✗ Adding existing schedules to the schedule library failed; retrying on next start:', failure)
+      expect(mocks.migrate).toHaveBeenCalledTimes(2)
+    })
+
+    it('logs and skips when the marker cannot be read', async () => {
+      const failure = new Error('no sqlite_master')
+      mocks.sqlite.prepare.mockImplementation(() => {
+        throw failure
+      })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { runMigrations } = await importMigrate()
+
+      await expect(runMigrations()).resolves.toBeUndefined()
+
+      expect(error).toHaveBeenCalledWith('✗ Adding existing schedules to the schedule library failed; retrying on next start:', failure)
+      expect(mocks.adoptUnmanagedSchedules).not.toHaveBeenCalled()
+    })
   })
 })

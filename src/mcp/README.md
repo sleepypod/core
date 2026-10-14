@@ -67,11 +67,11 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 
 | Intent | Tool | Procedures |
 |---|---|---|
-| "What's my schedule?" / "Why didn't it turn on?" | `get_schedules` | `schedules.getAll`, `settings.getAll` |
+| "What's my schedule?" / "Why didn't it turn on?" / "Which curve runs Tuesday?" | `get_schedules` | `schedules.getAll`, `getNotes`, `settings.getAll`, `curveTemplates.list` |
 | "Every weekday cool to 66 at 10pm" / "Wake me 7am with vibration" / "Delete Monday's alarm" | `manage_schedule` | `schedules.create/update/delete{Temperature,Power,Alarm}Schedule` |
-| "Given my sleep data, build me a curve for weeknights" / "Put Late Warm on weekends" (preview, then apply) | [`apply_sleep_curve`](#sleep-curves) | `schedules.getAll`, `settings.getAll`, `schedules.batchUpdate`, `curveTemplates.list` |
-| "What curves have I saved?" | `get_saved_curves` | `curveTemplates.list` |
-| "Save that as Late Warm" / "Delete my Deep Cool curve" | [`manage_saved_curve`](#sleep-curves) | `curveTemplates.list`, `save`, `delete` |
+| "Given my sleep data, build me a curve for weeknights" / "Put Late Warm on weekends" (preview, then apply) | [`apply_sleep_curve`](#sleep-curves) | `schedules.getAll`, `getNotes`, `settings.getAll`, `curveTemplates.list`, `put` |
+| "What curves have I saved?" / "Which curves are on?" | `get_saved_curves` | `curveTemplates.list` |
+| "Save that as Late Warm" / "Turn on Heatwave for weeknights" / "Pause Late Warm" / "Delete my Deep Cool curve" | [`manage_saved_curve`](#sleep-curves) | `curveTemplates.list`, `save`, `put`, `setActive`, `delete` |
 
 ### Settings
 
@@ -266,22 +266,38 @@ another save landed first: re-read with `get_sleep_stage_rules` and retry.
 
 ### Sleep curves
 
-`apply_sleep_curve` saves a whole curve (2-48 `setPoints`) for `side` `left`, `right` or `both` on a list of
-`days`, through `planCurveSave` in `src/lib/sleepCurve/savePlan.ts`, the same planner the Schedule screen's
-curve editor uses. Each target day's temperature and power rows are replaced in one `schedules.batchUpdate`
-transaction; alarms are kept. Flat-hold set points are dropped, and the power window runs from the first to
-the last set point (`endAction: "maintain"` holds the last temperature). `mode: "preview"` writes nothing and
-returns the simplified curve, `powerWindow`, the rows it `replaces` per side and day, `keptAlarms` and
-`warnings` (away mode, no on/off window); `mode: "apply"` with the same arguments saves exactly that.
-Instead of `setPoints` it accepts `curveName`, a saved curve. Optional `notes` (up to 1,000 characters) are
-written to every target day (`schedule_notes` table, `schedules.getNotes` / `batchUpdate.notes`) and shown on
-the curve's card; they replace the days' previous notes, default to the saved curve's notes with `curveName`,
-and appear per day in `get_schedules` and in the preview's `replaces`.
+Every recurring curve lives in the schedule library (`curve_templates` table, `curveTemplates` router): a
+named set point list in °F with a bedtime, wake, notes, `endAction`, its `days` per side and an `active` flag.
+An active curve runs on its days; two active curves never share a side and day. Turning a curve on, or giving
+it more days, moves shared days to it from the other active curves, and a curve left with no days turns off.
+The temperature and power rows the scheduler reads are written from the library by
+`src/server/scheduleLibrary.ts` through `planCurveSave` (`src/lib/sleepCurve/savePlan.ts`): each claimed day's
+temperature and power rows are replaced, alarms are kept, flat-hold set points are dropped, and the power window
+runs from the first to the last set point (`endAction: "maintain"` holds the last temperature). Editing a
+temperature or power row one at a time (`manage_schedule`, `schedules.batchUpdate`) releases that day from its
+curve, since the rows no longer match it; changing only `enabled` does not.
 
-Saved curves (`curve_templates` table, `curveTemplates` router) are named set point lists in °F with a
-bedtime, wake and notes, not tied to a side or day. `manage_saved_curve` saves (replacing a curve of the
-same name) or deletes one; `get_saved_curves` lists them. The Schedule screen lists them under "Saved curves"
-(opening one starts a new curve with its set points and notes), the AI curve wizard saves into the same table,
-and curves older versions kept in browser localStorage move to the pod on first load.
+`apply_sleep_curve` runs a curve (2-48 `setPoints`) on `side` `left`, `right` or `both` for a list of `days`.
+With `setPoints` it saves a new library curve (named by `name`, or after its days, e.g. "Weekdays curve") or
+replaces the set points of the curve called `name`; with `curveName` it puts an existing curve on more days. The
+curve turns on and keeps its other days. `mode: "preview"` writes nothing and returns the simplified curve,
+`powerWindow`, the target `curve` (`name`, `isNew`, resulting `days`), the rows it `replaces` per side and day,
+`movesDaysFrom` (days other curves give up), `alsoRewrites` (other days an active curve is rewritten on when its
+set points change), `keptAlarms` and `warnings` (away mode, no on/off window); `mode: "apply"` with the same
+arguments saves exactly that through `curveTemplates.put`. Optional `notes` (up to 1,000 characters) are stored on
+the curve and written to each of its days (`schedule_notes`, shown on the curve's card and per day in
+`get_schedules`); a library curve keeps its notes when omitted.
+
+`get_saved_curves` lists the library with each curve's `active`, `days` and `endAction`. `manage_saved_curve`
+`save`s set points under a name (replacing an existing curve's set points and keeping its days; a new curve is
+saved off), `activate`s a curve on its saved days or, with `side` and `days`, on those days for that side,
+`deactivate`s it (its days stop running; the curve and days are kept) or `delete`s it (its days stop running if it
+was on). `get_schedules` reports per side the active `curves` and their days; a day no curve claims was written
+one schedule at a time.
+
+The Schedule screen shows the same library under "Curves", each with an on/off switch, and asks before moving days.
+The AI curve wizard saves into it (off, no days), and curves older versions kept in browser localStorage move to
+the pod on first load. On upgrade, migration `0028_schedule_library` adds every existing schedule to the library
+once (matching days become one active curve, both sides when they match) without changing what the Pod does.
 The `design_sleep_curve` prompt chains the data tools into a preview using `CURVE_DESIGN_GUIDANCE`, the
 sleep-science text the copy/paste AI curve wizard also sends.

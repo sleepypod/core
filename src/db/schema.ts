@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import type { DayOfWeek } from '@/src/lib/scheduleTime'
 
 // ============================================================================
 // Device Settings & Configuration
@@ -338,6 +339,13 @@ export const curveTemplates = sqliteTable('curve_templates', {
   points: text('points', { mode: 'json' }).notNull().$type<Record<string, number>>(), // {"HH:mm": tempF}
   // Column predates the notes name (it held the AI wizard's reasoning).
   notes: text('reasoning').notNull().default(''),
+  endAction: text('end_action', { enum: ['turn_off', 'maintain'] }).notNull().default('turn_off'),
+  // Days the curve runs on per side. While active, no other active curve
+  // claims the same side and day, and that day's temperature and power rows
+  // are this curve's (src/server/scheduleLibrary.ts).
+  leftDays: text('left_days', { mode: 'json' }).notNull().$type<DayOfWeek[]>().default(sql`'[]'`),
+  rightDays: text('right_days', { mode: 'json' }).notNull().$type<DayOfWeek[]>().default(sql`'[]'`),
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

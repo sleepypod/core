@@ -1,5 +1,7 @@
 import type { DemoHandlers, RouterOutputs } from '../types'
 import { DAY, toCelsius } from '../util'
+import { planCurveSave } from '@/src/lib/sleepCurve/savePlan'
+import { releaseDemoDays } from './curveTemplates'
 
 type Side = 'left' | 'right'
 type Collection = RouterOutputs['schedules']['getAll']
@@ -8,8 +10,8 @@ type PowerRow = Collection['power'][number]
 type AlarmRow = Collection['alarm'][number]
 type DayOfWeek = TempRow['dayOfWeek']
 
-const WEEKNIGHTS: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday']
-const WEEKEND_NIGHTS: DayOfWeek[] = ['friday', 'saturday']
+export const WEEKNIGHTS: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday']
+export const WEEKEND_NIGHTS: DayOfWeek[] = ['friday', 'saturday']
 const WEEKDAYS: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
 
 const createdAt = new Date(Date.now() - 30 * DAY)
@@ -22,7 +24,7 @@ let alarm: AlarmRow[] = []
 const notes = new Map<string, string>()
 
 /** Night set points belong to the evening's day, post-midnight times included. */
-const CURVES: Record<Side, { weeknight: [string, number][], weekend: [string, number][] }> = {
+export const CURVES: Record<Side, { weeknight: [string, number][], weekend: [string, number][] }> = {
   left: {
     weeknight: [['22:00', 72], ['22:30', 68], ['01:00', 66], ['04:00', 69], ['06:00', 74]],
     weekend: [['23:00', 72], ['23:30', 68], ['02:00', 66], ['05:00', 69], ['07:30', 75]],
@@ -69,6 +71,11 @@ function collection(side: Side, unit: 'F' | 'C' = 'F', day?: DayOfWeek): Collect
   }
 }
 
+/** True when a row update changes more than its enabled flag. */
+function editsRow(changes: Record<string, unknown>): boolean {
+  return Object.entries(changes).some(([key, value]) => key !== 'id' && key !== 'enabled' && value !== undefined)
+}
+
 function update<T extends { id: number, updatedAt: Date }>(rows: T[], kind: string, id: number, changes: Partial<T>): T {
   const row = rows.find(r => r.id === id)
   if (!row) throw new Error(`${kind} schedule with ID ${id} not found`)
@@ -86,6 +93,32 @@ const stamp = () => {
   return { id: nextId++, createdAt: now, updatedAt: now }
 }
 
+/** Write a library curve's rows on one side, as src/server/scheduleLibrary.ts does on the pod. */
+export function writeDemoCurveRows(side: Side, targetDays: DayOfWeek[], clearDays: DayOfWeek[], curve: {
+  points: Record<string, number>
+  endAction: 'turn_off' | 'maintain'
+  notes: string
+}) {
+  const plan = planCurveSave({
+    sides: [side],
+    targetDays,
+    clearDays,
+    setPoints: Object.entries(curve.points).map(([time, temp]) => ({ time, temperature: temp })),
+    endAction: curve.endAction,
+    notes: curve.notes,
+    existing: { temperature: temperature.filter(r => r.side === side), power: power.filter(r => r.side === side) },
+  })
+  const deleted = { temperature: new Set(plan.deletes.temperature), power: new Set(plan.deletes.power) }
+  temperature = temperature.filter(r => !deleted.temperature.has(r.id))
+  power = power.filter(r => !deleted.power.has(r.id))
+  for (const c of plan.creates.temperature) temperature.push({ ...c, ...stamp() })
+  for (const c of plan.creates.power) power.push({ ...c, ...stamp() })
+  for (const n of plan.notes) {
+    if (n.notes) notes.set(`${n.side}:${n.dayOfWeek}`, n.notes)
+    else notes.delete(`${n.side}:${n.dayOfWeek}`)
+  }
+}
+
 export const schedules: DemoHandlers<'schedules'> = {
   getAll: input => collection(input.side, input.unit),
 
@@ -97,10 +130,16 @@ export const schedules: DemoHandlers<'schedules'> = {
   createTemperatureSchedule: (input) => {
     const row: TempRow = { ...input, enabled: input.enabled ?? true, ...stamp() }
     temperature.push(row)
+    releaseDemoDays([row])
     return { ...row }
   },
-  updateTemperatureSchedule: ({ id, ...changes }) => update(temperature, 'Temperature', id, changes),
+  updateTemperatureSchedule: ({ id, ...changes }) => {
+    const row = update(temperature, 'Temperature', id, changes)
+    if (editsRow(changes)) releaseDemoDays([row])
+    return row
+  },
   deleteTemperatureSchedule: (input) => {
+    releaseDemoDays(temperature.filter(r => r.id === input.id))
     temperature = remove(temperature, 'Temperature', input.id)
     return { success: true }
   },
@@ -108,10 +147,16 @@ export const schedules: DemoHandlers<'schedules'> = {
   createPowerSchedule: (input) => {
     const row: PowerRow = { ...input, endAction: input.endAction ?? 'turn_off', enabled: input.enabled ?? true, ...stamp() }
     power.push(row)
+    releaseDemoDays([row])
     return { ...row }
   },
-  updatePowerSchedule: ({ id, ...changes }) => update(power, 'Power', id, changes),
+  updatePowerSchedule: ({ id, ...changes }) => {
+    const row = update(power, 'Power', id, changes)
+    if (editsRow(changes)) releaseDemoDays([row])
+    return row
+  },
   deletePowerSchedule: (input) => {
+    releaseDemoDays(power.filter(r => r.id === input.id))
     power = remove(power, 'Power', input.id)
     return { success: true }
   },
@@ -135,6 +180,14 @@ export const schedules: DemoHandlers<'schedules'> = {
       ?? missing(alarm, input.updates?.alarm?.map(u => u.id))
     if (bad !== undefined) throw new Error(`Schedule with ID ${bad} not found`)
 
+    const edited = [
+      ...temperature.filter(r => input.deletes?.temperature?.includes(r.id)),
+      ...power.filter(r => input.deletes?.power?.includes(r.id)),
+      ...(input.creates?.temperature ?? []),
+      ...(input.creates?.power ?? []),
+      ...temperature.filter(r => input.updates?.temperature?.some(u => u.id === r.id && editsRow(u))),
+      ...power.filter(r => input.updates?.power?.some(u => u.id === r.id && editsRow(u))),
+    ]
     for (const id of input.deletes?.temperature ?? []) temperature = remove(temperature, 'Temperature', id)
     for (const id of input.deletes?.power ?? []) power = remove(power, 'Power', id)
     for (const id of input.deletes?.alarm ?? []) alarm = remove(alarm, 'Alarm', id)
@@ -152,6 +205,7 @@ export const schedules: DemoHandlers<'schedules'> = {
       if (text) notes.set(`${n.side}:${n.dayOfWeek}`, text)
       else notes.delete(`${n.side}:${n.dayOfWeek}`)
     }
+    releaseDemoDays(edited)
 
     return { success: true }
   },

@@ -2,7 +2,7 @@
  * Tests for useSchedule — the larger schedule manager that coordinates
  * temperature, power, and alarm schedules across days. Verifies derived
  * state (isPowerEnabled, isGlobalEnabled, hasScheduleData), bulk toggles,
- * curve save/delete, conflict detection, and apply-to-other-days flow.
+ * curve delete and apply-to-other-days flow.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -22,6 +22,9 @@ const trpcMock = vi.hoisted(() => {
     schedules: {
       getAll: { invalidate: vi.fn() },
       getByDay: { invalidate: vi.fn() },
+    },
+    curveTemplates: {
+      list: { invalidate: vi.fn() },
     },
   }
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -69,12 +72,6 @@ const trpcMock = vi.hoisted(() => {
 
 // Stable reference for getCurrentDay so tests don't depend on real time.
 const dayMock = vi.hoisted(() => ({ current: 'monday' as const }))
-const scheduleGroupingMock = vi.hoisted(() => ({
-  sortChronological: vi.fn((points: any[]) =>
-    [...points].sort((a, b) => a.time.localeCompare(b.time))),
-  simplifySetPoints: vi.fn((points: any[]) =>
-    [...points].sort((a, b) => a.time.localeCompare(b.time))),
-}))
 
 vi.mock('@/src/providers/SideProvider', () => ({
   useSide: () => sideMock.state,
@@ -83,7 +80,6 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: trpcMock.trpc }))
 vi.mock('@/src/components/Schedule/DaySelector', () => ({
   getCurrentDay: () => dayMock.current,
 }))
-vi.mock('@/src/lib/scheduleGrouping', () => scheduleGroupingMock)
 
 import { useSchedule } from '../useSchedule'
 
@@ -99,8 +95,7 @@ afterEach(() => {
   trpcMock.batchMutate.mockClear()
   trpcMock.utils.schedules.getAll.invalidate.mockReset()
   trpcMock.utils.schedules.getByDay.invalidate.mockReset()
-  scheduleGroupingMock.sortChronological.mockClear()
-  scheduleGroupingMock.simplifySetPoints.mockClear()
+  trpcMock.utils.curveTemplates.list.invalidate.mockReset()
   sideMock.state.primarySide = 'left'
   sideMock.state.activeSides = ['left']
   sideMock.state.singleScheduleSide = null
@@ -251,77 +246,6 @@ describe('useSchedule — curves', () => {
     expect(result.current.getCurveForDay('monday')).toEqual({ days: ['monday'], setPoints: [] })
   })
 
-  it('detectCurveConflicts flags target days with existing enabled rows outside originalDays', () => {
-    const { result } = renderHook(() => useSchedule())
-    const conflicts = result.current.detectCurveConflicts(['wednesday', 'thursday'], ['monday'])
-    expect(conflicts).toEqual(['wednesday'])
-  })
-
-  it('detectCurveConflicts excludes days listed in originalDays', () => {
-    const { result } = renderHook(() => useSchedule())
-    const conflicts = result.current.detectCurveConflicts(['monday', 'wednesday'], ['monday', 'wednesday'])
-    expect(conflicts).toEqual([])
-  })
-
-  it('saveCurve clears matching days and writes new rows for each active side', async () => {
-    sideMock.state.activeSides = ['left']
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [
-          { time: '07:00', temperature: 68 },
-          { time: '22:00', temperature: 60 },
-        ],
-        originalDays: ['monday'],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.deletes.temperature).toEqual([1])
-    expect(arg.creates.temperature).toHaveLength(2)
-    expect(arg.creates.power).toEqual([
-      expect.objectContaining({ side: 'left', dayOfWeek: 'monday', onTime: '07:00', offTime: '22:00', onTemperature: 68 }),
-    ])
-  })
-
-  it('saveCurve writes the simplified set points, not the raw list', async () => {
-    sideMock.state.activeSides = ['left']
-    const raw = [
-      { time: '22:00', temperature: 76 },
-      { time: '23:00', temperature: 76 },
-      { time: '23:30', temperature: 76 },
-    ]
-    scheduleGroupingMock.simplifySetPoints.mockReturnValueOnce([raw[0], raw[2]])
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({ targetDays: ['monday'], setPoints: raw })
-    })
-    expect(scheduleGroupingMock.simplifySetPoints).toHaveBeenCalledWith(raw)
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.creates.temperature.map((t: { time: string }) => t.time)).toEqual(['22:00', '23:30'])
-    expect(arg.creates.power).toEqual([expect.objectContaining({ onTime: '22:00', offTime: '23:30' })])
-  })
-
-  it('saveCurve skips power create when only one set point is provided', async () => {
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [{ time: '07:00', temperature: 68 }],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.creates.power).toEqual([])
-  })
-
-  it('saveCurve does nothing when both targetDays and originalDays are empty', async () => {
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({ targetDays: [], setPoints: [] })
-    })
-    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
-  })
-
   it('deleteCurve removes temperature and power rows for the given days', async () => {
     const { result } = renderHook(() => useSchedule())
     await act(async () => {
@@ -451,7 +375,7 @@ describe('useSchedule — applyToOtherDays', () => {
 })
 
 describe('useSchedule — onSuccess invalidation', () => {
-  it('mutation onSuccess callbacks invalidate getAll + getByDay', () => {
+  it('mutation onSuccess callbacks invalidate getAll + getByDay and the curve library', () => {
     renderHook(() => useSchedule())
     // Find the registered batchUpdate onSuccess and fire it
     const batchCall = trpcMock.trpc.schedules.batchUpdate.useMutation.mock.calls[0]
@@ -459,6 +383,8 @@ describe('useSchedule — onSuccess invalidation', () => {
     opts.onSuccess()
     expect(trpcMock.utils.schedules.getAll.invalidate).toHaveBeenCalled()
     expect(trpcMock.utils.schedules.getByDay.invalidate).toHaveBeenCalled()
+    // Row edits release days from their library curve, so the library refetches too.
+    expect(trpcMock.utils.curveTemplates.list.invalidate).toHaveBeenCalled()
   })
 })
 
@@ -506,108 +432,9 @@ describe('useSchedule — early returns + global toggle guards', () => {
     expect(trpcMock.batchMutate).not.toHaveBeenCalled()
     expect(result.current.confirmMessage).toMatch(/All schedules/i)
   })
-
-  it('detectCurveConflicts returns empty without allSchedules data', () => {
-    const { result } = renderHook(() => useSchedule())
-    expect(result.current.detectCurveConflicts(['monday'], [])).toEqual([])
-  })
 })
 
-describe('useSchedule — saveCurve / deleteCurve edge cases', () => {
-  it('saveCurve returns early when allSchedules data is missing', async () => {
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [{ time: '07:00', temperature: 68 }],
-      })
-    })
-    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
-  })
-
-  it('saveCurve no-ops when there are no rows to delete and no set points to write', async () => {
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      // targetDays is non-empty (so we pass the first guard) but setPoints is empty
-      // and the day has no existing rows → nothing to delete or create.
-      await result.current.saveCurve({ targetDays: ['monday'], setPoints: [] })
-    })
-    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
-  })
-
-  it('saveCurve in both-mode clears the other side rows too', async () => {
-    sideMock.state.activeSides = ['left', 'right']
-    trpcMock.overrides.allLeft = {
-      temperature: [{ id: 1, dayOfWeek: 'monday', time: '07:00', temperature: 70, enabled: true }],
-      power: [{ id: 11, dayOfWeek: 'monday' }],
-      alarm: [],
-    }
-    trpcMock.overrides.allRight = {
-      temperature: [{ id: 2, dayOfWeek: 'monday', time: '07:00', temperature: 70, enabled: true }],
-      power: [{ id: 22, dayOfWeek: 'monday' }],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [
-          { time: '07:00', temperature: 68 },
-          { time: '22:00', temperature: 60 },
-        ],
-        originalDays: ['monday'],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.deletes.temperature).toEqual(expect.arrayContaining([1, 2]))
-    expect(arg.deletes.power).toEqual(expect.arrayContaining([11, 22]))
-    // Should write to both sides
-    const sides = new Set(arg.creates.temperature.map((c: any) => c.side))
-    expect(sides.has('left')).toBe(true)
-    expect(sides.has('right')).toBe(true)
-  })
-
-  it('saveCurve writes only the sleeper\'s side when the other is away, even with both selected', async () => {
-    sideMock.state.activeSides = ['left', 'right']
-    sideMock.state.singleScheduleSide = 'right'
-    trpcMock.overrides.allRight = {
-      temperature: [{ id: 2, dayOfWeek: 'monday', time: '07:00', temperature: 70, enabled: true }],
-      power: [],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [
-          { time: '07:00', temperature: 68 },
-          { time: '22:00', temperature: 60 },
-        ],
-        originalDays: ['monday'],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(new Set(arg.creates.temperature.map((c: { side: string }) => c.side))).toEqual(new Set(['right']))
-    expect(arg.deletes.temperature).toEqual([2])
-  })
-
-  it('saveCurve clamps onTemperature into the 55–110 range', async () => {
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [
-          { time: '07:00', temperature: 999 },
-          { time: '22:00', temperature: 999 },
-        ],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.creates.power[0].onTemperature).toBe(110)
-  })
-
+describe('useSchedule — deleteCurve edge cases', () => {
   it('deleteCurve in both-mode clears the other side rows too', async () => {
     sideMock.state.activeSides = ['left', 'right']
     trpcMock.overrides.allLeft = {
@@ -758,6 +585,7 @@ describe('useSchedule — per-row mutation hooks register invalidating onSuccess
 
     trpcMock.utils.schedules.getAll.invalidate.mockClear()
     trpcMock.utils.schedules.getByDay.invalidate.mockClear()
+    trpcMock.utils.curveTemplates.list.invalidate.mockClear()
 
     for (const call of calls) {
       const opts = call[0] as { onSuccess: () => void } | undefined
@@ -769,6 +597,7 @@ describe('useSchedule — per-row mutation hooks register invalidating onSuccess
     // Kills ArrowFunction -> () => undefined (would skip both invalidations)
     expect(trpcMock.utils.schedules.getAll.invalidate).toHaveBeenCalledTimes(9)
     expect(trpcMock.utils.schedules.getByDay.invalidate).toHaveBeenCalledTimes(9)
+    expect(trpcMock.utils.curveTemplates.list.invalidate).toHaveBeenCalledTimes(9)
   })
 })
 
@@ -1112,108 +941,6 @@ describe('useSchedule — applyToOtherDays guards and side effects', () => {
   })
 })
 
-describe('useSchedule — saveCurve clamping, scheduler create, and side handling', () => {
-  it('clamps onTemperature below the 55F floor', async () => {
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [
-          { time: '07:00', temperature: 10 },
-          { time: '22:00', temperature: 10 },
-        ],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.creates.power[0].onTemperature).toBe(55)
-  })
-
-  it('does not create a power row when on == off times', async () => {
-    // canCreatePower's `onTime !== offTime` clause — same-time set points
-    // should skip the power create entirely.
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [
-          { time: '07:00', temperature: 68 },
-          { time: '07:00', temperature: 70 },
-        ],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.creates.power).toEqual([])
-  })
-
-  it('marks created temperature rows enabled (kills BooleanLiteral L540 mutant)', async () => {
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [{ time: '07:00', temperature: 68 }],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    for (const c of arg.creates.temperature) {
-      expect(c.enabled).toBe(true)
-    }
-  })
-
-  it('marks created power rows enabled (kills BooleanLiteral L550 mutant)', async () => {
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [
-          { time: '07:00', temperature: 68 },
-          { time: '22:00', temperature: 60 },
-        ],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    expect(arg.creates.power[0].enabled).toBe(true)
-  })
-
-  it('saveCurve no-ops when targetDays is empty but originalDays is non-empty AND allData is empty', async () => {
-    // ConditionalExpression L498: with target empty and original non-empty,
-    // the function must still try (originalDays alone is sufficient to enter
-    // the body). With allData also empty there is nothing to delete or
-    // create, so batchMutate must not fire.
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: [],
-        setPoints: [],
-        originalDays: ['monday'],
-      })
-    })
-    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
-  })
-
-  it('saveCurve early-returns when BOTH targetDays and originalDays are empty', async () => {
-    trpcMock.overrides.allLeft = {
-      temperature: [{ id: 99, dayOfWeek: 'monday', enabled: true }],
-      power: [],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: [],
-        setPoints: [],
-        originalDays: [],
-      })
-    })
-    // No mutation even though there are rows that could match.
-    expect(trpcMock.batchMutate).not.toHaveBeenCalled()
-  })
-})
-
 describe('useSchedule — getCurveForDay fingerprint correctness', () => {
   it('returns days that share the enabled set-point fingerprint and excludes disabled rows', () => {
     trpcMock.overrides.allLeft = {
@@ -1252,34 +979,7 @@ describe('useSchedule — getCurveForDay fingerprint correctness', () => {
   })
 })
 
-describe('useSchedule — saveCurve / deleteCurve other-side gating', () => {
-  it('saveCurve does not touch otherSide when only one active side', async () => {
-    sideMock.state.activeSides = ['left']
-    trpcMock.overrides.allLeft = {
-      temperature: [{ id: 1, dayOfWeek: 'monday', enabled: true }],
-      power: [],
-      alarm: [],
-    }
-    trpcMock.overrides.allRight = {
-      temperature: [{ id: 99, dayOfWeek: 'monday', enabled: true }],
-      power: [],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => {
-      await result.current.saveCurve({
-        targetDays: ['monday'],
-        setPoints: [{ time: '07:00', temperature: 68 }],
-        originalDays: ['monday'],
-      })
-    })
-    const arg = trpcMock.batchMutate.mock.calls[0][0]
-    // L506 ConditionalExpression `true` mutant would always read otherData →
-    // would include id 99 in deletes. Single-side must omit it.
-    expect(arg.deletes.temperature).not.toContain(99)
-    expect(arg.deletes.temperature).toEqual([1])
-  })
-
+describe('useSchedule — deleteCurve other-side gating', () => {
   it('deleteCurve does not touch otherSide when only one active side', async () => {
     sideMock.state.activeSides = ['left']
     trpcMock.overrides.allLeft = {
@@ -1668,7 +1368,7 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
     expect(result.current.getCurveForDay('monday').days).toEqual(['monday'])
   })
 
-  it('getCurveForDay and detectCurveConflicts use schedule data that arrives after mount', () => {
+  it('getCurveForDay uses schedule data that arrives after mount', () => {
     const { result, rerender } = renderHook(() => useSchedule())
     trpcMock.overrides.allLeft = {
       temperature: [{ id: 1, dayOfWeek: 'monday', time: '07:00', temperature: 68, enabled: true }],
@@ -1677,110 +1377,6 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
     }
     rerender()
     expect(result.current.getCurveForDay('monday').setPoints).toEqual([{ time: '07:00', temperature: 68 }])
-    expect(result.current.detectCurveConflicts(['monday'])).toEqual(['monday'])
-  })
-
-  it('saveCurve returns before sorting when both day lists are empty', async () => {
-    trpcMock.overrides.allLeft = {
-      temperature: [{ id: 1, dayOfWeek: 'monday' }],
-      power: [],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => result.current.saveCurve({ targetDays: [], originalDays: [], setPoints: [] }))
-    expect(scheduleGroupingMock.sortChronological).not.toHaveBeenCalled()
-  })
-
-  it('saveCurve clears original days even when there are no target days', async () => {
-    trpcMock.overrides.allLeft = {
-      temperature: [{ id: 1, dayOfWeek: 'monday' }],
-      power: [],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => result.current.saveCurve({
-      targetDays: [],
-      originalDays: ['monday'],
-      setPoints: [],
-    }))
-    expect(trpcMock.batchMutate).toHaveBeenCalledWith(expect.objectContaining({
-      deletes: { temperature: [1], power: [] },
-    }))
-  })
-
-  it('saveCurve batches when only a power row needs deletion', async () => {
-    trpcMock.overrides.allLeft = {
-      temperature: [],
-      power: [{ id: 2, dayOfWeek: 'monday' }],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => result.current.saveCurve({
-      targetDays: [],
-      originalDays: ['monday'],
-      setPoints: [],
-    }))
-    expect(trpcMock.batchMutate).toHaveBeenCalledWith(expect.objectContaining({
-      deletes: { temperature: [], power: [2] },
-    }))
-  })
-
-  it('saveCurve uses all-schedule data that arrives after mount', async () => {
-    const { result, rerender } = renderHook(() => useSchedule())
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    rerender()
-    await act(async () => result.current.saveCurve({
-      targetDays: ['monday'],
-      setPoints: [{ time: '07:00', temperature: 68 }],
-    }))
-    expect(trpcMock.batchMutate).toHaveBeenCalledOnce()
-  })
-
-  it('does not create power when a derived boundary time is empty', async () => {
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => result.current.saveCurve({
-      targetDays: ['monday'],
-      setPoints: [
-        { time: '', temperature: 68 },
-        { time: '22:00', temperature: 60 },
-      ],
-    }))
-    expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([])
-  })
-
-  it('does not create power when the first set point has no temperature', async () => {
-    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => result.current.saveCurve({
-      targetDays: ['monday'],
-      setPoints: [
-        { time: '07:00', temperature: undefined as any },
-        { time: '22:00', temperature: 60 },
-      ],
-    }))
-    expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([])
-  })
-
-  it('saveCurve filters wrong-day rows on both sides before collecting ids', async () => {
-    sideMock.state.activeSides = ['left', 'right']
-    trpcMock.overrides.allLeft = {
-      temperature: [{ id: 1, dayOfWeek: 'monday' }, { id: 11, dayOfWeek: 'friday' }],
-      power: [{ id: 2, dayOfWeek: 'monday' }, { id: 22, dayOfWeek: 'friday' }],
-      alarm: [],
-    }
-    trpcMock.overrides.allRight = {
-      temperature: [{ id: 3, dayOfWeek: 'monday' }, { id: 33, dayOfWeek: 'friday' }],
-      power: [{ id: 4, dayOfWeek: 'monday' }, { id: 44, dayOfWeek: 'friday' }],
-      alarm: [],
-    }
-    const { result } = renderHook(() => useSchedule())
-    await act(async () => result.current.saveCurve({
-      targetDays: ['monday'],
-      setPoints: [{ time: '07:00', temperature: 68 }],
-    }))
-    const payload = trpcMock.batchMutate.mock.calls[0][0]
-    expect(payload.deletes).toEqual({ temperature: [1, 3], power: [2, 4] })
   })
 
   it('deleteCurve filters wrong-day rows on both sides before collecting ids', async () => {
@@ -1833,18 +1429,6 @@ describe('useSchedule — mutation boundary and dependency regressions', () => {
     const { result } = renderHook(() => useSchedule())
     expect(result.current.isLoading).toBe(false)
   })
-})
-
-it('saves a single-point maintain curve to both sides', async () => {
-  trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
-  trpcMock.overrides.allRight = { temperature: [], power: [], alarm: [] }
-  sideMock.state.activeSides = ['left', 'right']
-  const { result } = renderHook(() => useSchedule())
-  await act(async () => result.current.saveCurve({ targetDays: ['monday'], setPoints: [{ time: '22:00', temperature: 75 }], endAction: 'maintain' }))
-  expect(trpcMock.batchMutate.mock.calls[0][0].creates.power).toEqual([
-    expect.objectContaining({ side: 'left', endAction: 'maintain', onTime: '22:00' }),
-    expect.objectContaining({ side: 'right', endAction: 'maintain', onTime: '22:00' }),
-  ])
 })
 
 it('preserves maintain when copying a day', async () => {

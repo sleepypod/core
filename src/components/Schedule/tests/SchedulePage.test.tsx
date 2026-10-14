@@ -25,7 +25,7 @@ const m = vi.hoisted(() => ({
   push: vi.fn(),
   notes: [] as Array<{ dayOfWeek: string, notes: string }>,
   notesLoading: false,
-  saved: { templates: [] as unknown[], isLoading: false, isDeleting: false, remove: vi.fn() },
+  saved: { templates: [] as unknown[], isLoading: false, isDeleting: false, isChanging: false, remove: vi.fn(), setActive: vi.fn() },
 }))
 vi.mock('@/src/hooks/useCurveTemplates', () => ({ useCurveTemplates: () => m.saved }))
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: m.push }), usePathname: () => '/en/schedule' }))
@@ -55,8 +55,24 @@ vi.mock('../AlarmSection', () => ({
   AlarmSection: ({ side, selectedSide }: { side: string, selectedSide: string }) => <div data-testid="alarms">{`${side}/${selectedSide}`}</div>,
 }))
 vi.mock('../CurveEditor', () => ({
-  CurveEditor: ({ onClose, initialDays, initialEndAction, initialSetPoints, initialNotes }: { onClose: () => void, initialDays: string[], initialEndAction?: string, initialSetPoints: Array<{ time: string }>, initialNotes?: string }) => (
-    <div data-testid="editor" data-end-action={initialEndAction} data-points={initialSetPoints.map(p => p.time).join(',')} data-notes={initialNotes ?? ''}>
+  CurveEditor: ({ onClose, initialDays, initialEndAction, initialSetPoints, initialNotes, curveId, initialName, initialActive, curveDays }: {
+    onClose: () => void
+    initialDays: string[]
+    initialEndAction?: string
+    initialSetPoints: Array<{ time: string }>
+    initialNotes?: string
+    curveId?: number
+    initialName?: string
+    initialActive?: boolean
+    curveDays?: unknown
+  }) => (
+    <div
+      data-testid="editor"
+      data-end-action={initialEndAction}
+      data-points={initialSetPoints.map(p => p.time).join(',')}
+      data-notes={initialNotes ?? ''}
+      data-curve={curveId === undefined ? '' : `${curveId}:${initialName}:${initialActive}:${JSON.stringify(curveDays)}`}
+    >
       {initialDays.join(',') || 'new'}
       <button type="button" onClick={onClose}>close editor</button>
     </div>
@@ -78,7 +94,9 @@ beforeEach(() => {
   m.notesLoading = false
   m.saved.templates = []
   m.saved.isLoading = false
+  m.saved.isChanging = false
   m.saved.remove.mockReset().mockResolvedValue({ deleted: true })
+  m.saved.setActive.mockReset().mockResolvedValue({ curve: {}, moved: [] })
   m.side.selectedSide = 'left'
   m.side.singleScheduleSide = null
   m.side.selectSide.mockReset()
@@ -333,43 +351,171 @@ it('falls back to turning off for new curves before the default setting loads', 
   m.defaultAction = 'turn_off'
 })
 
-describe('saved curves', () => {
-  const LATE_WARM = { name: 'Late Warm', bedtime: '01:30', wake: '10:30', points: { '00:45': 83, '02:30': 78, '11:00': 82 }, notes: 'Kept warm.', createdAt: 1 }
+describe('curve library', () => {
+  const curve = (id: number, name: string, days: { left?: string[], right?: string[] }, active: boolean, extra: object = {}) => ({
+    id, name, bedtime: '23:15', wake: '07:00', points: { '23:15': 83, '07:00': 84 }, notes: '', endAction: 'turn_off',
+    days: { left: days.left ?? [], right: days.right ?? [] }, active, createdAt: 1, ...extra,
+  })
+  const WEEKNIGHT = curve(7, 'Weeknight', { left: WEEKDAYS }, true, { notes: 'Cooler first half.' })
+  const HEATWAVE = curve(8, 'Heatwave', { left: [...WEEKDAYS, 'saturday', 'sunday'] }, false)
+  const IDEA = curve(9, 'Idea', {}, false)
+  const HEIDI = curve(10, 'Heidi nights', { right: WEEKDAYS }, true)
 
-  it('lists saved curves under the day curves, opens one in a new curve and deletes after confirming', async () => {
-    m.saved.templates = [LATE_WARM]
+  it('lists curves with their days and switches, active first, and only those for the shown side', () => {
+    m.saved.templates = [IDEA, HEATWAVE, WEEKNIGHT, HEIDI]
     const s = render(<SchedulePage />)
-    expect(s.getByText('Saved curves')).toBeTruthy()
-    expect(s.getByText('Late Warm')).toBeTruthy()
-    expect(s.getByText('Kept warm.')).toBeTruthy()
-    fireEvent.click(s.getByRole('button', { name: 'Use Late Warm' }))
-    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/new?side=left&saved=Late+Warm')
+    expect(s.getByText('Curves')).toBeTruthy()
+    const cards = s.getAllByTestId('library-curve')
+    expect(cards.map(c => within(c).getAllByText(/./)[0].textContent)).toEqual(['Weeknight', 'Idea', 'Heatwave'])
+    expect(within(cards[0]).getByText('Mon–Fri')).toBeTruthy()
+    expect(within(cards[0]).getByRole('switch', { name: 'Turn off Weeknight' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(cards[1]).getByText('Off · No days')).toBeTruthy()
+    expect(within(cards[2]).getByText('Off · Every day')).toBeTruthy()
+    expect(s.queryByText('Heidi nights')).toBeNull()
+  })
 
-    fireEvent.click(s.getByRole('button', { name: 'Delete Late Warm' }))
+  it('shows both sides\' days in the Both view', () => {
+    m.side.selectedSide = 'both'
+    m.saved.templates = [WEEKNIGHT, HEIDI, curve(11, 'Shared', { left: ['monday'], right: ['monday'] }, false)]
+    const s = render(<SchedulePage />)
+    const labels = s.getAllByTestId('library-curve').map(c => c.textContent)
+    expect(labels.some(t => t?.includes('Jon Mon–Fri'))).toBe(true)
+    expect(labels.some(t => t?.includes('Heidi Mon–Fri'))).toBe(true)
+    expect(labels.some(t => t?.includes('Off · Both · Mon'))).toBe(true)
+  })
+
+  it('names the featured curve after the library curve running it and marks schedules not in the library', () => {
+    m.saved.templates = [WEEKNIGHT]
+    const s = render(<SchedulePage />)
+    const featured = s.getByTestId('curve-card-featured')
+    expect(within(featured).getByText('Weeknight · Mon–Fri')).toBeTruthy()
+    fireEvent.click(within(featured).getByRole('button', { name: 'Edit Weeknight · Mon–Fri' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/7?side=left')
+    expect(s.getByText('NOT SAVED')).toBeTruthy()
+    fireEvent.click(s.getByRole('button', { name: 'Edit Sat, Sun' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/sat-sun?side=left')
+  })
+
+  it('opens a curve from its card and from Both view rows', () => {
+    m.saved.templates = [WEEKNIGHT]
+    const s = render(<SchedulePage />)
+    fireEvent.click(s.getAllByTestId('library-curve')[0])
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/7?side=left')
+    cleanup()
+    m.side.selectedSide = 'both'
+    const both = render(<SchedulePage />)
+    fireEvent.click(both.getByRole('button', { name: 'Edit Jon Mon–Fri' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/7?side=left&from=both')
+    // A one-side curve opens on its own side from Both, so saving can't copy it to the other side.
+    fireEvent.click(both.getAllByTestId('library-curve')[0])
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/7?side=left&from=both')
+    m.push.mockClear()
+    fireEvent.click(both.getByRole('button', { name: `Edit ${WEEKNIGHT.name}` }))
+    expect(m.push).toHaveBeenCalledTimes(1)
+  })
+
+  it('turns a curve off straight away', async () => {
+    m.saved.templates = [WEEKNIGHT]
+    const s = render(<SchedulePage />)
+    fireEvent.click(s.getByRole('switch', { name: 'Turn off Weeknight' }))
+    await waitFor(() => expect(m.saved.setActive).toHaveBeenCalledWith(7, false))
+    expect(m.push).not.toHaveBeenCalled()
+    expect(s.queryByRole('dialog')).toBeNull()
+  })
+
+  it('asks before turning on a curve that takes days from another, then turns it on', async () => {
+    m.saved.templates = [WEEKNIGHT, HEATWAVE]
+    const s = render(<SchedulePage />)
+    fireEvent.click(s.getByRole('switch', { name: 'Turn on Heatwave' }))
     const dialog = s.getByRole('dialog')
-    expect(within(dialog).getByText(/Days already using it keep their schedule/)).toBeTruthy()
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
-    await waitFor(() => expect(m.saved.remove).toHaveBeenCalledWith('Late Warm'))
+    expect(within(dialog).getByText('Move days to this curve?')).toBeTruthy()
+    expect(within(dialog).getByText('Mon–Fri move from Weeknight, which turns off. Turn on Heatwave?')).toBeTruthy()
+    expect(m.saved.setActive).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(s.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(s.getByRole('switch', { name: 'Turn on Heatwave' }))
+    fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Move & turn on' }))
+    await waitFor(() => expect(m.saved.setActive).toHaveBeenCalledWith(8, true))
     await waitFor(() => expect(s.queryByRole('dialog')).toBeNull())
   })
 
-  it('hides the section when nothing is saved', () => {
-    expect(render(<SchedulePage />).queryByText('Saved curves')).toBeNull()
+  it('turns on a curve without overlap directly, and opens one without days to pick them', async () => {
+    m.saved.templates = [WEEKNIGHT, curve(12, 'Weekend', { left: ['saturday', 'sunday'] }, false), IDEA]
+    const s = render(<SchedulePage />)
+    fireEvent.click(s.getByRole('switch', { name: 'Turn on Weekend' }))
+    await waitFor(() => expect(m.saved.setActive).toHaveBeenCalledWith(12, true))
+    expect(s.queryByRole('dialog')).toBeNull()
+    fireEvent.click(s.getByRole('switch', { name: 'Turn on Idea' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/9?side=left')
+    expect(m.saved.setActive).toHaveBeenCalledTimes(1)
   })
 
-  it('starts a new curve from a saved one, waiting for the list to load', () => {
+  it('shows a failed switch inline', async () => {
+    m.saved.templates = [WEEKNIGHT]
+    m.saved.setActive.mockRejectedValueOnce(new Error('pump stall guard tripped')).mockRejectedValueOnce('nope')
+    const s = render(<SchedulePage />)
+    fireEvent.click(s.getByRole('switch', { name: 'Turn off Weeknight' }))
+    expect(await s.findByText('pump stall guard tripped')).toBeTruthy()
+    fireEvent.click(s.getByRole('switch', { name: 'Turn off Weeknight' }))
+    expect(await s.findByText('Failed to turn off Weeknight')).toBeTruthy()
+  })
+
+  it('deletes a curve after confirming, warning when it is running', async () => {
+    m.saved.templates = [WEEKNIGHT, IDEA]
+    const s = render(<SchedulePage />)
+    fireEvent.click(s.getByRole('button', { name: 'Delete Weeknight' }))
+    let dialog = s.getByRole('dialog')
+    expect(within(dialog).getByText(/"Weeknight" will be removed and stop running on Jon Mon–Fri\./)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(m.saved.remove).not.toHaveBeenCalled()
+
+    fireEvent.click(s.getByRole('button', { name: 'Delete Idea' }))
+    dialog = s.getByRole('dialog')
+    expect(within(dialog).getByText('"Idea" will be removed from your curves.')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(m.saved.remove).toHaveBeenCalledWith('Idea'))
+    await waitFor(() => expect(s.queryByRole('dialog')).toBeNull())
+    expect(m.push).not.toHaveBeenCalled()
+  })
+
+  it('lists library curves without a schedule instead of the empty state', () => {
+    m.query = { data: { temperature: [] }, isLoading: false, error: null }
+    m.saved.templates = [IDEA]
+    const s = render(<SchedulePage />)
+    expect(s.queryByText('No schedule yet')).toBeNull()
+    expect(s.getByText('Idea')).toBeTruthy()
+    fireEvent.click(s.getByRole('button', { name: 'Create curve' }))
+    expect(m.push).toHaveBeenLastCalledWith('/en/schedule/new?side=left')
+  })
+
+  it('opens a library curve by id with its name, state, days and set points', () => {
+    m.saved.templates = [WEEKNIGHT]
+    const editor = render(<SchedulePage curve="7" curveSide="left" />).getByTestId('editor')
+    expect(editor.textContent).toContain('monday,tuesday,wednesday,thursday,friday')
+    expect(editor.getAttribute('data-curve')).toBe(`7:Weeknight:true:${JSON.stringify(WEEKNIGHT.days)}`)
+    expect(editor.getAttribute('data-points')).toBe('23:15,07:00')
+    expect(editor.getAttribute('data-notes')).toBe('Cooler first half.')
+  })
+
+  it('opens the library curve running a linked set of days', () => {
+    m.saved.templates = [WEEKNIGHT]
+    const editor = render(<SchedulePage curve="mon-tue-wed-thu-fri" curveSide="left" />).getByTestId('editor')
+    expect(editor.getAttribute('data-curve')).toMatch(/^7:Weeknight:true:/)
+    cleanup()
+    expect(render(<SchedulePage curve="sat-sun" curveSide="left" />).getByTestId('editor').getAttribute('data-curve')).toBe('')
+  })
+
+  it('explains a link to a curve that left the library, and waits for the library to load', () => {
+    const s = render(<SchedulePage curve="99" />)
+    expect(s.getByText('That curve is no longer in the library. It may have been deleted.')).toBeTruthy()
+    cleanup()
     m.saved.isLoading = true
-    const loading = render(<SchedulePage curve="new" savedCurve="Late Warm" />)
+    const loading = render(<SchedulePage curve="7" />)
     expect(loading.queryByTestId('editor')).toBeNull()
+    expect(loading.container.querySelector('.animate-pulse')).not.toBeNull()
     cleanup()
-    m.saved.isLoading = false
-    m.saved.templates = [LATE_WARM]
-    const editor = render(<SchedulePage curve="new" savedCurve="Late Warm" />).getByTestId('editor')
-    expect(editor.textContent).toContain('new')
-    expect(editor.getAttribute('data-points')).toBe('00:45,02:30,11:00')
-    expect(editor.getAttribute('data-notes')).toBe('Kept warm.')
-    cleanup()
-    expect(render(<SchedulePage curve="new" savedCurve="Gone" />).getByTestId('editor').getAttribute('data-points')).toBe('')
+    expect(render(<SchedulePage curve="new" />).queryByTestId('editor')).toBeNull()
   })
 })
 

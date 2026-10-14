@@ -197,6 +197,13 @@
       "when": 1791962178346,
       "tag": "0027_presence_auto_on",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1791967721108,
+      "tag": "0028_schedule_library",
+      "breakpoints": true
     }
   ]
 }

@@ -5,27 +5,44 @@ import { trpc } from '@/src/utils/trpc'
 import type { GeneratedCurve } from '@/src/lib/sleepCurve/curvePrompt'
 import { loadTemplates, removeLocalTemplates } from '@/src/lib/sleepCurve/curvePrompt'
 import { CURVE_NOTES_MAX } from '@/src/lib/sleepCurve/savePlan'
+import type { CurveDays } from '@/src/lib/scheduleLibrary'
+import type { inferRouterInputs } from '@trpc/server'
+import type { AppRouter } from '@/src/server/routers/app'
 
-/** A saved curve as the Schedule screen shows it; set points are °F. */
+/** A curve in the schedule library as the Schedule screen shows it; set points are °F. */
 export interface SavedCurve {
+  id: number
   name: string
   bedtime: string
   wake: string
   points: Record<string, number>
   notes: string
+  endAction: 'turn_off' | 'maintain'
+  /** Days it runs on per side while active. */
+  days: CurveDays
+  active: boolean
   createdAt: number
 }
 
 /**
- * Saved curves, stored on the pod so every browser and the MCP server see the
- * same list. Curves saved by older versions live in this browser's
- * localStorage; the first successful load moves them to the pod.
+ * The schedule library, stored on the pod so every browser and the MCP server
+ * see the same list. Changing a curve's days or active flag rewrites the
+ * schedule, so schedules and notes are refetched too. Curves saved by older
+ * versions live in this browser's localStorage; the first successful load
+ * moves them to the pod.
  */
 export function useCurveTemplates(enabled = true) {
   const utils = trpc.useUtils()
   const query = trpc.curveTemplates.list.useQuery({}, { enabled })
-  const invalidate = () => utils.curveTemplates.list.invalidate()
+  const invalidate = () => Promise.all([
+    utils.curveTemplates.list.invalidate(),
+    utils.schedules.getAll.invalidate(),
+    utils.schedules.getByDay.invalidate(),
+    utils.schedules.getNotes.invalidate(),
+  ])
   const saveMutation = trpc.curveTemplates.save.useMutation({ onSuccess: invalidate })
+  const putMutation = trpc.curveTemplates.put.useMutation({ onSuccess: invalidate })
+  const activeMutation = trpc.curveTemplates.setActive.useMutation({ onSuccess: invalidate })
   const deleteMutation = trpc.curveTemplates.delete.useMutation({ onSuccess: invalidate })
   const { mutateAsync: saveAsync } = saveMutation
 
@@ -48,7 +65,16 @@ export function useCurveTemplates(enabled = true) {
 
   const templates = useMemo<SavedCurve[]>(
     () => (query.data ?? []).map(t => ({
-      name: t.name, bedtime: t.bedtime, wake: t.wake, points: t.points, notes: t.notes, createdAt: t.createdAt.getTime(),
+      id: t.id,
+      name: t.name,
+      bedtime: t.bedtime,
+      wake: t.wake,
+      points: t.points,
+      notes: t.notes,
+      endAction: t.endAction,
+      days: t.days,
+      active: t.active,
+      createdAt: t.createdAt.getTime(),
     })),
     [query.data],
   )
@@ -61,5 +87,21 @@ export function useCurveTemplates(enabled = true) {
   const { mutateAsync: deleteAsync } = deleteMutation
   const remove = useCallback((name: string) => deleteAsync({ name }), [deleteAsync])
 
-  return { templates, save, remove, isLoading: query.isLoading, isSaving: saveMutation.isPending, isDeleting: deleteMutation.isPending }
+  const { mutateAsync: putAsync } = putMutation
+  const put = useCallback((curve: inferRouterInputs<AppRouter>['curveTemplates']['put']) => putAsync(curve), [putAsync])
+
+  const { mutateAsync: activeAsync } = activeMutation
+  const setActive = useCallback((id: number, active: boolean) => activeAsync({ id, active }), [activeAsync])
+
+  return {
+    templates,
+    save,
+    put,
+    setActive,
+    remove,
+    isLoading: query.isLoading,
+    isSaving: saveMutation.isPending || putMutation.isPending,
+    isChanging: activeMutation.isPending,
+    isDeleting: deleteMutation.isPending,
+  }
 }

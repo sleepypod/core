@@ -127,3 +127,16 @@ it('shows the final target instead of off for a maintained curve', () => {
   expect(s.getByText('Maintain temperature')).toBeTruthy()
   expect(s.queryByText('Power off')).toBeNull()
 })
+
+describe('CurveCard library labels', () => {
+  it('prefixes the library curve\'s name and marks schedules not in the library', () => {
+    const named = render(<CurveCard group={weekday} name="Weeknight" onEdit={vi.fn()} onDelete={vi.fn()} />)
+    expect(named.getByText('Weeknight · Mon–Fri')).toBeTruthy()
+    expect(named.getByRole('button', { name: 'Edit Weeknight · Mon–Fri' })).toBeTruthy()
+    expect(named.queryByText('NOT SAVED')).toBeNull()
+    cleanup()
+    const unsaved = render(<CurveCard group={weekday} unsaved onEdit={vi.fn()} onDelete={vi.fn()} />)
+    expect(unsaved.getByText('Mon–Fri')).toBeTruthy()
+    expect(unsaved.getByText('NOT SAVED')).toBeTruthy()
+  })
+})

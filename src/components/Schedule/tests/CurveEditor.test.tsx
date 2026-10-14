@@ -3,24 +3,20 @@ import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CurveEditor } from '../CurveEditor'
 
+interface Curve { id: number, name: string, days: { left: string[], right: string[] }, active: boolean }
+
 const m = vi.hoisted(() => ({
-  saveCurve: vi.fn(),
-  detectCurveConflicts: vi.fn(),
-  isMutating: false,
-  allSchedules: undefined as unknown,
+  put: vi.fn(),
+  isSaving: false,
+  templates: [] as Curve[],
+  side: { selectedSide: 'left' as string, singleScheduleSide: null as string | null },
 }))
-vi.mock('@/src/hooks/useSchedule', () => ({
-  useSchedule: () => ({
-    saveCurve: m.saveCurve,
-    detectCurveConflicts: m.detectCurveConflicts,
-    isMutating: m.isMutating,
-    allSchedules: m.allSchedules,
-  }),
+vi.mock('@/src/hooks/useCurveTemplates', () => ({
+  useCurveTemplates: () => ({ templates: m.templates, put: m.put, isSaving: m.isSaving, save: vi.fn() }),
 }))
-vi.mock('@/src/providers/SideProvider', () => ({ useSide: () => ({ selectedSide: 'left' }) }))
+vi.mock('@/src/providers/SideProvider', () => ({ useSide: () => m.side }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Jon', rightName: 'Heidi' }) }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
-vi.mock('@/src/hooks/useCurveTemplates', () => ({ useCurveTemplates: () => ({ save: vi.fn(), isSaving: false }) }))
 
 const INITIAL = [
   { time: '07:00', temperature: 84 },
@@ -28,16 +24,20 @@ const INITIAL = [
   { time: '00:30', temperature: 79 },
 ]
 
+const WEEKNIGHT: Curve = { id: 7, name: 'Weeknight', days: { left: ['monday', 'saturday'], right: [] }, active: true }
+
 beforeEach(() => {
-  m.saveCurve.mockReset().mockResolvedValue(undefined)
-  m.detectCurveConflicts.mockReset().mockReturnValue([])
-  m.isMutating = false
-  m.allSchedules = undefined
+  m.put.mockReset().mockResolvedValue({ curve: {}, moved: [] })
+  m.isSaving = false
+  m.templates = []
+  m.side.selectedSide = 'left'
+  m.side.singleScheduleSide = null
 })
 afterEach(cleanup)
 
 const saveCurveButton = (s: ReturnType<typeof render>) => s.getByRole('button', { name: 'Save curve' }) as HTMLButtonElement
 const rows = (s: ReturnType<typeof render>) => s.queryAllByTestId('set-point-row')
+const saved = () => m.put.mock.calls[0][0]
 
 describe('CurveEditor', () => {
   it('creates a curve from a preset for the picked days', async () => {
@@ -53,18 +53,17 @@ describe('CurveEditor', () => {
     expect(s.getByRole('button', { name: /Balanced/ }).getAttribute('aria-pressed')).toBe('true')
     expect(rows(s).length).toBeGreaterThan(2)
     expect(s.getByText('Jon · Mon, Tue')).toBeTruthy()
+    expect(s.getByText('Other curves keep their days.')).toBeTruthy()
     expect(saveCurveButton(s).disabled).toBe(false)
 
     fireEvent.click(saveCurveButton(s))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
-    expect(m.detectCurveConflicts).toHaveBeenCalledWith(['monday', 'tuesday'], [])
-    const arg = m.saveCurve.mock.calls[0][0]
-    expect(arg.targetDays).toEqual(['monday', 'tuesday'])
-    expect(arg.originalDays).toEqual([])
-    expect(arg.setPoints).toHaveLength(rows(s).length)
-    for (const sp of arg.setPoints) {
-      expect(sp.temperature).toBeGreaterThanOrEqual(55)
-      expect(sp.temperature).toBeLessThanOrEqual(110)
+    const arg = saved()
+    expect(arg).toMatchObject({ id: undefined, name: 'Mon, Tue curve', days: { left: ['monday', 'tuesday'], right: [] }, active: true, endAction: 'turn_off' })
+    expect(Object.keys(arg.points)).toHaveLength(rows(s).length)
+    for (const t of Object.values(arg.points) as number[]) {
+      expect(t).toBeGreaterThanOrEqual(55)
+      expect(t).toBeLessThanOrEqual(110)
     }
   })
 
@@ -82,13 +81,17 @@ describe('CurveEditor', () => {
     expect(rows(s)).toHaveLength(2)
 
     fireEvent.click(saveCurveButton(s))
-    await waitFor(() => expect(m.saveCurve).toHaveBeenCalled())
-    expect(m.saveCurve.mock.calls[0][0]).toEqual({
-      targetDays: ['monday'],
-      setPoints: [{ time: '23:15', temperature: 84 }, { time: '07:00', temperature: 84 }],
-      originalDays: ['monday'],
-      endAction: 'turn_off',
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved()).toEqual({
+      id: undefined,
+      name: 'Mon curve',
+      bedtime: '23:15',
+      wake: '07:00',
+      points: { '23:15': 84, '07:00': 84 },
       notes: '',
+      endAction: 'turn_off',
+      days: { left: ['monday'], right: [] },
+      active: true,
     })
   })
 
@@ -117,37 +120,140 @@ describe('CurveEditor', () => {
       .toEqual(['11:15 PM', '12:30 AM', '3:00 AM', '7:00 AM'])
   })
 
-  it('asks before moving days that belong to another curve', async () => {
-    m.detectCurveConflicts.mockReturnValue(['saturday'])
+  it('asks before moving days that another active curve runs, then saves', async () => {
+    m.templates = [WEEKNIGHT]
     const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+    expect(s.getByText('Mon moves from Weeknight.')).toBeTruthy()
     fireEvent.click(s.getByRole('button', { name: 'Sat' }))
+    expect(s.getByText('Mon, Sat move from Weeknight, which turns off.')).toBeTruthy()
     fireEvent.click(saveCurveButton(s))
     const dialog = await waitFor(() => s.getByRole('dialog'))
-    expect(within(dialog).getByText(/Sat is already part of another curve/)).toBeTruthy()
-    expect(m.saveCurve).not.toHaveBeenCalled()
+    expect(within(dialog).getByText('Mon, Sat move from Weeknight, which turns off. Saving moves them to this curve.')).toBeTruthy()
+    expect(m.put).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Move & save' }))
-    await waitFor(() => expect(m.saveCurve).toHaveBeenCalled())
-    expect(m.saveCurve.mock.calls[0][0].targetDays).toEqual(['monday', 'saturday'])
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved().days).toEqual({ left: ['monday', 'saturday'], right: [] })
   })
 
-  it('notes days that another curve already covers', () => {
-    m.allSchedules = { temperature: [
-      { dayOfWeek: 'saturday', enabled: true },
-      { dayOfWeek: 'sunday', enabled: true },
-      { dayOfWeek: 'monday', enabled: true },
-      { dayOfWeek: 'friday', enabled: false },
-    ] }
+  it('does not ask when the curve is saved without running', async () => {
+    m.templates = [WEEKNIGHT]
     const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
-    expect(s.getByText('Sat, Sun use another curve')).toBeTruthy()
+    fireEvent.click(s.getByRole('switch', { name: 'Run on these days' }))
+    expect(s.getByText('Saved to your curves without running. Turn it on any time.')).toBeTruthy()
+    fireEvent.click(saveCurveButton(s))
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(s.queryByRole('dialog')).toBeNull()
+    expect(saved()).toMatchObject({ active: false, days: { left: ['monday'], right: [] } })
+  })
+
+  it('ignores its own days and inactive curves when looking for moves', () => {
+    m.templates = [{ ...WEEKNIGHT, active: false }, { id: 3, name: 'Mine', days: { left: ['monday'], right: [] }, active: true }]
+    const s = render(<CurveEditor onClose={vi.fn()} curveId={3} initialName="Mine" initialDays={['monday']} initialSetPoints={INITIAL} />)
+    expect(s.getByText('Other curves keep their days.')).toBeTruthy()
+  })
+
+  it('saves to the library without days, explaining it will not run', async () => {
+    const s = render(<CurveEditor onClose={vi.fn()} initialSetPoints={INITIAL} />)
+    expect(s.getByText('Pick days to run it. Without days it is saved without running.')).toBeTruthy()
+    expect((s.getByLabelText('Name') as HTMLInputElement).placeholder).toBe('New curve')
+    fireEvent.click(saveCurveButton(s))
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved()).toMatchObject({ name: 'New curve', days: { left: [], right: [] }, active: true })
+  })
+
+  it('needs at least two set points', async () => {
+    const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={[{ time: '22:00', temperature: 80 }]} />)
+    fireEvent.click(saveCurveButton(s))
+    expect(await s.findByText('Add at least two set points')).toBeTruthy()
+    expect(m.put).not.toHaveBeenCalled()
+  })
+
+  it('uses the typed name, or numbers the default when it is taken', async () => {
+    m.templates = [
+      { id: 1, name: 'Weekdays curve', days: { left: [], right: [] }, active: false },
+      { id: 2, name: 'Weekdays curve 2', days: { left: [], right: [] }, active: false },
+    ]
+    const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] as const
+    const s = render(<CurveEditor onClose={vi.fn()} initialDays={[...weekdays]} initialSetPoints={INITIAL} />)
+    expect((s.getByLabelText('Name') as HTMLInputElement).placeholder).toBe('Weekdays curve')
+    fireEvent.click(saveCurveButton(s))
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved().name).toBe('Weekdays curve 3')
+    cleanup()
+
+    m.put.mockClear()
+    const named = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+    fireEvent.change(named.getByLabelText('Name'), { target: { value: '  Late warm  ' } })
+    fireEvent.click(saveCurveButton(named))
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved().name).toBe('Late warm')
+  })
+
+  it('edits a library curve in place, keeping the other side\'s days and its own name', async () => {
+    m.templates = [{ id: 9, name: 'Weekdays curve', days: { left: ['monday'], right: ['friday'] }, active: true }]
+    const s = render(
+      <CurveEditor
+        onClose={vi.fn()}
+        curveId={9}
+        initialName="Weekdays curve"
+        initialActive
+        curveDays={{ left: ['monday'], right: ['friday'] }}
+        initialDays={['monday']}
+        initialSetPoints={INITIAL}
+      />,
+    )
+    expect(s.getAllByText('Edit curve').length).toBeGreaterThan(0)
+    expect((s.getByLabelText('Name') as HTMLInputElement).value).toBe('Weekdays curve')
+    fireEvent.click(s.getByRole('button', { name: 'Tue' }))
+    fireEvent.click(saveCurveButton(s))
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved()).toMatchObject({ id: 9, name: 'Weekdays curve', days: { left: ['monday', 'tuesday'], right: ['friday'] }, active: true })
+  })
+
+  it('writes the picked days to both sides in the Both view', async () => {
+    m.side.selectedSide = 'both'
+    const s = render(<CurveEditor onClose={vi.fn()} curveId={4} curveDays={{ left: ['monday'], right: ['sunday'] }} initialDays={['monday', 'sunday']} initialSetPoints={INITIAL} />)
+    expect(s.getByText('Both sides · Mon, Sun')).toBeTruthy()
+    fireEvent.click(saveCurveButton(s))
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved().days).toEqual({ left: ['sunday', 'monday'], right: ['sunday', 'monday'] })
+  })
+
+  it('writes to the sleeper\'s side when the other side is away', async () => {
+    m.side.selectedSide = 'both'
+    m.side.singleScheduleSide = 'right'
+    const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+    expect(s.getByText('Heidi · Mon')).toBeTruthy()
+    fireEvent.click(saveCurveButton(s))
+    await waitFor(() => expect(m.put).toHaveBeenCalled())
+    expect(saved().days).toEqual({ left: [], right: ['monday'] })
   })
 
   it('shows save failures inline', async () => {
-    m.saveCurve.mockRejectedValue(new Error('scheduler reload failed'))
+    m.put.mockRejectedValue(new Error('Another curve already has that name'))
     const onClose = vi.fn()
     const s = render(<CurveEditor onClose={onClose} initialDays={['monday']} initialSetPoints={INITIAL} />)
     fireEvent.click(saveCurveButton(s))
-    await waitFor(() => expect(s.getByText('scheduler reload failed')).toBeTruthy())
+    await waitFor(() => expect(s.getByText('Another curve already has that name')).toBeTruthy())
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('reports a generic failure for non-Error rejections and closes the move dialog', async () => {
+    m.templates = [WEEKNIGHT]
+    m.put.mockRejectedValue('nope')
+    const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+    fireEvent.click(saveCurveButton(s))
+    fireEvent.click(within(await waitFor(() => s.getByRole('dialog'))).getByRole('button', { name: 'Move & save' }))
+    await waitFor(() => expect(s.getByText('Save failed')).toBeTruthy())
+    expect(s.queryByRole('dialog')).toBeNull()
+  })
+
+  it('shows saving state while the library write is pending', () => {
+    m.isSaving = true
+    const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
+    const busy = s.getAllByRole('button', { name: /Saving…/ }) as HTMLButtonElement[]
+    expect(busy.length).toBe(2)
+    expect(busy.every(b => b.disabled)).toBe(true)
   })
 
   it('cancels without saving', () => {
@@ -155,7 +261,7 @@ describe('CurveEditor', () => {
     const s = render(<CurveEditor onClose={onClose} initialDays={['monday']} initialSetPoints={INITIAL} />)
     fireEvent.click(s.getAllByRole('button', { name: 'Cancel' })[0])
     expect(onClose).toHaveBeenCalled()
-    expect(m.saveCurve).not.toHaveBeenCalled()
+    expect(m.put).not.toHaveBeenCalled()
   })
 
   it('keeps coolest at least 2° below warmest', () => {
@@ -168,7 +274,8 @@ describe('CurveEditor', () => {
   })
 })
 
-it('updates a point from its dialog and keyboard chart, and can cancel a day conflict', () => {
+it('updates a point from its dialog and keyboard chart, and can cancel a day move', () => {
+  m.templates = [{ id: 7, name: 'Weeknight', days: { left: ['tuesday'], right: [] }, active: true }]
   const s = render(<CurveEditor onClose={vi.fn()} initialDays={['monday']} initialSetPoints={INITIAL} />)
   fireEvent.click(s.getByRole('button', { name: 'Edit set point 11:15 PM' }))
   const dialog = s.getByRole('dialog')
@@ -176,12 +283,11 @@ it('updates a point from its dialog and keyboard chart, and can cancel a day con
   fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
   expect(s.getByRole('button', { name: 'Edit set point 10:00 PM' })).toBeTruthy()
   fireEvent.keyDown(s.getAllByRole('slider')[0], { key: 'ArrowUp' })
-  m.detectCurveConflicts.mockReturnValue(['tuesday'])
   fireEvent.click(s.getByRole('button', { name: 'Tue' }))
   fireEvent.click(saveCurveButton(s))
   fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
   expect(s.queryByRole('dialog')).toBeNull()
-  expect(m.saveCurve).not.toHaveBeenCalled()
+  expect(m.put).not.toHaveBeenCalled()
 })
 
 it('loads an imported AI curve into the local editor and saves only after review', async () => {
@@ -195,10 +301,10 @@ it('loads an imported AI curve into the local editor and saves only after review
   fireEvent.click(s.getByRole('button', { name: 'Next' }))
   fireEvent.click(s.getByRole('button', { name: 'Use curve' }))
   expect(s.queryByRole('dialog')).toBeNull()
-  expect(m.saveCurve).not.toHaveBeenCalled()
+  expect(m.put).not.toHaveBeenCalled()
   expect(rows(s)).toHaveLength(3)
   fireEvent.click(saveCurveButton(s))
-  await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ setPoints: expect.arrayContaining([{ time: '02:00', temperature: 75 }]) })))
+  await waitFor(() => expect(m.put).toHaveBeenCalledWith(expect.objectContaining({ points: { '22:00': 80, '02:00': 75, '07:00': 82 }, bedtime: '22:00', wake: '07:00' })))
 })
 
 it('edits the optional note and saves it with the curve', async () => {
@@ -207,7 +313,7 @@ it('edits the optional note and saves it with the curve', async () => {
   expect(notes.value).toBe('Old note')
   fireEvent.change(notes, { target: { value: 'Based on 14 nights' } })
   fireEvent.click(saveCurveButton(s))
-  await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ notes: 'Based on 14 nights' })))
+  await waitFor(() => expect(m.put).toHaveBeenCalledWith(expect.objectContaining({ notes: 'Based on 14 nights' })))
 })
 
 it('subscribes to desktop layout changes and removes the listener on unmount', () => {
@@ -241,7 +347,7 @@ it('preserves maintain on edit, removes the off badge, and saves the choice', as
   expect((s.getByLabelText('After schedule ends') as HTMLSelectElement).value).toBe('maintain')
   expect(s.queryByText('Power off')).toBeNull()
   fireEvent.click(saveCurveButton(s))
-  await waitFor(() => expect(m.saveCurve).toHaveBeenCalledWith(expect.objectContaining({ endAction: 'maintain' })))
+  await waitFor(() => expect(m.put).toHaveBeenCalledWith(expect.objectContaining({ endAction: 'maintain' })))
   fireEvent.change(s.getByLabelText('After schedule ends'), { target: { value: 'turn_off' } })
   expect(s.getByText('Power off')).toBeTruthy()
 })
