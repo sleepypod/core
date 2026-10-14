@@ -1,0 +1,49 @@
+# Group lookup for minimal Yocto images, which do not ship getent.
+# Keep NSS lookup where available, then fall back to the local group database.
+sleepypod_group_exists() {
+  if command -v getent >/dev/null 2>&1 && getent group "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+  local name password remainder
+  while IFS=: read -r name password remainder; do
+    [ "$name" != "$1" ] || return 0
+  done < "${SLEEPYPOD_GROUP_FILE:-/etc/group}"
+  return 1
+}
+
+sleepypod_journal_group() {
+  if sleepypod_group_exists systemd-journal; then
+    printf '%s\n' systemd-journal
+  elif sleepypod_group_exists adm; then
+    printf '%s\n' adm
+  fi
+}
+
+# ExecStartPre runs as root. Updating account membership here takes effect when
+# systemd subsequently starts the app as sleepypod, including the first OTA run
+# by an older sp-update (which installs the new sp-maintenance before restart).
+# Avoid daemon-reload/restart inside ExecStartPre and preserve all other groups.
+repair_sleepypod_journal_access() {
+  local journal_group current_groups usermod_bin candidate
+  journal_group=$(sleepypod_journal_group)
+  [ -n "$journal_group" ] || return 0
+  current_groups=$(id -nG sleepypod) || return 1
+  case " $current_groups " in
+    *" $journal_group "*) return 0 ;;
+  esac
+  usermod_bin=$(command -v usermod || true)
+  if [ -z "$usermod_bin" ]; then
+    # The service PATH excludes sbin on Yocto.
+    for candidate in /usr/sbin/usermod /sbin/usermod; do
+      if [ -x "$candidate" ]; then
+        usermod_bin=$candidate
+        break
+      fi
+    done
+  fi
+  if [ -z "$usermod_bin" ]; then
+    echo "WARNING: usermod missing; cannot grant journal access to sleepypod" >&2
+    return 1
+  fi
+  "$usermod_bin" -a -G "$journal_group" sleepypod
+}
