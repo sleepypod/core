@@ -2231,6 +2231,115 @@ describe('piezoStream — server lifecycle and protocol', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Handshake gate — Host / Origin allowlist (DNS rebinding + cross-site pages)
+// ---------------------------------------------------------------------------
+
+interface HandshakeResult {
+  status: number
+  body: string
+  client: WsClient
+}
+
+function attemptHandshake(port: number, headers: Record<string, string>): Promise<HandshakeResult> {
+  const ws = new WsClient(`ws://127.0.0.1:${port}`, { headers })
+  return new Promise((resolve, reject) => {
+    ws.once('open', () => resolve({ status: 101, body: '', client: ws }))
+    ws.once('unexpected-response', (_req, res) => {
+      let body = ''
+      res.setEncoding('utf-8')
+      res.on('data', (chunk: string) => {
+        body += chunk
+      })
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body, client: ws }))
+    })
+    ws.once('error', reject)
+  })
+}
+
+describe('piezoStream — handshake Host/Origin gate', () => {
+  let port = 0
+
+  beforeEach(() => {
+    const addr = startPiezoStreamServer().address()
+    if (addr === null || typeof addr === 'string') throw new Error('expected AddressInfo from server')
+    port = addr.port
+  })
+
+  afterEach(async () => {
+    await shutdownPiezoStreamServer()
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
+
+  async function expectConnects(headers: Record<string, string>): Promise<void> {
+    const result = await attemptHandshake(port, headers)
+    expect(result.status).toBe(101)
+    const messages: any[] = []
+    result.client.on('message', (data: Buffer) => messages.push(JSON.parse(data.toString('utf-8'))))
+    result.client.send(JSON.stringify({ type: 'subscribe', sensors: ['piezo-dual'] }))
+    await waitUntil(() => messages.some(m => m.type === 'subscribed'))
+    await new Promise<void>((resolve) => {
+      result.client.once('close', () => resolve())
+      result.client.close()
+    })
+  }
+
+  it('accepts the web UI origin on the pod port with the WS port in Host', async () => {
+    await expectConnects({ Origin: 'http://192.168.1.88:3000', Host: '192.168.1.88:3001' })
+  })
+
+  it('accepts .local and localhost origins', async () => {
+    await expectConnects({ Origin: 'http://eight-pod.local:3000', Host: 'eight-pod.local:3001' })
+    await expectConnects({ Origin: 'http://localhost:3000' })
+  })
+
+  it('accepts a native client that sends no Origin', async () => {
+    await expectConnects({})
+  })
+
+  it('rejects a cross-site Origin with 403 before the upgrade', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await attemptHandshake(port, { Origin: 'http://evil.example.com' })
+    expect(result.status).toBe(403)
+    expect(result.body).toContain('Origin not allowed')
+    expect(result.body).not.toContain('evil.example.com')
+    expect(warn).toHaveBeenCalledWith(
+      '[sensorStream] Rejected WebSocket handshake, %s not allowed: %s', 'Origin', 'http://evil.example.com')
+    expect(startPiezoStreamServer().clients.size).toBe(0)
+  })
+
+  it('rejects an allowed Origin when Host is a rebinding DNS name', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await attemptHandshake(port, {
+      Origin: 'http://192.168.1.88:3000',
+      Host: 'attacker.example.com:3001',
+    })
+    expect(result.status).toBe(403)
+    expect(result.body).toContain('Host not allowed')
+  })
+
+  it('rejects Origin: null from sandboxed iframes and file:// pages', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await attemptHandshake(port, { Origin: 'null' })
+    expect(result.status).toBe(403)
+  })
+
+  it('accepts hosts listed in SLEEPYPOD_ALLOWED_HOSTS', async () => {
+    vi.stubEnv('SLEEPYPOD_ALLOWED_HOSTS', 'pod.example.net')
+    await expectConnects({ Origin: 'https://pod.example.net', Host: 'pod.example.net:3001' })
+  })
+
+  it('logs a repeated rejection only once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (let i = 0; i < 3; i++) {
+      const result = await attemptHandshake(port, { Origin: 'http://repeat.example.com' })
+      expect(result.status).toBe(403)
+    }
+    expect(warn.mock.calls.filter(call => call[2] === 'http://repeat.example.com')).toHaveLength(1)
+  })
+})
+
 describe('piezoStream — findLatestRaw selection and fallback', () => {
   let dir: string
 

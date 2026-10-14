@@ -43,6 +43,7 @@
 
 import { RecentSensorFrames } from './recentSensorFrames'
 import { WebSocketServer, WebSocket } from 'ws'
+import type { VerifyClientCallbackAsync } from 'ws'
 import * as fs from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import * as path from 'node:path'
@@ -53,6 +54,7 @@ import { discoverSensorSource } from './sensorSourceDiscovery'
 import { recordSensorSource, recordFirstSensorFrame } from '@/src/lib/serverPerformance'
 import { natsReachable, startNatsFrameSource } from './natsFrameSource'
 import type { NatsFrameSourceHandle } from './natsFrameSource'
+import { ALLOWED_HOSTS_ENV, isHostAllowed, parseAllowedHosts } from '@/src/lib/hostAllowlist'
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -813,6 +815,63 @@ function updatePollRate(): void {
     .catch(() => { /* monitor not started yet */ })
 }
 
+// Each distinct rejection is logged once; a hostile page can retry in a loop
+// and must not be able to fill the pod's disk with warnings.
+const MAX_LOGGED_HANDSHAKE_REJECTIONS = 100
+const loggedHandshakeRejections = new Set<string>()
+
+interface HandshakeRejection {
+  header: 'Host' | 'Origin'
+  value: string
+}
+
+function handshakeRejection(host: string | undefined, origin: string | undefined): HandshakeRejection | null {
+  const allowedHosts = parseAllowedHosts(process.env[ALLOWED_HOSTS_ENV])
+  // Same rules as proxy.ts: a missing Host passes (Node rejects HTTP/1.1
+  // without one), a DNS name that is not a pod address is a rebinding attempt.
+  if (host !== undefined && !isHostAllowed(host, allowedHosts)) {
+    return { header: 'Host', value: host }
+  }
+  // Browsers don't apply same-origin rules to WebSockets, so any page the user
+  // visits could open this socket. Browsers always send Origin; the web UI's is
+  // http://<pod>:3000 while this server listens on WS_PORT, so the Origin's host
+  // is checked against the allowlist rather than compared with Host.
+  // No Origin passes: native clients (the iOS app's URLSessionWebSocketTask,
+  // scripts, node tests) send none, and a browser cannot omit it.
+  if (origin === undefined) return null
+  let originHost = ''
+  try {
+    originHost = new URL(origin).host
+  }
+  catch {
+    // `Origin: null` (sandboxed iframes, file:// pages) lands here and is rejected.
+  }
+  if (!isHostAllowed(originHost, allowedHosts)) return { header: 'Origin', value: origin }
+  return null
+}
+
+// The Vercel demo never starts this server (no listening sockets there), so
+// unlike proxy.ts there is no NEXT_PUBLIC_DEMO bypass.
+const verifyClient: VerifyClientCallbackAsync = ({ req, origin }, callback) => {
+  const rejection = handshakeRejection(req.headers.host, origin || undefined)
+  if (rejection === null) {
+    callback(true)
+    return
+  }
+  const key = `${rejection.header} ${rejection.value}`
+  if (!loggedHandshakeRejections.has(key) && loggedHandshakeRejections.size < MAX_LOGGED_HANDSHAKE_REJECTIONS) {
+    loggedHandshakeRejections.add(key)
+    console.warn('[sensorStream] Rejected WebSocket handshake, %s not allowed: %s', rejection.header, rejection.value)
+  }
+  // The body never echoes the header value back.
+  callback(
+    false,
+    403,
+    `${rejection.header} not allowed. Use the pod's IP address, or add this host to ${ALLOWED_HOSTS_ENV}.\n`,
+    { 'Content-Type': 'text/plain; charset=utf-8' },
+  )
+}
+
 /**
  * Start the piezo WebSocket streaming server.
  * Called from instrumentation.ts during server startup.
@@ -820,7 +879,7 @@ function updatePollRate(): void {
 export function startPiezoStreamServer(): WebSocketServer {
   if (streamState.wss) return streamState.wss
 
-  streamState.wss = new WebSocketServer({ port: WS_PORT, maxPayload: WS_MAX_PAYLOAD_BYTES })
+  streamState.wss = new WebSocketServer({ port: WS_PORT, maxPayload: WS_MAX_PAYLOAD_BYTES, verifyClient })
   console.log(`[sensorStream] WebSocket server listening on port ${WS_PORT}`)
 
   streamState.wss.on('connection', (ws) => {
