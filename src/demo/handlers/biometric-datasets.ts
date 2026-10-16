@@ -37,6 +37,7 @@ export const datasetHandlers: DemoHandlers<'biometricTuning'> = {
   // qualified pod resource telemetry. Do not fabricate waveform publication.
   getReplayAdmission: () => ({ configured: false, qualificationId: null, admitted: false, reasons: ['unqualified'] }),
   listRawSources: () => ({ items: [], nextCursor: null }),
+  locateRawArchives: () => [],
   inspectRawSource: input => ({ status: 'deferred', nextCursor: input.afterName }),
   createWaveformDataset: () => ({ status: 'deferred' }),
   listSessions: (input) => {

@@ -630,6 +630,17 @@ explicitly. Existing worker serialization, process limits, quotas and health
 checks remain enforced. This policy authorizes bounded replay on this measured
 pod only; it provides no accuracy designation or shadow qualification.
 
+**Raised 2026-10-16.** Calibration datasets frozen from real Pod 5 nights include
+sessions of 10–14 hours. Replay ran about 31× slower on the pod than on a laptop
+(a 2-hour cohort took 124 CPU-seconds), so a 10.5-hour night needed roughly 2,100
+CPU-seconds and was killed at the 1,200-second limit on every attempt. With the
+owner's approval the budget on this pod is now the schema maximum: 3,600 CPU-seconds
+and a one-hour wall deadline per waveform child, and a four-hour whole-job deadline
+(`{"jobWallMs":14400000,"waveformWallMs":3600000,"waveformCpuSeconds":3600}`). The
+admission cutoffs above are unchanged, so health refusals still pause or interrupt
+replay; workers still run one at a time at nice 19. The previous file is kept as
+`/etc/sleepypod/biometrics-replay.env.bak-20261016`.
+
 Deployment stores the two environment values in
 `/etc/sleepypod/biometrics-replay.env`, loaded by
 `/etc/systemd/system/sleepypod.service.d/biometrics-replay.conf`. A service restart

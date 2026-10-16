@@ -119,7 +119,7 @@ describe('retained waveform evaluator', () => {
       { ...output, run: { ...output.run, build_hash: '0'.repeat(64) } },
       { ...output, run: { ...output.run, config_hashes: { ...output.run.config_hashes, right: '0'.repeat(64) } } },
       { ...output, run: { ...output.run, counts: { ...output.run.counts, scored_outputs: 1 } } },
-      { ...output, run: { ...output.run, raw_records: 9 } },
+      { ...output, run: { ...output.run, raw_records: 0 } },
       { ...output, run: { ...output.run, artifact_hashes: ['c'.repeat(64)] } },
       { ...output, readings: output.readings.map(row => ({ ...row, timestampMs: row.timestampMs + 600000 })) },
       { ...output, configHash: 'c'.repeat(64), readings: output.readings.map(row => ({ ...row, configHash: 'c'.repeat(64) })) },
@@ -127,6 +127,8 @@ describe('retained waveform evaluator', () => {
       expect(() => evaluateBacktest(rehash({ ...base, waveform: { ...base.waveform, outputs: [bad] } }))).toThrow('Waveform output identity mismatch')
     }
     expect(() => evaluateBacktest(rehash({ ...base, waveform: { ...base.waveform, outputs: [output, output] } }))).toThrow('Waveform output identity mismatch')
+    // Pod 5 frames pack several records, so fewer frames than decoded records is valid.
+    expect(() => evaluateBacktest(rehash({ ...base, waveform: { ...base.waveform, outputs: [{ ...output, run: { ...output.run, raw_records: 1 } }] } }))).not.toThrow('Waveform output identity mismatch')
     const processed = fixture()
     expect(() => evaluateBacktest({ ...processed, waveform: base.waveform })).toThrow('Unexpected waveform inputs for processed replay')
   })

@@ -40,6 +40,9 @@ export const referenceHandlers: DemoHandlers<'biometricTuning'> = {
     imports.push({ descriptor, measurements: result.measurements.map(row => ({ ...row, id: ++rowId })) })
     return { ...structuredClone(descriptor), alreadyImported: false }
   },
+  // Demo imports always carry provenance; there are no older unlinked rows.
+  countLegacyReferences: () => ({ vitals: 0, stages: 0 }),
+  linkLegacyReferences: () => ({ vitals: 0, stages: 0, imports: 0 }),
   getImport: ({ id }) => structuredClone(get(id).descriptor),
   listImports: (input) => {
     const rows = imports.map(row => row.descriptor).filter(row => row.summary.side === input.side

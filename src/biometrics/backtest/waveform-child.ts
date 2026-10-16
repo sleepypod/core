@@ -88,7 +88,7 @@ export function runWaveformChild(location: WaveformWorkerLocation, work: unknown
       options.signal?.removeEventListener('abort', abort)
       if (failure) reject(failure)
       else if (code !== 0 || !result || (options.expectedBuildHash !== undefined && result.build_hash !== options.expectedBuildHash) || pending.length || result.counts.scored_outputs !== readings.length
-        || result.raw_records < result.decoded_records || result.decoded_records < result.counts.records
+        || (result.raw_records === 0 && result.decoded_records > 0) || result.decoded_records < result.counts.records
         || readings.some(reading => reading.configHash !== result?.config_hashes[reading.side])) {
         reject(new Error('Waveform worker failed or returned an incomplete result'))
       }

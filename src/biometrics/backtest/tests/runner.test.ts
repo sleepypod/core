@@ -13,11 +13,12 @@ import { tmpdir } from 'node:os'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import * as schema from '@/src/db/biometrics-schema'
 import { DatasetStore } from '../datasets'
 import { BacktestJobStore } from '../jobs'
 import { workerBuildHash } from '../child'
-import { executeNextBacktest } from '../runner'
+import { failureMessage, executeNextBacktest } from '../runner'
 import { backtestFixture } from './fixtures/backtest'
 let sqlite: Database.Database
 let db: ReturnType<typeof drizzle<typeof schema>>
@@ -217,7 +218,7 @@ describe('lease, cancellation and worker protocol failures', () => {
   ])('fails a worker reporting %s', async (_, body) => {
     const workerPath = await scriptedWorker('progress.cjs', `${body}setInterval(()=>{},1000)`)
     expect(await executeNextBacktest(db, { ...options, workerPath })).toEqual({ state: 'stopped', jobId })
-    expect(jobs.get(jobId)).toMatchObject({ state: 'failed', error: 'Replay failed validation, resources, or execution' })
+    expect(jobs.get(jobId)).toMatchObject({ state: 'failed', error: expect.stringMatching(/^Replay failed validation, resources, or execution/) })
   })
 
   it.each([
@@ -237,5 +238,16 @@ describe('lease, cancellation and worker protocol failures', () => {
     const workerPath = await scriptedWorker('incomplete.cjs', `${identity}emit({type:'result',report});`)
     expect(await executeNextBacktest(db, { ...options, workerPath })).toEqual({ state: 'stopped', jobId })
     expect(jobs.get(jobId)).toMatchObject({ state: 'failed' })
+  })
+})
+
+describe('failure messages', () => {
+  it('names the failed step for the pipeline’s own messages and stays generic for anything that could carry data', () => {
+    expect(failureMessage(new Error('Waveform worker failed or returned an incomplete result')))
+      .toBe('Replay failed validation, resources, or execution: Waveform worker failed or returned an incomplete result')
+    expect(failureMessage(new z.ZodError([]))).toBe('Replay failed validation, resources, or execution: job input or report did not match its schema')
+    for (const error of [new Error('ENOENT: /persistent/sleepypod-data/x.db'), new Error('{"heartRate":61}'), new Error(''), 'text', null]) {
+      expect(failureMessage(error)).toBe('Replay failed validation, resources, or execution')
+    }
   })
 })

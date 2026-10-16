@@ -44,7 +44,7 @@ def fixture(tmp_path, records=None, split_at=76):
         name = f'{index}.RAW.gz'
         (archive / name).write_bytes(gzip.compress(data, mtime=0))
         artifact = store.retain(archive, name)
-        selected.append({'artifact': asdict(artifact), 'first_event_ms': group[0][0], 'last_event_ms': group[-1][0]})
+        selected.append({'artifact': asdict(artifact), 'first_event_ms': min(t for t, _ in group), 'last_event_ms': max(t for t, _ in group)})
         (archive / name).unlink()
     snapshot = {'version': 'retained-waveform-input-v1', 'retained_start_ms': START,
         'score_start_ms': START + 60000, 'score_end_ms': START + 150000, 'artifacts': selected,
@@ -95,7 +95,7 @@ def test_rejects_overlaps_duplicates_unknown_versions_and_bad_context_before_out
     store, snapshot, _ = fixture(tmp_path)
     bad_inputs = []
     bad = deepcopy(snapshot)
-    bad['artifacts'][1]['first_event_ms'] = bad['artifacts'][0]['last_event_ms']
+    bad['artifacts'][1]['first_event_ms'] = bad['artifacts'][0]['last_event_ms'] - 1
     bad_inputs.append(bad)
     bad = deepcopy(snapshot)
     bad['artifacts'].append(bad['artifacts'][0])
@@ -152,3 +152,25 @@ def test_missing_artifact_never_falls_back_to_a_rolling_archive(tmp_path):
     (store.directory / snapshot['artifacts'][0]['artifact']['name']).unlink()
     with pytest.raises(FileNotFoundError):
         run(store, snapshot, lambda _: None)
+
+
+def test_pod5_pump_records_stamped_ahead_replay_like_time_ordered_input(tmp_path):
+    # Pod 5 writes each frzHealth stamped a second ahead of the piezo frame after it.
+    pumps = [(START + offset, {'type': 'frzHealth', 'left': {'pumpRpm': 0}, 'right': {'pumpRpm': 0}}) for offset in range(1000, 150000, 10000)]
+    ordered = sorted([*frames(), *pumps], key=lambda item: item[0])
+    written = []
+    for timestamp, record in ordered:
+        if record['type'] == 'frzHealth' and written and written[-1][1]['type'] != 'frzHealth':
+            written.insert(len(written) - 1, (timestamp, record))
+        else:
+            written.append((timestamp, record))
+    assert written != ordered
+    outputs = {}
+    for name, records in (('ordered', ordered), ('written', written)):
+        folder = tmp_path / name
+        folder.mkdir()
+        store, snapshot, _ = fixture(folder, records, split_at=len(records) // 2)
+        rows = []
+        run(store, snapshot, rows.append)
+        outputs[name] = [(row.side, row.timestamp_ms, row.candidate.heart_rate) for row in rows]
+    assert outputs['written'] == outputs['ordered'] and outputs['ordered']

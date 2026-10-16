@@ -1451,6 +1451,11 @@ Environment="XTABLES_LOCKFILE=/run/dac/xtables.lock"
 # (required DAC directory permissions and reboot authorization).
 ExecStartPre=+/bin/sh -c '[ "$DAC_SOCK_PATH" != "/deviceinfo/dac.sock" ] && ln -sf $DAC_SOCK_PATH /deviceinfo/dac.sock 2>/dev/null; true'
 ExecStartPre=+/usr/local/bin/sp-maintenance
+# Replay and shadow workers (User=sleepypod) serialize on a host-wide flock
+# at /run/sleepypod-shadow.lock, but cannot create files in root-owned /run.
+# Create or adopt it for the service user on every start (/run is tmpfs).
+# Append-open, never truncate or replace: a surviving worker may hold it.
+ExecStartPre=+/bin/sh -c ': >> /run/sleepypod-shadow.lock && chown sleepypod:sleepypod /run/sleepypod-shadow.lock && chmod 600 /run/sleepypod-shadow.lock'
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 # No fallback when the build is missing: pnpm start cannot run as the
 # sleepypod user (home is /nonexistent), so it only crash-looped with a

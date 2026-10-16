@@ -18,6 +18,17 @@ import type { RawInspectionLocation } from './raw-inspection-child'
 import { workerBuildHash, runBacktestChild } from './child'
 
 /** One leased attempt. Call only after the host's resource/ingest gate admits work. */
+const GENERIC_FAILURE = 'Replay failed validation, resources, or execution'
+/**
+ * Say which step failed when the error is one of this pipeline's own fixed
+ * messages; schema errors and anything that could carry data stay generic.
+ */
+export function failureMessage(error: unknown) {
+  if (error instanceof z.ZodError) return `${GENERIC_FAILURE}: job input or report did not match its schema`
+  if (error instanceof Error && /^[A-Za-z][A-Za-z ,;'()-]{2,119}$/.test(error.message)) return `${GENERIC_FAILURE}: ${error.message}`
+  return GENERIC_FAILURE
+}
+
 export async function executeNextBacktest(db: BetterSQLite3Database<typeof schema>, options: {
   owner: string
   workerPath: string
@@ -137,14 +148,14 @@ export async function executeNextBacktest(db: BetterSQLite3Database<typeof schem
     jobs.complete(lease, { ...measured, status, evidence: status === 'improved' ? 'qualified_reference_agreement' : work.job.evidence })
     return { state: 'succeeded' as const, jobId: claimed.id }
   }
-  catch {
+  catch (error) {
     // Only the authoritative lease may update state. Expired work is recovered
     // by the next claimant; it must not overwrite a replacement's result.
     try {
       const latest = jobs.get(claimed.id)
       if (latest.state === 'cancel_requested') jobs.acknowledgeCancellation(lease)
       else if (options.signal?.aborted || resourceFailure) jobs.interrupt(lease, resourceFailure ? 'Resource admission withdrawn' : 'Worker host stopped')
-      else jobs.fail(lease, 'Replay failed validation, resources, or execution')
+      else jobs.fail(lease, failureMessage(error))
     }
     catch { /* Lost lease: recovery owns the state transition. */ }
     return { state: 'stopped' as const, jobId: claimed.id }

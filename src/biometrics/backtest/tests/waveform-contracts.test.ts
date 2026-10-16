@@ -25,7 +25,9 @@ describe('retained waveform input contract', () => {
     expect(() => retainedWaveformInputSchema.parse(input({ artifacts: [source('a', 100, 900)] }))).toThrow('no events in the retained window')
     expect(() => retainedWaveformInputSchema.parse(input({ artifacts: [source('a', 5000, 6000)] }))).toThrow('no events in the retained window')
     expect(() => retainedWaveformInputSchema.parse(input({ artifacts: [source('a', 1000, 3000), source('a', 3500, 6000)] }))).toThrow('distinct with nonoverlapping ordered')
-    expect(() => retainedWaveformInputSchema.parse(input({ artifacts: [source('a', 1000, 3000), source('b', 3000, 6000)] }))).toThrow('distinct with nonoverlapping ordered')
+    expect(() => retainedWaveformInputSchema.parse(input({ artifacts: [source('a', 1000, 3000), source('b', 2999, 6000)] }))).toThrow('distinct with nonoverlapping ordered')
+    // Pod 5 archives can share their boundary millisecond.
+    expect(retainedWaveformInputSchema.parse(input({ artifacts: [source('a', 1000, 3000), source('b', 3000, 6000)] })).artifacts).toHaveLength(2)
     expect(() => retainedWaveformInputSchema.parse(input({ artifacts: [source('a', 1000, 3000, 1024 * 1024 * 1024 + 1)] }))).toThrow('compressed input budget')
     expect(() => retainedWaveformInputSchema.parse(input({ artifacts: [] }))).toThrow()
   })

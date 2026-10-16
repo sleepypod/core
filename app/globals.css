@@ -48,6 +48,16 @@
   --color-vital-hr: var(--chart-vital-hr);
   --color-vital-hrv: var(--chart-vital-hrv);
   --color-vital-br: var(--chart-vital-br);
+  --color-calib-prev: var(--calib-prev);
+  --color-calib-saved: var(--calib-saved);
+  --color-calib-none: var(--calib-none);
+  --color-calib-better: var(--calib-better);
+  --color-actor-agent: var(--actor-agent);
+  --color-actor-agent-bg: var(--actor-agent-bg);
+  --color-actor-you: var(--actor-you);
+  --color-actor-you-bg: var(--actor-you-bg);
+  --color-actor-pod: var(--actor-pod);
+  --color-actor-pod-bg: var(--actor-pod-bg);
   --radius-tag: 3px;
   --radius-thumb: 6px;
   --radius-ctl: 8px;
@@ -162,6 +172,18 @@
   --chart-vital-hrv: #b294e6;
   --chart-vital-br: #6db3e3;
 
+  /* Biometric calibration: previous vs saved profile, and who acted. */
+  --calib-prev: #3a3a40;
+  --calib-saved: #7fc0ea;
+  --calib-none: #2a2a2f;
+  --calib-better: #5fc27a;
+  --actor-agent: #b89cf0;
+  --actor-agent-bg: #231c33;
+  --actor-you: #7fc0ea;
+  --actor-you-bg: #12202c;
+  --actor-pod: #5fc27a;
+  --actor-pod-bg: #12261a;
+
   --toggle-off-track: var(--sp-line-2);
   --toggle-off-knob: #6a6a70;
   --toggle-on-knob: var(--sp-ink-0);
@@ -204,6 +226,16 @@
   --chart-vital-hr: #c94f40;
   --chart-vital-hrv: #7a5cc4;
   --chart-vital-br: #2f7fb8;
+  --calib-prev: #c4c4c0;
+  --calib-saved: #2f7fb8;
+  --calib-none: #e2e2df;
+  --calib-better: #2e9d5b;
+  --actor-agent: #6a4fb8;
+  --actor-agent-bg: #ece6f8;
+  --actor-you: #2f6fb5;
+  --actor-you-bg: #e3eef9;
+  --actor-pod: #2e8a52;
+  --actor-pod-bg: #e2f3e8;
   --toggle-off-track: #dcdcd8;
   --toggle-off-knob: #ffffff;
   --toggle-on-knob: #ffffff;

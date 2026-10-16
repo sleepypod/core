@@ -25,7 +25,8 @@ export const retainedWaveformInputSchema = z.object({
   let previous = -1, compressed = 0
   for (const source of value.artifacts) {
     if (source.first_event_ms > source.last_event_ms || source.last_event_ms < value.retained_start_ms || source.first_event_ms >= value.score_end_ms) invalid('Artifact has no events in the retained window')
-    if (hashes.has(source.artifact.sha256) || source.first_event_ms <= previous) invalid('Retained artifacts must be distinct with nonoverlapping ordered event bounds')
+    // Bounds may touch: Pod 5 can end one archive with a pump record stamped at the next archive's first frame.
+    if (hashes.has(source.artifact.sha256) || source.first_event_ms < previous) invalid('Retained artifacts must be distinct with nonoverlapping ordered event bounds')
     hashes.add(source.artifact.sha256)
     previous = source.last_event_ms
     compressed += source.artifact.compressed_bytes

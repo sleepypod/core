@@ -71,7 +71,8 @@ export function createBacktestEvaluator(dependencies: { configHash: (value: unkn
           || output.run.config_hashes[dataset.snapshot.side] !== output.configHash
           || output.run.config_hashes[otherSide] !== job.waveform.otherSide.resolvedHash
           || output.run.counts.scored_outputs !== output.readings.length
-          || output.run.raw_records < output.run.decoded_records || output.run.decoded_records < output.run.counts.records
+          // A Pod 5 frame can pack several records, so decoded records may outnumber frames but never exist without one.
+          || (output.run.raw_records === 0 && output.run.decoded_records > 0) || output.run.decoded_records < output.run.counts.records
           || JSON.stringify(output.run.artifact_hashes) !== JSON.stringify(retained.input.artifacts.map(row => row.artifact.sha256))
           || output.readings.some(row => row.configHash !== output.run.config_hashes[row.side]
             || row.timestampMs < retained.input.score_start_ms || row.timestampMs >= retained.input.score_end_ms)) throw new Error('Waveform output identity mismatch')

@@ -56,7 +56,7 @@ it.each([
   [events[0], { type: 'result', result: { ...result, counts: { ...result.counts, scored_outputs: 2 } } }],
   [{ type: 'reading', reading: { ...reading, configHash: 'b'.repeat(64) } }, events[1]],
   [{ type: 'reading', reading: { ...reading, hrvMetric: 'rmssd' } }, events[1]],
-  [events[0], { type: 'result', result: { ...result, decoded_records: 2 } }],
+  [events[0], { type: 'result', result: { ...result, raw_records: 0 } }],
   [events[0], { type: 'result', result: { ...result, counts: { ...result.counts, records: 2 } } }],
   [events[0], { type: 'reading', reading: { ...reading, configHash: 'b'.repeat(64) } },
     { type: 'result', result: { ...result, counts: { ...result.counts, scored_outputs: 2 } } }],
@@ -158,4 +158,12 @@ it('retains valid measured process resources and rejects fabricated scopes or ne
     await worker([events[0], { type: 'result', result: { ...result, resources: { ...resources, ...patch } } }].map(emit).join(''))
     await expect(runWaveformChild(location(), {})).rejects.toThrow('invalid event')
   }
+})
+
+it('accepts Pod 5 runs that decode more records than frames, but not records without any frame', async () => {
+  const packed = { ...result, decoded_records: 3, raw_records: 1 }
+  await worker([{ type: 'reading', reading }, { type: 'result', result: packed }].map(emit).join(''))
+  expect((await runWaveformChild(location(), {})).run).toEqual(packed)
+  await worker([{ type: 'reading', reading }, { type: 'result', result: { ...result, raw_records: 0 } }].map(emit).join(''))
+  await expect(runWaveformChild(location(), {})).rejects.toThrow('incomplete result')
 })

@@ -6,6 +6,7 @@ these remain supported along with definite containers and strings. Semantic
 tags and non-text map keys are outside this versioned firmware-record contract.
 """
 from dataclasses import dataclass
+import heapq
 import struct
 
 from common.cbor_raw import read_raw_record
@@ -118,15 +119,70 @@ class _Decoder:
 
 
 def decode_record(payload, limits=DecodeLimits()):
+    records = decode_records(payload, limits)
+    if len(records) != 1:
+        raise ValueError('Trailing bytes after CBOR record')
+    return records[0]
+
+
+def decode_records(payload, limits=DecodeLimits()):
+    """Decode one RAW frame. Pod 5 firmware packs several `log` maps into a
+    single frame back to back, so a frame is a CBOR sequence; every item must
+    be a typed record and all items share one decode budget."""
     if not isinstance(payload, bytes) or len(payload) > limits.record_bytes:
         raise ValueError('RAW inner record byte budget exceeded')
     decoder = _Decoder(payload, limits)
-    result = decoder.value()
-    if decoder.position != len(payload):
-        raise ValueError('Trailing bytes after CBOR record')
-    if not isinstance(result, dict) or not isinstance(result.get('type'), str):
-        raise ValueError('RAW record must have a textual type')
-    return result
+    records = []
+    while True:
+        result = decoder.value()
+        if not isinstance(result, dict) or not isinstance(result.get('type'), str):
+            raise ValueError('RAW record must have a textual type')
+        records.append(result)
+        if decoder.position == len(payload):
+            return records
+
+
+EVENT_TYPES = ('piezo-dual', 'frzHealth')
+REORDER_WINDOW_MS = 5000
+
+
+class EventOrder:
+    """Release piezo and pump events in timestamp order.
+
+    Each record type must be monotonic on its own, but Pod 5 stamps a
+    frzHealth record up to a second ahead of the piezo frame written after
+    it. Events are held until one at least `window_ms` newer arrives, which
+    merges the streams. A step back within a stream, or an event older than
+    one already released, is a real reversal: strict callers raise on it,
+    counting callers drop it and report `reversals`.
+    """
+    def __init__(self, strict=True, window_ms=REORDER_WINDOW_MS):
+        self.strict, self.window_ms = strict, window_ms
+        self.released, self.reversals = None, 0
+        self._held, self._sequence, self._latest = [], 0, {}
+
+    def push(self, timestamp_ms, item, kind):
+        latest = self._latest.get(kind)
+        if (latest is not None and timestamp_ms < latest) or (self.released is not None and timestamp_ms < self.released):
+            if self.strict:
+                raise ValueError('Retained event timestamps reversed')
+            self.reversals += 1
+            return []
+        self._latest[kind] = timestamp_ms
+        heapq.heappush(self._held, (timestamp_ms, self._sequence, item))
+        self._sequence += 1
+        return self._release(timestamp_ms - self.window_ms)
+
+    def flush(self):
+        return self._release(None)
+
+    def _release(self, through):
+        ready = []
+        while self._held and (through is None or self._held[0][0] <= through):
+            timestamp_ms, _, item = heapq.heappop(self._held)
+            self.released = timestamp_ms
+            ready.append((timestamp_ms, item))
+        return ready
 
 
 class RawRecordBudget:
@@ -164,7 +220,7 @@ def iter_retained_records(store, descriptor, limits=DecodeLimits(), max_records=
             if count > max_records:
                 raise ValueError('RAW record count limit exceeded')
             if payload is not None:
-                yield decode_record(payload, limits)
+                yield from decode_records(payload, limits)
 
 
 def inventory_retained(store, descriptor, limits=DecodeLimits(), max_records=1_000_000):
@@ -183,11 +239,18 @@ def inventory_retained(store, descriptor, limits=DecodeLimits(), max_records=1_0
               'first_event_ms': None, 'last_event_ms': None,
               'channels': {side: {'samples': 0, 'lost_markers': 0, 'truncated_tail_bytes': 0}
                            for side in ('left1', 'right1')}}
-    previous = None
+    order, previous = EventOrder(strict=False), None
+
+    def count_order(ready):
+        nonlocal previous
+        for timestamp_ms, _ in ready:
+            result['duplicate_timestamps'] += int(timestamp_ms == previous)
+            previous = timestamp_ms
+
     for record in iter_retained_records(store, descriptor, limits, max_records):
         result['decoded_records'] += 1
         kind = record['type']
-        if kind not in ('piezo-dual', 'frzHealth'):
+        if kind not in EVENT_TYPES:
             continue
         timestamp = record.get('ts')
         if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
@@ -195,10 +258,7 @@ def inventory_retained(store, descriptor, limits=DecodeLimits(), max_records=1_0
             result['invalid_timestamps'] += 1
         else:
             timestamp_ms = math.floor(timestamp * 1000 + 0.5)
-            if previous is not None:
-                result['timestamp_reversals'] += int(timestamp_ms < previous)
-                result['duplicate_timestamps'] += int(timestamp_ms == previous)
-            previous = timestamp_ms
+            count_order(order.push(timestamp_ms, None, kind))
             result['first_event_ms'] = timestamp_ms if result['first_event_ms'] is None else min(result['first_event_ms'], timestamp_ms)
             result['last_event_ms'] = timestamp_ms if result['last_event_ms'] is None else max(result['last_event_ms'], timestamp_ms)
         if kind == 'frzHealth':
@@ -225,6 +285,8 @@ def inventory_retained(store, descriptor, limits=DecodeLimits(), max_records=1_0
         result['usable_dual_frames'] += int(usable)
         result['empty_channel_frames'] += int(not usable and not oversized)
         result['oversize_channel_frames'] += int(oversized)
+    count_order(order.flush())
+    result['timestamp_reversals'] = order.reversals
     result['ordered_waveform_available'] = (result['usable_dual_frames'] > 0
         and result['invalid_timestamps'] == 0 and result['timestamp_reversals'] == 0
         and result['oversize_channel_frames'] == 0)

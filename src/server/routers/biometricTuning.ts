@@ -5,6 +5,7 @@ import { replayAdmission, replayAdmissionSchema, replayAdmitter } from '@/src/bi
 import { rawSourceDescriptorSchema, rawSourcePageSchema, rawSourcePageResultSchema } from '@/src/biometrics/backtest/raw-catalog'
 import { rawScanInputSchema, rawSourceNameSchema } from '@/src/biometrics/backtest/raw-inspection-child'
 import { createWaveformDatasetSchema } from '@/src/biometrics/backtest/waveform-selection'
+import { locateRawArchives } from '@/src/biometrics/backtest/raw-locate'
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
@@ -33,6 +34,7 @@ import { experimentProtocolSchema } from '@/src/biometrics/backtest/contracts'
 import { datasetDescriptorSchema } from '@/src/biometrics/backtest/contracts'
 import { deviceSettings } from '@/src/db/schema'
 import { ReferenceInputError } from '@/src/biometrics/references/time'
+import { countUnlinkedLegacyReferences, linkLegacyReferences } from '@/src/biometrics/references/legacy'
 
 /** UI and MCP call this shared service surface under the existing LAN trust model. */
 async function references<T>(action: (store: ReferenceStore) => T | Promise<T>): Promise<T> {
@@ -248,6 +250,13 @@ export const biometricTuningRouter = router({
     .output(rawSourcePageResultSchema)
     .query(({ input }) => references(() => coordinatorRequest(biometricsDb, { type: 'pageRawSources', input }))),
 
+  locateRawArchives: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/raw-sources/locate', protect: false, tags: ['Biometric tuning'] } })
+    .input(z.object({ startMs: z.number().int().nonnegative(), endMs: z.number().int().nonnegative() }).strict()
+      .refine(input => input.startMs <= input.endMs && input.endMs - input.startMs <= 36 * 3600_000, { message: 'Use a window of at most 36 hours' }))
+    .output(z.array(z.object({ name: rawSourceNameSchema, afterName: rawSourceNameSchema.nullable() })))
+    .query(({ input }) => locateRawArchives(input.startMs, input.endMs)),
+
   createWaveformDataset: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/biometric-tuning/waveform-datasets', protect: false, tags: ['Biometric tuning'] } })
     .input(createWaveformDatasetSchema)
@@ -372,6 +381,18 @@ export const biometricTuningRouter = router({
     .query(({ input }) => references(store => store.list(input.side, input.beforeId !== undefined && input.beforeCreatedAtMs !== undefined
       ? { createdAtMs: input.beforeCreatedAtMs, id: input.beforeId }
       : undefined))),
+
+  countLegacyReferences: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/references/legacy', protect: false, tags: ['Biometric tuning'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.object({ vitals: z.number().int(), stages: z.number().int() }))
+    .query(({ input }) => countUnlinkedLegacyReferences(biometricsDb, input.side)),
+
+  linkLegacyReferences: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometric-tuning/references/legacy/link', protect: false, tags: ['Biometric tuning'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.object({ vitals: z.number().int(), stages: z.number().int(), imports: z.number().int() }))
+    .mutation(({ input }) => references(() => linkLegacyReferences(biometricsDb, input.side))),
 
   getImport: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometric-tuning/references/{id}', protect: false, tags: ['Biometric tuning'] } })

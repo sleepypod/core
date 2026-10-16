@@ -1,7 +1,7 @@
-import { inArray } from 'drizzle-orm'
+import { and, asc, count, eq, inArray, isNull } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import * as schema from '@/src/db/biometrics-schema'
-import type { ReferenceImportInput } from './contracts'
+import { REFERENCE_LIMITS, type ReferenceImportInput } from './contracts'
 import { previewReferenceImport } from './normalize'
 import { ReferenceStore } from './store'
 
@@ -26,4 +26,39 @@ export function recordLegacyReferenceImport(db: BetterSQLite3Database<typeof sch
   const result = new ReferenceStore(db).commit({ import: input, previewHash: preview.summary.contentHash })
   const table = kind === 'vitals' ? schema.referenceVitals : schema.referenceStages
   for (let i = 0; i < rows.length; i += 100) db.update(table).set({ importId: result.id }).where(inArray(table.id, rows.slice(i, i + 100).map(row => row.id))).run()
+}
+
+/** Watch rows stored before imports carried provenance, per side. */
+export function countUnlinkedLegacyReferences(db: BetterSQLite3Database<typeof schema>, side: 'left' | 'right') {
+  const vitals = db.select({ n: count() }).from(schema.referenceVitals)
+    .where(and(eq(schema.referenceVitals.side, side), isNull(schema.referenceVitals.importId))).get()?.n ?? 0
+  const stages = db.select({ n: count() }).from(schema.referenceStages)
+    .where(and(eq(schema.referenceStages.side, side), isNull(schema.referenceStages.importId))).get()?.n ?? 0
+  return { vitals, stages }
+}
+
+/**
+ * Give rows stored before provenance support the same import record new rows
+ * get, so calibration datasets can use them. Rows go in time order, one
+ * import per source and up to `REFERENCE_LIMITS.rows` rows; each batch
+ * commits on its own, so an interrupted run resumes where it stopped.
+ */
+export function linkLegacyReferences(db: BetterSQLite3Database<typeof schema>, side: 'left' | 'right', batch: number = REFERENCE_LIMITS.rows) {
+  const linked = { vitals: 0, stages: 0, imports: 0 }
+  for (const kind of ['vitals', 'stages'] as const) {
+    for (;;) {
+      const rows = kind === 'vitals'
+        ? db.select().from(schema.referenceVitals).where(and(eq(schema.referenceVitals.side, side), isNull(schema.referenceVitals.importId)))
+            .orderBy(asc(schema.referenceVitals.source), asc(schema.referenceVitals.timestamp), asc(schema.referenceVitals.id)).limit(batch).all()
+        : db.select().from(schema.referenceStages).where(and(eq(schema.referenceStages.side, side), isNull(schema.referenceStages.importId)))
+            .orderBy(asc(schema.referenceStages.source), asc(schema.referenceStages.start), asc(schema.referenceStages.id)).limit(batch).all()
+      if (rows.length === 0) break
+      const source = rows[0].source
+      const sameSource = (rows as Array<LegacyVital | LegacyStage>).filter(row => row.source === source)
+      db.transaction(tx => recordLegacyReferenceImport(tx, kind, sameSource))
+      linked[kind] += sameSource.length
+      linked.imports++
+    }
+  }
+  return linked
 }

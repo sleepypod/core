@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import * as schema from '@/src/db/biometrics-schema'
-import { recordLegacyReferenceImport } from '../legacy'
+import { countUnlinkedLegacyReferences, linkLegacyReferences, recordLegacyReferenceImport } from '../legacy'
 import { ReferenceStore } from '../store'
 
 let sqlite: Database.Database
@@ -48,4 +48,20 @@ it('records stage intervals and ignores empty batches', () => {
   const page = new ReferenceStore(db).measurements(importId)
   expect(page.items.map(row => [row.stage, row.startMs, row.endMs])).toEqual([['light', T, T + 1800000], ['deep', T + 1800000, T + 3600000]])
   expect(new ReferenceStore(db).get(importId).summary).toMatchObject({ side: 'right', subjectId: 'legacy_unknown:right', accepted: 2, metrics: ['sleep_stages'] })
+})
+
+it('links rows stored before provenance support, per source and in bounded batches, and resumes', () => {
+  db.insert(schema.referenceVitals).values(Array.from({ length: 5 }, (_, i) => ({ side: 'left' as const, source: 'apple_watch' as const,
+    timestamp: new Date(T + i * 60000), heartRate: 60 + i }))).run()
+  db.insert(schema.referenceVitals).values({ side: 'right', source: 'apple_watch', timestamp: new Date(T), heartRate: 70 }).run()
+  db.insert(schema.referenceStages).values({ side: 'left', source: 'apple_watch', start: new Date(T), end: new Date(T + 1800000), stage: 'deep' }).run()
+  expect(countUnlinkedLegacyReferences(db, 'left')).toEqual({ vitals: 5, stages: 1 })
+  expect(linkLegacyReferences(db, 'left', 2)).toEqual({ vitals: 5, stages: 1, imports: 4 })
+  expect(countUnlinkedLegacyReferences(db, 'left')).toEqual({ vitals: 0, stages: 0 })
+  expect(countUnlinkedLegacyReferences(db, 'right')).toEqual({ vitals: 1, stages: 0 })
+  const imports = new ReferenceStore(db).list('left').items
+  expect(imports).toHaveLength(4)
+  expect(imports.every(item => item.summary.subjectId === 'legacy_unknown:left')).toBe(true)
+  expect(imports.map(item => item.summary.accepted).sort()).toEqual([1, 1, 2, 2])
+  expect(linkLegacyReferences(db, 'left')).toEqual({ vitals: 0, stages: 0, imports: 0 })
 })

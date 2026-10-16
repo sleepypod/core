@@ -162,3 +162,51 @@ def test_shared_budget_counts_empty_placeholders_across_artifact_streams(tmp_pat
     assert budget.consumed == 4
     with pytest.raises(ValueError, match='shared RAW'):
         list(iter_retained_records(store, descriptor, budget=3))
+
+
+def test_streams_every_map_of_a_pod5_packed_frame(tmp_path):
+    # Pod 5 firmware packs consecutive `log` maps into one frame.
+    first, second = cbor2.dumps({'type': 'log', 'msg': 'a'}), cbor2.dumps({'type': 'log', 'msg': 'b'})
+    store, descriptor = retain(tmp_path, envelope(first + second) + envelope(b'\xa1\x64type\x61x'))
+    assert list(iter_retained_records(store, descriptor)) == [{'type': 'log', 'msg': 'a'}, {'type': 'log', 'msg': 'b'}, {'type': 'x'}]
+    with pytest.raises(ValueError, match='Trailing bytes'):
+        decode_record(first + second)
+
+
+def test_rejects_untyped_or_truncated_items_after_the_first_map():
+    first = cbor2.dumps({'type': 'log'})
+    with pytest.raises(ValueError, match='textual type'):
+        raw_records.decode_records(first + cbor2.dumps([1]))
+    with pytest.raises(ValueError):
+        raw_records.decode_records(first + b'\xa1')
+
+
+def pump_record(timestamp):
+    return b'\xa2\x64type\x69frzHealth\x62ts\x1a' + timestamp.to_bytes(4, 'big')
+
+
+def test_inventory_merges_pod5_pump_records_stamped_ahead_of_piezo_frames(tmp_path):
+    # Pod 5 writes frzHealth stamped one second ahead of the next piezo frame.
+    frames = [piezo_record(100), pump_record(102), piezo_record(101), piezo_record(102), pump_record(104), piezo_record(103)]
+    store, descriptor = retain(tmp_path, b''.join(envelope(frame) for frame in frames))
+    result = raw_records.inventory_retained(store, descriptor)
+    assert result['timestamp_reversals'] == 0
+    assert result['duplicate_timestamps'] == 1
+    assert result['ordered_waveform_available'] is True
+    assert (result['first_event_ms'], result['last_event_ms']) == (100000, 104000)
+
+
+def test_event_order_releases_merged_streams_and_rejects_reversals():
+    order = raw_records.EventOrder(window_ms=2000)
+    released = order.push(10_000, 'a', 'piezo') + order.push(11_000, 'p', 'pump') + order.push(10_500, 'b', 'piezo')
+    released += order.push(13_000, 'c', 'piezo') + order.flush()
+    assert released == [(10_000, 'a'), (10_500, 'b'), (11_000, 'p'), (13_000, 'c')]
+    with pytest.raises(ValueError, match='reversed'):
+        order.push(12_000, 'late', 'pump')
+    strict = raw_records.EventOrder()
+    strict.push(5, 'x', 'piezo')
+    with pytest.raises(ValueError, match='reversed'):
+        strict.push(4, 'y', 'piezo')
+    counting = raw_records.EventOrder(strict=False)
+    counting.push(5, 'x', 'piezo')
+    assert counting.push(4, 'y', 'piezo') == [] and counting.reversals == 1

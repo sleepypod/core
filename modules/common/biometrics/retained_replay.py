@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import math
 
 from .raw_artifacts import RawArtifact
-from .raw_records import RawRecordBudget, iter_retained_records
+from .raw_records import EVENT_TYPES, EventOrder, RawRecordBudget, iter_retained_records
 from .replay import RecordedContext, WaveformReplay
 
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
@@ -74,7 +74,9 @@ class RetainedReplayInput:
             first, last = _integer(item['first_event_ms']), _integer(item['last_event_ms'])
             if first > last or last < start or first >= end:
                 raise ValueError('Artifact has no events in the retained window')
-            if artifact.sha256 in hashes or (artifacts and first <= artifacts[-1].last_event_ms):
+            # Bounds may touch: Pod 5 can end one archive with a pump record
+            # stamped at the next archive's first frame.
+            if artifact.sha256 in hashes or (artifacts and first < artifacts[-1].last_event_ms):
                 raise ValueError('Retained artifacts must be distinct and have nonoverlapping ordered event bounds')
             hashes.add(artifact.sha256)
             compressed += artifact.compressed_bytes
@@ -125,7 +127,19 @@ def replay_retained(store, raw_input, configs, sink, *, cancelled=lambda: False,
         score_start_ms=snapshot.score_start_ms, score_end_ms=snapshot.score_end_ms, sink=write)
     budget = RawRecordBudget(maximum_records)
     index, decoded = 0, 0
-    previous = None
+    order = EventOrder()
+
+    def feed(ready):
+        nonlocal index
+        for timestamp, record in ready:
+            if not snapshot.retained_start_ms <= timestamp < snapshot.score_end_ms:
+                continue
+            while index < len(snapshot.contexts) and timestamp >= snapshot.contexts[index].end_ms:
+                index += 1
+            interval = snapshot.contexts[index] if index < len(snapshot.contexts) else None
+            context = interval.context if interval and timestamp >= interval.start_ms else RecordedContext()
+            replay.feed(timestamp, record, context)
+
     for source in snapshot.artifacts:
         if cancelled():
             raise ValueError('Retained replay cancelled')
@@ -136,25 +150,18 @@ def replay_retained(store, raw_input, configs, sink, *, cancelled=lambda: False,
             decoded += 1
             if decoded > maximum_records:
                 raise ValueError('Retained replay decoded record budget exceeded')
-            if record['type'] not in ('piezo-dual', 'frzHealth'):
+            if record['type'] not in EVENT_TYPES:
                 continue
             timestamp = _timestamp(record)
-            if previous is not None and timestamp < previous:
-                raise ValueError('Retained event timestamps reversed')
-            previous = timestamp
-            first = timestamp if first is None else first
-            last = timestamp
+            # Bounds are the inspected min/max; the streams interleave within a file.
+            first = timestamp if first is None else min(first, timestamp)
+            last = timestamp if last is None else max(last, timestamp)
             if not source.first_event_ms <= timestamp <= source.last_event_ms:
                 raise ValueError('Retained event lies outside inspected bounds')
-            if not snapshot.retained_start_ms <= timestamp < snapshot.score_end_ms:
-                continue
-            while index < len(snapshot.contexts) and timestamp >= snapshot.contexts[index].end_ms:
-                index += 1
-            interval = snapshot.contexts[index] if index < len(snapshot.contexts) else None
-            context = interval.context if interval and timestamp >= interval.start_ms else RecordedContext()
-            replay.feed(timestamp, record, context)
+            feed(order.push(timestamp, record, record['type']))
         if first != source.first_event_ms or last != source.last_event_ms:
             raise ValueError('Retained event bounds differ from inspected source')
+    feed(order.flush())
     if cancelled():
         raise ValueError('Retained replay cancelled')
     replay.close()
