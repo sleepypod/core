@@ -24,7 +24,7 @@ afterAll(() => {
 })
 
 /** Score a candidate with fixed synthetic readings (references are 62 bpm). */
-function localReport(id: string, overrides: Array<{ path: string, value: unknown }>, split: 'tuning' | 'validation', heartRates: { default: number, candidate: number }) {
+function localReport(id: string, overrides: Array<{ path: string, value: unknown }>, split: 'tuning' | 'validation' | 'holdout', heartRates: { default: number, candidate: number }) {
   const defaults = { manifestHash, resolvedHash: configHash(defaultConfig), resolved: defaultConfig }
   const candidate = resolveConfig(overrides as never)
   const configs = [{ label: 'default' as const, revisionId: null, ...defaults },
@@ -84,6 +84,15 @@ describe('local fit reports', () => {
     expect(rankingMarkdown(ranking)).toContain('| 1 | better | 0.500 | -1.500 | 2.000 | 0.000 | 0/0 | n/a | n/a |')
   })
 
+  it('shows holdout error alongside only when holdout nights were scored', () => {
+    const overrides = [{ path: 'heart_rate.trackingToleranceBpm', value: 10 }]
+    const without = rankingMarkdown(rankCandidates([localReport('tol10', overrides, 'tuning', { default: 60, candidate: 61 })]))
+    expect(without).not.toContain('holdout')
+    const ranking = rankCandidates([localReport('tol10', overrides, 'tuning', { default: 60, candidate: 61 }), localReport('tol10', overrides, 'holdout', { default: 60, candidate: 62 })])
+    expect(ranking.rows[0].heartRate.holdout).toEqual({ maeDifference: -2, mae: 0, scoredNights: 1, coverageReducedNights: 0 })
+    expect(rankingMarkdown(ranking)).toContain('| 1 | tol10 | 1.000 | -1.000 | n/a | n/a | 0.000 | -2.000 |')
+  })
+
   it('compares local default HR error with pod results within 0.1 bpm', () => {
     const defaults = [localReport('defaults', [], 'tuning', { default: 60, candidate: 60 }), localReport('defaults', [], 'validation', { default: 60, candidate: 60 })]
     const pod = (split: string, mae: number) => ({ report: { split, datasetHash: fixture.contentHash, numericNightSummary: [{ metric: 'heart_rate', baseline: 'default', candidate: 'current',
@@ -99,10 +108,10 @@ describe('local fit reports', () => {
 })
 
 describe('local fit inputs', () => {
-  it('never replays holdout nights', async () => {
+  it('replays holdout nights only when explicitly included', async () => {
     const bundle = { index: { dataset: { id: fixture.id, contentHash: fixture.contentHash } }, manifest: fixture.manifest, snapshot: fixture.snapshot, rawDirectory: fixture.rawDirectory }
     await expect(fitCandidates({ bundle: bundle as never, candidates: [{ id: 'x', overrides: [] }], outputDirectory: directory, splits: ['holdout' as never] }))
-      .rejects.toThrow('Holdout runs once, on the pod')
+      .rejects.toThrow('Holdout nights are held back')
   })
 
   it('expands grids, including jointly varied axes', () => {

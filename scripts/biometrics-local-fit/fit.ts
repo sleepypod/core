@@ -15,7 +15,7 @@ import type { VerifiedBundle } from './bundle'
 import { summarizeLocalReport, type LocalFitReport } from './report'
 
 export const LOCAL_SPLITS = ['tuning', 'validation'] as const
-export type LocalSplit = typeof LOCAL_SPLITS[number]
+export type LocalSplit = typeof LOCAL_SPLITS[number] | 'holdout'
 /** Matches the protocol of the pod experiment the frozen nights were scored with. */
 export const DEFAULT_PROTOCOL = { version: 'descriptive-evaluation-v1', mode: 'signal_replay', assumedStageCalibrationQuality: 0, pointToleranceMs: 30000, clockOffsetMs: 0 } as const
 const LOCAL_EXPERIMENT_ID = '00000000-0000-4000-8000-000000000000'
@@ -94,6 +94,8 @@ export interface FitOptions {
   candidates: Candidate[]
   outputDirectory: string
   splits?: readonly LocalSplit[]
+  /** Score holdout nights too, once, for a candidate that is already chosen. */
+  includeHoldout?: boolean
   jobs?: number
   protocol?: z.input<typeof experimentProtocolSchema>
   python?: PythonLocation
@@ -108,7 +110,8 @@ export async function fitCandidates(options: FitOptions) {
   if (bundle.snapshot.version !== 'waveform-dataset-v1') throw new Error('Local fitting needs a retained waveform dataset')
   const snapshot = bundle.snapshot
   const splits = options.splits ?? LOCAL_SPLITS
-  if (splits.some(split => !LOCAL_SPLITS.includes(split))) throw new Error('Holdout runs once, on the pod, for the final candidate only')
+  if (splits.some(split => split === 'holdout') && !options.includeHoldout) throw new Error('Holdout nights are held back: pass --include-holdout only to score an already-chosen candidate, once')
+  if (splits.some(split => split !== 'holdout' && !(LOCAL_SPLITS as readonly string[]).includes(split))) throw new Error('Unknown split')
   const protocol = experimentProtocolSchema.parse(options.protocol ?? DEFAULT_PROTOCOL)
   if (protocol.mode !== 'signal_replay') throw new Error('Local fitting scores waveform replay; use a signal_replay protocol')
   const python = options.python ?? defaultPythonLocation()

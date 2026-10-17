@@ -8,7 +8,7 @@ import { compareWithPod, parseLocalReport, rankCandidates, rankingMarkdown } fro
 
 const usage = `Usage:
   verify BUNDLE
-  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--protocol FILE] [--python PATH]
+  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--include-holdout] [--protocol FILE] [--python PATH]
   sweep BUNDLE GRID.json|default OUTPUT_DIR [same options as fit]
   parity OUTPUT_DIR POD_RESULT.json [POD_RESULT.json ...]
 BUNDLE is the tar from GET /api/biometric-tuning/datasets/{id}/export, or a directory extracted from it.`
@@ -17,7 +17,8 @@ function options(args: string[]) {
   const values: Record<string, string> = {}
   const positional: string[] = []
   for (let index = 0; index < args.length; index++) {
-    if (args[index].startsWith('--')) values[args[index].slice(2)] = args[++index] ?? ''
+    if (args[index] === '--include-holdout') values['include-holdout'] = 'true'
+    else if (args[index].startsWith('--')) values[args[index].slice(2)] = args[++index] ?? ''
     else positional.push(args[index])
   }
   return { values, positional }
@@ -38,9 +39,10 @@ async function openBundle(path: string, outputDirectory: string) {
 async function fit(bundlePath: string, candidates: Candidate[], outputDirectory: string, flags: Record<string, string>) {
   await mkdir(outputDirectory, { recursive: true })
   const bundle = await openBundle(bundlePath, outputDirectory)
-  const splits = (flags.splits?.split(',') ?? [...LOCAL_SPLITS]) as LocalSplit[]
+  const includeHoldout = flags['include-holdout'] === 'true'
+  const splits = (flags.splits?.split(',') ?? [...LOCAL_SPLITS, ...(includeHoldout ? ['holdout'] : [])]) as LocalSplit[]
   const started = performance.now()
-  const result = await fitCandidates({ bundle, candidates, outputDirectory, splits,
+  const result = await fitCandidates({ bundle, candidates, outputDirectory, splits, includeHoldout,
     jobs: flags.jobs ? Number(flags.jobs) : undefined,
     protocol: flags.protocol ? await readJson(flags.protocol) as never : undefined,
     python: flags.python ? defaultPythonLocation(flags.python) : undefined,

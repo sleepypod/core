@@ -28,7 +28,7 @@ export type MetricSummary = ReturnType<typeof metricSummary>
  * and is labelled so it cannot be mistaken for the pod's backtest evidence. */
 export function summarizeLocalReport(input: {
   candidate: { id: string, overrides: Array<{ path: string, value: unknown }>, resolvedHash: string }
-  split: 'tuning' | 'validation'
+  split: 'tuning' | 'validation' | 'holdout'
   report: EvaluatorReport
   dataset: { id: string, contentHash: string }
   build: { pythonBuildHash: string, pythonSourcesHash: string, evaluatorBuildHash: string }
@@ -46,7 +46,7 @@ export type LocalFitReport = ReturnType<typeof summarizeLocalReport>
 
 const reportShape = z.object({ version: z.literal('biometrics-local-fit-report-v1'), label: z.literal('exploratory-local'),
   evidence: z.literal('not_activation_evidence'), candidate: z.object({ id: z.string(), resolvedHash: z.string() }).passthrough(),
-  split: z.enum(['tuning', 'validation']), summary: z.record(z.string(), z.object({ status: z.string(), nights: z.array(z.unknown()) }).passthrough()) }).passthrough()
+  split: z.enum(['tuning', 'validation', 'holdout']), summary: z.record(z.string(), z.object({ status: z.string(), nights: z.array(z.unknown()) }).passthrough()) }).passthrough()
 export function parseLocalReport(value: unknown) {
   return reportShape.parse(value) as unknown as LocalFitReport
 }
@@ -55,7 +55,7 @@ export function parseLocalReport(value: unknown) {
  * defaults on common support (lower is better), validation shown alongside. */
 export function rankCandidates(reports: LocalFitReport[]) {
   const ids = [...new Set(reports.map(report => report.candidate.id))]
-  const pick = (id: string, split: 'tuning' | 'validation') => reports.find(report => report.candidate.id === id && report.split === split)
+  const pick = (id: string, split: 'tuning' | 'validation' | 'holdout') => reports.find(report => report.candidate.id === id && report.split === split)
   const view = (report: LocalFitReport | undefined, metric: Metric) => report
     ? { maeDifference: report.summary[metric].equalNightMeanMaeDifference, mae: report.summary[metric].equalNightMeanMae.candidate,
         scoredNights: report.summary[metric].scoredNights, coverageReducedNights: report.summary[metric].coverageReducedNights }
@@ -65,10 +65,10 @@ export function rankCandidates(reports: LocalFitReport[]) {
   const changes = (overrides: Override[]) => overrides.filter(row => row.path.split('.')
     .reduce<unknown>((parent, part) => (parent as Record<string, unknown> | undefined)?.[part], defaultConfig) !== row.value).length
   const rows = ids.map((id) => {
-    const tuning = pick(id, 'tuning'), validation = pick(id, 'validation')
-    const candidate = (tuning ?? validation)?.candidate
+    const tuning = pick(id, 'tuning'), validation = pick(id, 'validation'), holdout = pick(id, 'holdout')
+    const candidate = (tuning ?? validation ?? holdout)?.candidate
     return { id, overrides: candidate?.overrides ?? [], resolvedHash: candidate?.resolvedHash ?? '', changedDefaults: changes(candidate?.overrides ?? []),
-      heartRate: { tuning: view(tuning, 'heart_rate'), validation: view(validation, 'heart_rate') },
+      heartRate: { tuning: view(tuning, 'heart_rate'), validation: view(validation, 'heart_rate'), ...(holdout ? { holdout: view(holdout, 'heart_rate') } : {}) },
       breathingRate: { tuning: view(tuning, 'breathing_rate'), validation: view(validation, 'breathing_rate') },
       hrv: { tuning: view(tuning, 'window_ibi_variability_v1'), validation: view(validation, 'window_ibi_variability_v1') } }
   })
@@ -84,11 +84,13 @@ export function rankCandidates(reports: LocalFitReport[]) {
 
 const format = (value: number | null | undefined, digits = 3) => value === null || value === undefined ? 'n/a' : value.toFixed(digits)
 export function rankingMarkdown(ranking: ReturnType<typeof rankCandidates>) {
-  const lines = ['_Exploratory, computed off-pod. Not activation evidence: confirm on the pod._', '',
-    '| # | candidate | tuning HR MAE | tuning Δ vs defaults | validation HR MAE | validation Δ | coverage-reduced nights (t/v) | BR Δ (t) | HRV Δ (t) |',
-    '| ---: | --- | ---: | ---: | ---: | ---: | :---: | ---: | ---: |']
+  const holdout = ranking.rows.some(row => row.heartRate.holdout)
+  const lines = ['_Exploratory, computed off-pod. Not activation evidence._', '',
+    `| # | candidate | tuning HR MAE | tuning Δ vs defaults | validation HR MAE | validation Δ |${holdout ? ' holdout HR MAE | holdout Δ |' : ''} coverage-reduced nights (t/v) | BR Δ (t) | HRV Δ (t) |`,
+    `| ---: | --- | ---: | ---: | ---: | ---: |${holdout ? ' ---: | ---: |' : ''} :---: | ---: | ---: |`]
   for (const row of ranking.rows) {
-    lines.push(`| ${row.rank} | ${row.id} | ${format(row.heartRate.tuning?.mae)} | ${format(row.heartRate.tuning?.maeDifference)} | ${format(row.heartRate.validation?.mae)} | ${format(row.heartRate.validation?.maeDifference)} | ${row.heartRate.tuning?.coverageReducedNights ?? 'n/a'}/${row.heartRate.validation?.coverageReducedNights ?? 'n/a'} | ${format(row.breathingRate.tuning?.maeDifference)} | ${format(row.hrv.tuning?.maeDifference)} |`)
+    const held = holdout ? ` ${format(row.heartRate.holdout?.mae)} | ${format(row.heartRate.holdout?.maeDifference)} |` : ''
+    lines.push(`| ${row.rank} | ${row.id} | ${format(row.heartRate.tuning?.mae)} | ${format(row.heartRate.tuning?.maeDifference)} | ${format(row.heartRate.validation?.mae)} | ${format(row.heartRate.validation?.maeDifference)} |${held} ${row.heartRate.tuning?.coverageReducedNights ?? 'n/a'}/${row.heartRate.validation?.coverageReducedNights ?? 'n/a'} | ${format(row.breathingRate.tuning?.maeDifference)} | ${format(row.hrv.tuning?.maeDifference)} |`)
   }
   return `${lines.join('\n')}\n`
 }

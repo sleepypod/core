@@ -58,9 +58,10 @@ on a 10-core laptop for seven frozen nights.
 The tool verifies every file hash, the dataset content hash and the exact set
 of archives before any replay. It then replays each tuning and validation night
 once per distinct configuration, longest nights first, across `--jobs` workers
-(default: all cores). Each candidate and split is scored with the pod's own
-`evaluateBacktest`, against defaults on common support. Holdout nights are
-never replayed locally: holdout runs once, on the pod, for the final candidate.
+(default: all cores). Holdout nights are skipped unless you pass
+`--include-holdout`. Use it only to score a candidate you have already chosen,
+once, on nights it was not fitted to. Each candidate and split is scored with the pod's own
+`evaluateBacktest`, against defaults on common support.
 
 Outputs:
 
