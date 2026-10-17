@@ -89,9 +89,11 @@ def test_minimum_peak_score_abstains_on_weak_windows_only():
     strict = core.WindowEstimator(parameters("heart_rate.minimumPeakScore", score + 1e-6))
     estimate = strict.estimate(1700000000, weak, samples()[-30000:], samples())
     assert estimate.heart_rate is None and "no_hr" in estimate.rejection_reasons
-    # The default keeps the previous fixed 0.1 floor, so default output is unchanged.
-    assert core.DEFAULT_PARAMETERS.heart_rate_minimum_peak_score == 0.1
-    assert core.WindowEstimator().estimate(1700000000, weak, samples()[-30000:], samples()).heart_rate == pytest.approx(hr)
+    # 0.1 is the previous fixed floor; the shipped default is now 0.4.
+    legacy = core.WindowEstimator(parameters("heart_rate.minimumPeakScore", 0.1))
+    assert legacy.estimate(1700000000, weak, samples()[-30000:], samples()).heart_rate == pytest.approx(hr)
+    assert core.DEFAULT_PARAMETERS.heart_rate_minimum_peak_score == 0.4
+    assert core.subharmonic_summation_hr(weak)[0] == (hr if score >= 0.4 else None)
 
 
 @pytest.mark.parametrize("value", [0.05, 0.85])

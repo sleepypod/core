@@ -35,7 +35,7 @@
             "type": "number",
             "minimum": 0.1,
             "maximum": 0.8,
-            "default": 0.1,
+            "default": 0.4,
             "unit": "score",
             "description": "Minimum subharmonic-summation autocorrelation score for a heart-rate estimate. Weaker windows report no heart rate instead of a guess; raising it trades coverage for accuracy."
           }
@@ -385,7 +385,7 @@
     "heart_rate": {
       "trackingToleranceBpm": 15,
       "trackingHistoryLength": 5,
-      "minimumPeakScore": 0.1
+      "minimumPeakScore": 0.4
     },
     "breathing_rate": {
       "intervalLowerRatio": 0.5,

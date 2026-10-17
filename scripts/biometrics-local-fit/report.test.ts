@@ -96,15 +96,15 @@ describe('local fit reports', () => {
     const dropsMost = defaults.map((value, index) => index >= 2 && index % 2 === 0 ? null : value)
     const ranking = rankCandidates([
       localReport('defaults', [], 'tuning', { default: defaults, candidate: defaults }),
-      localReport('gate-0.4', gate(0.4), 'tuning', { default: defaults, candidate: dropsWild }),
+      localReport('gate-0.45', gate(0.45), 'tuning', { default: defaults, candidate: dropsWild }),
       localReport('gate-0.6', gate(0.6), 'tuning', { default: defaults, candidate: dropsMost }),
     ])
     const rows = Object.fromEntries(ranking.rows.map(row => [row.id, row]))
     expect(rows.defaults.heartRate.tuning).toMatchObject({ ownMae: 5.6, coverage: 1 })
-    expect(rows['gate-0.4'].heartRate.tuning).toMatchObject({ ownMae: 0, coverage: 0.8, maeDifference: 0 })
+    expect(rows['gate-0.45'].heartRate.tuning).toMatchObject({ ownMae: 0, coverage: 0.8, maeDifference: 0 })
     expect(rows['gate-0.6'].heartRate.tuning).toMatchObject({ ownMae: 0, coverage: 0.2, maeDifference: 0 })
     // Common support scores both gates as no change; own error with the coverage floor does not.
-    expect(ranking.rows.map(row => row.id)).toEqual(['gate-0.4', 'defaults', 'gate-0.6'])
+    expect(ranking.rows.map(row => row.id)).toEqual(['gate-0.45', 'defaults', 'gate-0.6'])
     expect(rankCandidates([localReport('gate-0.6', gate(0.6), 'tuning', { default: defaults, candidate: dropsMost }),
       localReport('defaults', [], 'tuning', { default: defaults, candidate: defaults })], 0.1).rows[0].id).toBe('gate-0.6')
   })
