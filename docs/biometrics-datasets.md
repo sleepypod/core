@@ -249,3 +249,18 @@ reader verification → Python numerical replay → release → collection, whil
 checking that canonical observations and the parent dataset remain unchanged.
 Public `signalReplay` remains false until coordinator/API source selection and
 fenced waveform-job/report integration are wired to this publisher.
+
+## Off-pod fitting bundle
+
+`GET /api/biometric-tuning/datasets/{id}/export` streams one live dataset as an
+uncompressed tar: `bundle.json` (every other file with its size and SHA-256),
+`manifest.json`, `snapshot.json` and the retained `raw/<sha256>.RAW.gz` archives
+the snapshot references. The coordinator verifies the dataset hash, checks that
+the live RAW references match the snapshot exactly, and hashes each archive before
+anything is sent. The route hashes the archives again while streaming and aborts
+on any change. Released or unknown datasets return 404; an integrity failure
+returns 409 without streaming. The MCP tool `export_calibration_dataset` returns
+the same index and the download path, never waveform bytes.
+`scripts/biometrics-local-fit` replays these bundles with the shipped Python
+worker and scores them with the shipped evaluator. Its reports are labelled
+`exploratory-local` and are never activation evidence.

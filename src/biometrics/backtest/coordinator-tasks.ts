@@ -12,6 +12,7 @@ import { summarizeBacktestResult } from './report-summary'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import type * as schema from '@/src/db/biometrics-schema'
 import { DatasetStore, createDatasetSchema } from './datasets'
+import { prepareDatasetExport } from './dataset-export'
 import { BacktestJobStore, experimentProtocolSchema } from './jobs'
 import { readStageTraces, readNumericTraces, readReferenceTraces } from './traces'
 import { traceRequestSchema } from './trace-contracts'
@@ -31,6 +32,7 @@ export const coordinatorTaskSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('pageRawSources'), input: rawSourcePageSchema }).strict(),
   z.object({ type: z.literal('createDataset'), input: createDatasetSchema }).strict(),
   z.object({ type: z.literal('datasetDescriptor'), input: idInput }).strict(),
+  z.object({ type: z.literal('exportDataset'), input: idInput }).strict(),
   z.object({ type: z.literal('readResult'), input: idInput }).strict(),
   z.object({ type: z.literal('readSummary'), input: idInput }).strict(),
   z.object({ type: z.literal('readReferenceTrace'), input: referenceTraceRequestSchema }).strict(),
@@ -50,6 +52,7 @@ export interface CoordinatorResults {
   pageRawSources: ReturnType<RawSourceCatalog['page']>
   createDataset: ReturnType<DatasetStore['create']>
   datasetDescriptor: ReturnType<DatasetStore['descriptor']>
+  exportDataset: Awaited<ReturnType<typeof prepareDatasetExport>>
   readResult: ReturnType<BacktestJobStore['result']>
   readSummary: ReturnType<typeof summarizeBacktestResult<NonNullable<ReturnType<BacktestJobStore['result']>>>>
   readReferenceTrace: ReturnType<typeof readReferenceTraces>
@@ -79,6 +82,7 @@ export async function performCoordinatorTask(db: BetterSQLite3Database<typeof sc
     case 'pageRawSources': return new RawSourceCatalog(db).page(task.input)
     case 'createDataset': return new DatasetStore(db).create(task.input)
     case 'datasetDescriptor': return new DatasetStore(db).descriptor(task.input.id)
+    case 'exportDataset': return prepareDatasetExport(db, task.input.id)
     case 'readResult': return new BacktestJobStore(db).result(task.input.id)
     case 'readSummary': return summarizeBacktestResult(new BacktestJobStore(db).result(task.input.id))
     case 'readReferenceTrace': return readReferenceTraces(db, task.input)

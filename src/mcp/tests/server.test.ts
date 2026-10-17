@@ -48,7 +48,7 @@ const callerMock = vi.hoisted(() => {
       getReplayAdmission: fn(), listRawSources: fn(), inspectRawSource: fn(), createWaveformDataset: fn(),
       getManifest: fn(), getProfileOverview: fn(), listSessions: fn(), getSessionCapabilities: fn(), listImports: fn(),
       getProfileRevision: fn(), listProfileRevisions: fn(), compareReadings: fn(), deleteImport: fn(), releaseDataset: fn(), releaseBacktestResult: fn(), getActivationStatus: fn(), listActivationHistory: fn(), previewImport: fn(), commitImport: fn(),
-      createProfileRevision: fn(), createDataset: fn(), getDataset: fn(), listDatasets: fn(), createExperiment: fn(),
+      createProfileRevision: fn(), createDataset: fn(), getDataset: fn(), describeDatasetExport: fn(), listDatasets: fn(), createExperiment: fn(),
       getExperiment: fn(), listExperiments: fn(), enqueueBacktest: fn(), getBacktest: fn(), cancelBacktest: fn(), listBacktests: fn(),
       getBacktestSummary: fn(), getBacktestTrace: fn(), getBacktestNumericTrace: fn(), getBacktestReferenceTrace: fn(), activateProfile: fn(), activateValidatedProfile: fn(), rollbackProfile: fn(), resetProfile: fn(),
     },
@@ -118,6 +118,7 @@ describe('sleepypod MCP server', () => {
       'apply_sleep_curve',
       'backtest_biometrics',
       'diagnose_pod',
+      'export_calibration_dataset',
       'get_automations',
       'get_bed_occupancy',
       'get_environment',
@@ -1238,6 +1239,12 @@ it('routes every remaining inspection, experiment, backtest and release action t
     api.listExperiments.mockResolvedValue({ items: [], nextCursor: null })
     await manage({ action: 'list_experiments', input: { side: 'right' } })
     expect(api.listExperiments).toHaveBeenCalledWith({ side: 'right' })
+
+    const download = { method: 'GET', path: `/api/biometric-tuning/datasets/${id}/export`, contentType: 'application/x-tar', bytes: 4096 }
+    api.describeDatasetExport.mockResolvedValue({ index: { version: 'calibration-dataset-bundle-v1', files: [] }, download })
+    expect(await call('export_calibration_dataset', { id })).toMatchObject({ download, next: expect.stringContaining('biometrics:local-fit') })
+    expect(api.describeDatasetExport).toHaveBeenCalledWith({ id })
+    expect((await client.listTools()).tools.find(tool => tool.name === 'export_calibration_dataset')?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
 
     const backtest = (request: Record<string, unknown>) => call('backtest_biometrics', { request })
     api.getBacktest.mockResolvedValue({ id, state: 'running' })

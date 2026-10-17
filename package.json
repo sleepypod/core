@@ -30,6 +30,7 @@
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "build:biometrics-worker": "node scripts/build/biometrics-worker.mjs",
     "biometrics:experiment": "tsx scripts/algorithm-experiments/cli.ts",
+    "biometrics:local-fit": "tsx scripts/biometrics-local-fit/cli.ts",
     "test:browser": "node tests/browser/run.mjs"
   },
   "lint-staged": {

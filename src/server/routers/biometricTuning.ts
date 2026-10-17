@@ -32,6 +32,7 @@ import { BacktestJobStore } from '@/src/biometrics/backtest/jobs'
 import { describeJob, jobDescriptorSchema, resultDescriptorSchema } from '@/src/biometrics/backtest/descriptors'
 import { experimentProtocolSchema } from '@/src/biometrics/backtest/contracts'
 import { datasetDescriptorSchema } from '@/src/biometrics/backtest/contracts'
+import { datasetBundleIndexSchema, datasetBundleTarBytes } from '@/src/biometrics/backtest/dataset-export'
 import { deviceSettings } from '@/src/db/schema'
 import { ReferenceInputError } from '@/src/biometrics/references/time'
 import { countUnlinkedLegacyReferences, linkLegacyReferences } from '@/src/biometrics/references/legacy'
@@ -286,6 +287,13 @@ export const biometricTuningRouter = router({
     .input(importIdSchema)
     .output(datasetDescriptorSchema)
     .query(({ input }) => references(() => coordinatorRequest(biometricsDb, { type: 'datasetDescriptor', input }).then(result => datasetDescriptorSchema.parse(result)))),
+
+  describeDatasetExport: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/datasets/{id}/export-index', protect: false, tags: ['Biometric tuning'] } })
+    .input(importIdSchema)
+    .output(z.object({ index: datasetBundleIndexSchema, download: z.object({ method: z.literal('GET'), path: z.string(), contentType: z.literal('application/x-tar'), bytes: z.number().int().nonnegative() }).strict() }).strict())
+    .query(({ input }) => references(() => coordinatorRequest(biometricsDb, { type: 'exportDataset', input }).then(result => ({ index: result.index,
+      download: { method: 'GET' as const, path: `/api/biometric-tuning/datasets/${input.id}/export`, contentType: 'application/x-tar' as const, bytes: datasetBundleTarBytes(result.index) } })))),
 
   listDatasets: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometric-tuning/datasets', protect: false, tags: ['Biometric tuning'] } })

@@ -144,6 +144,13 @@ export function registerBiometricTools(server: McpServer) {
     }
   }))
 
+  server.registerTool('export_calibration_dataset', {
+    title: 'Export a frozen calibration dataset for off-pod fitting',
+    description: 'Verify one frozen dataset and every retained RAW archive it references, then return the bundle index (each file with its SHA-256) and the LAN download path that streams the tar. Waveform bytes are never placed in this response. Download only to a user-authorized machine: archives include both sides of the bed. Released datasets are not found. Off-pod results are exploratory; confirm candidates with backtest_biometrics on the pod.',
+    inputSchema: id.shape, annotations: read,
+  }, input => runTool(async () => jsonResult({ ...await getCaller().biometricTuning.describeDatasetExport(input),
+    next: 'pnpm biometrics:local-fit fit BUNDLE CANDIDATES OUTPUT_DIR (see scripts/biometrics-local-fit/README.md)' })))
+
   server.registerTool('backtest_biometrics', {
     title: 'Start, inspect or cancel a biometric evaluation',
     description: 'Durable replay never applies a profile or changes hardware. Start pins the candidate and expected binding generation. Report returns compact evidence and a report resource; trace returns at most 500 exact stage intervals and numeric_trace returns at most 500 exact recomputed readings for the dataset side using a pinned report hash and cursor; reference_trace pages frozen source records without submitted payloads or annotations. Descriptive or insufficient evidence is not validated improvement.',
