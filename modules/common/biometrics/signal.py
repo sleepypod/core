@@ -27,6 +27,7 @@ class ProcessingParameters:
     breathing_interval_upper_ratio: float
     hrv_harmonic_tolerance: float
     hrv_minimum_windows: int
+    heart_rate_minimum_peak_score: float
 
     def __post_init__(self):
         resolve_config([
@@ -36,6 +37,7 @@ class ProcessingParameters:
             {"path": "breathing_rate.intervalUpperRatio", "value": self.breathing_interval_upper_ratio},
             {"path": "hrv_index.harmonicTolerance", "value": self.hrv_harmonic_tolerance},
             {"path": "hrv_index.minimumWindows", "value": self.hrv_minimum_windows},
+            {"path": "heart_rate.minimumPeakScore", "value": self.heart_rate_minimum_peak_score},
         ])
 
     @classmethod
@@ -46,7 +48,8 @@ class ProcessingParameters:
                    config["breathing_rate"]["intervalLowerRatio"],
                    config["breathing_rate"]["intervalUpperRatio"],
                    config["hrv_index"]["harmonicTolerance"],
-                   config["hrv_index"]["minimumWindows"])
+                   config["hrv_index"]["minimumWindows"],
+                   config["heart_rate"]["minimumPeakScore"])
 
 
 DEFAULT_PARAMETERS = ProcessingParameters.from_config(manifest()["defaults"])
@@ -111,7 +114,8 @@ def _compute_autocorr(filtered: np.ndarray, fs: float) -> Optional[np.ndarray]:
 
 def subharmonic_summation_hr(samples: np.ndarray, fs: float = SAMPLE_RATE,
                              bpm_range: tuple = (45, 120),
-                             n_harmonics: int = 3):
+                             n_harmonics: int = 3,
+                             min_score: float = DEFAULT_PARAMETERS.heart_rate_minimum_peak_score):
     """Subharmonic summation for robust fundamental HR detection.
 
     Only scores autocorrelation PEAKS (not every lag) to avoid edge effects
@@ -120,7 +124,10 @@ def subharmonic_summation_hr(samples: np.ndarray, fs: float = SAMPLE_RATE,
 
     Hermes 1988 (JASA), adapted for BCG by Bruser et al. 2011.
 
-    Returns (heart_rate_bpm, score) or (None, 0.0) on failure.
+    Returns (heart_rate_bpm, score) or (None, 0.0) on failure. A best score
+    below min_score also returns (None, score): on a weak heartbeat the tallest
+    autocorrelation peak is usually not the heart (the true rate is often not a
+    candidate at all), so reporting nothing beats reporting a confident guess.
     """
     filtered = _bandpass(samples, HR_BAND[0], HR_BAND[1], fs)
     acr = _compute_autocorr(filtered, fs)
@@ -161,7 +168,7 @@ def subharmonic_summation_hr(samples: np.ndarray, fs: float = SAMPLE_RATE,
             best_score = score
             best_lag = lag
 
-    if best_lag is None or best_score < 0.1:
+    if best_lag is None or best_score < min_score:
         return None, best_score
 
     hr = 60.0 * fs / best_lag
@@ -483,7 +490,7 @@ class WindowEstimator:
         # Match live warmup exactly; never pad unavailable history with zeroes.
         if len(hr_samples) < int(10 * fs):
             return WindowEstimate(timestamp_s, None, None, None, None, 0.0, ("hr_warmup",))
-        hr_raw, hr_score = subharmonic_summation_hr(hr_samples, fs)
+        hr_raw, hr_score = subharmonic_summation_hr(hr_samples, fs, min_score=self.parameters.heart_rate_minimum_peak_score)
         hr = self.hr_tracker.update(hr_raw, hr_score)
         br = compute_breathing_rate(breathing_samples, fs, self.parameters)
         hrv = (compute_hrv(hrv_samples, fs, self.parameters)

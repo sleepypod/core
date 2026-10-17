@@ -68,8 +68,14 @@ Outputs:
 - `out/<candidate>/<split>.json`: per-night HR, breathing and HRV error, plus
   the full evaluator report. A metric without paired reference data reads
   `no_paired_reference`, never zero error.
-- `out/ranking.json` and `out/ranking.md`: ranked by the tuning split's
-  equal-night mean HR MAE difference from defaults, with validation alongside.
+- `out/ranking.json` and `out/ranking.md`: ranked by tuning HR error on each
+  candidate's own readings, among candidates that keep at least `--min-coverage`
+  (default 75%) of the defaults' Watch coverage; validation and holdout are shown
+  alongside. Each split also shows the common-support difference against
+  defaults. That difference reads 0 for a change that only withholds readings
+  (such as `heart_rate.minimumPeakScore`), which is why it is not the ranking key.
+- `--save-readings` also writes every replay's derived readings to
+  `out/readings/<night>-<config>.json` for error analysis.
 - `out/run.json`: timing, worker count and the Python build identity.
 
 ## 4. Check parity, then confirm on the pod

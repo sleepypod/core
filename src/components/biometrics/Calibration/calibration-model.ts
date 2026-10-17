@@ -11,6 +11,7 @@ import type { NumericReportView } from './report-view'
 export type ParamPath
   = | 'heart_rate.trackingToleranceBpm'
     | 'heart_rate.trackingHistoryLength'
+    | 'heart_rate.minimumPeakScore'
     | 'breathing_rate.intervalLowerRatio'
     | 'breathing_rate.intervalUpperRatio'
     | 'hrv_index.minimumWindows'
@@ -21,6 +22,7 @@ export interface ParamSpec { path: ParamPath, key: string, min: number, max: num
 export const PARAMS: Record<ParamPath, ParamSpec> = {
   'heart_rate.trackingToleranceBpm': { path: 'heart_rate.trackingToleranceBpm', key: 'trackingToleranceBpm', min: 5, max: 30, step: 1, decimals: 0 },
   'heart_rate.trackingHistoryLength': { path: 'heart_rate.trackingHistoryLength', key: 'trackingHistoryLength', min: 1, max: 10, step: 1, decimals: 0 },
+  'heart_rate.minimumPeakScore': { path: 'heart_rate.minimumPeakScore', key: 'minimumPeakScore', min: 0.1, max: 0.8, step: 0.05, decimals: 2 },
   'breathing_rate.intervalLowerRatio': { path: 'breathing_rate.intervalLowerRatio', key: 'intervalLowerRatio', min: 0.25, max: 0.9, step: 0.05, decimals: 2 },
   'breathing_rate.intervalUpperRatio': { path: 'breathing_rate.intervalUpperRatio', key: 'intervalUpperRatio', min: 1.1, max: 2, step: 0.05, decimals: 2 },
   'hrv_index.minimumWindows': { path: 'hrv_index.minimumWindows', key: 'minimumWindows', min: 10, max: 30, step: 1, decimals: 0 },

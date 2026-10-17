@@ -10,6 +10,31 @@ type NightSummary = ReturnType<ReturnType<typeof createNumericNightSummary>>[num
 
 const mean = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
 
+interface OwnScore { pairedCount: number, metrics: { mae: number } | null }
+interface NumericWindow { metrics: Array<{ metric: string, baseline: string, candidate: string, ownSupport: { baseline: OwnScore, candidate: OwnScore } }> }
+
+/** Pool each configuration's own-support error across a night's windows. Unlike
+ * common support, this credits a candidate that abstains on hard windows, so it
+ * is always reported with the Watch coverage it kept. */
+function ownSupportNights(report: EvaluatorReport, metric: Metric) {
+  return (report.nights as Array<{ cohortId: string, numericComparisons?: NumericWindow[] }>).map((night) => {
+    const pooled = { default: { paired: 0, error: 0 }, candidate: { paired: 0, error: 0 } }
+    for (const window of night.numericComparisons ?? []) {
+      const row = window.metrics.find(item => item.metric === metric && item.baseline === 'default' && item.candidate === 'candidate')
+      if (!row) continue
+      for (const [key, score] of [['default', row.ownSupport.baseline], ['candidate', row.ownSupport.candidate]] as const) {
+        if (score.metrics && score.pairedCount) {
+          pooled[key].paired += score.pairedCount
+          pooled[key].error += score.metrics.mae * score.pairedCount
+        }
+      }
+    }
+    const mae = (key: 'default' | 'candidate') => pooled[key].paired ? pooled[key].error / pooled[key].paired : null
+    return { cohortId: night.cohortId, defaultPairedCount: pooled.default.paired, candidatePairedCount: pooled.candidate.paired,
+      defaultMae: mae('default'), candidateMae: mae('candidate') }
+  })
+}
+
 function metricSummary(report: EvaluatorReport, metric: Metric) {
   const summary = (report.numericNightSummary as NightSummary[] | undefined)
     ?.find(row => row.metric === metric && row.baseline === 'default' && row.candidate === 'candidate')
@@ -17,10 +42,15 @@ function metricSummary(report: EvaluatorReport, metric: Metric) {
     defaultMae: night.commonSupport.baseline.mae, candidateMae: night.commonSupport.candidate.mae, maeDifference: night.commonMaeDifference,
     coverageReduced: night.coverageReduced, lostObservationTimestamps: night.lostObservationTimestamps }))
   const scored = nights.filter(night => night.maeDifference !== null)
+  const own = ownSupportNights(report, metric)
+  const ownScored = own.filter(night => night.defaultMae !== null && night.candidateMae !== null)
+  const defaultPairs = own.reduce((sum, night) => sum + night.defaultPairedCount, 0)
   return { status: scored.length ? 'scored' as const : 'no_paired_reference' as const,
     totalNights: nights.length, scoredNights: scored.length, coverageReducedNights: nights.filter(night => night.coverageReduced).length,
     equalNightMeanMae: { default: mean(scored.map(night => night.defaultMae as number)), candidate: mean(scored.map(night => night.candidateMae as number)) },
-    equalNightMeanMaeDifference: summary?.equalNightMeanMaeDifference ?? null, nights }
+    equalNightMeanMaeDifference: summary?.equalNightMeanMaeDifference ?? null, nights,
+    ownSupport: { equalNightMeanMae: { default: mean(ownScored.map(night => night.defaultMae as number)), candidate: mean(ownScored.map(night => night.candidateMae as number)) },
+      referenceCoverage: defaultPairs ? own.reduce((sum, night) => sum + night.candidatePairedCount, 0) / defaultPairs : null, nights: own } }
 }
 export type MetricSummary = ReturnType<typeof metricSummary>
 
@@ -53,11 +83,12 @@ export function parseLocalReport(value: unknown) {
 
 /** Rank by the tuning split's equal-night mean HR error difference against
  * defaults on common support (lower is better), validation shown alongside. */
-export function rankCandidates(reports: LocalFitReport[]) {
+export function rankCandidates(reports: LocalFitReport[], minimumCoverage = 0.75) {
   const ids = [...new Set(reports.map(report => report.candidate.id))]
   const pick = (id: string, split: 'tuning' | 'validation' | 'holdout') => reports.find(report => report.candidate.id === id && report.split === split)
   const view = (report: LocalFitReport | undefined, metric: Metric) => report
     ? { maeDifference: report.summary[metric].equalNightMeanMaeDifference, mae: report.summary[metric].equalNightMeanMae.candidate,
+        ownMae: report.summary[metric].ownSupport?.equalNightMeanMae.candidate ?? null, coverage: report.summary[metric].ownSupport?.referenceCoverage ?? null,
         scoredNights: report.summary[metric].scoredNights, coverageReducedNights: report.summary[metric].coverageReducedNights }
     : null
   const key = (value: number | null | undefined) => value ?? Number.POSITIVE_INFINITY
@@ -72,25 +103,34 @@ export function rankCandidates(reports: LocalFitReport[]) {
       breathingRate: { tuning: view(tuning, 'breathing_rate'), validation: view(validation, 'breathing_rate') },
       hrv: { tuning: view(tuning, 'window_ibi_variability_v1'), validation: view(validation, 'window_ibi_variability_v1') } }
   })
-  rows.sort((a, b) => key(a.heartRate.tuning?.maeDifference) - key(b.heartRate.tuning?.maeDifference)
-    || key(a.heartRate.validation?.maeDifference) - key(b.heartRate.validation?.maeDifference)
+  // A candidate below the coverage floor ranks after every one above it, so
+  // abstaining on most of the night cannot win on error alone.
+  const kept = (row: typeof rows[number]) => (row.heartRate.tuning?.coverage ?? 1) >= minimumCoverage ? 0 : 1
+  rows.sort((a, b) => kept(a) - kept(b)
+    || key(a.heartRate.tuning?.ownMae) - key(b.heartRate.tuning?.ownMae)
+    || key(a.heartRate.validation?.ownMae) - key(b.heartRate.validation?.ownMae)
     || (a.heartRate.tuning?.coverageReducedNights ?? 0) - (b.heartRate.tuning?.coverageReducedNights ?? 0)
     || a.changedDefaults - b.changedDefaults
     || a.id.localeCompare(b.id))
   return { version: 'biometrics-local-fit-ranking-v1' as const, label: 'exploratory-local' as const, evidence: 'not_activation_evidence' as const,
-    rankedBy: 'tuning.heart_rate.equalNightMeanMaeDifference_vs_defaults_common_support' as const,
+    rankedBy: 'tuning.heart_rate.ownSupport_equalNightMeanMae_with_reference_coverage_floor' as const, minimumCoverage,
     rows: rows.map((row, index) => ({ rank: index + 1, ...row })) }
 }
 
 const format = (value: number | null | undefined, digits = 3) => value === null || value === undefined ? 'n/a' : value.toFixed(digits)
+const percent = (value: number | null | undefined) => value === null || value === undefined ? 'n/a' : `${Math.round(value * 100)}%`
 export function rankingMarkdown(ranking: ReturnType<typeof rankCandidates>) {
   const holdout = ranking.rows.some(row => row.heartRate.holdout)
-  const lines = ['_Exploratory, computed off-pod. Not activation evidence._', '',
-    `| # | candidate | tuning HR MAE | tuning Δ vs defaults | validation HR MAE | validation Δ |${holdout ? ' holdout HR MAE | holdout Δ |' : ''} coverage-reduced nights (t/v) | BR Δ (t) | HRV Δ (t) |`,
-    `| ---: | --- | ---: | ---: | ---: | ---: |${holdout ? ' ---: | ---: |' : ''} :---: | ---: | ---: |`]
+  const splits = ['tuning', 'validation', ...(holdout ? ['holdout'] : [])] as const
+  const lines = [`_Exploratory, computed off-pod. Not activation evidence. Ranked by tuning HR error on each candidate's own readings, among candidates keeping ≥${percent(ranking.minimumCoverage)} of the defaults' Watch coverage._`, '',
+    `| # | candidate | ${splits.map(split => `${split} HR MAE | ${split} Δ common | ${split} coverage`).join(' | ')} | BR Δ (t) | HRV Δ (t) |`,
+    `| ---: | --- | ${splits.map(() => '---: | ---: | ---:').join(' | ')} | ---: | ---: |`]
   for (const row of ranking.rows) {
-    const held = holdout ? ` ${format(row.heartRate.holdout?.mae)} | ${format(row.heartRate.holdout?.maeDifference)} |` : ''
-    lines.push(`| ${row.rank} | ${row.id} | ${format(row.heartRate.tuning?.mae)} | ${format(row.heartRate.tuning?.maeDifference)} | ${format(row.heartRate.validation?.mae)} | ${format(row.heartRate.validation?.maeDifference)} |${held} ${row.heartRate.tuning?.coverageReducedNights ?? 'n/a'}/${row.heartRate.validation?.coverageReducedNights ?? 'n/a'} | ${format(row.breathingRate.tuning?.maeDifference)} | ${format(row.hrv.tuning?.maeDifference)} |`)
+    const cells = splits.map((split) => {
+      const view = row.heartRate[split as 'tuning']
+      return `${format(view?.ownMae)} | ${format(view?.maeDifference)} | ${percent(view?.coverage)}`
+    })
+    lines.push(`| ${row.rank} | ${row.id} | ${cells.join(' | ')} | ${format(row.breathingRate.tuning?.maeDifference)} | ${format(row.hrv.tuning?.maeDifference)} |`)
   }
   return `${lines.join('\n')}\n`
 }

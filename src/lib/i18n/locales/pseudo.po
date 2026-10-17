@@ -13,15 +13,19 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:169
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:250
 msgid ", with {count} overrides"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:169
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:250
 msgid ", with 1 override"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:369
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:250
+msgid ", with no overrides"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:393
 msgid ". Separate from the profile."
 msgstr ""
 
@@ -36,7 +40,7 @@ msgstr ""
 #. placeholder {1}: label.day
 #. placeholder {2}: fmt1(prev)
 #. placeholder {3}: fmt1(saved)
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:198
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:228
 msgid "{0} {1}: previous {2}, saved {3} bpm"
 msgstr ""
 
@@ -44,12 +48,12 @@ msgstr ""
 #. placeholder {1}: avg(n => n.previous.heart_rate.mae as number)
 #. placeholder {2}: avg(n => n.saved.heart_rate.mae as number)
 #. placeholder {3}: shortDuration(job.updatedAtMs - job.createdAtMs)
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:216
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:231
 msgid "{0} HR error {1} → {2} bpm · {3}"
 msgstr ""
 
 #. placeholder {0}: i.summary.accepted
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:227
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:242
 msgid "{0} records"
 msgstr ""
 
@@ -69,15 +73,15 @@ msgstr ""
 msgid "A saved revision is not evidence of validation or processor adoption."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:109
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:177
 msgid "Accept an estimate when it is within"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:156
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:237
 msgid "accepted 10-second IBI windows"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:123
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:191
 msgid "accepted estimates in the tracker"
 msgstr ""
 
@@ -216,7 +220,7 @@ msgid "Available reference records by metric (across revisions)"
 msgstr ""
 
 #. placeholder {0}: group.latest.id.slice(0, 4)
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:181
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:197
 msgid "Backtest {0}. Frozen dataset replayed through the previous and saved profiles; nothing here changes the pod."
 msgstr ""
 
@@ -225,7 +229,7 @@ msgid "Backtest jobs"
 msgstr ""
 
 #. placeholder {0}: splitLabel[job.split]
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:220
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:235
 msgid "Backtest on {0} nights failed"
 msgstr ""
 
@@ -258,19 +262,19 @@ msgstr ""
 msgid "Biometric calibration"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:264
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:279
 msgid "Biometric calibration side"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:113
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:181
 msgid "bpm of the tracker"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:128
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:204
 msgid "BREATHING"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:173
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:189
 msgid "Breathing error"
 msgstr ""
 
@@ -394,11 +398,11 @@ msgstr ""
 msgid "Candidate spike threshold"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:94
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:162
 msgid "Changed values are white; the previous profile (System defaults) sits underneath. Moving a control edits the saved profile; saving again re-requests it. The processor adopts a profile only after it acknowledges a request."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:95
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:163
 msgid "Changed values are white; the previous profile sits underneath. Moving a control edits the saved profile; saving again re-requests it. The processor adopts a profile only after it acknowledges a request."
 msgstr ""
 
@@ -426,6 +430,10 @@ msgstr ""
 msgid "Choose the protocol before looking at results. Creating an experiment does not run a job or apply a profile."
 msgstr ""
 
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:78
+msgid "Choosing nights the reference covers…"
+msgstr ""
+
 #: src/components/biometrics/Calibration/ReferenceOverlay.tsx:38
 msgid "Circles are recomputed readings; squares are reference points; horizontal bars are reference intervals. Only the two displayed pages are shown. This visual overlay does not create new matched pairs or scores."
 msgstr ""
@@ -434,7 +442,7 @@ msgstr ""
 msgid "Clear this night’s selection"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:187
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:205
 msgid "click a night"
 msgstr ""
 
@@ -544,7 +552,7 @@ msgstr ""
 msgid "Compressed bytes: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:372
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:396
 msgid "config id"
 msgstr ""
 
@@ -586,11 +594,11 @@ msgstr ""
 msgid "Coverage reduced in at least one evaluated window"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:61
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:129
 msgid "covered"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:361
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:380
 msgid "current"
 msgstr ""
 
@@ -626,7 +634,7 @@ msgstr ""
 msgid "Dataset hash"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:84
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:99
 msgid "Dataset nights"
 msgstr ""
 
@@ -661,7 +669,7 @@ msgid "Descriptive evaluation only"
 msgstr ""
 
 #. placeholder {0}: shortDuration(run.durationMs)
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:150
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
 msgid "done · {0}"
 msgstr ""
 
@@ -677,11 +685,15 @@ msgstr ""
 msgid "Each configuration on its own available intervals"
 msgstr ""
 
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:268
+msgid "Each night's heart rate against the reference appears here once a backtest has run."
+msgstr ""
+
 #: src/components/biometrics/Calibration/ProfileLibrary.tsx:34
 msgid "Edit a new candidate from this revision"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:192
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:273
 msgid "Edit overrides"
 msgstr ""
 
@@ -744,7 +756,7 @@ msgstr ""
 msgid "Evaluated minutes: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:75
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:90
 msgid "Evaluation dataset"
 msgstr ""
 
@@ -812,7 +824,7 @@ msgstr ""
 msgid "Experiment saved: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:361
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:380
 msgid "expired"
 msgstr ""
 
@@ -841,7 +853,7 @@ msgstr ""
 msgid "F1"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:150
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
 msgid "failed"
 msgstr ""
 
@@ -851,7 +863,7 @@ msgstr ""
 msgid "Failed"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:184
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:265
 msgid "Fallback"
 msgstr ""
 
@@ -860,16 +872,16 @@ msgstr ""
 msgid "Fallback stage"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:202
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:217
 msgid "Fell back to a compatible profile"
 msgstr ""
 
 #. placeholder {0}: splitLabel[job.split]
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:220
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:235
 msgid "Finished a backtest on {0} nights"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:314
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:344
 msgid "first 500 readings"
 msgstr ""
 
@@ -897,7 +909,7 @@ msgstr ""
 msgid "Flags"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:128
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:143
 msgid "Freeze a new dataset"
 msgstr ""
 
@@ -909,29 +921,41 @@ msgstr ""
 msgid "Freeze selected inputs"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:361
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:85
+msgid "Freezing failed."
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:79
+msgid "Freezing the nights…"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:380
 msgid "freshness unknown"
 msgstr ""
 
 #. placeholder {0}: d.manifest.splitProtocol.assignments.length
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:224
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:239
 msgid "Froze a dataset of {0} nights"
 msgstr ""
 
 #. placeholder {0}: formatDay(dataset.createdAtMs, timezone)
 #. placeholder {1}: formatBytes(dataset.byteLength)
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:79
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:94
 msgid "frozen {0} · {1}"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:84
+msgid "Frozen and queued. The backtest replays every split; results appear as each finishes."
 msgstr ""
 
 #. placeholder {0}: nights.length
 #. placeholder {1}: sources.join(' + ')
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:69
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:71
 msgid "Frozen copy of {0} nights and {1} reference. Later edits or deletions do not touch it. Whole nights are split before scoring; a split is not evidence on its own."
 msgstr ""
 
 #. placeholder {0}: nights.length
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:70
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:72
 msgid "Frozen copy of {0} nights. Later edits or deletions do not touch it. Whole nights are split before scoring; a split is not evidence on its own."
 msgstr ""
 
@@ -971,7 +995,7 @@ msgstr ""
 msgid "Groups use native reference timestamps and record types, independently of candidate output. Half-window groups exclude intervals crossing the midpoint. Groups overlap and are not independent experiments. These are not motion or artifact subgroups."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:228
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:258
 msgid "H holdout"
 msgstr ""
 
@@ -983,13 +1007,13 @@ msgstr ""
 msgid "Heart rate"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:106
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:174
 msgid "HEART RATE"
 msgstr ""
 
 #. placeholder {0}: label.weekday
 #. placeholder {1}: label.day
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:291
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:321
 msgid "Heart rate · {0} {1}"
 msgstr ""
 
@@ -1003,7 +1027,7 @@ msgstr ""
 msgid "Heart-rate spike threshold (standard deviations)"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:295
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:325
 msgid "Heart-rate trace"
 msgstr ""
 
@@ -1011,7 +1035,7 @@ msgstr ""
 msgid "Hello, tRPC test page!"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:377
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:401
 msgid "hide"
 msgstr ""
 
@@ -1022,8 +1046,8 @@ msgstr ""
 msgid "Higher agreement: {0}; lower: {1}; unchanged: {2}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:120
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:206
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:135
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:221
 msgid "holdout"
 msgstr ""
 
@@ -1040,23 +1064,23 @@ msgstr ""
 msgid "Holdout accesses recorded for this experiment: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:258
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:288
 msgid "Holdout is the number to trust; tuning nights were used to pick these values."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:186
 msgid "HR error · holdout"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:168
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:184
 msgid "HR error · tuning"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:169
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:185
 msgid "HR error · validation"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:186
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:204
 msgid "HR error per night · bpm vs reference"
 msgstr ""
 
@@ -1068,11 +1092,11 @@ msgstr ""
 msgid "HRV definitions differ or are partly unknown. A combined HRV average is unavailable."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:149
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:230
 msgid "HRV INDEX"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:172
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:188
 msgid "HRV index error"
 msgstr ""
 
@@ -1109,7 +1133,7 @@ msgstr ""
 msgid "Import preview"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:126
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:141
 msgid "Import reference"
 msgstr ""
 
@@ -1145,7 +1169,7 @@ msgid "Inherited default"
 msgstr ""
 
 #. placeholder {0}: stages.ruleCount
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:166
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:247
 msgid "Inherits the {0} rules and fallback from"
 msgstr ""
 
@@ -1240,11 +1264,11 @@ msgstr ""
 msgid "Keep retained inputs"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:318
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:337
 msgid "Keep saved profile"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:119
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:187
 msgid "Keep the last"
 msgstr ""
 
@@ -1280,7 +1304,11 @@ msgstr ""
 msgid "Limitations"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:144
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:77
+msgid "Linking Watch data already on the pod…"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:223
 msgid "Longest breathing interval (× median)"
 msgstr ""
 
@@ -1333,7 +1361,7 @@ msgstr ""
 msgid "Measured Python processes: {0} of {1}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:366
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:390
 msgid "Measured sensor calibration for this side:"
 msgstr ""
 
@@ -1365,11 +1393,15 @@ msgstr ""
 msgid "Metrics: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:202
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:217
 msgid "Migrated sleep-stage settings into the profile"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:159
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:201
+msgid "Minimum beat signal score"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:240
 msgid "Minimum IBI windows"
 msgstr ""
 
@@ -1469,7 +1501,7 @@ msgstr ""
 msgid "Night {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:171
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:187
 msgid "Night covered"
 msgstr ""
 
@@ -1482,11 +1514,27 @@ msgid "No accepted time range."
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:158
-msgid "No backtest has replayed the saved profile yet. Saving a change re-runs the latest experiment on its tuning and validation nights; nothing here changes the pod."
+#~ msgid "No backtest has replayed the saved profile yet. Saving a change re-runs the latest experiment on its tuning and validation nights; nothing here changes the pod."
+#~ msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:177
+msgid "No backtest has replayed the saved profile yet. Saving a change replays the frozen dataset on its tuning, validation and holdout nights; nothing here changes the pod."
 msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestJobs.tsx:28
 msgid "No backtest jobs for this side."
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:175
+msgid "No backtest yet. Freeze a new dataset below; it replays the newest referenced nights through the previous and saved profiles. Nothing here changes the pod."
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:174
+msgid "No backtest yet. Import a reference for this side, then freeze nights that have it; the replay scores the previous and saved profiles against it. Nothing here changes the pod."
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:176
+msgid "No backtest yet. This dataset has no waveform replay; freeze a new dataset below to set one up. Nothing here changes the pod."
 msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestReport.tsx:38
@@ -1506,7 +1554,11 @@ msgid "No coverage reduction detected"
 msgstr ""
 
 #: src/components/biometrics/Calibration/CalibrationEvidence.tsx:71
-msgid "No dataset is frozen for this side yet. Freeze recorded nights with an imported reference to backtest a profile."
+#~ msgid "No dataset is frozen for this side yet. Freeze recorded nights with an imported reference to backtest a profile."
+#~ msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:73
+msgid "No dataset is frozen for this side yet. Freezing takes the newest nights a reference covers, with their RAW archives, so a backtest can replay them."
 msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestReport.tsx:62
@@ -1563,7 +1615,7 @@ msgstr ""
 msgid "No recorded nights for this side."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:101
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:116
 msgid "no reference"
 msgstr ""
 
@@ -1571,7 +1623,7 @@ msgstr ""
 msgid "No reference"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:286
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:316
 msgid "no reference device · excluded from error"
 msgstr ""
 
@@ -1635,7 +1687,7 @@ msgstr ""
 msgid "Normalized reference measurements"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:362
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:386
 msgid "not reported"
 msgstr ""
 
@@ -1648,6 +1700,10 @@ msgstr ""
 msgid "Not requested"
 msgstr ""
 
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:200
+msgid "not run"
+msgstr ""
+
 #: src/components/biometrics/Calibration/BacktestReport.tsx:63
 #: src/components/biometrics/Calibration/NumericReport.tsx:24
 #: src/components/biometrics/Calibration/NumericReport.tsx:25
@@ -1656,12 +1712,12 @@ msgstr ""
 msgid "Not scored"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:55
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:57
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:123
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:125
 msgid "not tested"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:330
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:349
 msgid "Nothing changes until you move a control or restore."
 msgstr ""
 
@@ -1770,7 +1826,7 @@ msgstr ""
 msgid "Only the current page is plotted. Dots represent individual readings; gaps and missing values are not interpolated. Original stored readings remain unchanged."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:135
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:211
 msgid "or longer than"
 msgstr ""
 
@@ -1821,7 +1877,7 @@ msgstr ""
 msgid "Overview"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:330
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:349
 msgid "Overwrites the saved profile and requests it; the current one becomes previous."
 msgstr ""
 
@@ -1870,7 +1926,7 @@ msgstr ""
 msgid "Permanently release report"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:238
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:268
 msgid "Pick a scored night to see its heart-rate trace."
 msgstr ""
 
@@ -1957,11 +2013,11 @@ msgstr ""
 msgid "Preview normalized records before saving them on the pod."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:222
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:245
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:312
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:65
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:141
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:252
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:275
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:342
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:133
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:217
 msgid "previous"
 msgstr ""
 
@@ -1999,12 +2055,12 @@ msgid "Processor"
 msgstr ""
 
 #. placeholder {0}: event.generation
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:203
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:218
 msgid "Processor acknowledged generation {0}"
 msgstr ""
 
 #. placeholder {0}: event.generation
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:204
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:219
 msgid "Processor rejected generation {0}"
 msgstr ""
 
@@ -2042,7 +2098,7 @@ msgstr ""
 msgid "Protocol hash"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:287
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:317
 msgid "quality"
 msgstr ""
 
@@ -2054,7 +2110,7 @@ msgstr ""
 msgid "Queue backtest"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:150
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
 msgid "queued"
 msgstr ""
 
@@ -2062,8 +2118,18 @@ msgstr ""
 msgid "Queued"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:65
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:83
+msgid "Queueing the backtest…"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:133
 msgid "range"
+msgstr ""
+
+#. placeholder {0}: setup.done ?? 0
+#. placeholder {1}: setup.total ?? 0
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:80
+msgid "Reading RAW archives · {0} / {1}"
 msgstr ""
 
 #: src/components/biometrics/Calibration/StageReport.tsx:52
@@ -2104,8 +2170,8 @@ msgstr ""
 msgid "Recorded nights"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:313
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:128
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:343
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:143
 msgid "reference"
 msgstr ""
 
@@ -2241,7 +2307,7 @@ msgstr ""
 msgid "Regression under the evaluation policy"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:131
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:207
 msgid "Reject intervals shorter than"
 msgstr ""
 
@@ -2261,7 +2327,7 @@ msgstr ""
 msgid "Release these retained inputs permanently? Existing reports and audit metadata remain. Active jobs must finish or be cancelled first."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:79
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:94
 msgid "released"
 msgstr ""
 
@@ -2322,7 +2388,11 @@ msgstr ""
 msgid "Report identity"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:152
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:197
+msgid "Report no heart rate when the beat signal scores below"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:233
 msgid "Report the index only after"
 msgstr ""
 
@@ -2339,7 +2409,7 @@ msgid "Requested"
 msgstr ""
 
 #. placeholder {0}: event.generation
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:198
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:213
 msgid "Requested activation · generation {0}"
 msgstr ""
 
@@ -2375,7 +2445,7 @@ msgstr ""
 msgid "Restore and request"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:326
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:345
 msgid "Restore previous"
 msgstr ""
 
@@ -2398,11 +2468,11 @@ msgstr ""
 msgid "Restore… ▾"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:201
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:216
 msgid "Restored system defaults and requested them"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:200
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:215
 msgid "Restored the previous profile and requested it"
 msgstr ""
 
@@ -2433,6 +2503,10 @@ msgstr ""
 
 #: src/components/biometrics/Calibration/BacktestJobs.tsx:71
 msgid "Retained waveform replay"
+msgstr ""
+
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:81
+msgid "Retaining the archives…"
 msgstr ""
 
 #: src/components/biometrics/Calibration/ManualProfileActivation.tsx:62
@@ -2489,11 +2563,11 @@ msgid "Row {0}: {1}"
 msgstr ""
 
 #. placeholder {0}: o.rule
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:174
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:255
 msgid "Rule {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:150
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:170
 msgid "running"
 msgstr ""
 
@@ -2510,7 +2584,7 @@ msgstr ""
 msgid "Save a candidate for evaluation. This does not change live processing."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:318
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:337
 msgid "Save and request"
 msgstr ""
 
@@ -2522,7 +2596,7 @@ msgstr ""
 msgid "Save evaluation protocol"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:174
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:189
 msgid "Save failed."
 msgstr ""
 
@@ -2530,9 +2604,9 @@ msgstr ""
 msgid "Save previewed import"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:226
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:246
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:311
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:256
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:276
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:341
 msgid "saved"
 msgstr ""
 
@@ -2553,7 +2627,7 @@ msgstr ""
 msgid "Saved observations: {0}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:92
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:160
 msgid "Saved profile against previous"
 msgstr ""
 
@@ -2567,7 +2641,7 @@ msgstr ""
 msgid "Saved sample times: {0}. Planned observation intervals: {1}."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:196
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:211
 msgid "Saved the profile"
 msgstr ""
 
@@ -2575,7 +2649,7 @@ msgstr ""
 msgid "Saves it as the profile and requests it; the current saved profile becomes previous. The processor keeps running what it has until it acknowledges the request."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:318
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:337
 msgid "Saving…"
 msgstr ""
 
@@ -2654,6 +2728,10 @@ msgstr ""
 msgid "Sessions: {0}"
 msgstr ""
 
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:82
+msgid "Setting up the replay…"
+msgstr ""
+
 #: src/components/biometrics/Calibration/NumericReport.tsx:108
 msgid "Shared MAE difference"
 msgstr ""
@@ -2676,11 +2754,11 @@ msgstr ""
 msgid "Shared-timestamp comparisons. Differences are comparison minus baseline; negative error differences mean lower error on shared observations."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:143
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:222
 msgid "Shortest breathing interval (× median)"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:377
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:401
 msgid "show"
 msgstr ""
 
@@ -2705,11 +2783,11 @@ msgstr ""
 msgid "Simulated demo: generated readings, no hardware execution or qualification."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:168
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:249
 msgid "Sleep stages"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:162
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:243
 msgid "SLEEP STAGES"
 msgstr ""
 
@@ -2826,7 +2904,7 @@ msgid "Stop recorded"
 msgstr ""
 
 #. placeholder {0}: i.summary.source
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:227
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:242
 msgid "Stored a {0} reference import"
 msgstr ""
 
@@ -2848,7 +2926,7 @@ msgstr ""
 #: src/components/biometrics/Calibration/BacktestJobs.tsx:64
 #: src/components/biometrics/Calibration/BacktestReport.tsx:60
 #: src/components/biometrics/Calibration/CalibrationControls.tsx:80
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:103
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:171
 #: src/components/biometrics/Calibration/NumericReport.tsx:26
 #: src/components/biometrics/Calibration/NumericTrace.tsx:147
 #: src/components/biometrics/Calibration/ProfileComparison.tsx:29
@@ -2858,7 +2936,7 @@ msgstr ""
 msgid "System defaults"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:54
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:122
 msgid "tested on save"
 msgstr ""
 
@@ -2879,7 +2957,7 @@ msgstr ""
 msgid "The last archive was unavailable. Continue to inspect the next archive."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:139
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:215
 msgid "the median"
 msgstr ""
 
@@ -2912,7 +2990,7 @@ msgstr ""
 msgid "The retained inputs are unavailable for new evaluations."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:171
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:252
 msgid "The rule list itself differs from the shipped rules."
 msgstr ""
 
@@ -2972,7 +3050,7 @@ msgstr ""
 msgid "These scores compare readings recomputed from retained waveforms. Shared-timestamp scores use observations available in every configuration. Differences describe agreement with the reference and do not establish validated improvement."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:237
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:267
 msgid "This backtest compared stored readings, so there is no recomputed heart-rate trace to draw."
 msgstr ""
 
@@ -3083,16 +3161,16 @@ msgstr ""
 msgid "Trace night"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:125
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:193
 msgid "Tracking history length"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:115
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:183
 msgid "Tracking tolerance (bpm)"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:112
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:206
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:127
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:221
 msgid "tuning"
 msgstr ""
 
@@ -3115,7 +3193,7 @@ msgstr ""
 msgid "Unavailable or belongs to a different sleeper."
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:53
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:121
 msgid "unchanged"
 msgstr ""
 
@@ -3154,8 +3232,8 @@ msgstr ""
 msgid "Validated activation"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:116
-#: src/components/biometrics/Calibration/CalibrationPage.tsx:206
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:131
+#: src/components/biometrics/Calibration/CalibrationPage.tsx:221
 msgid "validation"
 msgstr ""
 
@@ -3209,12 +3287,11 @@ msgstr ""
 msgid "Waveform dataset retained: {published}"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:157
-#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:180
+#: src/components/biometrics/Calibration/CalibrationEvidence.tsx:196
 msgid "What the saved profile did"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:176
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:257
 msgid "when"
 msgstr ""
 
@@ -3233,7 +3310,7 @@ msgstr ""
 msgid "Window IBI variability index (ms)"
 msgstr ""
 
-#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:158
+#: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:239
 msgid "window IBI variability, not clinical RMSSD"
 msgstr ""
 

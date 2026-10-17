@@ -1,6 +1,6 @@
 {
   "id": "sleepypod-biometric-bundle",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "schemaVersion": 1,
   "canonicalization": "finite-binary64-json-v1",
   "sampleRateHz": 500,
@@ -30,11 +30,20 @@
             "default": 5,
             "unit": "windows",
             "description": "Number of accepted heart-rate estimates retained by the tracker."
+          },
+          "minimumPeakScore": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 0.8,
+            "default": 0.1,
+            "unit": "score",
+            "description": "Minimum subharmonic-summation autocorrelation score for a heart-rate estimate. Weaker windows report no heart rate instead of a guess; raising it trades coverage for accuracy."
           }
         },
         "required": [
           "trackingToleranceBpm",
-          "trackingHistoryLength"
+          "trackingHistoryLength",
+          "minimumPeakScore"
         ],
         "additionalProperties": false
       },
@@ -375,7 +384,8 @@
   "defaults": {
     "heart_rate": {
       "trackingToleranceBpm": 15,
-      "trackingHistoryLength": 5
+      "trackingHistoryLength": 5,
+      "minimumPeakScore": 0.1
     },
     "breathing_rate": {
       "intervalLowerRatio": 0.5,
@@ -624,7 +634,7 @@
     }
   },
   "sourceHashes": {
-    "modules/common/biometrics/signal.py": "fff73469815673c8daebba9e2c9e7bcf97708939ad7a5639a52f0a53c9d75c18",
+    "modules/common/biometrics/signal.py": "0b1447c1162245232c053aeeb5cb3e75e7da3392c38a43c465f28596f084b32f",
     "modules/piezo-processor/main.py": "75db2ea2f005fd537d994b306332c1abf97c0c28abb496a8d3af03816ccf8550",
     "src/lib/sleep-stages.ts": "b1800e49ce8525d314333da6a29a63131a002d160bb294fa97b24df6e655e228",
     "modules/piezo-processor/runtime_adapter.py": "0a22a2fa05aae6569bfc4b53fba80d75e89f702f021ccb61f82ce64e284c5bb8",

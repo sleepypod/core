@@ -8,7 +8,7 @@ import { compareWithPod, parseLocalReport, rankCandidates, rankingMarkdown } fro
 
 const usage = `Usage:
   verify BUNDLE
-  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--include-holdout] [--protocol FILE] [--python PATH]
+  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--include-holdout] [--save-readings] [--min-coverage 0.75] [--protocol FILE] [--python PATH]
   sweep BUNDLE GRID.json|default OUTPUT_DIR [same options as fit]
   parity OUTPUT_DIR POD_RESULT.json [POD_RESULT.json ...]
 BUNDLE is the tar from GET /api/biometric-tuning/datasets/{id}/export, or a directory extracted from it.`
@@ -17,7 +17,7 @@ function options(args: string[]) {
   const values: Record<string, string> = {}
   const positional: string[] = []
   for (let index = 0; index < args.length; index++) {
-    if (args[index] === '--include-holdout') values['include-holdout'] = 'true'
+    if (args[index] === '--include-holdout' || args[index] === '--save-readings') values[args[index].slice(2)] = 'true'
     else if (args[index].startsWith('--')) values[args[index].slice(2)] = args[++index] ?? ''
     else positional.push(args[index])
   }
@@ -49,6 +49,7 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
   const splits = (flags.splits?.split(',') ?? [...LOCAL_SPLITS, ...(includeHoldout ? ['holdout'] : [])]) as LocalSplit[]
   const started = performance.now()
   const result = await fitCandidates({ bundle, candidates, outputDirectory, splits, includeHoldout,
+    readingsDirectory: flags['save-readings'] === 'true' ? join(outputDirectory, 'readings') : undefined,
     jobs,
     protocol: flags.protocol ? await readJson(flags.protocol) as never : undefined,
     python: flags.python ? defaultPythonLocation(flags.python) : undefined,
@@ -57,7 +58,7 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
     await mkdir(join(outputDirectory, report.candidate.id), { recursive: true })
     await writeFile(join(outputDirectory, report.candidate.id, `${report.split}.json`), `${JSON.stringify(report)}\n`)
   }
-  const ranking = rankCandidates(result.reports)
+  const ranking = rankCandidates(result.reports, flags['min-coverage'] ? Number(flags['min-coverage']) : undefined)
   await writeFile(join(outputDirectory, 'ranking.json'), `${JSON.stringify(ranking, null, 2)}\n`)
   await writeFile(join(outputDirectory, 'ranking.md'), rankingMarkdown(ranking))
   const totalWallMs = performance.now() - started

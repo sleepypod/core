@@ -16,7 +16,7 @@ interface ParameterSchema {
 }
 
 export interface BiometricConfig {
-  heart_rate: { trackingToleranceBpm: number, trackingHistoryLength: number }
+  heart_rate: { trackingToleranceBpm: number, trackingHistoryLength: number, minimumPeakScore: number }
   breathing_rate: { intervalLowerRatio: number, intervalUpperRatio: number }
   hrv_index: { harmonicTolerance: number, minimumWindows: number }
   sleep_stages: StageClassifier

@@ -151,7 +151,7 @@ export function ProfileCard({ saved, previous, previousIsDefaults, draft, onDraf
     <Slider value={draft[path]} min={PARAMS[path].min} max={PARAMS[path].max} step={PARAMS[path].step} label={label} disabled={disabled} onChange={v => set(path, v)} />
   )
 
-  const tol = 'heart_rate.trackingToleranceBpm', hist = 'heart_rate.trackingHistoryLength'
+  const tol = 'heart_rate.trackingToleranceBpm', hist = 'heart_rate.trackingHistoryLength', peak = 'heart_rate.minimumPeakScore'
   const low = 'breathing_rate.intervalLowerRatio', high = 'breathing_rate.intervalUpperRatio', windows = 'hrv_index.minimumWindows'
 
   return (
@@ -191,6 +191,14 @@ export function ProfileCard({ saved, previous, previousIsDefaults, draft, onDraf
           {t`accepted estimates in the tracker`}
         </>,
         sub(hist), slider(hist, t`Tracking history length`), effect([hist], 'heart_rate', 'bpm'), true,
+      )}
+      {row(
+        <>
+          {t`Report no heart rate when the beat signal scores below`}
+          {' '}
+          {value(peak)}
+        </>,
+        sub(peak), slider(peak, t`Minimum beat signal score`), effect([peak], 'heart_rate', 'bpm'), true,
       )}
 
       <Eyebrow>{t`BREATHING`}</Eyebrow>

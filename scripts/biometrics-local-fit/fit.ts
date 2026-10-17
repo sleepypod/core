@@ -102,6 +102,8 @@ export interface FitOptions {
   splits?: readonly LocalSplit[]
   /** Score holdout nights too, once, for a candidate that is already chosen. */
   includeHoldout?: boolean
+  /** Also write each replay's derived readings here, one JSON file per night and configuration. */
+  readingsDirectory?: string
   jobs?: number
   protocol?: z.input<typeof experimentProtocolSchema>
   python?: PythonLocation
@@ -151,6 +153,11 @@ export async function fitCandidates(options: FitOptions) {
       { version: 'retained-waveform-work-v1', input, configs: { [snapshot.side]: resolved, [otherSideSide]: defaults.resolved } },
       { signal, timeoutMs: 3600000, expectedBuildHash: build.hash })
     outputs.set(`${item.cohortId}:${item.hash}`, { cohortId: item.cohortId, configHash: item.hash, ...output })
+    if (options.readingsDirectory) {
+      await mkdir(options.readingsDirectory, { recursive: true })
+      await writeFile(join(options.readingsDirectory, `${item.cohortId}-${item.hash.slice(0, 12)}.json`),
+        `${JSON.stringify({ cohortId: item.cohortId, configHash: item.hash, side: snapshot.side, readings: output.readings })}\n`)
+    }
     options.onProgress?.(++done, items.length, { cohortId: item.cohortId,
       candidateIds: candidates.filter(row => row.resolvedHash === item.hash).map(row => row.id), wallMs: performance.now() - itemStarted })
   })

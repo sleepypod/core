@@ -140,7 +140,7 @@ it('reads the backtest per night and per split, with holdout the one to trust', 
   expect(screen.getByText('frozen Oct 12 · 2.1 MB')).toBeTruthy()
   expect(screen.getAllByText('watch').length).toBe(3)
   expect(screen.getByText('holdout −0.8 bpm · covered 90%')).toBeTruthy()
-  expect(screen.getAllByText('unchanged').length).toBe(3)
+  expect(screen.getAllByText('unchanged').length).toBe(4)
   const nights = screen.getByRole('listbox', { name: 'Dataset nights' })
   fireEvent.click(within(nights).getByRole('option', { name: /Sat 10/ }))
   expect(within(nights).getByRole('option', { name: /Sat 10/ }).getAttribute('aria-selected')).toBe('true')

@@ -25,7 +25,7 @@ afterAll(() => {
 })
 
 /** Score a candidate with fixed synthetic readings (references are 62 bpm). */
-function localReport(id: string, overrides: Array<{ path: string, value: unknown }>, split: 'tuning' | 'validation' | 'holdout', heartRates: { default: number, candidate: number }) {
+function localReport(id: string, overrides: Array<{ path: string, value: unknown }>, split: 'tuning' | 'validation' | 'holdout', heartRates: { default: number | Array<number | null>, candidate: number | Array<number | null> }) {
   const defaults = { manifestHash, resolvedHash: configHash(defaultConfig), resolved: defaultConfig }
   const candidate = resolveConfig(overrides as never)
   const configs = [{ label: 'default' as const, revisionId: null, ...defaults },
@@ -33,9 +33,10 @@ function localReport(id: string, overrides: Array<{ path: string, value: unknown
   const night = exportNights.find(row => row.split === split) ?? exportNights[0]
   const artifact = fixture.snapshot.version === 'waveform-dataset-v1' ? fixture.snapshot.waveformInputs.find(row => row.cohortId === night.cohortId)?.input.artifacts[0].artifact.sha256 ?? '' : ''
   const outputs = [...new Map(configs.map(config => [config.resolvedHash, config])).values()].map((config) => {
-    const heartRate = config.label === 'default' ? heartRates.default : heartRates.candidate
-    const readings = Array.from({ length: 10 }, (_, index) => ({ side: 'left' as const, timestampMs: night.startMs + index * 60000, heartRate, hrvIndex: 30,
-      hrvMetric: 'window_ibi_variability_v1' as const, breathingRate: 14, qualityScore: 1, flags: null, hrRaw: heartRate, sourceSide: 'left' as const,
+    const chosen = config.label === 'default' ? heartRates.default : heartRates.candidate
+    const rate = (index: number) => Array.isArray(chosen) ? chosen[index] : chosen
+    const readings = Array.from({ length: 10 }, (_, index) => ({ side: 'left' as const, timestampMs: night.startMs + index * 60000, heartRate: rate(index), hrvIndex: 30,
+      hrvMetric: 'window_ibi_variability_v1' as const, breathingRate: 14, qualityScore: 1, flags: null, hrRaw: rate(index), sourceSide: 'left' as const,
       configHash: config.resolvedHash, limitations: [] }))
     return { cohortId: night.cohortId, configHash: config.resolvedHash, readings, run: { version: 'retained-waveform-run-v1' as const, build_hash: pythonBuildHash,
       decoded_records: 10, raw_records: 10, counts: { records: 10, accepted_frames: 10, empty_channel_frames: 0, pump_gated_frames: 0, preroll_outputs: 0, scored_outputs: readings.length },
@@ -67,7 +68,7 @@ describe('local fit reports', () => {
     expect(() => parseLocalReport({ ...report, label: 'pod' })).toThrow()
   })
 
-  it('ranks by tuning HR error difference and keeps validation alongside', () => {
+  it('ranks by tuning HR error on own readings and keeps validation alongside', () => {
     const better = [{ path: 'heart_rate.trackingToleranceBpm', value: 10 }], worse = [{ path: 'heart_rate.trackingToleranceBpm', value: 25 }]
     const reports = [
       localReport('worse', worse, 'tuning', { default: 60, candidate: 58 }), localReport('worse', worse, 'validation', { default: 60, candidate: 59 }),
@@ -75,14 +76,37 @@ describe('local fit reports', () => {
       localReport('defaults', [], 'tuning', { default: 60, candidate: 60 }), localReport('defaults', [], 'validation', { default: 60, candidate: 60 }),
     ]
     const ranking = rankCandidates(reports)
-    expect(ranking).toMatchObject({ label: 'exploratory-local', evidence: 'not_activation_evidence' })
+    expect(ranking).toMatchObject({ label: 'exploratory-local', evidence: 'not_activation_evidence', minimumCoverage: 0.75 })
     expect(ranking.rows.map(row => [row.rank, row.id])).toEqual([[1, 'better'], [2, 'defaults'], [3, 'worse']])
-    expect(ranking.rows[0].heartRate).toEqual({ tuning: { maeDifference: -1.5, mae: 0.5, scoredNights: 1, coverageReducedNights: 0 },
-      validation: { maeDifference: 0, mae: 2, scoredNights: 1, coverageReducedNights: 0 } })
+    expect(ranking.rows[0].heartRate).toEqual({
+      tuning: { maeDifference: -1.5, mae: 0.5, ownMae: 0.5, coverage: 1, scoredNights: 1, coverageReducedNights: 0 },
+      validation: { maeDifference: 0, mae: 2, ownMae: 2, coverage: 1, scoredNights: 1, coverageReducedNights: 0 } })
+    expect(rankingMarkdown(ranking)).toContain('| 1 | better | 0.500 | -1.500 | 100% | 2.000 | 0.000 | 100% | n/a | n/a |')
     const tied = rankCandidates([localReport('b-two', [...better, { path: 'heart_rate.trackingHistoryLength', value: 8 }], 'tuning', { default: 60, candidate: 61 }),
       localReport('a-one', [...better, { path: 'hrv_index.minimumWindows', value: 10 }], 'tuning', { default: 60, candidate: 61 })])
     expect(tied.rows.map(row => [row.id, row.changedDefaults])).toEqual([['a-one', 1], ['b-two', 2]])
-    expect(rankingMarkdown(ranking)).toContain('| 1 | better | 0.500 | -1.500 | 2.000 | 0.000 | 0/0 | n/a | n/a |')
+  })
+
+  it('credits abstaining on bad windows but not below the coverage floor', () => {
+    const gate = (value: number) => [{ path: 'heart_rate.minimumPeakScore', value }]
+    // References sit on readings 0, 2, 4, 6 and 8 at 62 bpm. Defaults are right
+    // except one wild reading; each gate only removes readings, never changes them.
+    const defaults = [62, 60, 62, 60, 62, 60, 62, 60, 90, 60]
+    const dropsWild = defaults.map((value, index) => index === 8 ? null : value)
+    const dropsMost = defaults.map((value, index) => index >= 2 && index % 2 === 0 ? null : value)
+    const ranking = rankCandidates([
+      localReport('defaults', [], 'tuning', { default: defaults, candidate: defaults }),
+      localReport('gate-0.4', gate(0.4), 'tuning', { default: defaults, candidate: dropsWild }),
+      localReport('gate-0.6', gate(0.6), 'tuning', { default: defaults, candidate: dropsMost }),
+    ])
+    const rows = Object.fromEntries(ranking.rows.map(row => [row.id, row]))
+    expect(rows.defaults.heartRate.tuning).toMatchObject({ ownMae: 5.6, coverage: 1 })
+    expect(rows['gate-0.4'].heartRate.tuning).toMatchObject({ ownMae: 0, coverage: 0.8, maeDifference: 0 })
+    expect(rows['gate-0.6'].heartRate.tuning).toMatchObject({ ownMae: 0, coverage: 0.2, maeDifference: 0 })
+    // Common support scores both gates as no change; own error with the coverage floor does not.
+    expect(ranking.rows.map(row => row.id)).toEqual(['gate-0.4', 'defaults', 'gate-0.6'])
+    expect(rankCandidates([localReport('gate-0.6', gate(0.6), 'tuning', { default: defaults, candidate: dropsMost }),
+      localReport('defaults', [], 'tuning', { default: defaults, candidate: defaults })], 0.1).rows[0].id).toBe('gate-0.6')
   })
 
   it('shows holdout error alongside only when holdout nights were scored', () => {
@@ -90,8 +114,8 @@ describe('local fit reports', () => {
     const without = rankingMarkdown(rankCandidates([localReport('tol10', overrides, 'tuning', { default: 60, candidate: 61 })]))
     expect(without).not.toContain('holdout')
     const ranking = rankCandidates([localReport('tol10', overrides, 'tuning', { default: 60, candidate: 61 }), localReport('tol10', overrides, 'holdout', { default: 60, candidate: 62 })])
-    expect(ranking.rows[0].heartRate.holdout).toEqual({ maeDifference: -2, mae: 0, scoredNights: 1, coverageReducedNights: 0 })
-    expect(rankingMarkdown(ranking)).toContain('| 1 | tol10 | 1.000 | -1.000 | n/a | n/a | 0.000 | -2.000 |')
+    expect(ranking.rows[0].heartRate.holdout).toEqual({ maeDifference: -2, mae: 0, ownMae: 0, coverage: 1, scoredNights: 1, coverageReducedNights: 0 })
+    expect(rankingMarkdown(ranking)).toContain('| 1 | tol10 | 1.000 | -1.000 | 100% | n/a | n/a | n/a | 0.000 | -2.000 | 100% |')
   })
 
   it('compares local default HR error with pod results within 0.1 bpm', () => {
