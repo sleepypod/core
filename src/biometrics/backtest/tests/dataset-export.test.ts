@@ -10,7 +10,7 @@ import { DatasetStore } from '../datasets'
 import { datasetBundleChunks, datasetBundleTarBytes, prepareDatasetExport } from '../dataset-export'
 import { exportableWaveformDataset } from './fixtures/export'
 
-const state = vi.hoisted(() => ({ db: undefined as unknown }))
+const state = vi.hoisted(() => ({ db: undefined as unknown, failure: null as Error | null }))
 vi.mock('@/src/db', () => ({
   get biometricsDb() {
     return state.db
@@ -19,6 +19,7 @@ vi.mock('@/src/db', () => ({
 vi.mock('@/src/biometrics/backtest/coordinator-service', () => ({
   coordinatorRequest: (db: Parameters<typeof prepareDatasetExport>[0], task: { type: string, input: { id: string } }) => {
     if (task.type !== 'exportDataset') throw new Error('unexpected task')
+    if (state.failure) return Promise.reject(state.failure)
     return prepareDatasetExport(db, task.input.id)
   },
 }))
@@ -31,6 +32,7 @@ beforeEach(() => {
   state.db = fixture.db
 })
 afterEach(() => {
+  state.failure = null
   fixture.sqlite.close()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -130,6 +132,15 @@ describe('GET /api/biometric-tuning/datasets/{id}/export', () => {
     expect((await get(fixture.id)).status).toBe(404)
     expect((await get('99999999-9999-4999-8999-999999999999')).status).toBe(404)
     expect((await get('not-a-uuid')).status).toBe(400)
+  })
+
+  it('maps coordinator error codes even when the error is not this bundle\'s ReferenceInputError class', async () => {
+    state.failure = Object.assign(new Error('Retained dataset inputs were explicitly released'), { code: 'DATASET_RELEASED' })
+    expect((await get(fixture.id)).status).toBe(404)
+    state.failure = Object.assign(new Error('A retained RAW archive failed its SHA-256 check'), { code: 'DATASET_CORRUPT' })
+    expect((await get(fixture.id)).status).toBe(409)
+    state.failure = new Error('Biometrics coordinator failed')
+    expect((await get(fixture.id)).status).toBe(500)
   })
 
   it('returns 409 without streaming when a retained archive fails its hash check', async () => {

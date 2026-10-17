@@ -4,7 +4,6 @@ import { biometricsDb } from '@/src/db'
 import { coordinatorRequest } from '@/src/biometrics/backtest/coordinator-service'
 import type { CoordinatorResults } from '@/src/biometrics/backtest/coordinator-tasks'
 import { datasetBundleChunks, datasetBundleTarBytes, retainedRawDirectory } from '@/src/biometrics/backtest/dataset-export'
-import { ReferenceInputError } from '@/src/biometrics/references/time'
 
 // One export at a time: each one reads every retained archive of the dataset
 // twice (verification, then streaming). A stalled client must not latch it.
@@ -15,11 +14,13 @@ const EXPORT_WATCHDOG_MS = (() => {
 })()
 
 function errorResponse(error: unknown) {
-  if (error instanceof ReferenceInputError) {
-    if (error.code === 'NOT_FOUND' || error.code === 'DATASET_RELEASED') return NextResponse.json({ error: 'Dataset not found or released' }, { status: 404 })
-    if (error.code === 'DATASET_CORRUPT') return NextResponse.json({ error: `DATASET_CORRUPT: ${error.message}` }, { status: 409 })
-    if (error.code === 'WORKER_UNAVAILABLE') return NextResponse.json({ error: error.message }, { status: 503 })
-  }
+  // Match on the code, not the class: the coordinator's reply is rebuilt as a
+  // ReferenceInputError that need not be the same class instance this route
+  // imports once Next has bundled both.
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 'NOT_FOUND' || code === 'DATASET_RELEASED') return NextResponse.json({ error: 'Dataset not found or released' }, { status: 404 })
+  if (code === 'DATASET_CORRUPT') return NextResponse.json({ error: `DATASET_CORRUPT: ${(error as Error).message}` }, { status: 409 })
+  if (code === 'WORKER_UNAVAILABLE') return NextResponse.json({ error: (error as Error).message }, { status: 503 })
   return NextResponse.json({ error: 'Dataset export failed' }, { status: 500 })
 }
 
