@@ -84,6 +84,7 @@ export function parseLocalReport(value: unknown) {
 /** Rank by the tuning split's equal-night mean HR error difference against
  * defaults on common support (lower is better), validation shown alongside. */
 export function rankCandidates(reports: LocalFitReport[], minimumCoverage = 0.75) {
+  if (!Number.isFinite(minimumCoverage) || minimumCoverage < 0 || minimumCoverage > 1) throw new Error('Minimum coverage must be a fraction from 0 to 1')
   const ids = [...new Set(reports.map(report => report.candidate.id))]
   const pick = (id: string, split: 'tuning' | 'validation' | 'holdout') => reports.find(report => report.candidate.id === id && report.split === split)
   const view = (report: LocalFitReport | undefined, metric: Metric) => report

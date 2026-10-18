@@ -1399,7 +1399,7 @@ msgstr "Migró los ajustes de fases del sueño al perfil"
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:201
 msgid "Minimum beat signal score"
-msgstr ""
+msgstr "Puntuación mínima de la señal del latido"
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:240
 msgid "Minimum IBI windows"
@@ -2390,7 +2390,7 @@ msgstr "Identidad del informe"
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:197
 msgid "Report no heart rate when the beat signal scores below"
-msgstr ""
+msgstr "No informar la frecuencia cardíaca cuando la señal del latido puntúa por debajo de"
 
 #: src/components/biometrics/Calibration/CalibrationProfileCard.tsx:233
 msgid "Report the index only after"

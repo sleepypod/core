@@ -43,6 +43,10 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
   // Check flags before extracting a bundle or replaying anything.
   const jobs = flags.jobs === undefined ? undefined : Number(flags.jobs)
   if (jobs !== undefined && !(Number.isSafeInteger(jobs) && jobs >= 1)) throw new Error('--jobs is a positive whole number of parallel replays')
+  const minimumCoverage = flags['min-coverage'] === undefined ? undefined : Number(flags['min-coverage'])
+  if (minimumCoverage !== undefined && !(Number.isFinite(minimumCoverage) && minimumCoverage >= 0 && minimumCoverage <= 1)) {
+    throw new Error('--min-coverage is a fraction from 0 to 1, for example 0.75')
+  }
   await mkdir(outputDirectory, { recursive: true })
   const bundle = await openBundle(bundlePath, outputDirectory)
   const includeHoldout = flags['include-holdout'] === 'true'
@@ -58,7 +62,7 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
     await mkdir(join(outputDirectory, report.candidate.id), { recursive: true })
     await writeFile(join(outputDirectory, report.candidate.id, `${report.split}.json`), `${JSON.stringify(report)}\n`)
   }
-  const ranking = rankCandidates(result.reports, flags['min-coverage'] ? Number(flags['min-coverage']) : undefined)
+  const ranking = rankCandidates(result.reports, minimumCoverage)
   await writeFile(join(outputDirectory, 'ranking.json'), `${JSON.stringify(ranking, null, 2)}\n`)
   await writeFile(join(outputDirectory, 'ranking.md'), rankingMarkdown(ranking))
   const totalWallMs = performance.now() - started

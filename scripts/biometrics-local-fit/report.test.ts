@@ -109,6 +109,14 @@ describe('local fit reports', () => {
       localReport('defaults', [], 'tuning', { default: defaults, candidate: defaults })], 0.1).rows[0].id).toBe('gate-0.6')
   })
 
+  it('rejects a coverage floor outside 0 to 1', async () => {
+    for (const value of [Number.NaN, 75, -0.1]) expect(() => rankCandidates([], value), String(value)).toThrow('fraction from 0 to 1')
+    writeFileSync(join(directory, 'one.json'), JSON.stringify([{ id: 'x', overrides: [] }]))
+    for (const flag of ['75%', '75']) {
+      await expect(runLocalFitCli(['fit', directory, join(directory, 'one.json'), join(directory, 'out'), '--min-coverage', flag])).rejects.toThrow('--min-coverage is a fraction from 0 to 1')
+    }
+  })
+
   it('shows holdout error alongside only when holdout nights were scored', () => {
     const overrides = [{ path: 'heart_rate.trackingToleranceBpm', value: 10 }]
     const without = rankingMarkdown(rankCandidates([localReport('tol10', overrides, 'tuning', { default: 60, candidate: 61 })]))
