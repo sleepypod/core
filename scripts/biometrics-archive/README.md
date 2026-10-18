@@ -117,6 +117,7 @@ Rules (`TABLES` in `merge.ts`):
 | `health_runs` | check_id, started_at (added) | state (last_seen_at) |
 | `calibration_profiles` | side, sensor_type | state: the current profile; history is in `calibration_runs` |
 | `reference_stages` | side, start, source | state: a corrected import replaces the label |
+| `reference_samples` | side, metric, timestamp, source | state (Watch breathing rate and HRV SDNN) |
 | `reference_vitals` | side, timestamp, source | state |
 | `reference_imports` | id (text) | state (deleted_at_ms) |
 | `biometric_processing_runs`, `biometric_experiments`, `biometric_backtest_jobs`, `biometric_raw_sources`, `biometric_shadow_runs`, `biometric_dataset_raw_artifacts` | id (text) | state |

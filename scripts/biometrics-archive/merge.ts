@@ -52,6 +52,7 @@ export const TABLES: TableSpec[] = [
   { table: 'reference_imports', key: ['id'], mode: 'state' },
   { table: 'reference_measurements', key: ['import_id', 'record_key'], mode: 'append' },
   { table: 'reference_stages', key: ['side', 'start', 'source'], mode: 'state' },
+  { table: 'reference_samples', key: ['side', 'metric', 'timestamp', 'source'], mode: 'state' },
   { table: 'reference_vitals', key: ['side', 'timestamp', 'source'], mode: 'state' },
   { table: 'biometric_processing_runs', key: ['id'], mode: 'state' },
   { table: 'biometric_runtime_configs', key: ['side', 'generation'], mode: 'append' },
