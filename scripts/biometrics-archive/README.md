@@ -106,7 +106,7 @@ Rules (`TABLES` in `merge.ts`):
 | `prime_events` | timestamp (added) | append |
 | `thermal_state` | side, timestamp, is_powered (added) | append |
 | `flash_write_samples` | boot_id, timestamp (added) | append |
-| `calibration_runs` | side, sensor_type, created_at (added) | append |
+| `calibration_runs` | side, sensor_type, created_at, triggered_by, duration_ms (added) | append |
 | `reference_measurements` | import_id, record_key | append |
 | `biometric_runtime_configs` | side, generation | append; after a pod reset reuses a generation, the new config is a conflict |
 | `biometric_holdout_accesses` | id (text) | append |

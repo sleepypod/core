@@ -48,7 +48,8 @@ export const TABLES: TableSpec[] = [
   { table: 'pump_alerts', key: ['timestamp', 'type', 'side'], mode: 'state' },
   { table: 'health_runs', key: ['check_id', 'started_at'], mode: 'state' },
   { table: 'calibration_profiles', key: ['side', 'sensor_type'], mode: 'state' },
-  { table: 'calibration_runs', key: ['side', 'sensor_type', 'created_at'], mode: 'append' },
+  // A retried calibration can log several runs in the same second; trigger and duration tell them apart.
+  { table: 'calibration_runs', key: ['side', 'sensor_type', 'created_at', 'triggered_by', 'duration_ms'], mode: 'append' },
   { table: 'reference_imports', key: ['id'], mode: 'state' },
   { table: 'reference_measurements', key: ['import_id', 'record_key'], mode: 'append' },
   { table: 'reference_stages', key: ['side', 'start', 'source'], mode: 'state' },

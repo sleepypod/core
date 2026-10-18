@@ -79,6 +79,18 @@ it('keeps the first copy of an append-only row and records a changed copy once',
   expect(JSON.parse(conflict.snapshot_row).heart_rate).toBe(72)
 })
 
+it('keeps calibration runs the pod logged in the same second as separate rows', () => {
+  const runs = (db: Database.Database) => {
+    const insert = db.prepare(`INSERT INTO calibration_runs (side, sensor_type, status, error_message, duration_ms, triggered_by, created_at)
+      VALUES ('left', 'piezo', 'failed', 'No piezo records available', ?, ?, 1777925137)`)
+    insert.run(4, 'startup')
+    insert.run(6, 'daily')
+  }
+  const path = snapshot(runs)
+  expect(merge(path, 1).tables.calibration_runs).toMatchObject({ inserted: 2, conflicts: 0 })
+  expect(merge(path, 2).tables.calibration_runs).toMatchObject({ inserted: 0, ignored: 2, conflicts: 0 })
+})
+
 it('takes the newest snapshot\'s values for state tables, but keeps a released dataset\'s content', () => {
   const dataset = (db: Database.Database, snapshotText: string, releasedAtMs: number | null) => db.prepare(`INSERT INTO biometric_datasets
     (id, side, subject_id, idempotency_key, request_hash, content_hash, manifest, snapshot, byte_length, created_at_ms, released_at_ms)
