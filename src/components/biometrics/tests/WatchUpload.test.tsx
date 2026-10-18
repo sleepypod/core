@@ -12,7 +12,7 @@ afterEach(() => {
 it('uploads for the named sleeper, reports partial conflicts, and refreshes charts', async () => {
   const xhr = {
     open: vi.fn(), setRequestHeader: vi.fn(), send: vi.fn(), upload: {}, timeout: 0,
-    status: 200, responseText: JSON.stringify({ vitals: 12, stages: 0, matchedVitals: 14, matchedStages: 3, rejectedStageBatches: 1 }),
+    status: 200, responseText: JSON.stringify({ vitals: 12, stages: 0, breathing: 5, hrv: 2, matchedVitals: 14, matchedStages: 3, matchedBreathing: 6, matchedHrv: 2, rejectedStageBatches: 1 }),
     onload: null as (() => void) | null,
   }
   vi.stubGlobal('XMLHttpRequest', function XMLHttpRequest() {
@@ -32,7 +32,8 @@ it('uploads for the named sleeper, reports partial conflicts, and refreshes char
     xhr.onload?.()
   })
   await waitFor(() => expect(invalidate).toHaveBeenCalled())
-  expect(screen.getByText(/Imported 12 new/)).toBeTruthy()
+  expect(screen.getByText(/Imported 12 new heart-rate, 5 new breathing-rate and 2 new HRV samples/)).toBeTruthy()
+  expect(screen.getByText(/Found 14 heart-rate, 6 breathing-rate and 2 HRV samples/)).toBeTruthy()
   expect(screen.getByText(/stage batches conflicted/)).toBeTruthy()
 })
 
@@ -67,7 +68,7 @@ it('shows transfer progress, protects an active import, and allows closing after
   expect(screen.getByRole('status').textContent).toContain('Importing on the pod')
   fireEvent.click(screen.getByRole('button', { name: 'Close' }))
   expect(screen.getByRole('dialog')).toBeTruthy()
-  xhr.responseText = JSON.stringify({ vitals: 0, stages: 2, matchedVitals: 0, matchedStages: 2, rejectedStageBatches: 0 })
+  xhr.responseText = JSON.stringify({ vitals: 0, stages: 2, breathing: 0, hrv: 0, matchedVitals: 0, matchedStages: 2, matchedBreathing: 0, matchedHrv: 0, rejectedStageBatches: 0 })
   await act(async () => xhr.onload?.())
   expect(screen.getByRole('status').textContent).toContain('2 new sleep-stage segments')
   fireEvent.click(screen.getByRole('button', { name: 'Close' }))

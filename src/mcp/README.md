@@ -207,9 +207,10 @@ source IDs against the parent dataset hash; do not pass paths or raw bytes.
 
 ### Apple Watch imports
 
-`import_apple_watch_data` imports extracted Watch heart-rate `samples` and/or sleep-stage
-`segments` for an explicit `side`. Timestamps are Unix seconds; each array accepts up to
-2,000 records. It uses the existing reference-vitals and reference-stages procedures,
+`import_apple_watch_data` imports extracted Watch heart-rate `samples`, respiratory-rate
+`breathingRates` (breaths/min), HRV SDNN `hrvSdnn` (ms) and/or sleep-stage `segments` for an
+explicit `side`. Timestamps are Unix seconds; each array accepts up to 2,000 records. It uses
+the existing reference-vitals, reference-samples and reference-stages procedures,
 so repeats skip duplicates and never overwrite pod measurements. Check `stageError`
 for partial success before reporting completion.
 
@@ -226,14 +227,16 @@ curl --fail-with-body -X POST \
 
 The body is raw `export.zip` or `export.xml`, not multipart. `side` is required;
 `days` defaults to 30 and accepts 1–90. Uploads are limited to 512 MiB and ZIP XML
-members to 1 GiB uncompressed. Only Apple Watch heart rate and sleep stages in the
-chosen period are imported. A ZIP must contain `apple_health_export/export.xml` or
+members to 1 GiB uncompressed. Only Apple Watch heart rate, respiratory rate, HRV
+(SDNN) and sleep stages in the chosen period are imported; records the sleepypod iOS
+app wrote back into Health (source `sleepypod`, `sleepypod design`) are always skipped. A ZIP must contain `apple_health_export/export.xml` or
 `export.xml`; unrelated members are never extracted. Files are staged on persistent
 storage and deleted on completion or failure. Only one upload/import runs at a time.
 
-The response includes `vitals` and `stages` (new rows), `matchedVitals` and
-`matchedStages` (eligible records), and `rejectedStageBatches` (conflicting stage
-batches skipped while heart rate still imports). A disconnect or timeout can leave
+The response includes `vitals`, `breathing`, `hrv` and `stages` (new rows),
+`matchedVitals`, `matchedBreathing`, `matchedHrv` and `matchedStages` (eligible
+records), and `rejectedStageBatches` (conflicting stage batches skipped while the
+vitals still import). A disconnect or timeout can leave
 some batches imported; retrying the same export is safe. Upload has a 30-minute
 budget, followed by a separate 10-minute import budget. The browser allows 41
 minutes for both phases and response cleanup. Like the existing API, this is LAN-only.

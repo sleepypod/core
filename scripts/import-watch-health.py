@@ -1,29 +1,32 @@
 #!/usr/bin/env -S uv run --quiet --no-project
 """
-Import Apple Watch sleep stages and heart rate from a Health export into the pod.
+Import Apple Watch sleep stages, heart rate, breathing rate and HRV from a Health export into the pod.
 
     scripts/import-watch-health.py ~/Desktop/apple_health_export --pod 192.168.1.88 --side left
 
 Reads export.xml (or the unzipped apple_health_export/ directory) with the same
 parser as sleep-stage-dataset.py, keeps samples whose sourceName matches
---source (default: Watch), and posts them to the pod's REST API:
+--source (default: Watch) and was not written by sleepypod itself, and posts
+them to the pod's REST API:
 
   POST /api/biometrics/reference-stages   SleepAnalysis segments (wake/light/deep/rem)
   POST /api/biometrics/reference-vitals   HeartRate samples
+  POST /api/biometrics/reference-samples  RespiratoryRate (breathing_rate, breaths/min)
+                                          and HeartRateVariabilitySDNN (hrv_sdnn, ms)
 
-Heart rate is first-write-wins on side + time + source, so re-running on a
-newer export only adds what is new. Stages are stricter: a batch is rejected
+Heart rate, breathing rate and HRV are first-write-wins on side + time +
+source (+ metric), so re-running on a newer export only adds what is new. Stages are stricter: a batch is rejected
 (HTTP 400) when a segment overlaps a stored one with different boundaries,
 e.g. a night the iOS app already posted. Such a batch is skipped with a
-warning, heart rate is still imported, and the run exits 1 at the end.
+warning, the vitals are still imported, and the run exits 1 at the end.
 Nothing is written to the pod's own `vitals` table: Watch heart rate lives in
-`reference_vitals`, and the Biometrics page draws it as a second line over the
-pod's heart rate.
+`reference_vitals` (the Biometrics page draws it as a second line over the
+pod's heart rate), breathing rate and HRV in `reference_samples`.
 
 Options:
   --days N        only samples from the last N days (default 30; 0 = everything)
   --dry-run       parse and count, post nothing
-  --stages-only / --hr-only
+  --stages-only / --hr-only (heart rate alone, without breathing rate and HRV)
 """
 import argparse
 import importlib.util
@@ -42,6 +45,18 @@ _spec = importlib.util.spec_from_file_location('sleep_stage_dataset', os.path.jo
 _ds = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_ds)
 parse_export = _ds.parse_export
+
+HK_RR = 'HKQuantityTypeIdentifierRespiratoryRate'
+HK_HRV = 'HKQuantityTypeIdentifierHeartRateVariabilitySDNN'
+# reference_samples metric, HK type, plausible range (the API enforces the same)
+SAMPLE_METRICS = (('breathing_rate', HK_RR, 4, 60), ('hrv_sdnn', HK_HRV, 1, 500))
+# Factors into the canonical unit (breaths/min, ms). Health exports use
+# count/min and ms; anything unlisted is skipped instead of stored unconverted.
+SAMPLE_UNITS = {HK_RR: {'count/min': 1, 'count/s': 60, 'Hz': 60}, HK_HRV: {'ms': 1, 's': 1000}}
+# The sleepypod iOS app writes the pod's own HR, breathing, HRV and sleep stages
+# back into Health (sourceName "sleepypod", "sleepypod design"). Those are never
+# a reference, whatever --source says.
+POD_SOURCE = '(?i)sleepypod'
 
 # The API caps both endpoints at 2000 items per call.
 BATCH = 2000
@@ -127,14 +142,18 @@ def export_stream(export):
 
 
 def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
-        stages=True, hr=True, post=post_json, now=None, report=False):
+        stages=True, hr=True, extra=True, post=post_json, now=None, report=False):
     now = time.time() if now is None else now
     cutoff = now - days * 86400 if days > 0 else float('-inf')
+    quantities = {hk: [] for _, hk, _, _ in SAMPLE_METRICS}
     with export_stream(export) as xml:
-        segments, hr_samples = parse_export(xml, source_pattern, cutoff=cutoff)
+        segments, hr_samples = parse_export(xml, source_pattern, cutoff=cutoff, quantities=quantities,
+                                            exclude_pattern=POD_SOURCE, units=SAMPLE_UNITS)
 
     segs = [s for s in dedupe_segments(segments) if s[1] >= cutoff] if stages else []
     samples = [(t, bpm) for t, bpm in hr_samples if t >= cutoff and 20 <= bpm <= 250] if hr else []
+    extras = {metric: [(t, v) for t, v in quantities[hk] if t >= cutoff and lo <= v <= hi] if extra else []
+              for metric, hk, lo, hi in SAMPLE_METRICS}
 
     def span(times):
         if not times:
@@ -144,12 +163,14 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
         return f'{fmt(lo)} → {fmt(hi)}'
 
     print(f'{len(segs)} stage segments ({span([s[0] for s in segs])}), '
-          f'{len(samples)} heart-rate samples ({span([t for t, _ in samples])}) for side {side}', file=sys.stderr)
+          f'{len(samples)} heart-rate samples ({span([t for t, _ in samples])}), '
+          f"{len(extras['breathing_rate'])} breathing-rate and {len(extras['hrv_sdnn'])} HRV samples for side {side}",
+          file=sys.stderr)
     if dry_run:
-        return {'stages': 0, 'vitals': 0}
+        return {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0}
 
     url = base_url(pod)
-    written = {'stages': 0, 'vitals': 0}
+    written = {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0}
     rejected = 0
     for batch in chunks(segs):
         try:
@@ -170,12 +191,21 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
             'samples': [{'timestamp': t, 'heartRate': bpm} for t, bpm in batch],
         })
         written['vitals'] += int(out.get('written', 0))
-    print(f"wrote {written['stages']} new stage segments and {written['vitals']} new heart-rate samples to {url}",
+    for metric, key in (('breathing_rate', 'breathing'), ('hrv_sdnn', 'hrv')):
+        for batch in chunks(extras[metric]):
+            out = post(f'{url}/api/biometrics/reference-samples', {
+                'side': side, 'source': 'apple_watch', 'metric': metric,
+                'samples': [{'timestamp': t, 'value': v} for t, v in batch],
+            })
+            written[key] += int(out.get('written', 0))
+    print(f"wrote {written['stages']} new stage segments, {written['vitals']} new heart-rate, "
+          f"{written['breathing']} new breathing-rate and {written['hrv']} new HRV samples to {url}",
           file=sys.stderr)
     if report:
-        return {**written, 'rejectedStageBatches': rejected, 'matchedStages': len(segs), 'matchedVitals': len(samples)}
+        return {**written, 'rejectedStageBatches': rejected, 'matchedStages': len(segs), 'matchedVitals': len(samples),
+                'matchedBreathing': len(extras['breathing_rate']), 'matchedHrv': len(extras['hrv_sdnn'])}
     if rejected:
-        raise SystemExit(f'error: {rejected} stage batch(es) rejected by the pod; heart rate was still imported')
+        raise SystemExit(f'error: {rejected} stage batch(es) rejected by the pod; vitals were still imported')
     return written
 
 
@@ -197,7 +227,8 @@ def main(argv=None):
     if not os.path.exists(export):
         ap.error(f'{export} not found')
     result = run(export, args.pod, args.side, args.source, args.days, args.dry_run,
-        stages=not args.hr_only, hr=not args.stages_only, report=args.json)
+        stages=not args.hr_only, hr=not args.stages_only, extra=not (args.hr_only or args.stages_only),
+        report=args.json)
     if args.json:
         print(json.dumps(result))
     return 0

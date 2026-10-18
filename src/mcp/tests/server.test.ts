@@ -24,7 +24,7 @@ const callerMock = vi.hoisted(() => {
     },
     biometrics: {
       getLatestSleep: fn(), getSleepRecord: fn(), getSleepRecords: fn(), getSleepStages: fn(), getVitalsSummary: fn(),
-      getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceStages: fn(),
+      getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceSamples: fn(), importReferenceStages: fn(),
       getReferenceStages: fn(), getReferenceVitals: fn(), getVitals: fn(),
     },
     sleepStages: { getClassifier: fn(), previewClassifier: fn(), setClassifier: fn() },
@@ -1172,15 +1172,41 @@ it('imports stage-only Watch data and rejects empty import requests', async () =
     const result = await client.callTool({ name: 'import_apple_watch_data', arguments: {
       side: 'left', segments: [{ start: 1791700000, end: 1791700060, stage: 'deep' }],
     } }) as CallToolResult
-    expect(JSON.parse(text(result))).toEqual({ vitals: 0, stages: 1, stageError: null })
+    expect(JSON.parse(text(result))).toEqual({ vitals: 0, breathing: 0, hrv: 0, stages: 1, stageError: null })
     const empty = await client.callTool({ name: 'import_apple_watch_data', arguments: { side: 'left' } }) as CallToolResult
     expect(empty.isError).toBe(true)
-    expect(text(empty)).toContain('Provide samples or segments')
+    expect(text(empty)).toContain('Provide samples, breathingRates, hrvSdnn or segments')
     callerMock.biometrics.importReferenceVitals.mockResolvedValue({ written: 1 })
     const vitalsOnly = await client.callTool({ name: 'import_apple_watch_data', arguments: {
       side: 'left', samples: [{ timestamp: 1791700000, heartRate: 60 }],
     } }) as CallToolResult
-    expect(JSON.parse(text(vitalsOnly))).toEqual({ vitals: 1, stages: 0, stageError: null })
+    expect(JSON.parse(text(vitalsOnly))).toEqual({ vitals: 1, breathing: 0, hrv: 0, stages: 0, stageError: null })
+  }
+  finally { await client.close() }
+})
+
+it('imports Watch breathing rate and HRV per metric through importReferenceSamples', async () => {
+  callerMock.biometrics.importReferenceSamples.mockReset()
+  callerMock.biometrics.importReferenceSamples.mockResolvedValueOnce({ written: 2 }).mockResolvedValueOnce({ written: 1 })
+  const client = await connect()
+  try {
+    const result = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'left',
+      breathingRates: [{ timestamp: 1791700000, value: 14.5 }, { timestamp: 1791700300, value: 15 }],
+      hrvSdnn: [{ timestamp: 1791700000, value: 48 }],
+    } }) as CallToolResult
+    expect(JSON.parse(text(result))).toEqual({ vitals: 0, breathing: 2, hrv: 1, stages: 0, stageError: null })
+    expect(callerMock.biometrics.importReferenceSamples).toHaveBeenNthCalledWith(1, { side: 'left', source: 'apple_watch', metric: 'breathing_rate',
+      samples: [{ timestamp: 1791700000, value: 14.5 }, { timestamp: 1791700300, value: 15 }] })
+    expect(callerMock.biometrics.importReferenceSamples).toHaveBeenNthCalledWith(2, { side: 'left', source: 'apple_watch', metric: 'hrv_sdnn',
+      samples: [{ timestamp: 1791700000, value: 48 }] })
+    const implausible = await client.callTool({ name: 'import_apple_watch_data', arguments: {
+      side: 'left', breathingRates: [{ timestamp: 1791700000, value: 90 }],
+    } }) as CallToolResult
+    expect(implausible.isError).toBe(true)
+    const empty = await client.callTool({ name: 'import_apple_watch_data', arguments: { side: 'left', samples: [], breathingRates: [], hrvSdnn: [] } }) as CallToolResult
+    expect(empty.isError).toBe(true)
+    expect(callerMock.biometrics.importReferenceSamples).toHaveBeenCalledTimes(2)
   }
   finally { await client.close() }
 })

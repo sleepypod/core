@@ -39,12 +39,22 @@ def hr_record(at, bpm, source=WATCH):
             f'startDate="{hk_time(at)}" endDate="{hk_time(at)}" value="{bpm}"/>\n')
 
 
-def write_export(path, segments, hr):
+def quantity_record(kind, at, value, unit, source=WATCH):
+    return (f' <Record type="HKQuantityTypeIdentifier{kind}" sourceName="{source}" unit="{unit}" '
+            f'startDate="{hk_time(at)}" endDate="{hk_time(at)}" value="{value}"/>\n')
+
+
+def write_export(path, segments, hr, rr=(), hrv=(), extra=''):
     parts = ['<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n']
     for a, b, v in segments:
         parts.append(sleep_record(T0 + timedelta(minutes=a), T0 + timedelta(minutes=b), v))
     for m, bpm in hr:
         parts.append(hr_record(T0 + timedelta(minutes=m), bpm))
+    for m, v in rr:
+        parts.append(quantity_record('RespiratoryRate', T0 + timedelta(minutes=m), v, 'count/min'))
+    for m, v in hrv:
+        parts.append(quantity_record('HeartRateVariabilitySDNN', T0 + timedelta(minutes=m), v, 'ms'))
+    parts.append(extra)
     parts.append('</HealthData>\n')
     with open(path, 'w', encoding='utf-8') as f:
         f.write(''.join(parts))
@@ -105,14 +115,14 @@ class ImportWatchHealthTest(unittest.TestCase):
             {'timestamp': int((T0 + timedelta(minutes=6)).timestamp()), 'heartRate': 56.5},
             {'timestamp': int((T0 + timedelta(minutes=11)).timestamp()), 'heartRate': 61.0},
         ])
-        self.assertEqual(written, {'stages': 3, 'vitals': 3})
-        self.assertIn('wrote 3 new stage segments and 3 new heart-rate samples', err)
+        self.assertEqual(written, {'stages': 3, 'vitals': 3, 'breathing': 0, 'hrv': 0})
+        self.assertIn('wrote 3 new stage segments, 3 new heart-rate', err)
 
     def test_dry_run_posts_nothing_but_reports_counts(self):
         write_export(self.export, [(0, 20, 'AsleepCore')], [(1, 58)])
         post, written, err = self.run_import(dry_run=True)
         self.assertEqual(post.calls, [])
-        self.assertEqual(written, {'stages': 0, 'vitals': 0})
+        self.assertEqual(written, {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0})
         self.assertIn('1 stage segments', err)
         self.assertIn('1 heart-rate samples', err)
 
@@ -123,7 +133,7 @@ class ImportWatchHealthTest(unittest.TestCase):
         self.assertEqual(len(post.calls[0][1]['segments']), 1)
         self.assertEqual(len(post.calls[1][1]['samples']), 1)
         _, written_all, _ = self.run_import(days=0)
-        self.assertEqual(written_all, {'stages': 2, 'vitals': 2})
+        self.assertEqual(written_all, {'stages': 2, 'vitals': 2, 'breathing': 0, 'hrv': 0})
 
     def test_batches_at_the_api_limit(self):
         write_export(self.export, [], [(m, 60) for m in range(0, 4500)])
@@ -174,6 +184,52 @@ class ImportWatchHealthTest(unittest.TestCase):
             pass
         post, _, _ = self.run_import(source_pattern='Nope')
         self.assertEqual(post.calls, [])
+
+    def test_posts_breathing_rate_and_hrv_per_metric(self):
+        write_export(self.export, [], [(1, 58)], rr=[(2, 14.5), (7, 15), (8, 2), (9, 90)], hrv=[(3, 48), (4, 0), (5, 900)])
+        post, written, err = self.run_import()
+        t = lambda m: int((T0 + timedelta(minutes=m)).timestamp())
+        self.assertEqual([u.rsplit('/', 1)[1] for u, _ in post.calls],
+                         ['reference-vitals', 'reference-samples', 'reference-samples'])
+        self.assertEqual(post.calls[1][1], {'side': 'left', 'source': 'apple_watch', 'metric': 'breathing_rate',
+                                            'samples': [{'timestamp': t(2), 'value': 14.5}, {'timestamp': t(7), 'value': 15.0}]})
+        self.assertEqual(post.calls[2][1], {'side': 'left', 'source': 'apple_watch', 'metric': 'hrv_sdnn',
+                                            'samples': [{'timestamp': t(3), 'value': 48.0}]})
+        self.assertEqual(written, {'stages': 0, 'vitals': 1, 'breathing': 2, 'hrv': 1})
+        self.assertIn('2 breathing-rate and 1 HRV samples', err)
+        # --hr-only and --stages-only leave breathing rate and HRV out.
+        post, _, _ = self.run_import(stages=False, extra=False)
+        self.assertEqual([u.rsplit('/', 1)[1] for u, _ in post.calls], ['reference-vitals'])
+
+    def test_converts_breathing_and_hrv_units_and_skips_unknown_ones(self):
+        extra = (quantity_record('RespiratoryRate', T0 + timedelta(minutes=2), 0.25, 'count/s')
+                 + quantity_record('RespiratoryRate', T0 + timedelta(minutes=3), 15, 'count/h')
+                 + quantity_record('HeartRateVariabilitySDNN', T0 + timedelta(minutes=4), 0.042, 's')
+                 + quantity_record('HeartRateVariabilitySDNN', T0 + timedelta(minutes=5), 42, 'us'))
+        write_export(self.export, [], [(1, 58)], extra=extra)
+        post, written, _ = self.run_import()
+        t = lambda m: int((T0 + timedelta(minutes=m)).timestamp())
+        self.assertEqual(post.calls[1][1]['samples'], [{'timestamp': t(2), 'value': 15.0}])
+        self.assertEqual(post.calls[2][1]['samples'], [{'timestamp': t(4), 'value': 42.0}])
+        self.assertEqual(written, {'stages': 0, 'vitals': 1, 'breathing': 1, 'hrv': 1})
+
+    def test_never_imports_records_sleepypod_wrote_to_health(self):
+        at = T0 + timedelta(minutes=1)
+        pod = ''.join([
+            hr_record(at, 99, source='sleepypod'),
+            quantity_record('RespiratoryRate', at, 30, 'count/min', source='sleepypod'),
+            quantity_record('HeartRateVariabilitySDNN', at, 99, 'ms', source='sleepypod design'),
+            sleep_record(at, at + timedelta(minutes=30), 'AsleepDeep', source='sleepypod'),
+            # Even when the source pattern would match it.
+            hr_record(at, 98, source='sleepypod Watch'),
+        ])
+        write_export(self.export, [(0, 20, 'AsleepCore')], [(2, 58)], rr=[(2, 14)], hrv=[(2, 40)], extra=pod)
+        post, written, _ = self.run_import()
+        values = [s.get('heartRate', s.get('value')) for _, p in post.calls for s in p.get('samples', [])]
+        self.assertEqual(values, [58.0, 14.0, 40.0])
+        self.assertEqual([s['stage'] for s in post.calls[0][1]['segments']], ['light'])
+        _, written_any, _ = self.run_import(source_pattern='.')
+        self.assertEqual(written_any, {'stages': 1, 'vitals': 1, 'breathing': 1, 'hrv': 1})
 
     def test_base_url_forms(self):
         self.assertEqual(iw.base_url('192.168.1.88'), 'http://192.168.1.88:3000')

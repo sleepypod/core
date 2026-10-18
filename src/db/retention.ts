@@ -39,6 +39,7 @@ import {
  *   calibration_*     — small, correctness-critical, keep indefinitely
  *   reference_stages  — external ground-truth labels, low volume, keep indefinitely
  *   reference_vitals  — external (Apple Watch) heart rate, low volume, keep indefinitely
+ *   reference_samples — external (Apple Watch) breathing rate and HRV, low volume, keep indefinitely
  */
 
 const RETENTION_TABLES = [

@@ -321,6 +321,6 @@ share it.
 mkdir -p snapshot && curl -fsS "http://POD:3000/api/biometrics/analysis-export?start=2026-10-15T09:16:00Z&end=2026-10-15T15:24:00Z" | tar -xf - -C snapshot/
 ```
 
-To keep history beyond the pod's retention, `pnpm biometrics:archive pull`
-pulls this export on a schedule into a long-term local store with a merged
-database (`scripts/biometrics-archive/README.md`).
+To keep history beyond the pod's retention, run `pnpm biometrics:archive pull`
+whenever you want to sync: it pulls this export into a long-term local store
+with a merged database (`scripts/biometrics-archive/README.md`).

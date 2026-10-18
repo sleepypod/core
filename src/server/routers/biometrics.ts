@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement, referenceStages, referenceVitals, biometricProcessingRuns } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages, referenceVitals, referenceSamples, biometricProcessingRuns } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
@@ -76,6 +76,9 @@ function batchOverlaps(segments: StageSegment[]): string[] {
   }
   return conflicts
 }
+
+/** Plausible Apple Watch values per reference_samples metric, in breaths/min and ms. */
+export const REFERENCE_SAMPLE_RANGE = { breathing_rate: [4, 60], hrv_sdnn: [1, 500] } as const
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -1154,6 +1157,58 @@ export const biometricsRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to import reference vitals: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
+   * Import externally measured breathing rate (breaths/min) or HRV SDNN (ms)
+   * samples, one metric per call (Apple Watch via a Health export). Stored in
+   * `reference_samples`, never in `vitals`, under the same first-write-wins
+   * rule as importReferenceVitals (unique on side, metric, timestamp, source).
+   */
+  importReferenceSamples: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometrics/reference-samples', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z.object({
+        side: sideSchema,
+        source: z.enum(['apple_watch']),
+        metric: z.enum(['breathing_rate', 'hrv_sdnn']),
+        samples: z.array(
+          z.object({
+            // Unix seconds in 2001..2100, as importReferenceVitals.
+            timestamp: z.number().int().min(1_000_000_000).max(4_102_444_800),
+            value: z.number().finite(),
+          }).strict()
+        ).min(1).max(2000),
+      }).strict().superRefine((input, ctx) => {
+        const [lo, hi] = REFERENCE_SAMPLE_RANGE[input.metric]
+        const index = input.samples.findIndex(s => s.value < lo || s.value > hi)
+        if (index >= 0) ctx.addIssue({ code: 'custom', path: ['samples', index, 'value'], message: `${input.metric} must be within ${lo}..${hi}` })
+      })
+    )
+    .output(z.object({ written: z.number() }))
+    .mutation(async ({ input }) => {
+      try {
+        const rows = input.samples.map(s => ({
+          side: input.side,
+          source: input.source,
+          metric: input.metric,
+          timestamp: new Date(s.timestamp * 1000),
+          value: s.value,
+        }))
+        const inserted = biometricsDb.transaction((tx) => {
+          const accepted = tx.insert(referenceSamples).values(rows).onConflictDoNothing().returning().all()
+          recordLegacyReferenceImport(biometricsDb, 'samples', accepted)
+          return accepted
+        })
+        return { written: inserted.length }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to import reference samples: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

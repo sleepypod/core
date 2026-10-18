@@ -8,8 +8,8 @@ import { POST } from './route'
 
 let directory: string
 let server: Server
-const seen = new Set<number>()
-const requests: Array<{ side: string, source: string }> = []
+const seen = new Set<string>()
+const requests: Array<{ side: string, source: string, metric?: string, samples?: Array<{ value?: number, heartRate?: number }> }> = []
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), 'watch-upload-test-'))
   vi.stubEnv('WATCH_UPLOAD_DIR', directory)
@@ -20,8 +20,9 @@ beforeAll(async () => {
     requests.push(data)
     let written = 0
     for (const sample of data.samples ?? []) {
-      if (!seen.has(sample.timestamp)) {
-        seen.add(sample.timestamp)
+      const key = `${data.metric ?? 'heart_rate'}:${sample.timestamp}`
+      if (!seen.has(key)) {
+        seen.add(key)
         written++
       }
     }
@@ -49,6 +50,26 @@ it('streams XML through the real importer, routes to the selected side, dedupes,
   expect(requests[0]).toMatchObject({ side: 'right', source: 'apple_watch' })
   expect(await (await POST(request())).json()).toMatchObject({ vitals: 0, matchedVitals: 1 })
   expect(await readdir(directory)).toEqual([])
+})
+
+it('imports Watch breathing rate and HRV, skips records sleepypod wrote to Health, and dedupes per metric', async () => {
+  requests.length = 0
+  const date = new Date(Date.now() - 60_000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +0000')
+  const record = (type: string, source: string, value: number, unit: string) =>
+    `<Record type="HKQuantityTypeIdentifier${type}" sourceName="${source}" startDate="${date}" endDate="${date}" value="${value}" unit="${unit}" />`
+  const xml = `<HealthData>${[
+    record('RespiratoryRate', 'Apple Watch', 14.5, 'count/min'),
+    record('HeartRateVariabilitySDNN', 'Apple Watch', 48, 'ms'),
+    // The pod's own readings written back by the iOS app, even from a source named like a Watch.
+    record('RespiratoryRate', 'sleepypod', 99, 'count/min'),
+    record('HeartRateVariabilitySDNN', 'sleepypod design', 99, 'ms'),
+    record('HeartRate', 'sleepypod Watch', 99, 'count/min'),
+  ].join('')}</HealthData>`
+  const request = () => new Request('http://pod/api/biometrics/watch-upload?side=left&days=7', { method: 'POST', body: xml })
+  expect(await (await POST(request())).json()).toEqual({ stages: 0, vitals: 0, breathing: 1, hrv: 1, rejectedStageBatches: 0,
+    matchedStages: 0, matchedVitals: 0, matchedBreathing: 1, matchedHrv: 1 })
+  expect(requests.map(r => [r.metric, r.side, r.samples?.map(s => s.value)])).toEqual([['breathing_rate', 'left', [14.5]], ['hrv_sdnn', 'left', [48]]])
+  expect(await (await POST(request())).json()).toMatchObject({ breathing: 0, hrv: 0, matchedBreathing: 1, matchedHrv: 1 })
 })
 
 it('rejects malformed files and cleans up after parser failure', async () => {

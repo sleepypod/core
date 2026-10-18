@@ -138,6 +138,14 @@ This alignment primitive does not by itself establish validated improvement.
 The existing `biometrics.importReferenceStages` and `importReferenceVitals`
 contracts still accept Unix seconds and return `{ written }`. They retain
 first-write-wins heart-rate behavior and whole-request stage-overlap rejection.
+`biometrics.importReferenceSamples` (`POST /api/biometrics/reference-samples`)
+follows the same contract for one `metric` per request, `breathing_rate`
+(breaths/min, 4–60) or `hrv_sdnn` (ms, 1–500), as `{ timestamp, value }`
+samples stored in `reference_samples` and first-write-wins on side, metric,
+time and source. The **Upload Apple Watch data** dialog
+(`POST /api/biometrics/watch-upload`) feeds all three from a Health export,
+using only Watch-sourced records: anything the sleepypod iOS app wrote back
+into Health is the pod's own data and is never imported as a reference.
 Newly accepted rows and normalized provenance commit atomically; if provenance
 cannot be saved, the legacy insert rolls back too.
 
