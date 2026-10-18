@@ -16,6 +16,7 @@ import { traceRequestSchema } from '@/src/biometrics/backtest/trace-contracts'
 import { submitBacktestSchema } from '@/src/biometrics/backtest/submission'
 import { submitShadowSchema } from '@/src/biometrics/shadow/submission-contracts'
 import { prepareShadowRequestSchema } from '@/src/biometrics/shadow/preparation-contracts'
+import { analysisExportRequestSchema } from '@/src/biometrics/analysis-export'
 
 const side = z.enum(['left', 'right'])
 const id = z.object({ id: z.string().uuid() }).strict()
@@ -150,6 +151,12 @@ export function registerBiometricTools(server: McpServer) {
     inputSchema: id.shape, annotations: read,
   }, input => runTool(async () => jsonResult({ ...await getCaller().biometricTuning.describeDatasetExport(input),
     next: 'pnpm biometrics:local-fit fit BUNDLE CANDIDATES OUTPUT_DIR (see scripts/biometrics-local-fit/README.md)' })))
+
+  server.registerTool('export_analysis_snapshot', {
+    title: 'Locate an analysis snapshot of the biometrics database and RAW archives',
+    description: 'Count the RAW archives for a window (start/end as ISO 8601 or epoch ms, at most 14 days) and return the LAN download path for a tar holding a consistent biometrics.db backup, those archives and a hashed manifest.json, with the archive count and estimated bytes. Bytes are never placed in this response. Windows over 2 GiB of RAW are rejected; narrow the window or set includeRaw false. The snapshot holds the full biometrics database for both sides: download only to a user-authorized machine.',
+    inputSchema: analysisExportRequestSchema.shape, annotations: read,
+  }, input => runTool(async () => jsonResult(await getCaller().biometricTuning.describeAnalysisExport(input))))
 
   server.registerTool('backtest_biometrics', {
     title: 'Start, inspect or cancel a biometric evaluation',

@@ -264,3 +264,59 @@ the same index and the download path, never waveform bytes.
 `scripts/biometrics-local-fit` replays these bundles with the shipped Python
 worker and scores them with the shipped evaluator. Its reports are labelled
 `exploratory-local` and are never activation evidence.
+
+## Analysis snapshot export
+
+`GET /api/biometrics/analysis-export?start=<ISO or ms>&end=<ISO or ms>&raw=1|0`
+streams an uncompressed tar for off-pod analysis, such as comparing pod
+biometrics with the Apple Watch. It replaces the ssh `backup()` + scp step and
+`fetch_raw.sh`. The route is read-only and does no replay or backtest work:
+
+- `biometrics.db`: a consistent online backup taken through a separate
+  read-only connection. The backup is written to `os.tmpdir()` (tmpfs on the
+  pod, so the eMMC is never written) and deleted when the stream ends, fails or
+  the client disconnects. If the snapshot would not fit in tmpfs the route
+  returns 507.
+- `raw/<name>.RAW.gz` (when `raw=1`, the default): finished archives from
+  `/persistent/biometrics-archive` whose file mtime falls in
+  [start − 20 min, end + 45 min], oldest first. A frame is gzipped about 15 min
+  after it closes, so the widening catches the frames that overlap the window.
+  `*.tmp.*` partials and symlinks are skipped.
+- `manifest.json`: the last entry, written once every other file has been
+  hashed during streaming. Fields:
+  - `formatVersion`: `analysis-export-v1`.
+  - `generatedAt` / `generatedAtMs` and `build` (branch, commit, title and build
+    date from `.git-info`).
+  - `pod`: `id` is a stable pod identifier, HKDF-SHA256 over the same
+    hardware-rooted seed chain the HomeKit identity uses (eMMC CID, then eMMC
+    serial, then `/etc/machine-id`; ADR 0020). It is the same on every export
+    and survives reinstalls; the seed itself never leaves the pod. `idSource`
+    names the seed used (`id` is null on a dev machine with no hardware seed).
+    `hostname`, and `model` (`podVersion`, model name and sensor hardware
+    revision from the last DAC status poll, or null before the first poll).
+  - `schema.biometrics`: the latest applied drizzle migration in the snapshot
+    (`migrationHash`, `migrationCreatedAt`, `migrationTag` from the migration
+    journal, `appliedMigrations`).
+  - `window`: `requested` start/end, `rawSelection` (the widened mtime range and
+    `includeRaw`) and `served` (archive count and the min/max mtime of the
+    archives actually included).
+  - `files`: every other entry with `bytes` and `sha256`; raw entries also carry
+    the original `name` and `mtimeMs`.
+
+The window must be at most 14 days with start before end (400 otherwise). If
+the window's RAW archives total more than 2 GiB the route returns 413 without
+taking a snapshot; narrow the window or pass `raw=0`. One export runs at a time
+(429 while another is streaming). `Content-Length` is exact, so a download cut
+short by a pruned archive or a dropped connection is detectable.
+
+The MCP tool `export_analysis_snapshot` (tRPC `biometricTuning.describeAnalysisExport`)
+returns the download path, archive count, RAW bytes and an estimated tar size
+for a window, never the bytes themselves.
+
+**Privacy:** the snapshot is the full biometrics database for both sides of the
+bed plus raw sensor waveforms. Download it only to trusted machines and don't
+share it.
+
+```sh
+mkdir -p snapshot && curl -fsS "http://POD:3000/api/biometrics/analysis-export?start=2026-10-15T09:16:00Z&end=2026-10-15T15:24:00Z" | tar -xf - -C snapshot/
+```

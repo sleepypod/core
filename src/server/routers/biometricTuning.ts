@@ -33,6 +33,7 @@ import { describeJob, jobDescriptorSchema, resultDescriptorSchema } from '@/src/
 import { experimentProtocolSchema } from '@/src/biometrics/backtest/contracts'
 import { datasetDescriptorSchema } from '@/src/biometrics/backtest/contracts'
 import { datasetBundleIndexSchema, datasetBundleTarBytes } from '@/src/biometrics/backtest/dataset-export'
+import { AnalysisExportTooLargeError, MAX_ANALYSIS_RAW_BYTES, analysisExportDownloadPath, analysisExportRequestSchema, analysisWindowSchema, liveDatabaseBytes, planAnalysisExport, tarBytes } from '@/src/biometrics/analysis-export'
 import { deviceSettings } from '@/src/db/schema'
 import { ReferenceInputError } from '@/src/biometrics/references/time'
 import { countUnlinkedLegacyReferences, linkLegacyReferences } from '@/src/biometrics/references/legacy'
@@ -294,6 +295,29 @@ export const biometricTuningRouter = router({
     .output(z.object({ index: datasetBundleIndexSchema, download: z.object({ method: z.literal('GET'), path: z.string(), contentType: z.literal('application/x-tar'), bytes: z.number().int().nonnegative() }).strict() }).strict())
     .query(({ input }) => references(() => coordinatorRequest(biometricsDb, { type: 'exportDataset', input }).then(result => ({ index: result.index,
       download: { method: 'GET' as const, path: `/api/biometric-tuning/datasets/${input.id}/export`, contentType: 'application/x-tar' as const, bytes: datasetBundleTarBytes(result.index) } })))),
+
+  describeAnalysisExport: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometric-tuning/analysis-export-index', protect: false, tags: ['Biometric tuning'] } })
+    .input(analysisExportRequestSchema)
+    .output(z.object({ window: z.object({ startMs: z.number(), endMs: z.number(), includeRaw: z.boolean() }).strict(), archiveCount: z.number().int().nonnegative(),
+      rawBytes: z.number().int().nonnegative(), maxRawBytes: z.number().int().positive(), estimatedBytes: z.number().int().nonnegative(),
+      download: z.object({ method: z.literal('GET'), path: z.string(), contentType: z.literal('application/x-tar') }).strict() }).strict())
+    .query(async ({ input }) => {
+      const parsed = analysisWindowSchema.safeParse(input)
+      if (!parsed.success) throw new TRPCError({ code: 'BAD_REQUEST', message: parsed.error.issues.map(issue => issue.message).join('; ') })
+      try {
+        const plan = await planAnalysisExport(parsed.data)
+        const databaseBytes = await liveDatabaseBytes(biometricsDb.$client.name)
+        return { window: plan.window, archiveCount: plan.archives.length, rawBytes: plan.rawBytes, maxRawBytes: MAX_ANALYSIS_RAW_BYTES,
+          // The manifest is a few hundred bytes per archive.
+          estimatedBytes: tarBytes([databaseBytes, ...plan.archives.map(archive => archive.bytes), 2048 + 300 * plan.archives.length]),
+          download: { method: 'GET' as const, path: analysisExportDownloadPath(plan.window), contentType: 'application/x-tar' as const } }
+      }
+      catch (error) {
+        if (error instanceof AnalysisExportTooLargeError) throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: error.message, cause: error })
+        throw error
+      }
+    }),
 
   listDatasets: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometric-tuning/datasets', protect: false, tags: ['Biometric tuning'] } })

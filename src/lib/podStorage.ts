@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile)
 
 export const PERSISTENT_ROOT = '/persistent'
 export const PRUNER_TARGET_PERCENT = Number(process.env.SP_PRUNER_TARGET_PCT) || 80
-const ARCHIVE_DIR = `${PERSISTENT_ROOT}/biometrics-archive`
+export const ARCHIVE_DIR = `${PERSISTENT_ROOT}/biometrics-archive`
 const SWAPFILE = `${PERSISTENT_ROOT}/swapfile`
 const INSTALL_DIR = process.env.SP_INSTALL_DIR ?? '/home/dac/sleepypod-core'
 const CLEANUP_BIN = '/usr/local/bin/sp-storage-cleanup'

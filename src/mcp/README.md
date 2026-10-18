@@ -143,6 +143,7 @@ app/api/mcp/route.ts   Next.js route handler (stateless Streamable HTTP)
 | `propose_biometric_profile` | Save an immutable agent-origin candidate; never activate |
 | `manage_biometric_experiment` | Freeze datasets, inspect archive cursors, retain selected waveform sources, and create/list/read experiments with pinned protocols |
 | `export_calibration_dataset` | Verify a frozen dataset and its retained archives; return the hashed bundle index and the LAN tar download path (no waveform bytes in the MCP response) |
+| `export_analysis_snapshot` | Count the RAW archives for a window (≤ 14 days) and return the LAN download path for a tar with a `biometrics.db` backup, those archives and a hashed `manifest.json` (no bytes in the MCP response) |
 | `backtest_biometrics` | Enqueue/status/list/cancel and compact report summaries |
 | `apply_biometric_profile` | Explicitly authorized validated/manual activation, reset or rollback; validated activation pins evaluation/report identity, manual activation requires unvalidated acknowledgement |
 | `release_biometric_artifacts` | Explicit reference deletion or dataset/report release; report release requires its content hash |

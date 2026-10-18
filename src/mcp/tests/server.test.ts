@@ -48,7 +48,7 @@ const callerMock = vi.hoisted(() => {
       getReplayAdmission: fn(), listRawSources: fn(), inspectRawSource: fn(), createWaveformDataset: fn(),
       getManifest: fn(), getProfileOverview: fn(), listSessions: fn(), getSessionCapabilities: fn(), listImports: fn(),
       getProfileRevision: fn(), listProfileRevisions: fn(), compareReadings: fn(), deleteImport: fn(), releaseDataset: fn(), releaseBacktestResult: fn(), getActivationStatus: fn(), listActivationHistory: fn(), previewImport: fn(), commitImport: fn(),
-      createProfileRevision: fn(), createDataset: fn(), getDataset: fn(), describeDatasetExport: fn(), listDatasets: fn(), createExperiment: fn(),
+      createProfileRevision: fn(), createDataset: fn(), getDataset: fn(), describeDatasetExport: fn(), describeAnalysisExport: fn(), listDatasets: fn(), createExperiment: fn(),
       getExperiment: fn(), listExperiments: fn(), enqueueBacktest: fn(), getBacktest: fn(), cancelBacktest: fn(), listBacktests: fn(),
       getBacktestSummary: fn(), getBacktestTrace: fn(), getBacktestNumericTrace: fn(), getBacktestReferenceTrace: fn(), activateProfile: fn(), activateValidatedProfile: fn(), rollbackProfile: fn(), resetProfile: fn(),
     },
@@ -119,6 +119,7 @@ describe('sleepypod MCP server', () => {
       'backtest_biometrics',
       'compare_vitals_to_watch',
       'diagnose_pod',
+      'export_analysis_snapshot',
       'export_calibration_dataset',
       'get_automations',
       'get_bed_occupancy',
@@ -1272,6 +1273,15 @@ it('routes every remaining inspection, experiment, backtest and release action t
     expect(await call('export_calibration_dataset', { id })).toMatchObject({ download, next: expect.stringContaining('biometrics:local-fit') })
     expect(api.describeDatasetExport).toHaveBeenCalledWith({ id })
     expect((await client.listTools()).tools.find(tool => tool.name === 'export_calibration_dataset')?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+
+    const snapshot = { window: { startMs: 1791612000000, endMs: 1791640800000, includeRaw: true }, archiveCount: 3, rawBytes: 900, maxRawBytes: 2 * 1024 ** 3, estimatedBytes: 4096,
+      download: { method: 'GET', path: '/api/biometrics/analysis-export?start=1791612000000&end=1791640800000&raw=1', contentType: 'application/x-tar' } }
+    api.describeAnalysisExport.mockResolvedValue(snapshot)
+    expect(await call('export_analysis_snapshot', { start: '2026-10-10T06:00:00.000Z', end: '1791640800000' })).toEqual(snapshot)
+    expect(api.describeAnalysisExport).toHaveBeenCalledWith({ start: '2026-10-10T06:00:00.000Z', end: '1791640800000', includeRaw: true })
+    await call('export_analysis_snapshot', { start: '1791612000000', end: '1791640800000', includeRaw: false })
+    expect(api.describeAnalysisExport).toHaveBeenLastCalledWith({ start: '1791612000000', end: '1791640800000', includeRaw: false })
+    expect((await client.listTools()).tools.find(tool => tool.name === 'export_analysis_snapshot')?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
 
     const backtest = (request: Record<string, unknown>) => call('backtest_biometrics', { request })
     api.getBacktest.mockResolvedValue({ id, state: 'running' })

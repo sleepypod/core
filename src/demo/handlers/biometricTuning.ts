@@ -159,6 +159,7 @@ export const biometricTuning: DemoHandlers<'biometricTuning'> = {
       { label: 'candidate', revisionId, manifestHash: candidate.manifestHash, resolvedHash: candidate.hash, resolved: candidate.resolved },
     ]
   }),
+  describeAnalysisExport: () => { throw new Error('SIMULATED DEMO: analysis snapshots need a real pod database and RAW archives.') },
   getManifest: async () => ({ manifest: biometricManifest, manifestHash: await hash(biometricManifest), activationAvailable: true }),
   resolveProfile: input => resolve(input.overrides, input.baseManifestHash),
   createProfileRevision: createDemoRevision,
