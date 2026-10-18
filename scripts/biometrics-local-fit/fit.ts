@@ -21,7 +21,11 @@ export const DEFAULT_PROTOCOL = { version: 'descriptive-evaluation-v1', mode: 's
 const LOCAL_EXPERIMENT_ID = '00000000-0000-4000-8000-000000000000'
 const REPO = resolve(import.meta.dirname, '../..')
 
-export const candidateSchema = z.object({ id: z.string().regex(/^[A-Za-z0-9_.-]{1,80}$/),
+/** Names the runner itself writes inside OUTPUT_DIR; a candidate directory must not shadow them. */
+export const RESERVED_CANDIDATE_IDS = new Set(['bundle', 'work', 'readings', 'ranking.json', 'ranking.md', 'run.json', 'parity.json'])
+export const candidateIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/, 'Candidate ids start with a letter or digit and use only letters, digits, _ . -')
+  .refine(id => !RESERVED_CANDIDATE_IDS.has(id), 'Candidate id collides with a runner output name')
+export const candidateSchema = z.object({ id: candidateIdSchema,
   overrides: z.array(z.object({ path: z.string().min(1).max(200), value: z.unknown() }).strict()).max(64) }).strict()
 export const candidateFileSchema = z.array(candidateSchema).min(1).max(500)
   .refine(rows => new Set(rows.map(row => row.id)).size === rows.length, 'Candidate ids must be unique')
@@ -65,15 +69,17 @@ export async function prepareWorkerSlots(rawDirectory: string, workDirectory: st
   return slots
 }
 
-async function runPool<T>(items: T[], slots: string[], work: (item: T, slot: string) => Promise<void>) {
-  let next = 0, failed = false
+/** Run items across slots; the first failure aborts every replay still running. */
+async function runPool<T>(items: T[], slots: string[], work: (item: T, slot: string, signal: AbortSignal) => Promise<void>) {
+  let next = 0
+  const controller = new AbortController()
   await Promise.all(slots.map(async (slot) => {
-    while (!failed && next < items.length) {
+    while (!controller.signal.aborted && next < items.length) {
       try {
-        await work(items[next++], slot)
+        await work(items[next++], slot, controller.signal)
       }
       catch (error) {
-        failed = true
+        controller.abort()
         throw error
       }
     }
@@ -136,14 +142,14 @@ export async function fitCandidates(options: FitOptions) {
   const otherSideSide = snapshot.side === 'left' ? 'right' : 'left'
   const started = performance.now()
   let done = 0
-  await runPool(items, slots, async (item, slot) => {
+  await runPool(items, slots, async (item, slot, signal) => {
     const input = inputs.get(item.cohortId)
     const resolved = configs.get(item.hash)
     if (!input || !resolved) throw new Error('Missing replay input')
     const itemStarted = performance.now()
     const output = await runWaveformChild({ ...python, retainedDirectory: slot },
       { version: 'retained-waveform-work-v1', input, configs: { [snapshot.side]: resolved, [otherSideSide]: defaults.resolved } },
-      { timeoutMs: 3600000, expectedBuildHash: build.hash })
+      { signal, timeoutMs: 3600000, expectedBuildHash: build.hash })
     outputs.set(`${item.cohortId}:${item.hash}`, { cohortId: item.cohortId, configHash: item.hash, ...output })
     options.onProgress?.(++done, items.length, { cohortId: item.cohortId,
       candidateIds: candidates.filter(row => row.resolvedHash === item.hash).map(row => row.id), wallMs: performance.now() - itemStarted })

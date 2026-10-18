@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { extractBundle, verifyBundle } from './bundle'
 import { candidateFileSchema, defaultPythonLocation, fitCandidates, LOCAL_SPLITS, type Candidate, type LocalSplit } from './fit'
@@ -31,6 +31,9 @@ async function readJson(path: string) {
 async function openBundle(path: string, outputDirectory: string) {
   if ((await stat(path)).isDirectory()) return verifyBundle(path)
   const destination = join(outputDirectory, 'bundle')
+  if (resolve(path) === resolve(destination) || resolve(path).startsWith(`${resolve(destination)}/`)) {
+    throw new Error(`The bundle cannot live inside ${destination}: that directory is replaced by the extracted copy`)
+  }
   await rm(destination, { recursive: true, force: true })
   await extractBundle(path, destination)
   return verifyBundle(destination)

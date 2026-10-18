@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -7,7 +7,8 @@ import { configHash, dataHash } from '@/src/biometrics/algorithms/canonical'
 import { defaultConfig, manifestHash, resolveConfig } from '@/src/biometrics/algorithms/registry'
 import { evaluateBacktest } from '@/src/biometrics/backtest/evaluator'
 import { exportableWaveformDataset, exportNights } from '@/src/biometrics/backtest/tests/fixtures/export'
-import { DEFAULT_PROTOCOL, fitCandidates } from './fit'
+import { candidateFileSchema, DEFAULT_PROTOCOL, fitCandidates } from './fit'
+import { runLocalFitCli } from './cli'
 import { DEFAULT_GRID, expandGrid } from './grid'
 import { compareWithPod, parseLocalReport, rankCandidates, rankingMarkdown, summarizeLocalReport } from './report'
 
@@ -123,5 +124,28 @@ describe('local fit inputs', () => {
       { path: 'breathing_rate.intervalLowerRatio', value: 0.5 }, { path: 'breathing_rate.intervalUpperRatio', value: 1.5 }, { path: 'hrv_index.minimumWindows', value: 10 }] })
     for (const candidate of candidates) expect(() => resolveConfig(candidate.overrides as never)).not.toThrow()
     expect(() => expandGrid({ 'a,b': [[1]] })).toThrow('needs 2 values')
+  })
+
+  it('keeps grid ids distinct and valid for signed, repeated and long values', () => {
+    const ids = expandGrid({ 'heart_rate.trackingToleranceBpm': [-1, 1], 'a/b.c d': ['x y'] }).map(row => row.id)
+    expect(ids).toEqual(['tolm1-c_dx_y', 'tol1-c_dx_y'])
+    const long = expandGrid({ 'heart_rate.trackingToleranceBpm': ['a'.repeat(90), `${'a'.repeat(90)}b`] }).map(row => row.id)
+    expect(new Set(long).size).toBe(2)
+    expect(long.every(id => id.length <= 80)).toBe(true)
+  })
+
+  it('rejects candidate ids that would collide with runner output paths', () => {
+    for (const id of ['.', '..', 'work', 'bundle', 'readings', 'ranking.json', 'run.json', '-x']) {
+      expect(() => candidateFileSchema.parse([{ id, overrides: [] }]), id).toThrow()
+    }
+    expect(candidateFileSchema.parse([{ id: 'tol10.v2', overrides: [] }])).toHaveLength(1)
+  })
+
+  it('refuses a bundle stored where the runner extracts it', async () => {
+    const out = join(directory, 'self')
+    mkdirSync(out)
+    writeFileSync(join(out, 'bundle'), 'not a tar')
+    writeFileSync(join(out, 'candidates.json'), JSON.stringify([{ id: 'x', overrides: [] }]))
+    await expect(runLocalFitCli(['fit', join(out, 'bundle'), join(out, 'candidates.json'), out])).rejects.toThrow('cannot live inside')
   })
 })

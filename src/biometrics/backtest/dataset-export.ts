@@ -59,10 +59,14 @@ export async function openRetainedArtifact(directory: string, name: string, expe
 
 async function hashRetainedArtifact(directory: string, name: string, expectedBytes: number) {
   const handle = await openRetainedArtifact(directory, name, expectedBytes)
-  const digest = createHash('sha256')
-  for await (const chunk of createReadStream('', { fd: handle.fd, autoClose: false, highWaterMark: 1024 * 1024 })) digest.update(chunk as Buffer)
-  await handle.close()
-  return digest.digest('hex')
+  try {
+    const digest = createHash('sha256')
+    for await (const chunk of createReadStream('', { fd: handle.fd, autoClose: false, highWaterMark: 1024 * 1024 })) digest.update(chunk as Buffer)
+    return digest.digest('hex')
+  }
+  finally {
+    await handle.close()
+  }
 }
 
 /** Verify a live dataset and every retained archive it references before anything
