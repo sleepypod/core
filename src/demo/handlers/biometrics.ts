@@ -15,7 +15,7 @@ import {
   type Side,
 } from '../history'
 import type { DemoHandlers, RouterOutputs } from '../types'
-import { DAY, MINUTE, hashSeed, randomBetween, seededRandom } from '../util'
+import { DAY, HOUR, MINUTE, hashSeed, randomBetween, seededRandom } from '../util'
 import { classifyDemoWindow } from '../biometrics/stages'
 import { demoStageView } from './biometricTuning'
 import { mergeIntoBlocks, type SleepStageBlock } from '@/src/lib/sleep-stages'
@@ -87,12 +87,29 @@ function lastNight(side: Side): DemoNight | undefined {
 }
 
 /**
- * A finished demo night as compareToWatch sees it. The Watch reads a little
- * below the pod with some scatter (HR every 10 min, breathing every 15 min,
- * two SDNN samples a night), and the scripted hypnogram stands in for its
- * stages, as in the sleepStages demo.
+ * Two simulated profile changes, the mornings after the 10th and 5th newest
+ * finished nights, so the deviation trend has markers and a story: each one
+ * brings the pod closer to the Watch.
  */
-function demoDeviationNight(n: DemoNight & { leftBedAt: Date }, classifier: StageClassifier): DeviationNightInput {
+function demoConfigChanges(side: Side) {
+  const finished = demoNights(side).filter(n => n.leftBedAt !== null)
+  return [[1, 9], [2, 4]].flatMap(([generation, index]) => {
+    const night = finished[index]
+    return night?.leftBedAt ? [{ generation, atMs: night.leftBedAt.getTime() + 2 * HOUR }] : []
+  })
+}
+
+/** How far the demo pod reads above the Watch before the first change, between them and after the second. */
+const DEMO_POD_OFFSET = { heartRate: [4.5, 2.8, 1.5], breathingRate: [2.4, 1.9, 1.4] }
+
+/**
+ * A finished demo night as compareToWatch sees it. The Watch reads a little
+ * below the pod (less so after each simulated profile change, `step`) with
+ * some scatter (HR every 10 min, breathing every 15 min, two SDNN samples a
+ * night), and the scripted hypnogram stands in for its stages, as in the
+ * sleepStages demo.
+ */
+function demoDeviationNight(n: DemoNight & { leftBedAt: Date }, classifier: StageClassifier, step: number): DeviationNightInput {
   const start = n.enteredBedAt.getTime()
   const end = n.leftBedAt.getTime()
   const rand = seededRandom(hashSeed(`watch:${n.id}`))
@@ -112,8 +129,8 @@ function demoDeviationNight(n: DemoNight & { leftBedAt: Date }, classifier: Stag
       hrv: vitals.map(v => ({ t: v.t, v: v.hrv })),
     },
     watch: {
-      heartRate: watch(5, v => v.heartRate - 1.5 + randomBetween(rand, -3, 3)),
-      breathingRate: watch(8, v => v.breathingRate - 1.4 + randomBetween(rand, -1, 1)),
+      heartRate: watch(5, v => v.heartRate - DEMO_POD_OFFSET.heartRate[step] + randomBetween(rand, -3, 3)),
+      breathingRate: watch(8, v => v.breathingRate - DEMO_POD_OFFSET.breathingRate[step] + randomBetween(rand, -1, 1)),
       hrvSdnn: [1 / 3, 2 / 3].flatMap((f) => {
         const v = inNight[Math.floor(inNight.length * f)]
         return v ? [{ t: v.t, v: Math.round(v.hrv * randomBetween(rand, 0.6, 0.8)) }] : []
@@ -187,12 +204,13 @@ export const biometrics: DemoHandlers<'biometrics'> = {
     if (endDate.getTime() - startDate.getTime() > 31 * DAY) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Select at most 31 days' })
     const minHours = input.minHours ?? 3
     const view = await demoStageView(input.side)
+    const changes = demoConfigChanges(input.side)
     const nights = demoNights(input.side)
       .filter((n): n is DemoNight & { leftBedAt: Date } => n.leftBedAt !== null
         && n.enteredBedAt >= startDate && n.enteredBedAt <= endDate
         && n.leftBedAt.getTime() - n.enteredBedAt.getTime() >= minHours * 3_600_000)
       .reverse()
-      .map(n => demoDeviationNight(n, view.classifier))
+      .map(n => demoDeviationNight(n, view.classifier, changes.filter(c => c.atMs <= n.enteredBedAt.getTime()).length))
     return {
       side: input.side,
       startDate,
@@ -201,6 +219,7 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       classifier: { isDefault: view.isDefault, source: view.provenance.source, generation: view.provenance.generation, stageHash: view.provenance.stageHash },
       hrvNote: HRV_NOTE,
       ...compareNightsToWatch(nights),
+      configChanges: changes.filter(c => c.atMs >= startDate.getTime() && c.atMs <= endDate.getTime()),
     }
   },
 

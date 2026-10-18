@@ -33,6 +33,31 @@ describe('LineChart hover', () => {
   })
 })
 
+describe('LineChart guides, markers and dots', () => {
+  it('draws guides at their values, labels them, and puts markers at fractional indices', () => {
+    const { container, getAllByTestId, getByText } = render(
+      <LineChart
+        series={[{ data: [0, 10, Number.NaN, 5, Number.NaN], color: 'red', dots: true }]}
+        min={0}
+        max={10}
+        height={88}
+        guides={[{ value: 0, label: '0', strong: true }, { value: 10, label: '10' }]}
+        markers={[{ at: 0.5, label: 'gen 2' }, { at: 3.5, label: 'gen 3' }]}
+      />,
+    )
+    const lines = [...container.querySelectorAll('line')]
+    // y = 4 + (1 − v / 10) × 80: zero at the bottom, 10 at the top.
+    expect(lines.slice(0, 2).map(l => [l.getAttribute('y1'), l.getAttribute('stroke')])).toEqual([['84', 'var(--text-3)'], ['4', 'var(--border-1)']])
+    expect(lines.slice(2).map(l => l.getAttribute('x1'))).toEqual(['37.5', '262.5'])
+    expect(getByText('10').style.top).toBe('4px')
+    const markers = getAllByTestId('chart-marker')
+    expect(markers.map(m => [m.textContent, m.style.left || `right ${m.style.right}`])).toEqual([['gen 2', '12.5%'], ['gen 3', 'right 12.5%']])
+    // The point between two gaps has no line through it but still gets a dot.
+    expect(container.querySelector('path:not([data-testid])')?.getAttribute('d')).toBe('M0.0,84.0 L75.0,4.0 M225.0,44.0')
+    expect(getAllByTestId('chart-dots')[0].getAttribute('d')).toBe('M0.0,84.0 h0 M75.0,4.0 h0 M225.0,44.0 h0')
+  })
+})
+
 describe('HoverMark', () => {
   it('flips the label to the left past the middle', () => {
     const { getByTestId, rerender } = render(<HoverMark pct={20} label="a" />)

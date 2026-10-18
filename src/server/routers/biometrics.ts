@@ -4,9 +4,9 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement, referenceStages, referenceVitals, referenceSamples, biometricProcessingRuns } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages, referenceVitals, referenceSamples, biometricProcessingRuns, biometricRuntimeReceipts } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
-import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns } from 'drizzle-orm'
+import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns, inArray } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
 import { loadReference, loadStageView, loadStageInputs } from './sleepStages'
@@ -132,6 +132,27 @@ async function loadDeviationNight(side: 'left' | 'right', record: typeof sleepRe
     epochs: classifySleepStages(inRecord(vitalsData), inRecord(movementData), calibrationQuality, ruleset),
     reference,
   }
+}
+
+/**
+ * Profile generations (numeric settings and stage classifier) that took
+ * effect on this side in [start, end], at the sample time the processor
+ * acknowledged for its numeric components. A generation never acknowledged
+ * changed no stored reading, so it is left out.
+ */
+async function loadConfigChanges(side: 'left' | 'right', start: Date, end: Date) {
+  const rows = await biometricsDb
+    .select({ generation: biometricRuntimeReceipts.generation, atMs: max(biometricRuntimeReceipts.effectiveSampleTimeMs) })
+    .from(biometricRuntimeReceipts)
+    .where(and(
+      eq(biometricRuntimeReceipts.side, side),
+      eq(biometricRuntimeReceipts.state, 'applied'),
+      inArray(biometricRuntimeReceipts.component, ['heart_rate', 'breathing_rate', 'hrv_index'])
+    ))
+    .groupBy(biometricRuntimeReceipts.generation)
+  return rows
+    .filter((r): r is { generation: number, atMs: number } => r.atMs !== null && r.atMs >= start.getTime() && r.atMs <= end.getTime())
+    .sort((a, b) => a.atMs - b.atMs)
 }
 
 /**
@@ -1335,6 +1356,8 @@ export const biometricsRouter = router({
    * classifier on the stored vitals and movement. Read-only. Nights are sleep
    * records of at least `minHours` entered in [startDate, endDate], oldest
    * first; the window defaults to the last 14 days and may span at most 31.
+   * `configChanges` lists the side's profile generations that took effect in
+   * the window, to mark where a night-to-night step may come from.
    */
   compareToWatch: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/watch-deviation', protect: false, tags: ['Biometrics'] } })
@@ -1363,6 +1386,8 @@ export const biometricsRouter = router({
       hrvNote: z.string(),
       nights: z.array(deviationNightSchema),
       summary: deviationSummarySchema,
+      /** Profile generations that took effect in the window, oldest first, at the acknowledged sample time. */
+      configChanges: z.array(z.object({ generation: z.number().int(), atMs: z.number() })),
     }))
     .query(async ({ input }) => {
       const endDate = input.endDate ?? new Date()
@@ -1406,6 +1431,7 @@ export const biometricsRouter = router({
           },
           hrvNote: HRV_NOTE,
           ...compareNightsToWatch(nights),
+          configChanges: await loadConfigChanges(input.side, startDate, endDate),
         }
       }
       catch (error) {

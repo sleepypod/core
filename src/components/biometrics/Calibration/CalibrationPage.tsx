@@ -30,6 +30,7 @@ import { LifecycleStrip, RestoreMenu, RestoreDialog, type RestoreTarget } from '
 import { ProfileCard } from './CalibrationProfileCard'
 import { BacktestCard, DatasetCard, type BacktestReadiness, type DatasetNight } from './CalibrationEvidence'
 import { ActivityCard, type ActivityRow } from './CalibrationActivity'
+import { WatchDeviationTrend } from './WatchDeviationTrend'
 import { useEvaluationSetup } from './evaluation-setup'
 
 type Side = 'left' | 'right'
@@ -308,6 +309,7 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
             setup={setup.progress}
             timezone={timezone}
           />
+          <WatchDeviationTrend side={side} timezone={timezone} />
           <SensorLine sensors={overview.data.sensorCalibration} hash={overview.data.desired.hash} />
         </div>
 

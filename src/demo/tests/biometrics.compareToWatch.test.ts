@@ -39,6 +39,22 @@ describe('demo biometrics.compareToWatch', () => {
     expect(await required(biometrics.compareToWatch)({ side: 'left', minHours: 3 })).toEqual(out)
   })
 
+  it('marks two simulated profile changes, each bringing heart rate closer to the Watch', async () => {
+    const out = await required(biometrics.compareToWatch)({ side: 'left', minHours: 3 })
+    expect(out.configChanges.map(c => c.generation)).toEqual([1, 2])
+    const [first, second] = out.configChanges
+    const bias = (from: number, to: number) => {
+      const nights = out.nights.filter(n => n.enteredBedAt.getTime() > from && n.enteredBedAt.getTime() < to && n.heartRate.bias !== null)
+      expect(nights.length).toBeGreaterThan(0)
+      return nights.reduce((s, n) => s + (n.heartRate.bias ?? 0), 0) / nights.length
+    }
+    expect(bias(0, first.atMs)).toBeGreaterThan(bias(first.atMs, second.atMs))
+    expect(bias(first.atMs, second.atMs)).toBeGreaterThan(bias(second.atMs, Infinity))
+
+    const recent = await required(biometrics.compareToWatch)({ side: 'left', minHours: 3, startDate: new Date(second.atMs - 1), endDate: new Date(NOW) })
+    expect(recent.configChanges).toEqual([second])
+  })
+
   it('rejects a reversed window and one over 31 days', async () => {
     await expect(async () => required(biometrics.compareToWatch)({ side: 'left', startDate: new Date(NOW), endDate: new Date(NOW - 1000), minHours: 3 }))
       .rejects.toThrow(/startDate must be before or equal to endDate/)

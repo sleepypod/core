@@ -261,7 +261,9 @@ export function registerSleepTools(server: McpServer) {
       + 'kappa, per-stage recall and pod vs Watch minutes. The goal is near-zero deviation: lower mae and |bias|, higher r, coverage and kappa. '
       + 'Use it before and after any biometric profile change (apply_biometric_profile) or stage ruleset change (set_sleep_stage_rules) '
       + 'to see whether deviation went down. Stages re-score immediately; stored HR, breathing and HRV only change for nights recorded '
-      + 'after a profile takes effect, so compare those nights. Nights are picked by bed-entry time; a date-only startDate/endDate is '
+      + 'after a profile takes effect, so compare those nights; configChanges lists the profile generations that took effect in the '
+      + 'window (generation, atMs = the sample time the processor acknowledged) to tell which nights those are. '
+      + 'Nights are picked by bed-entry time; a date-only startDate/endDate is '
       + 'a whole UTC calendar day, so endDate "2026-10-18" includes records entered any time that day. Default window is the last 14 days '
       + '(at most 31); only sleep records of at least minHours count.',
     inputSchema: {

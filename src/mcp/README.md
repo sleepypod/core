@@ -285,7 +285,9 @@ per stage over the scored epochs. `hrvNote` explains that the pod's HRV is an IB
 not SDNN, so HRV deviation is not like-for-like yet.
 
 Run it before and after a profile or stage ruleset change. Stages re-score immediately; stored HR,
-breathing and HRV only change for nights recorded after a profile takes effect.
+breathing and HRV only change for nights recorded after a profile takes effect. `configChanges` lists
+the side's profile generations that took effect in the window (`generation`, and `atMs`, the sample
+time the processor acknowledged), so nights before and after a change can be told apart.
 
 ### Sleep curves
 

@@ -198,5 +198,10 @@ re-run the side's effective classifier on the stored vitals and movement and
 score each 5-minute epoch against the Watch stage at its midpoint (accuracy,
 kappa, recall, minutes per stage over the scored epochs). The summary pools
 every pair and scored epoch of all nights rather than averaging nightly figures.
+`configChanges` lists the side's profile generations whose numeric components
+the processor acknowledged inside the window, at the latest acknowledged sample
+time (`effective_sample_time_ms` in `biometric_runtime_receipts`). Settings →
+Biometric calibration draws the nights as a trend with these as markers once
+any night in the last 31 days pairs with Watch data.
 HRV is not like-for-like: the pod stores a window IBI variability index, not
 SDNN, which the response's `hrvNote` repeats.

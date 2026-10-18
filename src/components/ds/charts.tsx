@@ -51,6 +51,21 @@ export interface LineSeries {
   dash?: boolean
   fill?: boolean
   width?: number
+  /** Mark every point, so a value between two gaps still shows. */
+  dots?: boolean
+}
+
+/** A horizontal rule at `value`; `strong` for a reference such as zero. */
+export interface ChartGuide {
+  value: number
+  label?: string
+  strong?: boolean
+}
+
+/** A vertical hairline at a fractional point index, e.g. 2.5 between points 2 and 3. */
+export interface ChartMarker {
+  at: number
+  label: string
 }
 
 /**
@@ -58,7 +73,7 @@ export interface LineSeries {
  * `xLabel` turns on the hover readout: the label for the point under the
  * pointer and each series' value there (through `format`, default 1 decimal).
  */
-export function LineChart({ series, min, max, height = 80, className, xLabel, format = v => v.toFixed(1) }: {
+export function LineChart({ series, min, max, height = 80, className, xLabel, format = v => v.toFixed(1), guides = [], markers = [] }: {
   series: LineSeries[]
   min?: number
   max?: number
@@ -66,6 +81,8 @@ export function LineChart({ series, min, max, height = 80, className, xLabel, fo
   className?: string
   xLabel?: (index: number) => string
   format?: (value: number, series: number) => string
+  guides?: ChartGuide[]
+  markers?: ChartMarker[]
 }) {
   const width = 300
   const hover = useHoverFraction()
@@ -75,23 +92,49 @@ export function LineChart({ series, min, max, height = 80, className, xLabel, fo
   const idx = xLabel && hover.frac !== null && n > 0 ? Math.round(hover.frac * (n - 1)) : null
   const lo = min ?? Math.min(...all)
   const hi = max ?? Math.max(...all)
+  const yOf = (v: number) => 4 + (1 - (v - lo) / (hi - lo || 1)) * (height - 8)
+  const xPct = (i: number) => (i / Math.max(1, n - 1)) * 100
+  const points = (d: number[]) => d.flatMap((v, i) => Number.isFinite(v)
+    ? [{ i, x: ((i / Math.max(1, d.length - 1)) * width).toFixed(1), y: yOf(v).toFixed(1) }]
+    : [])
   const path = (d: number[]) => {
     let out = ''
-    let pen = false
-    d.forEach((v, i) => {
-      if (!Number.isFinite(v)) {
-        pen = false
-        return
-      }
-      const x = ((i / Math.max(1, d.length - 1)) * width).toFixed(1)
-      const y = (4 + (1 - (v - lo) / (hi - lo || 1)) * (height - 8)).toFixed(1)
-      out += `${pen ? 'L' : 'M'}${x},${y} `
-      pen = true
-    })
+    let last = -2
+    for (const p of points(d)) {
+      out += `${p.i === last + 1 ? 'L' : 'M'}${p.x},${p.y} `
+      last = p.i
+    }
     return out.trim()
   }
+  const labelled = guides.filter(g => g.label)
+  const bare = !xLabel && markers.length === 0 && labelled.length === 0
   const svg = (
-    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className={cn('block', !xLabel && className)}>
+    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className={cn('block', bare && className)}>
+      {guides.map(g => (
+        <line
+          key={`guide-${g.value}`}
+          x1={0}
+          x2={width}
+          y1={yOf(g.value)}
+          y2={yOf(g.value)}
+          stroke={g.strong ? 'var(--text-3)' : 'var(--border-1)'}
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+      {markers.map(m => (
+        <line
+          key={`marker-${m.label}`}
+          x1={(xPct(m.at) / 100) * width}
+          x2={(xPct(m.at) / 100) * width}
+          y1={0}
+          y2={height}
+          stroke="var(--text-2)"
+          strokeWidth={1}
+          strokeDasharray="2 3"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
       {series.map((s, i) => {
         const d = path(s.data)
         if (!d) return null
@@ -106,18 +149,46 @@ export function LineChart({ series, min, max, height = 80, className, xLabel, fo
               strokeDasharray={s.dash ? '4 4' : undefined}
               vectorEffect="non-scaling-stroke"
             />
+            {/* Zero-length round-capped segments: dots that stay round under preserveAspectRatio="none". */}
+            {s.dots && (
+              <path
+                data-testid="chart-dots"
+                d={points(s.data).map(p => `M${p.x},${p.y} h0`).join(' ')}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={(s.width ?? 1.75) + 3}
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
           </g>
         )
       })}
     </svg>
   )
-  if (!xLabel) return svg
+  if (bare) return svg
   const values = idx === null ? [] : series.map((s, i) => (Number.isFinite(s.data[idx]) ? format(s.data[idx], i) : null)).filter((v): v is string => v !== null)
   return (
-    <div className={cn('relative', className)} onPointerMove={hover.onPointerMove} onPointerLeave={hover.onPointerLeave}>
+    <div className={cn('relative', className)} onPointerMove={xLabel ? hover.onPointerMove : undefined} onPointerLeave={xLabel ? hover.onPointerLeave : undefined}>
       {svg}
-      {idx !== null && (
-        <HoverMark pct={(idx / Math.max(1, n - 1)) * 100} label={`${xLabel(idx)}${values.length ? ` · ${values.join(' / ')}` : ''}`} />
+      {labelled.map(g => (
+        <span key={`guide-${g.value}`} aria-hidden className="pointer-events-none absolute right-full -translate-y-1/2 pr-1.5 font-mono text-[10px] leading-3 text-fg-3" style={{ top: yOf(g.value) }}>
+          {g.label}
+        </span>
+      ))}
+      {markers.map(m => (
+        <span
+          key={`marker-${m.label}`}
+          aria-hidden
+          data-testid="chart-marker"
+          className={cn('pointer-events-none absolute bottom-0 font-mono text-[10px] leading-3 whitespace-nowrap text-fg-2', xPct(m.at) > 55 ? 'pr-1' : 'pl-1')}
+          style={xPct(m.at) > 55 ? { right: `${100 - xPct(m.at)}%` } : { left: `${xPct(m.at)}%` }}
+        >
+          {m.label}
+        </span>
+      ))}
+      {idx !== null && xLabel && (
+        <HoverMark pct={xPct(idx)} label={`${xLabel(idx)}${values.length ? ` · ${values.join(' / ')}` : ''}`} />
       )}
     </div>
   )

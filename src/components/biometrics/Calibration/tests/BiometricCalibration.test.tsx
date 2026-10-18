@@ -67,6 +67,7 @@ vi.mock('../ShadowRuns', () => ({ ShadowRuns: ({ side }: { side: string }) => <p
 vi.mock('../CalibrationReferences', () => ({ CalibrationReferences: () => <p>Reference import</p> }))
 vi.mock('../ReferenceLibrary', () => ({ ReferenceLibrary: () => null }))
 vi.mock('../CalibrationBacktests', () => ({ CalibrationBacktests: () => <p>Dataset builder</p> }))
+vi.mock('../WatchDeviationTrend', () => ({ WatchDeviationTrend: ({ side }: { side: string }) => <p>{`Watch deviation ${side}`}</p> }))
 
 const i18n = setupI18n({ locale: 'en', messages: {} })
 const view = (side: 'left' | 'right' = 'left') => <I18nProvider i18n={i18n}><BiometricCalibration side={side} onSideChange={mock.sideChange} /></I18nProvider>
@@ -126,6 +127,7 @@ it('shows who saved what, that it is still waiting, and what the processor runs'
   expect(screen.getByText('trackingToleranceBpm · previous: 15 · range 5–30')).toBeTruthy()
   expect(screen.getByText(/window IBI variability, not clinical RMSSD/)).toBeTruthy()
   expect(screen.getByText('Measured sensor calibration for this side:', { exact: false })).toBeTruthy()
+  expect(screen.getByText('Watch deviation left')).toBeTruthy()
   expect(screen.getByText('a4f2…9c')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Keep saved profile' }).getAttribute('aria-disabled')).toBe('true')
   expect(screen.getByText('Nothing changes until you move a control or restore.')).toBeTruthy()

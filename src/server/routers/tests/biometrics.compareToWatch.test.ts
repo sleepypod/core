@@ -144,11 +144,34 @@ describe('biometrics.compareToWatch', () => {
     expect(out.nights[0].stages).toMatchObject({ epochs: 36, accuracy: 1, podMinutes: { light: 180 } })
   })
 
+  it('lists profile generations acknowledged in the window at their latest numeric boundary, oldest first', async () => {
+    const receipt = (side: 'left' | 'right', component: string, generation: number, atMin: number | null, state: 'applied' | 'pending_boundary' = 'applied') => ({
+      side, component, generation, appliedHash: `h${generation}`, effectiveSampleTimeMs: atMin === null ? null : at(atMin).getTime(), state, heartbeatAtMs: at(0).getTime(),
+    })
+    bio.insert(bioSchema.biometricRuntimeReceipts).values([
+      // Generation 3 takes effect once its last numeric component does; the stage consumer's receipt does not move it.
+      receipt('left', 'heart_rate', 3, 30 * 60),
+      receipt('left', 'breathing_rate', 3, 30 * 60 + 2),
+      receipt('left', 'hrv_index', 3, 30 * 60 + 1),
+      receipt('left', 'sleep_stages', 3, 40 * 60),
+      receipt('left', 'heart_rate', 2, 10 * 60),
+      receipt('left', 'heart_rate', 4, null, 'pending_boundary'),
+      receipt('left', 'heart_rate', 1, -2 * 60),
+      receipt('right', 'heart_rate', 5, 20 * 60),
+    ]).run()
+    const out = await caller.compareToWatch({ side: 'left', ...WINDOW })
+    expect(out.configChanges).toEqual([
+      { generation: 2, atMs: at(10 * 60).getTime() },
+      { generation: 3, atMs: at(30 * 60 + 2).getTime() },
+    ])
+  })
+
   it('returns an empty report without nights and defaults to the last 14 days', async () => {
     seedNight(at(-20 * 24 * 60, new Date()), 4)
     const out = await caller.compareToWatch({ side: 'left' })
     expect(out.nights).toEqual([])
     expect(out.summary).toMatchObject({ nights: 0, heartRate: { n: 0, coverage: null, mae: null }, stages: null })
+    expect(out.configChanges).toEqual([])
     expect(out.endDate.getTime() - out.startDate.getTime()).toBe(14 * 24 * HOUR)
   })
 
