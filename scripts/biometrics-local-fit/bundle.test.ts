@@ -103,3 +103,13 @@ it('refuses tar entries that are unlisted, resized, links or outside the bundle'
   write([])
   await expect(extract()).rejects.toThrow('missing')
 })
+
+it('rejects an oversized listed entry before writing it', async () => {
+  const index = JSON.parse(readFileSync(tarPath).subarray(512, 512 + Number.parseInt(readFileSync(tarPath).subarray(124, 135).toString(), 8)).toString('utf8'))
+  index.files[1].bytes = 16 * 1024 * 1024 + 1
+  const text = Buffer.from(JSON.stringify(index))
+  tarPath = join(directory, 'oversized.tar')
+  // The header claims a 16 MiB + 1 snapshot; extraction must refuse before streaming it.
+  writeFileSync(tarPath, Buffer.concat([tarHeader('bundle.json', text.length), text, tarPadding(text.length), tarHeader('snapshot.json', index.files[1].bytes), TAR_END]))
+  await expect(extract()).rejects.toThrow('Bundle file is too large: snapshot.json')
+})

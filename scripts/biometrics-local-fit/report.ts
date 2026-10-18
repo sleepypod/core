@@ -104,7 +104,7 @@ const podResultSchema = z.object({ report: z.object({ split: z.enum(['tuning', '
 export function compareWithPod(defaults: LocalFitReport[], podResults: unknown[], toleranceBpm = 0.1) {
   const rows = podResults.flatMap((raw) => {
     const report = podResultSchema.parse(raw).report
-    if (report.split === 'holdout') throw new Error('Parity uses tuning and validation results only; holdout is never replayed locally')
+    if (report.split === 'holdout') throw new Error('Parity compares tuning and validation results only; holdout results are not compared')
     const local = defaults.find(row => row.split === report.split)
     const defaultsHash = defaults[0]?.candidate.resolvedHash
     const pod = report.numericNightSummary.find(row => row.metric === 'heart_rate' && row.baseline === 'default' && row.baselineHash === defaultsHash)

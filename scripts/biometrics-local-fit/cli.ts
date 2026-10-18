@@ -40,13 +40,16 @@ async function openBundle(path: string, outputDirectory: string) {
 }
 
 async function fit(bundlePath: string, candidates: Candidate[], outputDirectory: string, flags: Record<string, string>) {
+  // Check flags before extracting a bundle or replaying anything.
+  const jobs = flags.jobs === undefined ? undefined : Number(flags.jobs)
+  if (jobs !== undefined && !(Number.isSafeInteger(jobs) && jobs >= 1)) throw new Error('--jobs is a positive whole number of parallel replays')
   await mkdir(outputDirectory, { recursive: true })
   const bundle = await openBundle(bundlePath, outputDirectory)
   const includeHoldout = flags['include-holdout'] === 'true'
   const splits = (flags.splits?.split(',') ?? [...LOCAL_SPLITS, ...(includeHoldout ? ['holdout'] : [])]) as LocalSplit[]
   const started = performance.now()
   const result = await fitCandidates({ bundle, candidates, outputDirectory, splits, includeHoldout,
-    jobs: flags.jobs ? Number(flags.jobs) : undefined,
+    jobs,
     protocol: flags.protocol ? await readJson(flags.protocol) as never : undefined,
     python: flags.python ? defaultPythonLocation(flags.python) : undefined,
     onProgress: (done, total, item) => process.stderr.write(`[${done}/${total}] ${item.cohortId} ${item.candidateIds.join(',') || '(baseline)'} ${(item.wallMs / 1000).toFixed(1)}s\n`) })

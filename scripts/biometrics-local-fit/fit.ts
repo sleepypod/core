@@ -110,7 +110,7 @@ export interface FitOptions {
 
 /** Replay each selected night once per distinct resolved configuration, then
  * score each candidate and split with the pod's own evaluator. Holdout nights
- * are never replayed here. */
+ * are replayed only with includeHoldout. */
 export async function fitCandidates(options: FitOptions) {
   const { bundle } = options
   if (bundle.snapshot.version !== 'waveform-dataset-v1') throw new Error('Local fitting needs a retained waveform dataset')

@@ -103,7 +103,7 @@ describe('local fit reports', () => {
     expect(close.allWithinTolerance).toBe(true)
     expect(close.rows.map(row => [row.cohortId, row.localMae, row.podMae])).toEqual([['night-a', 2, 2.05], ['night-b', 2, 2]])
     expect(compareWithPod(defaults, [pod('tuning', 2.2)]).allWithinTolerance).toBe(false)
-    expect(() => compareWithPod(defaults, [pod('holdout', 2)])).toThrow('holdout is never replayed locally')
+    expect(() => compareWithPod(defaults, [pod('holdout', 2)])).toThrow('holdout results are not compared')
     expect(() => compareWithPod(defaults, [{ report: { ...pod('tuning', 2).report, datasetHash: 'f'.repeat(64) } }])).toThrow('different dataset')
   })
 })
@@ -139,6 +139,13 @@ describe('local fit inputs', () => {
       expect(() => candidateFileSchema.parse([{ id, overrides: [] }]), id).toThrow()
     }
     expect(candidateFileSchema.parse([{ id: 'tol10.v2', overrides: [] }])).toHaveLength(1)
+  })
+
+  it('rejects a --jobs value that is not a positive whole number', async () => {
+    writeFileSync(join(directory, 'one.json'), JSON.stringify([{ id: 'x', overrides: [] }]))
+    for (const flag of ['four', '4x', '0', '1.5']) {
+      await expect(runLocalFitCli(['fit', directory, join(directory, 'one.json'), join(directory, 'jobs-out'), '--jobs', flag]), flag).rejects.toThrow('--jobs is a positive whole number')
+    }
   })
 
   it('refuses a bundle stored where the runner extracts it', async () => {

@@ -37,7 +37,7 @@ export async function extractBundle(tarPath: string, destination: string) {
   try {
     const total = (await handle.stat()).size
     let position = 0, index: DatasetBundleIndex | undefined
-    const expected = new Map<string, number>(), seen = new Set<string>()
+    const expected = new Map<string, DatasetBundleIndex['files'][number]>(), seen = new Set<string>()
     for (;;) {
       const header = parseTarHeader(await readExactly(handle, position, 512))
       position += 512
@@ -48,11 +48,14 @@ export async function extractBundle(tarPath: string, destination: string) {
         if (header.name !== DATASET_BUNDLE_INDEX_PATH || header.bytes > MAX_INDEX_BYTES) throw new BundleError('Bundle must start with its bundle.json index')
         const text = await readExactly(handle, position, header.bytes)
         index = datasetBundleIndexSchema.parse(JSON.parse(text.toString('utf8')))
-        for (const file of index.files) expected.set(file.path, file.bytes)
+        for (const file of index.files) expected.set(file.path, file)
         await writeFile(join(destination, DATASET_BUNDLE_INDEX_PATH), text, { flag: 'wx', mode: 0o600 })
       }
       else {
-        if (expected.get(header.name) !== header.bytes) throw new BundleError(`Unlisted or resized bundle entry: ${header.name}`)
+        const file = expected.get(header.name)
+        if (!file || file.bytes !== header.bytes) throw new BundleError(`Unlisted or resized bundle entry: ${header.name}`)
+        // Enforce size limits before writing, not only during verification.
+        if (header.bytes > (file.role === 'raw' ? MAX_RAW_BYTES : MAX_TEXT_BYTES)) throw new BundleError(`Bundle file is too large: ${header.name}`)
         if (position + header.bytes > total) throw new BundleError('Truncated bundle archive')
         await pipeline(createReadStream('', { fd: handle.fd, autoClose: false, start: position, end: position + header.bytes - 1 }),
           createWriteStream(join(destination, header.name), { flags: 'wx', mode: 0o600 }))
