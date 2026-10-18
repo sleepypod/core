@@ -201,12 +201,12 @@ function DeviationPanel({ title, unit, mae, bias, dates, markers, note }: {
   const hasData = mae.some(Number.isFinite) || bias.some(Number.isFinite)
   return (
     <section className="flex min-w-0 flex-col gap-1.5" aria-label={title}>
-      <div className="flex items-baseline justify-between gap-2 text-xs">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-xs">
         <span className="text-fg">
           {title}
           <span className="text-fg-3">{` · ${unit}`}</span>
         </span>
-        {latest && <span className="truncate font-mono text-[11px] text-fg-2">{latest}</span>}
+        {latest && <span className="font-mono text-[11px] text-fg-2">{latest}</span>}
       </div>
       {hasData
         ? (
