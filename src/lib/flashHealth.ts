@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { flashInsights } from './flashInsights'
 import { asc, gte } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { flashWriteSamples } from '@/src/db/biometrics-schema'
@@ -40,13 +41,14 @@ export interface FlashReading {
 }
 
 export interface FlashReport {
+  insights: ReturnType<typeof flashInsights>
   device: string
   name: string | null
   capacityBytes: number | null
   lifeTime: [WearRange | null, WearRange | null]
   preEol: PreEol | null
   sinceBoot: { bytes: number, uptimeSeconds: number }
-  /** Average over the last week of samples, null until they cover an hour. */
+  /** Legacy rate retained for existing clients. The card uses gap-aware insights. */
   perDay: { bytes: number, coveredHours: number } | null
 }
 
@@ -146,14 +148,16 @@ export function recordFlashSample(db: Db, reading: FlashReading, now: number): v
 /** Average over the last week of samples; the live reading closes the window at now. */
 export function buildFlashReport(db: Db, reading: FlashReading, now: number, device = FLASH_DEVICE): FlashReport {
   const rows = db.select().from(flashWriteSamples)
-    .where(gte(flashWriteSamples.timestamp, new Date(now - RATE_WINDOW_MS)))
+    .where(gte(flashWriteSamples.timestamp, new Date(now - RATE_WINDOW_MS - 2 * MIN_COVERAGE_MS)))
     .orderBy(asc(flashWriteSamples.timestamp))
     .all()
-  const rate = writeRate([
+  const samples = [
     ...rows.map(r => ({ at: r.timestamp.getTime(), bootId: r.bootId, sectorsWritten: r.sectorsWritten })),
     ...(reading.bootId == null ? [] : [{ at: now, bootId: reading.bootId, sectorsWritten: reading.sectorsWritten }]),
-  ])
+  ]
+  const rate = writeRate(samples.filter(s => s.at >= now - RATE_WINDOW_MS))
   return {
+    insights: flashInsights(samples, now),
     device,
     name: reading.name,
     capacityBytes: reading.capacityBytes,

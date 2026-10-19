@@ -260,6 +260,8 @@ async function blockWan(): Promise<void> {
  * - `setInternetAccess`  — toggle WAN block on/off
  * - `triggerUpdate`       — kick off sp-update (or a deploy-driven install)
  */
+const flashWindow = z.object({ hours: z.number(), coveredHours: z.number(), bytes: z.number(), bytesPerDay: z.number().nullable() })
+
 const wearRange = z.object({ minPercent: z.number(), maxPercent: z.number().nullable() }).nullable()
 
 export const systemRouter = router({
@@ -667,6 +669,10 @@ export const systemRouter = router({
       capacityBytes: z.number().nullable(),
       lifeTime: z.tuple([wearRange, wearRange]),
       preEol: z.enum(['normal', 'warning', 'urgent']).nullable(),
+      insights: z.object({
+        windows: z.array(flashWindow),
+        history: z.array(flashWindow.extend({ end: z.number() })),
+      }),
       sinceBoot: z.object({ bytes: z.number(), uptimeSeconds: z.number() }),
       perDay: z.object({ bytes: z.number(), coveredHours: z.number() }).nullable(),
     }).nullable())

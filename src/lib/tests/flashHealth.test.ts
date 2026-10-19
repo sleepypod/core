@@ -183,6 +183,15 @@ describe('buildFlashReport', () => {
     expect(report.device).toBe('mmcblk0')
   })
 
+  it('builds insights from persisted counters and the live reading without writing rows', () => {
+    recordFlashSample(db, reading(mib(0)), T0)
+    recordFlashSample(db, reading(mib(100)), T0 + HOUR)
+    const report = buildFlashReport(db, reading(mib(200)), T0 + 2 * HOUR)
+    expect(report.insights.windows[0]).toEqual({ hours: 1, coveredHours: 1, bytes: 100 * 1024 ** 2, bytesPerDay: 2400 * 1024 ** 2 })
+    expect(report.insights.windows[1].coveredHours).toBe(2)
+    expect(db.select().from(flashWriteSamples).all()).toHaveLength(2)
+  })
+
   it('ignores samples older than a week', () => {
     recordFlashSample(db, reading(0, 'old'), T0 - 8 * DAY)
     recordFlashSample(db, reading(mib(100)), T0)

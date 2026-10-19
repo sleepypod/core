@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { FlashWrites } from './FlashWrites'
 import { Gauge, HardDrive, Trash2 } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
@@ -63,21 +64,15 @@ function FlashCard({ flash }: { flash: Flash }) {
         right={eol && <StatusDot tone={eol.tone} label={eol.label} />}
       />
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 @min-[640px]:grid-cols-3">
-        <KeyValue
-          label="Writes per day"
-          value={flash.perDay ? formatBytes(flash.perDay.bytes) : 'Measuring…'}
-        />
         {main && <KeyValue label="Wear (main area)" value={wearLabel(main)} />}
         {slc && <KeyValue label="Wear (SLC area)" value={wearLabel(slc)} />}
         <KeyValue label="Reserve blocks" value={eol?.label ?? 'Not reported'} />
         <KeyValue label="Written since boot" value={formatBytes(flash.sinceBoot.bytes)} />
       </div>
       <p className="text-xs text-fg-2 text-pretty">
-        {flash.perDay
-          ? `Averaged over the last ${flash.perDay.coveredHours < 48 ? `${flash.perDay.coveredHours} h` : `${Math.round(flash.perDay.coveredHours / 24)} days`}. `
-          : 'Writes per day appear after an hour of samples. '}
-        {'Covers everything on the chip — Eight\'s firmware, sleepypod and the OS. Wear is the chip\'s own estimate, in 10% steps.'}
+        Wear is the chip’s own estimate, in 10% steps. It is separate from the write rates below.
       </p>
+      <FlashWrites insights={flash.insights} />
     </Card>
   )
 }
