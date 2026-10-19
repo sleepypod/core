@@ -1,3 +1,5 @@
+import { recordingChangeSchema, recordingPolicySchema } from '@/src/lib/recordingPolicy'
+import { getRecordingPolicy, setRecordingPolicy } from '@/src/lib/recordingStore'
 import { z } from 'zod'
 import { branchNameSchema } from '@/src/server/validation-schemas'
 import { TRPCError } from '@trpc/server'
@@ -265,6 +267,18 @@ const flashWindow = z.object({ hours: z.number(), coveredHours: z.number(), byte
 const wearRange = z.object({ minPercent: z.number(), maxPercent: z.number().nullable() }).nullable()
 
 export const systemRouter = router({
+  getRecordingPolicy: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/system/recording', protect: false, tags: ['System'] } })
+    .input(z.object({}))
+    .output(recordingPolicySchema)
+    .query(() => getRecordingPolicy(Date.now(), true)),
+
+  setRecordingPolicy: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/system/recording', protect: false, tags: ['System'] } })
+    .input(recordingChangeSchema)
+    .output(recordingPolicySchema)
+    .mutation(({ input }) => setRecordingPolicy(input)),
+
   /**
    * Returns whether WAN access is currently blocked by iptables.
    */

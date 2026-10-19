@@ -23,6 +23,8 @@ vi.mock('@/src/utils/trpc', () => ({
   },
 }))
 
+vi.mock('../DataRecordingCard', () => ({ DataRecordingCard: () => <div>Data recording</div> }))
+
 import { StorageTab } from '../StorageTab'
 
 beforeEach(() => {
@@ -131,6 +133,8 @@ describe('StorageTab', () => {
       expect(screen.getAllByText('1.23 GB/day')).toHaveLength(3)
       expect(screen.getByText('Last 24 hours')).toBeTruthy()
       expect(screen.getByRole('group', { name: 'Hourly flash write rates' })).toBeTruthy()
+      expect(screen.getByText(/Keeping transient data in RAM/)).toBeTruthy()
+      expect(document.querySelector('details')).toBeNull()
       expect(screen.getAllByText('Normal').length).toBeGreaterThan(0)
     })
 

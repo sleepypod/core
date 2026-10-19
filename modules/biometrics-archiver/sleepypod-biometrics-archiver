@@ -17,18 +17,29 @@
 # file + rename.
 set -euo pipefail
 
+# shellcheck source=modules/biometrics-archiver/sleepypod-recording-policy
+source "$(dirname "$0")/sleepypod-recording-policy"
+
 TMPFS_DIR="${TMPFS_DIR:-/persistent/biometrics}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/persistent/biometrics-archive}"
 PENDING_DIR="${PENDING_DIR:-$TMPFS_DIR/.pending}"
 KEEP_RECENT_MIN="${KEEP_RECENT_MIN:-15}"
 GZIP_LEVEL="${GZIP_LEVEL:-6}"
 
-mkdir -p "$ARCHIVE_DIR"
-
 if ! mountpoint -q "$TMPFS_DIR"; then
   echo "archiver: $TMPFS_DIR is not a tmpfs mount — skipping" >&2
   exit 0
 fi
+
+if ! raw_archive_enabled; then
+  # Older firmware leaves completed frames behind. Continue the normal RAM
+  # cleanup without writing gzip files, or opting out could fill tmpfs and
+  # interrupt live sensing. Keep the same age threshold as the archive pass.
+  find "$TMPFS_DIR" -maxdepth 1 -type f -name '*.RAW' ! -name 'SEQNO.RAW' -mmin "+$KEEP_RECENT_MIN" -delete
+  exit 0
+fi
+
+mkdir -p "$ARCHIVE_DIR"
 
 archived=0
 removed=0
@@ -38,6 +49,7 @@ failed=0
 # the source is only that extra name — the firmware's own name, if it still
 # holds one, is untouched.
 archive_one() {
+  raw_archive_enabled || return 0
   local src=$1 base dst tmp
   base=$(basename "$src")
   dst="$ARCHIVE_DIR/$base.gz"

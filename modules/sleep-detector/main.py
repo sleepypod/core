@@ -212,6 +212,8 @@ logging.basicConfig(
     format="%(asctime)s [sleep-detector] %(levelname)s %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+from common.recording_policy import install_logging_policy
+install_logging_policy()
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

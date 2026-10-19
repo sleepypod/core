@@ -1,0 +1,27 @@
+#!/bin/bash
+# Shared read-only policy check. Never source user-controlled settings as shell.
+raw_archive_enabled() {
+  local file="${SP_RECORDING_POLICY_FILE:-}" data_dir="/persistent/sleepypod-data"
+  if [ -z "$file" ]; then
+    if [ -n "${DATABASE_URL:-}" ]; then
+      data_dir=$(dirname "${DATABASE_URL#file:}")
+    elif [ -r /etc/sleepypod/data-dir ]; then
+      read -r data_dir < /etc/sleepypod/data-dir
+    fi
+    file="$data_dir/recording-policy.json"
+  fi
+  [ -e "$file" ] || return 0
+  # Python is installed with the bundled sensor modules. Parse JSON rather
+  # than sourcing shell or matching a field inside potentially corrupt text.
+  python3 - "$file" <<'PYTHON'
+import json
+import sys
+try:
+    with open(sys.argv[1]) as source:
+        policy = json.load(source)
+    enabled = isinstance(policy, dict) and policy.get("rawArchive", True) is True
+except (OSError, ValueError):
+    enabled = False
+sys.exit(0 if enabled else 1)
+PYTHON
+}

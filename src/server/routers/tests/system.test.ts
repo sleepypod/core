@@ -10,6 +10,12 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const recordingMock = vi.hoisted(() => ({
+  get: vi.fn(() => ({ loggingMode: 'quiet', debugUntil: null, healthHistory: true, rawArchive: true })),
+  set: vi.fn(() => ({ loggingMode: 'off', debugUntil: null, healthHistory: true, rawArchive: true })),
+}))
+vi.mock('@/src/lib/recordingStore', () => ({ getRecordingPolicy: recordingMock.get, setRecordingPolicy: recordingMock.set }))
+
 const execMock = vi.hoisted(() => ({
   execFile: vi.fn((..._args: unknown[]) => {
     const cb = _args[_args.length - 1] as (e: unknown, o: { stdout: string }) => void
@@ -1053,5 +1059,18 @@ describe('system.getSensorSource', () => {
     execMock.execFile.mockClear()
     await caller.getSensorSource({})
     expect(execMock.execFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('recording policy API', () => {
+  it('returns current policy and applies a validated independent setting', async () => {
+    expect(await caller.getRecordingPolicy({})).toMatchObject({ loggingMode: 'quiet' })
+    expect(await caller.setRecordingPolicy({ loggingMode: 'off' })).toMatchObject({ loggingMode: 'off' })
+    expect(recordingMock.set).toHaveBeenCalledWith({ loggingMode: 'off' })
+  })
+
+  it('rejects arbitrary expiry values and invalid modes', async () => {
+    await expect(caller.setRecordingPolicy({ debugUntil: 9999999999999 } as never)).rejects.toThrow()
+    await expect(caller.setRecordingPolicy({ loggingMode: 'everything' } as never)).rejects.toThrow()
   })
 })

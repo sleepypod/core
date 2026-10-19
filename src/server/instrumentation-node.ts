@@ -1,3 +1,4 @@
+import { installAppLogging } from '@/src/lib/appLogging'
 import { shutdownBaseController } from '@/src/hardware/base/instance'
 /**
  * Server startup and process lifecycle management.
@@ -459,6 +460,7 @@ async function initializeBackgroundServices(): Promise<void> {
 }
 
 export async function registerNodeInstrumentation(): Promise<void> {
+  installAppLogging()
   // Register global handlers first (before any initialization that could fail)
   registerGlobalHandlers()
   startPerformanceMonitoring()

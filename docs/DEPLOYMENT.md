@@ -320,3 +320,41 @@ The biometrics worker location probes are also excluded from automatic tracing:
 `coordinator.cjs` and `shadow-host.cjs` in the standalone bundle after Next builds.
 Keep that packaging step and its dependency-graph checks when changing tracing.
 Do not apply these annotations to shipped assets that need inclusion in a release.
+
+## Optional recording controls
+
+System → Storage → Data recording controls app diagnostic logs, the Health
+status timeline and compressed RAW waveform archives independently. It does
+not disable hardware safety checks, live sensing, biometric database records,
+module lifecycle status, firmware/OS logs or hourly flash-write measurements.
+Existing saved data remains subject to its normal retention policy.
+
+- **Quiet** (default) emits core console and bundled Python warnings/errors.
+  **Off** suppresses those application logs. Direct third-party stdout/stderr
+  and firmware logs are outside this control. The installer configures the
+  system journal in RAM, so suppressing these logs primarily saves processing
+  and memory rather than further flash writes.
+- **Debug for 15 minutes** temporarily permits all application log levels,
+  then returns to the selected Quiet/Off setting. Expiry is an absolute
+  timestamp, evaluated at each log call; it survives process restarts and
+  needs no timer-driven persistent write. Existing RAM logs remain until
+  journal rotation or reboot.
+- Disabling **Health timeline** skips new `health_runs` samples (within one
+  minute). Live diagnostic queries and the module `system_health` lifecycle
+  records continue. Re-enabling starts fresh timeline runs.
+- Disabling **Raw waveform archive** stops future gzip writes. A file already
+  being compressed may finish. The linker releases pending RAM pins within
+  one minute; the archiver still removes completed temporary files using its
+  normal age threshold so firmware that retains RAW files cannot fill tmpfs.
+  Firmware's current files and existing compressed archives are preserved.
+  This applies to the legacy RAW/tmpfs archiver, not NATS-managed telemetry.
+
+Preferences live in `recording-policy.json` beside `DATABASE_URL` (normally
+`/persistent/sleepypod-data/`). The core writes the complete JSON atomically
+only when a setting changes; Python readers cache it for at most one second.
+The archiver resolves the same directory via `DATABASE_URL` or
+`/etc/sleepypod/data-dir`. `SP_RECORDING_POLICY_FILE` overrides the path for
+isolated tests. The file is shared with shell/Python services intentionally,
+so no SQLite schema change or privileged service restart is needed to apply
+preferences. Deploy the core, Python common module and archiver scripts
+together using the normal updater.

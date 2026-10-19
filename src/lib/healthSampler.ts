@@ -1,15 +1,27 @@
+import { getRecordingPolicy } from '@/src/lib/recordingStore'
 import { biometricsDb } from '@/src/db'
 import { getDataPath } from '@/src/lib/dataPathCollect'
 import { loadOpenRuns, recordSample, SAMPLE_INTERVAL_MS, type OpenRun } from '@/src/lib/healthHistory'
 
-let timer: NodeJS.Timeout | null = null
-let open: Map<string, OpenRun> | null = null
+const shared = globalThis as typeof globalThis & {
+  __healthSampler?: { timer: NodeJS.Timeout | null, open: Map<string, OpenRun> | null }
+}
+const sampler = shared.__healthSampler ??= { timer: null, open: null }
 
 async function sampleOnce(): Promise<void> {
   const now = Date.now()
+  if (!getRecordingPolicy(now).healthHistory) {
+    sampler.open = new Map()
+    return
+  }
   const state = await getDataPath(now)
-  open ??= loadOpenRuns(biometricsDb, now)
-  recordSample(biometricsDb, open, state.nodes.map(n => ({ id: n.id, status: n.status, detail: n.detail })), now)
+  // A setting may change while the asynchronous probe is in flight.
+  if (!getRecordingPolicy(Date.now(), true).healthHistory) {
+    sampler.open = new Map()
+    return
+  }
+  sampler.open ??= loadOpenRuns(biometricsDb, now)
+  recordSample(biometricsDb, sampler.open, state.nodes.map(n => ({ id: n.id, status: n.status, detail: n.detail })), now)
 }
 
 /**
@@ -18,25 +30,25 @@ async function sampleOnce(): Promise<void> {
  * startup doesn't record a burst of "no frames yet".
  */
 export function startHealthSampler(initialDelayMs = 90_000): void {
-  if (timer) return
+  if (sampler.timer) return
   const tick = () => {
     sampleOnce().catch((err) => {
       console.warn('[health] sample failed:', err instanceof Error ? err.message : err)
     })
   }
-  timer = setTimeout(() => {
+  sampler.timer = setTimeout(() => {
     tick()
-    timer = setInterval(tick, SAMPLE_INTERVAL_MS)
-    timer.unref()
+    sampler.timer = setInterval(tick, SAMPLE_INTERVAL_MS)
+    sampler.timer.unref()
   }, initialDelayMs)
-  timer.unref()
+  sampler.timer.unref()
 }
 
 export function stopHealthSampler(): void {
-  if (timer) {
-    clearTimeout(timer)
-    clearInterval(timer)
-    timer = null
+  if (sampler.timer) {
+    clearTimeout(sampler.timer)
+    clearInterval(sampler.timer)
+    sampler.timer = null
   }
-  open = null
+  sampler.open = null
 }

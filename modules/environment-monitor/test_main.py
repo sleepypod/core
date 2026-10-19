@@ -6,10 +6,12 @@ values are not inserted into the freezer_temp table as valid readings.
 
 import sqlite3
 import sys
+from pathlib import Path
 
 # Stub pod-only imports so this test runs on a developer machine.
 _cbor2_stub = type(sys)("cbor2")
 _common_stub = type(sys)("common")
+_common_stub.__path__ = [str(Path(__file__).resolve().parent.parent / "common")]
 _raw_follower_stub = type(sys)("common.raw_follower")
 _raw_follower_stub.RawFileFollower = None
 _nats_follower_stub = type(sys)("common.nats_follower")

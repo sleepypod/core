@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-const mock = vi.hoisted(() => ({ get: vi.fn(), load: vi.fn(), record: vi.fn() }))
+const mock = vi.hoisted(() => ({ get: vi.fn(), load: vi.fn(), record: vi.fn(), policy: vi.fn() }))
+vi.mock('@/src/lib/recordingStore', () => ({ getRecordingPolicy: mock.policy }))
 vi.mock('@/src/db', () => ({ biometricsDb: {} }))
 vi.mock('@/src/lib/dataPathCollect', () => ({ getDataPath: mock.get }))
 vi.mock('@/src/lib/healthHistory', () => ({ loadOpenRuns: mock.load, recordSample: mock.record, SAMPLE_INTERVAL_MS: 60000 }))
@@ -8,6 +9,7 @@ import { startHealthSampler, stopHealthSampler } from '../healthSampler'
 beforeEach(() => {
   vi.useFakeTimers()
   vi.clearAllMocks()
+  mock.policy.mockReturnValue({ healthHistory: true })
   mock.get.mockResolvedValue({ nodes: [{ id: 'dac', status: 'ok', detail: 'Connected' }] })
   mock.load.mockReturnValue(new Map())
 })
@@ -41,4 +43,28 @@ it('logs a failed sample and retries next minute', async () => {
   expect(warn).toHaveBeenCalledWith('[health] sample failed:', 'Not ready')
   await vi.advanceTimersByTimeAsync(60000)
   expect(mock.record).toHaveBeenCalledOnce()
+})
+
+it('stops history writes while disabled and starts a fresh run when recording resumes', async () => {
+  startHealthSampler(1)
+  await vi.advanceTimersByTimeAsync(1)
+  mock.policy.mockReturnValue({ healthHistory: false })
+  await vi.advanceTimersByTimeAsync(60000)
+  expect(mock.record).toHaveBeenCalledTimes(1)
+  expect(mock.get).toHaveBeenCalledTimes(1)
+  mock.policy.mockReturnValue({ healthHistory: true })
+  await vi.advanceTimersByTimeAsync(60000)
+  expect(mock.record).toHaveBeenCalledTimes(2)
+  expect(mock.load).toHaveBeenCalledTimes(1)
+  expect(mock.record.mock.calls[1][1]).not.toBe(mock.record.mock.calls[0][1])
+})
+
+it('does not write if recording is disabled while a health probe is in flight', async () => {
+  mock.get.mockImplementationOnce(async () => {
+    mock.policy.mockReturnValue({ healthHistory: false })
+    return { nodes: [] }
+  })
+  startHealthSampler(1)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(mock.record).not.toHaveBeenCalled()
 })

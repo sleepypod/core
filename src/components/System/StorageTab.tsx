@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { FlashWrites } from './FlashWrites'
+import { DataRecordingCard } from './DataRecordingCard'
 import { Gauge, HardDrive, Trash2 } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import type { AppRouter } from '@/src/server/routers/app'
@@ -180,6 +181,7 @@ export function StorageTab() {
       </Card>
 
       {flash.data && <FlashCard flash={flash.data} />}
+      <DataRecordingCard />
 
       <Card>
         <CardHeader

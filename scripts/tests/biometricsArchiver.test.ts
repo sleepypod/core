@@ -59,6 +59,7 @@ function scriptEnv(extraEnv: Partial<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
     ...process.env,
     PATH: [stubBinDir, process.env.PATH ?? ''].join(':'),
     UNMOUNTED_FILE: unmountedFile,
+    SP_RECORDING_POLICY_FILE: join(root, 'recording-policy.json'),
     TMPFS_DIR: tmpfsDir,
     ARCHIVE_DIR: archiveDir,
     ...extraEnv,
@@ -466,5 +467,30 @@ describe.each(['remove_biometrics_archiver_for_nats', 'remove_biometrics_archive
     expect(result.stderr).toContain('is still mounted')
     expect(existsSync(mountUnit)).toBe(true)
     expect(existsSync(recoveryTool)).toBe(true)
+  })
+})
+
+describe('recording controls', () => {
+  it('releases only RAM pins when disabled and leaves live frames and saved archives intact', () => {
+    const live = writeRaw()
+    expect(runLinker().status).toBe(0)
+    expect(pendingEntries()).toEqual(['00001.RAW'])
+    mkdirSync(archiveDir, { recursive: true })
+    const saved = join(archiveDir, 'saved.RAW.gz')
+    writeFileSync(saved, 'previous archive')
+    writeFileSync(join(root, 'recording-policy.json'), '{\n  "rawArchive": false\n}\n')
+    expect(runLinker().status).toBe(0)
+    expect(pendingEntries()).toEqual([])
+    expect(existsSync(live)).toBe(true)
+    const completed = writeRaw('completed.RAW')
+    utimesSync(completed, new Date(0), new Date(0))
+    expect(runArchiver().status).toBe(0)
+    expect(existsSync(completed)).toBe(false)
+    expect(existsSync(live)).toBe(true)
+    expect(readdirSync(archiveDir)).toEqual(['saved.RAW.gz'])
+    expect(readFileSync(saved, 'utf8')).toBe('previous archive')
+    writeFileSync(join(root, 'recording-policy.json'), '{\n  "rawArchive": true\n}\n')
+    expect(runLinker().status).toBe(0)
+    expect(pendingEntries()).toEqual(['00001.RAW'])
   })
 })

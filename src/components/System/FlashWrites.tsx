@@ -64,15 +64,12 @@ export function FlashWrites({ insights }: { insights: Insights }) {
         Reboots, counter resets and long sampling gaps are excluded; missing data is not zero writes.
         Window boundaries are estimated between samples. GB uses 1,000,000,000 bytes.
       </p>
-      <details className="text-xs text-fg-2">
-        <summary className="cursor-pointer text-fg">What reduces flash writes?</summary>
-        <p className="mt-2 text-pretty">
-          Keeping transient data in RAM, saving only changed values and batching database updates can reduce writes.
-          Smaller log or archive retention limits mainly reclaim space: deleting data does not undo its writes.
-          RAM buffers lose unflushed data on power loss. Compare full 24-hour windows with similar usage;
-          updates and archive jobs can cause short bursts. These counters do not measure the flash chip’s internal write amplification.
-        </p>
-      </details>
+      <p className="text-xs text-fg-2 text-pretty">
+        Keeping transient data in RAM, saving only changed values and batching database updates can reduce writes.
+        Smaller log or archive retention limits mainly reclaim space: deleting data does not undo its writes.
+        RAM buffers lose unflushed data on power loss. Compare full 24-hour windows with similar usage;
+        updates and archive jobs can cause short bursts. These counters do not measure the flash chip’s internal write amplification.
+      </p>
     </div>
   )
 }

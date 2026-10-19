@@ -211,7 +211,7 @@ install_biometrics_archiver() {
 
   # Scripts
   local s
-  for s in sleepypod-tmpfs-prep sleepypod-biometrics-linker \
+  for s in sleepypod-recording-policy sleepypod-tmpfs-prep sleepypod-biometrics-linker \
            sleepypod-biometrics-archiver sleepypod-biometrics-pruner; do
     install -m 0755 "$archiver_src/$s" "/usr/local/bin/$s"
   done

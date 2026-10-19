@@ -1,3 +1,4 @@
+import { changeRecordingPolicy, DEFAULT_RECORDING_POLICY } from '@/src/lib/recordingPolicy'
 import { flashInsights } from '@/src/lib/flashInsights'
 import type { DemoHandlers, RouterOutputs } from '../types'
 import { DAY, HOUR, MINUTE, hashSeed, seededRandom } from '../util'
@@ -13,6 +14,7 @@ const COMMIT = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'de
 const COMMIT_TITLE = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE?.split('\n')[0] || 'Demo build'
 const loadedAt = Date.now()
 
+let recordingPolicy = { ...DEFAULT_RECORDING_POLICY }
 let internetBlocked = true
 let buildDate = new Date(loadedAt - 3 * DAY).toISOString()
 let pendingUpdateAt: number | null = null
@@ -153,6 +155,11 @@ export const system: DemoHandlers<'system'> = {
     biometricsArchive: { usedBytes: Math.round(2.6 * GB), fileCount: 168 },
   }),
 
+  getRecordingPolicy: () => recordingPolicy,
+  setRecordingPolicy: (input) => {
+    recordingPolicy = changeRecordingPolicy(recordingPolicy, input)
+    return recordingPolicy
+  },
   getStorage: () => storage(),
 
   getFlashHealth: () => {

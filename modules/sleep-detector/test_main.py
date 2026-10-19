@@ -36,6 +36,7 @@ for _name in ("calibration", "side_mode"):
     _stubs[f"common.{_name}"] = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_stubs[f"common.{_name}"])
 _stubs["common.health"].report_health = lambda *a, **kw: None
+_stubs["common"].__path__ = [str(Path(__file__).resolve().parent.parent / "common")]
 sys.modules.update(_stubs)
 
 import main  # noqa: E402

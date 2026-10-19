@@ -5,6 +5,7 @@ developer Mac without the on-pod runtime. We only exercise iter_presses.
 """
 
 import sys
+from pathlib import Path
 
 _stubs = {
     "cbor2": type(sys)("cbor2"),
@@ -12,6 +13,7 @@ _stubs = {
     "common.raw_follower": type(sys)("common.raw_follower"),
 }
 _stubs["common.raw_follower"].RawFileFollower = None
+_stubs["common"].__path__ = [str(Path(__file__).resolve().parent.parent / "common")]
 sys.modules.update(_stubs)
 
 from main import iter_presses  # noqa: E402
