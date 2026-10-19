@@ -178,11 +178,13 @@ The bundled challenger scores κ 0.12 on these nights and the pod's rules about
 
 Two parity checks keep the container and the phone honest:
 
-- Features: `--fixture night-fixture.json` writes one night's raw rows and the
-  feature rows under both contracts. Copy it to
-  `sleepypod-ios/SleepypodTests/Fixtures/stage-features-night.json`; the Swift
-  `StageFeatureParityTests` suite recomputes every column from the raw rows and
-  fails on any difference above 1e-6.
+- Features: `--fixture night-fixture.json` writes a synthetic night's raw rows
+  (deterministic, nobody's sleep) and the feature rows under both contracts.
+  Copy it to `sleepypod-ios/SleepypodTests/Fixtures/stage-features-night.json`;
+  the Swift `StageFeatureParityTests` suite recomputes every column from the raw
+  rows and fails on any difference above 1e-6. `--fixture-real` uses the first
+  real labeled night instead, for a local check only: it carries timestamps and
+  per-minute biometrics and must never be committed.
 - Conversion: `--export out/` fits each model on all nights and writes
   `personal-<kind>.mlmodel` with a card in the challenger's schema (test vectors
   are the model's own predictions on 12 training rows). The phone's
