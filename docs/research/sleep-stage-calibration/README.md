@@ -149,6 +149,50 @@ docs/research/sleep-stage-calibration/feat2.py dataset.csv
 
 It needs numpy and scikit-learn; its shebang pulls them through `uv`.
 
+## 6. Personal models, container side
+
+`personal-models.py` trains the two ojwalch/sleep_classifiers models (logistic
+regression, random forest with 200 trees of depth 4) on the same features the
+iPhone computes for its on-device personal models
+(sleepypod-ios `docs/design/on-device-stage-training.md`), so the container
+run and the phone fit can be cross-checked:
+
+```sh
+docs/research/sleep-stage-calibration/personal-models.py dataset.csv --contract A   # the challenger's four inputs
+docs/research/sleep-stage-calibration/personal-models.py dataset.csv --contract B   # pod native: adds HRV, breathing, 15-min windows
+```
+
+Rows are 5-minute epochs from each night's first Watch-labeled sample, labeled
+by the Watch stage at the epoch midpoint, rare classes oversampled instead of
+class-weighted (Create ML has no class weights), scored leave-one-night-out
+with Cohen's κ against the Watch, pooled and per night. On the ten left-side
+nights to 2026-10-18 (724 labeled epochs):
+
+| contract | logistic κ | forest κ |
+|---|---|---|
+| A | 0.08 | 0.05 |
+| B | 0.11 | 0.20 |
+
+The bundled challenger scores κ 0.12 on these nights and the pod's rules about
+0.02, so contract B's forest is the first model to clear both.
+
+Two parity checks keep the container and the phone honest:
+
+- Features: `--fixture night-fixture.json` writes one night's raw rows and the
+  feature rows under both contracts. Copy it to
+  `sleepypod-ios/SleepypodTests/Fixtures/stage-features-night.json`; the Swift
+  `StageFeatureParityTests` suite recomputes every column from the raw rows and
+  fails on any difference above 1e-6.
+- Conversion: `--export out/` fits each model on all nights and writes
+  `personal-<kind>.mlmodel` with a card in the challenger's schema (test vectors
+  are the model's own predictions on 12 training rows). The phone's
+  `StageChallenger.load(modelURL:cardURL:)` refuses a model that fails its
+  vectors, so a converter mismatch shows up at load. Needs `coremltools`
+  (`uv run --with coremltools …`).
+
+The Mac analysis container is not checked in here; add its Dockerfile location
+when it is.
+
 ## Tests
 
 ```sh
