@@ -16,7 +16,7 @@
  */
 import { z } from 'zod'
 import { DEFAULT_STAGE_RULESET, SLEEP_STAGES, type StageRuleset } from './sleep-stage-rules'
-import { filterStageOutliers, type SleepEpoch, type SleepStage, type SleepStageBlock } from './sleep-stages'
+import type { SleepEpoch, SleepStage, SleepStageBlock } from './sleep-stages'
 
 export const STAGE_MODEL_EPOCH_SECONDS = 300
 const WINDOW_HALF_SECONDS = 450
@@ -266,6 +266,36 @@ export function stageModelFeatures(contract: StageModelContract, enteredBed: Dat
   return out
 }
 
+// MARK: Outliers
+
+/**
+ * The rules engine's outlier filter (sleep-stages.ts `filterOutliers`), ported rather than imported: that file
+ * is a pinned numerical source of the biometrics manifest, and exporting from it would change the manifest hash.
+ * Hard limits null a field; the HR spike filter nulls a reading more than `heartRateSpikeStdDevs` from its
+ * ±2-sample window median.
+ */
+export function filterModelOutliers<T extends VitalsLike>(vitals: T[], limits: StageRuleset['outliers']): T[] {
+  const inRange = (v: number | null, r: { min: number, max: number }) => v !== null && v >= r.min && v <= r.max
+  return vitals.map((v, i) => {
+    let heartRate = inRange(v.heartRate, limits.heartRate) ? v.heartRate : null
+    const hrv = inRange(v.hrv, limits.hrv) ? v.hrv : null
+    const breathingRate = inRange(v.breathingRate, limits.breathingRate) ? v.breathingRate : null
+    if (heartRate !== null && limits.heartRateSpikeStdDevs > 0) {
+      const windowHRs = vitals.slice(Math.max(0, i - 2), Math.min(vitals.length - 1, i + 2) + 1)
+        .map(w => w.heartRate)
+        .filter((hr): hr is number => inRange(hr, limits.heartRate))
+      if (windowHRs.length > 0) {
+        const sorted = [...windowHRs].sort((a, b) => a - b)
+        const windowMedian = sorted[Math.floor(sorted.length / 2)]
+        const windowMean = windowHRs.reduce((a, h) => a + h, 0) / windowHRs.length
+        const stdDev = Math.sqrt(windowHRs.reduce((a, h) => a + (h - windowMean) ** 2, 0) / windowHRs.length)
+        if (stdDev > 0 && Math.abs(heartRate - windowMedian) > limits.heartRateSpikeStdDevs * stdDev) heartRate = null
+      }
+    }
+    return { ...v, heartRate, hrv, breathingRate }
+  })
+}
+
 // MARK: Classification
 
 /**
@@ -285,7 +315,7 @@ export function classifyWithStageModel(
   const contract = stageModelContract(model)
   if (!contract) throw new Error('unknown feature contract')
   const sorted = [...vitals].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-  const filtered = filterStageOutliers(sorted, ruleset.outliers).rows
+  const filtered = filterModelOutliers(sorted, ruleset.outliers)
   const rows = stageModelFeatures(contract, enteredBed, leftBed, filtered, movement)
   const epochs: SleepEpoch[] = rows.map((row) => {
     const startMs = row.start * 1000
