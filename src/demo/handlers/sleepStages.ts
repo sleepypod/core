@@ -77,6 +77,13 @@ export const sleepStages: DemoHandlers<'sleepStages'> = {
     }
   }),
 
+  // The demo has no Mac-trained model: the Settings card shows "none stored", and the switch cannot be turned on.
+  getModel: async () => ({ model: null, uploadedAt: null, active: false }),
+  setModelActive: async (input) => {
+    if (input.active) throw new TRPCError({ code: 'NOT_FOUND', message: `No valid personal stage model stored for ${input.side}` })
+    return { active: false, version: null }
+  },
+
   previewClassifier: async (input) => {
     const nights = previewNights(input.side, input.sleepRecordId, input.nights ?? 1)
     const [latest] = nights
