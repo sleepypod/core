@@ -1186,6 +1186,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "model | sql:text | logical:json/SQLiteTextJson | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "version | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "uploaded_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "active | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:false | not-primary-key | not-unique | not-autoincrement | enum:none",
     ],
     "exportName": "sideStageModels",
     "foreignKeys": [],

@@ -238,10 +238,15 @@ curl -X PUT http://<pod-ip>:3000/api/sleep-stages/model   -H 'content-type: appl
 curl -X POST http://<pod-ip>:3000/api/sleep-stages/model/preview   -H 'content-type: application/json' -d '{"side":"left","nights":14}'
 ```
 
-The stored model is scored on read next to the side's rules; it does not yet
-replace them as the side's classifier, because the classifier is pinned to
-the hashed biometrics manifest through the profile system and a new engine
-there is a migration of its own. On the ten left-side nights to 2026-10-19
+The stored model can also stage the side's nights: `PUT /api/sleep-stages/model/active`
+with `{"side":"left","active":true}` (or the "Stage nights with this model"
+switch on the Settings → Sleep stages page) makes `getSleepStages` and the
+Watch comparison classify with the model, with the profile's rules as the
+fallback for any night it cannot stage. Every stage read carries `stagedBy`
+(`rules` or `model` plus the version), and the web Night view marks
+model-staged nights. The profile system and its manifest are untouched: the
+rules remain the configured classifier and the model is a per-side switch
+beside it, which is why no manifest-hash migration was needed. On the ten left-side nights to 2026-10-19
 the container's contract-B forest, evaluated by the pod's TypeScript,
 reached in-sample κ 0.33 (leave-one-night-out 0.20 in training).
 

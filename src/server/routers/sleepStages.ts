@@ -42,6 +42,14 @@ import {
 
 type Side = 'left' | 'right'
 
+/** The side's stored model when it is marked active and still validates; null means the rules stage the side. */
+export function loadActiveStageModel(side: Side): StageModel | null {
+  const row = db.select().from(sideStageModels).where(and(eq(sideStageModels.side, side), eq(sideStageModels.active, true))).get()
+  if (!row) return null
+  const parsed = stageModelSchema.safeParse(row.model)
+  return parsed.success ? parsed.data : null
+}
+
 /** Rules delivered to the stage consumer, with the actual bundle identity. */
 export function loadStageView(side: Side) {
   return consumeStageView(db, biometricsDb, side)
@@ -383,16 +391,35 @@ export const sleepStagesRouter = router({
       }
     }),
 
-  /** The side's uploaded personal stage model, if any. */
+  /** The side's uploaded personal stage model, if any, and whether it stages the side's nights. */
   getModel: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/sleep-stages/model', protect: false, tags: ['Sleep stages'] } })
     .input(z.object({ side: sideSchema }).strict())
-    .output(z.object({ model: stageModelSchema.nullable(), uploadedAt: z.number().nullable() }))
+    .output(z.object({ model: stageModelSchema.nullable(), uploadedAt: z.number().nullable(), active: z.boolean() }))
     .query(async ({ input }) => {
       const row = db.select().from(sideStageModels).where(eq(sideStageModels.side, input.side)).get()
-      if (!row) return { model: null, uploadedAt: null }
+      if (!row) return { model: null, uploadedAt: null, active: false }
       const parsed = stageModelSchema.safeParse(row.model)
-      return { model: parsed.success ? parsed.data : null, uploadedAt: row.uploadedAt.getTime() }
+      return { model: parsed.success ? parsed.data : null, uploadedAt: row.uploadedAt.getTime(), active: parsed.success && row.active }
+    }),
+
+  /**
+   * Make the stored model stage the side's nights (or go back to the rules). The profile's rules stay
+   * the fallback for any night the model cannot stage, and the choice is recorded on every stage read
+   * as `stagedBy`.
+   */
+  setModelActive: publicProcedure
+    .meta({ openapi: { method: 'PUT', path: '/sleep-stages/model/active', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema, active: z.boolean() }).strict())
+    .output(z.object({ active: z.boolean(), version: z.string().nullable() }))
+    .mutation(async ({ input }) => {
+      const row = db.select().from(sideStageModels).where(eq(sideStageModels.side, input.side)).get()
+      if (!row || !stageModelSchema.safeParse(row.model).success) {
+        if (input.active) throw new TRPCError({ code: 'NOT_FOUND', message: `No valid personal stage model stored for ${input.side}` })
+        return { active: false, version: null }
+      }
+      db.update(sideStageModels).set({ active: input.active }).where(eq(sideStageModels.side, input.side)).run()
+      return { active: input.active, version: row.version }
     }),
 
   /**

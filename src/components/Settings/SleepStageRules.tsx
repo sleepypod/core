@@ -46,6 +46,13 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
   const save = trpc.sleepStages.setClassifier.useMutation({
     onSuccess: () => utils.sleepStages.getClassifier.invalidate({ side }),
   })
+  const model = trpc.sleepStages.getModel.useQuery({ side })
+  const setModelActive = trpc.sleepStages.setModelActive.useMutation({
+    onSuccess: () => {
+      utils.sleepStages.getModel.invalidate({ side })
+      utils.biometrics.getSleepStages.invalidate()
+    },
+  })
 
   const saved = query.data?.pending?.classifier.ruleset ?? query.data?.classifier.ruleset
   const [draft, setDraft] = useState<StageRuleset | null>(null)
@@ -100,6 +107,12 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
       {(query.data.pending?.warning ?? query.data.provenance?.warning) && (
         <InlineError>{query.data.pending?.warning ?? query.data.provenance?.warning}</InlineError>
       )}
+      <PersonalModelCard
+        model={model.data ?? null}
+        busy={setModelActive.isPending}
+        error={setModelActive.error?.message ?? null}
+        onToggle={active => setModelActive.mutate({ side, active })}
+      />
       {/* Toolbar: profile, state, preset, reset */}
       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[13px]">
         <SegmentedControl
@@ -267,6 +280,48 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * The personal model stored on the pod for this side (trained on a Mac from the pod's nights with the
+ * Apple Watch as the label) and the switch that makes it stage the side's nights. The rules below stay
+ * the fallback for any night the model cannot stage.
+ */
+function PersonalModelCard({ model, busy, error, onToggle }: {
+  model: { model: { version: string, kind: string, metrics?: Record<string, unknown> } | null, uploadedAt: number | null, active: boolean } | null
+  busy: boolean
+  error: string | null
+  onToggle: (active: boolean) => void
+}) {
+  const stored = model?.model ?? null
+  const lono = stored?.metrics?.lono as { kappa?: number | null, nights?: number | null } | undefined
+  const kappa = lono?.kappa != null ? lono.kappa.toFixed(2) : null
+  return (
+    <Card className="gap-2 p-4">
+      <CardHeader
+        title="Personal model"
+        subtitle={stored
+          ? `${stored.kind === 'forest' ? 'Random forest' : 'Logistic regression'} ${stored.version}${kappa ? ` · κ ${kappa} against the Watch, held out${lono?.nights ? ` over ${lono.nights} nights` : ''}` : ''}`
+          : 'None stored. Train one on a Mac with scripts/train-personal-models.py and it appears here.'}
+        right={stored && (
+          <Toggle
+            on={model?.active ?? false}
+            disabled={busy}
+            label="Stage nights with this model"
+            onChange={onToggle}
+          />
+        )}
+      />
+      {stored && (
+        <p className="text-xs text-fg-2">
+          {model?.active
+            ? 'Nights are staged by the model; the rules below are the fallback when it cannot stage a night.'
+            : 'Off: nights are staged by the rules below. Turn on to stage with the model instead; the rules remain the fallback.'}
+        </p>
+      )}
+      {error && <InlineError>{error}</InlineError>}
+    </Card>
   )
 }
 

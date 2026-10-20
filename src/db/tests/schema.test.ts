@@ -254,6 +254,7 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'model', notNull: true, default: undefined },
       { name: 'version', notNull: true, default: undefined },
       { name: 'uploaded_at', notNull: true, default: undefined },
+      { name: 'active', notNull: true, default: false },
     ],
     indexes: [],
   },

@@ -424,12 +424,13 @@ describe('sleepStages router', () => {
     }
 
     it('stores a validated model per side and removes it with null', async () => {
-      expect(await caller.getModel({ side: 'left' })).toEqual({ model: null, uploadedAt: null })
+      expect(await caller.getModel({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false })
       const stored = await caller.setModel({ side: 'left', model })
       expect(stored).toEqual({ stored: true, version: 'test-forest' })
       const out = await caller.getModel({ side: 'left' })
       expect(out.model?.version).toBe('test-forest')
       expect(out.uploadedAt).not.toBeNull()
+      expect(out.active).toBe(false)
       expect((await caller.getModel({ side: 'right' })).model).toBeNull()
       expect(await caller.setModel({ side: 'left', model: null })).toEqual({ stored: false, version: null })
       expect((await caller.getModel({ side: 'left' })).model).toBeNull()
@@ -463,6 +464,28 @@ describe('sleepStages router', () => {
       expect(out.rulesPooled?.epochs).toBe(12)
       const inline = await caller.previewModel({ side: 'right', model, nights: 3 })
       expect(inline.nights).toHaveLength(0)
+    })
+
+    it('stages the side with the model once it is made active, and falls back to the rules without one', async () => {
+      const { biometricsRouter } = await import('@/src/server/routers/biometrics')
+      const bio = biometricsRouter.createCaller({})
+      const record = seedNight()
+      expect((await rejectionOf(caller.setModelActive({ side: 'left', active: true }))).code).toBe('NOT_FOUND')
+      expect(await caller.setModelActive({ side: 'left', active: false })).toEqual({ active: false, version: null })
+      await caller.setModel({ side: 'left', model })
+      const rules = await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })
+      expect(rules.stagedBy).toEqual({ engine: 'rules', version: null })
+      expect(await caller.setModelActive({ side: 'left', active: true })).toEqual({ active: true, version: 'test-forest' })
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+      const staged = await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })
+      expect(staged.stagedBy).toEqual({ engine: 'model', version: 'test-forest' })
+      // The model works in 5-minute epochs from bed entry over the 60-minute record.
+      expect(staged.epochs).toHaveLength(12)
+      expect(staged.epochs.every(e => e.duration === 300_000)).toBe(true)
+      expect(staged.blocks.map(b => b.stage)).toEqual(['light', 'deep', 'light'])
+      // Removing the model returns the side to the rules.
+      await caller.setModel({ side: 'left', model: null })
+      expect((await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })).stagedBy?.engine).toBe('rules')
     })
 
     it('refuses an inline model that fails its vectors and wraps unexpected failures', async () => {

@@ -92,6 +92,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       exits: record?.timesExitedBed ?? records.find(r => r.id === id)?.timesExitedBed ?? null,
       quality: epochs.length > 0 ? stages?.qualityScore ?? null : null,
       distribution: stages?.distribution,
+      stagedBy: stages?.stagedBy,
       date: key && record ? keyToDate(key) : start != null ? keyToDate(toNightKey(new Date(start))) : key ? keyToDate(key) : null,
       hr: downsample(epochs.map(e => e.heartRate)),
       // Same chunking as `hr`, over the epochs that have a reading, so each point knows its time.
@@ -200,6 +201,8 @@ interface Night {
   quality: number | null
   distribution?: { wake: number, rem: number, light: number, deep: number }
   date: Date | null
+  /** Which algorithm staged the night: the profile's rules, or the side's active personal model. */
+  stagedBy?: { engine: 'rules' | 'model', version: string | null }
 }
 
 function NightCard({ night, error, empty }: { night: Night, error: string | null, empty: boolean }) {
@@ -253,6 +256,9 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
           <span className="text-base font-medium max-[899px]:hidden">{night.date ? formatNightLong(night.date) : '—'}</span>
           <span className="font-mono text-xl font-light min-[900px]:hidden">{formatDuration(night.asleepSeconds)}</span>
           <span className="font-mono text-xs text-fg-2">{times}</span>
+          {night.hasStages && night.stagedBy?.engine === 'model' && (
+            <span className="font-mono text-xs text-cool" title={night.stagedBy.version ?? undefined}>Personal model</span>
+          )}
         </div>
         <div className="ml-auto self-start min-[900px]:self-center">{edit}</div>
       </div>

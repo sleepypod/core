@@ -9,8 +9,10 @@ import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns, inArray } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
-import { loadReference, loadStageView, loadStageInputs } from './sleepStages'
+import { loadActiveStageModel, loadReference, loadStageView, loadStageInputs } from './sleepStages'
 import { stageViewSchema, type StageView } from '@/src/biometrics/profiles/stage-view'
+import { classifyWithStageModel, type StageModel } from '@/src/lib/personal-stage-model'
+import type { SleepEpoch } from '@/src/lib/sleep-stages'
 import {
   classifySleepStages,
   mergeIntoBlocks,
@@ -93,6 +95,31 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const WATCH_DEVIATION_DEFAULT_DAYS = 14
 const WATCH_DEVIATION_MAX_DAYS = 31
 
+/** Which algorithm staged a night: the profile's rules, or the side's active personal model. */
+const stagedBySchema = z.object({ engine: z.enum(['rules', 'model']), version: z.string().nullable() })
+type StagedBy = z.infer<typeof stagedBySchema>
+
+/**
+ * Stage one night: with the side's active personal model when there is one and it can stage the
+ * night, otherwise with the rules. The model is applied over the record window the way the phone
+ * and the Mac evaluator do; a model failure never leaves a night blank.
+ */
+function stageNight(
+  vitalsData: Parameters<typeof classifySleepStages>[0], movementData: Parameters<typeof classifySleepStages>[1],
+  calibrationQuality: number, ruleset: StageRuleset, model: StageModel | null, window: { start: Date, end: Date } | null,
+): { epochs: SleepEpoch[], stagedBy: StagedBy } {
+  if (model && window) {
+    try {
+      const epochs = classifyWithStageModel(model, window.start, window.end, vitalsData, movementData, ruleset)
+      if (epochs.length > 0) return { epochs, stagedBy: { engine: 'model', version: model.version } }
+    }
+    catch (error) {
+      console.warn(`[sleep-stages] personal model ${model.version} failed, using rules: ${error instanceof Error ? error.message : error}`)
+    }
+  }
+  return { epochs: classifySleepStages(vitalsData, movementData, calibrationQuality, ruleset), stagedBy: { engine: 'rules', version: null } }
+}
+
 /**
  * One sleep record's pod series, Watch samples and re-classified stages for
  * compareToWatch. Pod vitals are read past the record's edges by the widest
@@ -129,7 +156,7 @@ async function loadDeviationNight(side: 'left' | 'right', record: typeof sleepRe
       breathingRate: watch(watchSamples.filter(s => s.metric === 'breathing_rate')),
       hrvSdnn: watch(watchSamples.filter(s => s.metric === 'hrv_sdnn')),
     },
-    epochs: classifySleepStages(inRecord(vitalsData), inRecord(movementData), calibrationQuality, ruleset),
+    epochs: stageNight(inRecord(vitalsData), inRecord(movementData), calibrationQuality, ruleset, loadActiveStageModel(side), { start, end }).epochs,
     reference,
   }
 }
@@ -1620,11 +1647,13 @@ export const biometricsRouter = router({
       qualityScore: z.number(),
       totalSleepMs: z.number(),
       stageView: stageViewSchema.optional(),
+      /** Which algorithm staged this result: the profile's rules or the side's active personal model. */
+      stagedBy: stagedBySchema.optional(),
       sleepRecordId: z.number().nullable(),
       enteredBedAt: z.number().nullable(),
       leftBedAt: z.number().nullable(),
     }))
-    .query(async ({ input }): Promise<SleepStagesResult & { stageView?: StageView }> => {
+    .query(async ({ input }): Promise<SleepStagesResult & { stageView?: StageView, stagedBy?: StagedBy }> => {
       try {
         // Reject ambiguous requests: if sleepRecordId is provided alongside date range, error out
         if (input.sleepRecordId && (input.startDate || input.endDate)) {
@@ -1763,12 +1792,14 @@ export const biometricsRouter = router({
         const stageView = loadStageView(input.side)
         const classifier = stageView.classifier
 
-        // Classify stages
-        const epochs = classifySleepStages(vitalsData, movementData, calibrationQuality, classifier.ruleset)
+        // Classify stages: the side's active personal model over the record window, else the rules.
+        const { epochs, stagedBy } = stageNight(vitalsData, movementData, calibrationQuality, classifier.ruleset,
+          loadActiveStageModel(input.side), sleepRecordId !== null ? { start: windowStart, end: windowEnd } : null)
 
         if (epochs.length === 0) {
           return {
             stageView,
+            stagedBy,
             epochs: [],
             blocks: [],
             distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
@@ -1787,6 +1818,7 @@ export const biometricsRouter = router({
 
         return {
           stageView,
+          stagedBy,
           epochs,
           blocks,
           distribution,

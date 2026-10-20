@@ -16,8 +16,10 @@ import {
 const trpcMock = vi.hoisted(() => {
   const setMutate = vi.fn()
   const previewMutate = vi.fn()
+  const activeMutate = vi.fn()
   const invalidate = vi.fn()
   const state = {
+    model: { model: null, uploadedAt: null, active: false } as { model: { version: string, kind: string, metrics?: Record<string, unknown> } | null, uploadedAt: number | null, active: boolean },
     classifier: null as unknown as StageClassifier,
     pending: null as { classifier: StageClassifier, generation: number, warning: string | null } | null,
     movementOnly: null as unknown as StageClassifier['ruleset'],
@@ -35,11 +37,14 @@ const trpcMock = vi.hoisted(() => {
   return {
     setMutate,
     previewMutate,
+    activeMutate,
     invalidate,
     state,
     trpc: {
-      useUtils: () => ({ sleepStages: { getClassifier: { invalidate } } }),
+      useUtils: () => ({ sleepStages: { getClassifier: { invalidate }, getModel: { invalidate: vi.fn() } }, biometrics: { getSleepStages: { invalidate: vi.fn() } } }),
       sleepStages: {
+        getModel: { useQuery: () => ({ data: state.model }) },
+        setModelActive: { useMutation: () => ({ mutate: activeMutate, isPending: false, error: null }) },
         getClassifier: {
           useQuery: () => ({
             data: state.loading || state.queryError
@@ -679,5 +684,26 @@ describe('SleepStageRules', () => {
     fireEvent.change(screen.getByLabelText('Start from preset'), { target: { value: '' } })
     expect(screen.getByLabelText('Rule 2 stage')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
+  })
+  describe('personal model card', () => {
+    it('says when no model is stored on the pod', () => {
+      trpcMock.state.model = { model: null, uploadedAt: null, active: false }
+      render(<SleepStageRules side="left" onSideChange={() => {}} />)
+      expect(screen.getByText(/None stored/)).toBeTruthy()
+      expect(screen.queryByRole('switch', { name: 'Stage nights with this model' })).toBeNull()
+    })
+
+    it('shows the stored model and switches staging to it', () => {
+      trpcMock.state.model = {
+        model: { version: 'container-forest-test', kind: 'forest', metrics: { lono: { kappa: 0.25, nights: 11 } } },
+        uploadedAt: 1,
+        active: false,
+      }
+      render(<SleepStageRules side="left" onSideChange={() => {}} />)
+      expect(screen.getByText(/Random forest container-forest-test/)).toBeTruthy()
+      expect(screen.getByText(/κ 0\.25/)).toBeTruthy()
+      fireEvent.click(screen.getByRole('switch', { name: 'Stage nights with this model' }))
+      expect(trpcMock.activeMutate).toHaveBeenCalledWith({ side: 'left', active: true })
+    })
   })
 })

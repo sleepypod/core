@@ -129,6 +129,9 @@ export const sideStageModels = sqliteTable('side_stage_models', {
   model: text('model', { mode: 'json' }).notNull(),
   version: text('version').notNull(),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+  // When set, the side's stages are classified by this model instead of the profile's rules; the rules
+  // remain the fallback whenever the model cannot stage a night.
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
 })
 
 export const stageClassifierChanges = sqliteTable('stage_classifier_changes', {
