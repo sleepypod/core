@@ -33,6 +33,12 @@ describe('demo sleepStages', () => {
     vi.useRealTimers()
   })
 
+  it('has no personal model and refuses to switch one on', async () => {
+    expect(await required(sleepStages.getModel)({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false })
+    expect(await required(sleepStages.setModelActive)({ side: 'left', active: false })).toEqual({ active: false, version: null })
+    await expect(required(sleepStages.setModelActive)({ side: 'left', active: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
   it('keeps a classifier per side for the session', async () => {
     expect((await required(sleepStages.getClassifier)({ side: 'left' })).isDefault).toBe(true)
     await required(sleepStages.setClassifier)({ side: 'left', classifier: movementOnly })

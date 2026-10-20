@@ -114,6 +114,18 @@ describe('SleepScreen night view', () => {
     expect(screen.getByTestId('raw-data')).toBeTruthy()
   })
 
+  it('marks a night the personal model staged, and says nothing for the rules', () => {
+    render(<SleepScreen />)
+    expect(screen.queryByText('Personal model')).toBeNull()
+    cleanup()
+    state.stages.mockImplementation(() => ({
+      data: { ...stagesFor(at(22, 23, 20), 12), stagedBy: { engine: 'model', version: 'container-forest-test' } },
+      isLoading: false,
+    }))
+    render(<SleepScreen />)
+    expect(screen.getByText('Personal model').getAttribute('title')).toBe('container-forest-test')
+  })
+
   it('reads out the heart rate under the pointer with the epoch time', () => {
     const { container } = render(<SleepScreen />)
     // The heart-rate chart is the filled line (two paths) inside a hoverable box.

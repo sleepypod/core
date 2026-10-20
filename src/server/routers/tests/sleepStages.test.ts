@@ -483,6 +483,9 @@ describe('sleepStages router', () => {
       expect(staged.epochs).toHaveLength(12)
       expect(staged.epochs.every(e => e.duration === 300_000)).toBe(true)
       expect(staged.blocks.map(b => b.stage)).toEqual(['light', 'deep', 'light'])
+      // Without a record window (the "last night" lookup) the rules stage the result even with a model active.
+      const latest = await bio.getSleepStages({ side: 'left' })
+      expect(latest.stagedBy?.engine).toBe('rules')
       // Removing the model returns the side to the rules.
       await caller.setModel({ side: 'left', model: null })
       expect((await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })).stagedBy?.engine).toBe('rules')

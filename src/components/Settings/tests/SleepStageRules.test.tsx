@@ -693,6 +693,17 @@ describe('SleepStageRules', () => {
       expect(screen.queryByRole('switch', { name: 'Stage nights with this model' })).toBeNull()
     })
 
+    it('describes an active logistic model without metrics and shows a switch error', () => {
+      trpcMock.state.model = { model: { version: 'container-logistic-test', kind: 'logistic' }, uploadedAt: 1, active: true }
+      render(<SleepStageRules side="left" onSideChange={() => {}} />)
+      expect(screen.getByText(/Logistic regression container-logistic-test/)).toBeTruthy()
+      expect(screen.getByText(/Nights are staged by the model/)).toBeTruthy()
+      const toggle = screen.getByRole('switch', { name: 'Stage nights with this model' })
+      expect(toggle.getAttribute('aria-checked')).toBe('true')
+      fireEvent.click(toggle)
+      expect(trpcMock.activeMutate).toHaveBeenCalledWith({ side: 'left', active: false })
+    })
+
     it('shows the stored model and switches staging to it', () => {
       trpcMock.state.model = {
         model: { version: 'container-forest-test', kind: 'forest', metrics: { lono: { kappa: 0.25, nights: 11 } } },
