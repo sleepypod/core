@@ -207,7 +207,10 @@ scripts/train-personal-models.py --pod <pod-ip> --snapshot poddb/biometrics.db  
 ```
 
 The pod needs the model endpoints below, and the Watch stages must already be
-on it (section 2b).
+on it (section 2b). The run leaves the dataset and the exported models (about
+half a megabyte) in the work directory and deletes the ~75 MB database
+snapshot unless `--keep-snapshot`; the pod keeps one model row per side,
+replaced on every upload.
 
 ### Running a model on the pod
 

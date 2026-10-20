@@ -13,6 +13,7 @@ Usage:
   scripts/train-personal-models.py --pod 192.168.1.88 --side left
   scripts/train-personal-models.py --pod eight-pod.local --side left --contract A --kind logistic --no-upload
   scripts/train-personal-models.py --pod ... --snapshot poddb/biometrics.db   # reuse a snapshot
+  scripts/train-personal-models.py --pod ... --keep-snapshot                  # keep the ~75 MB snapshot for reuse
 
 The pod needs the sleep-stages model endpoints (sleepypod-core PR #855). The
 Watch stages must already be on the pod (scripts/import-watch-health.py).
@@ -82,13 +83,20 @@ def main():
     ap.add_argument('--work', default='personal-models', help='working directory (default ./personal-models)')
     ap.add_argument('--snapshot', help='an existing biometrics.db snapshot instead of taking one')
     ap.add_argument('--no-upload', action='store_true', help='train and export only')
+    ap.add_argument('--keep-snapshot', action='store_true', help='leave the ~75 MB database snapshot in the work dir (deleted after a run by default)')
     args = ap.parse_args()
 
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     db = Path(args.snapshot) if args.snapshot else snapshot(args.pod, work)
     dataset = work / 'dataset.csv'
-    run([sys.executable, DATASET, '--from-db', db, '--side', args.side, '--out', dataset])
+    try:
+        run([sys.executable, DATASET, '--from-db', db, '--side', args.side, '--out', dataset])
+    finally:
+        # The snapshot is the only large file this leaves behind; a supplied one is the caller's to keep.
+        if not args.snapshot and not args.keep_snapshot:
+            db.unlink(missing_ok=True)
+            print(f'removed snapshot {db} (pass --keep-snapshot to keep it)', file=sys.stderr)
 
     out = work / f'contract-{args.contract}'
     result = run([MODELS, dataset, '--contract', args.contract, '--export', out], capture_output=True)
