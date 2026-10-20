@@ -152,7 +152,7 @@ It needs numpy and scikit-learn; its shebang pulls them through `uv`.
 ## 6. Personal models, container side
 
 `personal-models.py` trains the two ojwalch/sleep_classifiers models (logistic
-regression, random forest with 200 trees of depth 4) on the same features the
+regression, random forest with 200 trees of depth 8) on the same features the
 iPhone computes for its on-device personal models
 (sleepypod-ios `docs/design/on-device-stage-training.md`), so the container
 run and the phone fit can be cross-checked:
@@ -175,6 +175,14 @@ nights to 2026-10-18 (724 labeled epochs):
 
 The bundled challenger scores κ 0.12 on these nights and the pod's rules about
 0.02, so contract B's forest is the first model to clear both.
+
+A sweep on the same nights (leave-one-night-out, contract B) chose the forest's
+depth: 200 trees at depth 3/4/6/8/unlimited gave κ 0.18/0.21/0.22/0.26/0.23,
+and 100, 500 or 1000 trees changed nothing at any depth, so the forest is
+pinned at 200 trees, depth 8. Logistic regression was flat (κ 0.10–0.11) across
+C from 0.01 to 100. Histogram gradient boosting at depth 3 reached κ 0.27, the
+best single number but within noise of the depth-8 forest on eleven nights;
+it would need its own export format and is a candidate once more nights exist.
 
 Two parity checks keep the container and the phone honest:
 

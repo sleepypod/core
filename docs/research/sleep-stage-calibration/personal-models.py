@@ -30,7 +30,9 @@ EPOCH = 300
 WINDOW_HALF = 450
 CONTRACT_A = ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction']
 CONTRACT_B = CONTRACT_A + ['hrvRel', 'hrv15Rel', 'hr15StdRel', 'br15Std', 'motion15', 'minutesSinceBed']
-HYPER = {'logistic': {'maxIterations': 200, 'l2Penalty': 0.01}, 'forest': {'trees': 200, 'maxDepth': 4}}
+# Depth 8 after a leave-one-night-out sweep on eleven nights (Oct 2026): depth 4 κ 0.21, depth 8 κ 0.26;
+# 100 to 1000 trees made no difference, so 200 stays. Logistic was flat in C. See README section 6.
+HYPER = {'logistic': {'maxIterations': 200, 'l2Penalty': 0.01}, 'forest': {'trees': 200, 'maxDepth': 8}}
 
 
 def num(v):
