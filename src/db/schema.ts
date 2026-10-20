@@ -119,6 +119,18 @@ export const sideSettings = sqliteTable('side_settings', {
  * recent changes with their effect and revert one. `before`/`after` are
  * classifiers ({ engine, ruleset }) or null for the defaults.
  */
+/**
+ * A personal sleep-stage model uploaded for a side (sleepypod-ios training or
+ * the analysis container's export), validated by stageModelSchema. It is
+ * scored beside the rules on read; it does not replace the side's classifier.
+ */
+export const sideStageModels = sqliteTable('side_stage_models', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  model: text('model', { mode: 'json' }).notNull(),
+  version: text('version').notNull(),
+  uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+})
+
 export const stageClassifierChanges = sqliteTable('stage_classifier_changes', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

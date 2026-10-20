@@ -8,13 +8,23 @@ import { writeLegacyStageClassifier } from '@/src/biometrics/profiles/legacy-sta
 import { ReferenceInputError } from '@/src/biometrics/references/time'
 import { ProfileStore } from '@/src/biometrics/profiles/store'
 import type { Override } from '@/src/biometrics/algorithms/registry'
-import { sideSettings, stageClassifierChanges } from '@/src/db/schema'
+import { sideSettings, sideStageModels, stageClassifierChanges } from '@/src/db/schema'
+import {
+  classifyWithStageModel,
+  failingTestVectors,
+  stageModelBlocks,
+  stageModelContract,
+  stageModelSchema,
+  type StageModel,
+} from '@/src/lib/personal-stage-model'
 import { and, asc, desc, eq, gt, gte, lte } from 'drizzle-orm'
 import { sideSchema } from '@/src/server/validation-schemas'
 import {
   changedSegments,
   classifyNights,
+  classifySleepStages,
   piezoCalibrationQuality,
+  scoreAgainstReference,
   type NightInputs,
   type SleepStageBlock,
 } from '@/src/lib/sleep-stages'
@@ -368,6 +378,114 @@ export const sleepStagesRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to preview stage classifier: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /** The side's uploaded personal stage model, if any. */
+  getModel: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/sleep-stages/model', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.object({ model: stageModelSchema.nullable(), uploadedAt: z.number().nullable() }))
+    .query(async ({ input }) => {
+      const row = db.select().from(sideStageModels).where(eq(sideStageModels.side, input.side)).get()
+      if (!row) return { model: null, uploadedAt: null }
+      const parsed = stageModelSchema.safeParse(row.model)
+      return { model: parsed.success ? parsed.data : null, uploadedAt: row.uploadedAt.getTime() }
+    }),
+
+  /**
+   * Upload a personal stage model (or null to remove it). The document must
+   * validate, name a known feature contract, and reproduce every one of its
+   * own test vectors, so a converter mismatch is refused at the door.
+   */
+  setModel: publicProcedure
+    .meta({ openapi: { method: 'PUT', path: '/sleep-stages/model', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema, model: stageModelSchema.nullable() }).strict())
+    .output(z.object({ stored: z.boolean(), version: z.string().nullable() }))
+    .mutation(async ({ input }) => {
+      if (input.model === null) {
+        db.delete(sideStageModels).where(eq(sideStageModels.side, input.side)).run()
+        return { stored: false, version: null }
+      }
+      if (!stageModelContract(input.model)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Unknown feature contract: ${input.model.featureContract.join(', ')}` })
+      }
+      const failing = failingTestVectors(input.model)
+      if (failing.length > 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Model fails ${failing.length} of its ${input.model.testVectors.length} test vectors (first: ${failing[0]})` })
+      }
+      db.insert(sideStageModels)
+        .values({ side: input.side, model: input.model, version: input.model.version, uploadedAt: new Date() })
+        .onConflictDoUpdate({ target: sideStageModels.side, set: { model: input.model, version: input.model.version, uploadedAt: new Date() } })
+        .run()
+      return { stored: true, version: input.model.version }
+    }),
+
+  /**
+   * Stage recent nights with a personal model (the uploaded one, or one sent
+   * inline) and score it against the Watch beside the side's rules on the
+   * same nights: the pod-side half of the model pipeline.
+   */
+  previewModel: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/sleep-stages/model/preview', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({
+      side: sideSchema,
+      sleepRecordId: z.number().int().optional(),
+      nights: z.number().int().min(1).max(30).optional(),
+      model: stageModelSchema.optional(),
+    }).strict())
+    .output(z.object({
+      version: z.string().nullable(),
+      nights: z.array(z.object({
+        sleepRecordId: z.number(),
+        enteredBedAt: z.number(),
+        leftBedAt: z.number(),
+        blocks: z.array(z.object({ start: z.number(), end: z.number(), stage: stageEnum })),
+        agreement: agreementSchema,
+        rulesAgreement: agreementSchema,
+      })),
+      pooled: agreementSchema,
+      rulesPooled: agreementSchema,
+    }))
+    .mutation(async ({ input }) => {
+      let model: StageModel | null = input.model ?? null
+      if (!model) {
+        const row = db.select().from(sideStageModels).where(eq(sideStageModels.side, input.side)).get()
+        const parsed = row ? stageModelSchema.safeParse(row.model) : null
+        if (!parsed?.success) throw new TRPCError({ code: 'NOT_FOUND', message: `No personal stage model stored for ${input.side}` })
+        model = parsed.data
+      }
+      if (failingTestVectors(model).length > 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Model fails its own test vectors' })
+      try {
+        const loaded = await loadNights(input.side, input.sleepRecordId, input.nights ?? 1)
+        const ruleset = (await loadStageClassifier(input.side)).ruleset
+        const staged = loaded.map(night => ({
+          night,
+          epochs: classifyWithStageModel(model, night.record.enteredBedAt, night.record.leftBedAt, night.vitalsData, night.movementData, ruleset),
+          rules: classifySleepStages(night.vitalsData, night.movementData, night.calibrationQuality, ruleset),
+        }))
+        const allReference = staged.flatMap(s => s.night.reference)
+        return {
+          version: model.version,
+          nights: staged.map(s => ({
+            sleepRecordId: s.night.record.id,
+            enteredBedAt: s.night.record.enteredBedAt.getTime(),
+            leftBedAt: s.night.record.leftBedAt.getTime(),
+            blocks: stageModelBlocks(s.epochs),
+            agreement: scoreAgainstReference(s.epochs, s.night.reference),
+            rulesAgreement: scoreAgainstReference(s.rules, s.night.reference),
+          })),
+          pooled: scoreAgainstReference(staged.flatMap(s => s.epochs), allReference),
+          rulesPooled: scoreAgainstReference(staged.flatMap(s => s.rules), allReference),
+        }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to preview stage model: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

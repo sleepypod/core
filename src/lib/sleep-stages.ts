@@ -96,6 +96,10 @@ interface OutlierReport {
  * Applies the ruleset's hard limits and a windowed median filter for HR.
  * Nulls out specific fields rather than removing rows (movement data preserved).
  */
+export function filterStageOutliers(vitals: VitalsRow[], limits: StageRuleset['outliers']): OutlierReport {
+  return filterOutliers(vitals, limits)
+}
+
 function filterOutliers(vitals: VitalsRow[], limits: StageRuleset['outliers']): OutlierReport {
   const inRange = (v: number | null, r: { min: number, max: number }) => v !== null && v >= r.min && v <= r.max
   let heartRateReadings = 0

@@ -192,6 +192,31 @@ Two parity checks keep the container and the phone honest:
   vectors, so a converter mismatch shows up at load. Needs `coremltools`
   (`uv run --with coremltools …`).
 
+### Running a model on the pod
+
+`--export out/` also writes `personal-<kind>.json`, the pod's portable form
+(forest trees as parallel arrays with four-class leaf votes, logistic as
+scaler plus weights, the feature contract, hyperparameters and the test
+vectors), checked against scikit-learn on every training row before it is
+written. The pod evaluates it with `src/lib/personal-stage-model.ts`, which
+computes the same feature contracts from a night's vitals and movement (the
+same synthetic fixture is replayed by `src/lib/tests/personal-stage-model.test.ts`)
+and refuses a model that fails its own test vectors.
+
+```sh
+# store the container's forest on the pod for the left side
+curl -X PUT http://<pod-ip>:3000/api/sleep-stages/model   -H 'content-type: application/json'   -d "$(jq -c '{side:"left", model:.}' out/personal-forest.json)"
+# score it beside the rules against the Watch on the last 14 nights
+curl -X POST http://<pod-ip>:3000/api/sleep-stages/model/preview   -H 'content-type: application/json' -d '{"side":"left","nights":14}'
+```
+
+The stored model is scored on read next to the side's rules; it does not yet
+replace them as the side's classifier, because the classifier is pinned to
+the hashed biometrics manifest through the profile system and a new engine
+there is a migration of its own. On the ten left-side nights to 2026-10-19
+the container's contract-B forest, evaluated by the pod's TypeScript,
+reached in-sample κ 0.33 (leave-one-night-out 0.20 in training).
+
 The Mac analysis container is not checked in here; add its Dockerfile location
 when it is.
 

@@ -211,6 +211,13 @@
       "when": 1792415320894,
       "tag": "0029_clear_stale_gesture_alarm_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1792475644291,
+      "tag": "0030_side_stage_models",
+      "breakpoints": true
     }
   ]
 }

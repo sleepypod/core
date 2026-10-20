@@ -409,4 +409,60 @@ describe('sleepStages router', () => {
       expect(out.saved?.agreement?.accuracy).toBeLessThan(1)
     })
   })
+  describe('personal stage model', () => {
+    /** One tree: deep when hrZ <= -0.5, else light. */
+    const model = {
+      version: 'test-forest',
+      kind: 'forest' as const,
+      classes: ['wake', 'light', 'deep', 'rem'] as ['wake', 'light', 'deep', 'rem'],
+      featureContract: ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction'],
+      trees: [{ f: [0, -1, -1], t: [-0.5, 0, 0], l: [1, -1, -1], r: [2, -1, -1], v: [[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]] }],
+      testVectors: [
+        { inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 2 },
+        { inputs: { hrZ: 1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 },
+      ],
+    }
+
+    it('stores a validated model per side and removes it with null', async () => {
+      expect(await caller.getModel({ side: 'left' })).toEqual({ model: null, uploadedAt: null })
+      const stored = await caller.setModel({ side: 'left', model })
+      expect(stored).toEqual({ stored: true, version: 'test-forest' })
+      const out = await caller.getModel({ side: 'left' })
+      expect(out.model?.version).toBe('test-forest')
+      expect(out.uploadedAt).not.toBeNull()
+      expect((await caller.getModel({ side: 'right' })).model).toBeNull()
+      expect(await caller.setModel({ side: 'left', model: null })).toEqual({ stored: false, version: null })
+      expect((await caller.getModel({ side: 'left' })).model).toBeNull()
+    })
+
+    it('refuses a model that fails its own vectors or names an unknown contract', async () => {
+      const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
+      expect((await rejectionOf(caller.setModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
+      const unknown = { ...model, featureContract: ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction', 'extra'],
+        trees: [{ f: [4, -1, -1], t: [0, 0, 0], l: [1, -1, -1], r: [2, -1, -1], v: [[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]] }],
+        testVectors: [{ inputs: { hrZ: 0, hrStdZ: 0, motionZ: 0, nightFraction: 0, extra: -1 }, expected: 2 }] }
+      expect((await rejectionOf(caller.setModel({ side: 'left', model: unknown }))).code).toBe('BAD_REQUEST')
+    })
+
+    it('scores the model and the rules against the Watch on the same nights', async () => {
+      seedNight()
+      bio.insert(bioSchema.referenceStages).values([
+        { side: 'left', source: 'apple_watch', start: BED, end: at(20), stage: 'light' },
+        { side: 'left', source: 'apple_watch', start: at(20), end: at(40), stage: 'deep' },
+        { side: 'left', source: 'apple_watch', start: at(40), end: at(60), stage: 'light' },
+      ]).run()
+      expect((await rejectionOf(caller.previewModel({ side: 'left' }))).code).toBe('NOT_FOUND')
+      await caller.setModel({ side: 'left', model })
+      const out = await caller.previewModel({ side: 'left' })
+      expect(out.version).toBe('test-forest')
+      expect(out.nights).toHaveLength(1)
+      // The HR dip in minutes 20–40 is the only low-z stretch: the tree calls it deep, matching the Watch exactly.
+      expect(out.nights[0].blocks.map(b => b.stage)).toEqual(['light', 'deep', 'light'])
+      expect(out.nights[0].agreement?.accuracy).toBe(1)
+      expect(out.pooled?.epochs).toBe(12)
+      expect(out.rulesPooled?.epochs).toBe(12)
+      const inline = await caller.previewModel({ side: 'right', model, nights: 3 })
+      expect(inline.nights).toHaveLength(0)
+    })
+  })
 })

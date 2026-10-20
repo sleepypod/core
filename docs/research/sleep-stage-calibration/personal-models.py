@@ -13,7 +13,7 @@ last labeled sample, which is what the pod record gives the phone.
 Usage:
   personal-models.py dataset.csv [--contract A|B] [--model logistic|forest|both]
   personal-models.py dataset.csv --fixture night-fixture.json   # synthetic feature-parity fixture for the Swift test
-  personal-models.py dataset.csv --export out/                  # .mlmodel + card per model (needs coremltools)
+  personal-models.py dataset.csv --export out/                  # pod JSON + card per model (+ .mlmodel with coremltools)
 """
 import argparse
 import csv
@@ -211,14 +211,63 @@ def lono(data, kind, columns):
     return kappa(y_all, p_all), per_night
 
 
+def portable(clf, kind, columns):
+    """The model as plain JSON the pod evaluates (sleepypod-core src/lib/personal-stage-model.ts):
+    forest trees as parallel arrays with four-class leaf votes, logistic as scaler plus weights."""
+    if kind == 'forest':
+        trees = []
+        for est in clf.estimators_:
+            t = est.tree_
+            classes = [int(c) for c in clf.classes_]
+            votes = []
+            for node in range(t.node_count):
+                row = [0.0] * 4
+                for k, c in enumerate(classes):
+                    row[c] = float(t.value[node][0][k])
+                votes.append(row)
+            trees.append({
+                'f': [int(f) if f >= 0 else -1 for f in t.feature],
+                't': [float(x) if f >= 0 else 0.0 for x, f in zip(t.threshold, t.feature)],
+                'l': [int(x) for x in t.children_left],
+                'r': [int(x) for x in t.children_right],
+                'v': votes,
+            })
+        return {'kind': 'forest', 'trees': trees}
+    scaler = clf.named_steps['standardscaler']
+    lr = clf.named_steps['logisticregression']
+    return {'kind': 'logistic', 'logistic': {
+        'mean': [float(x) for x in scaler.mean_], 'scale': [float(x) for x in scaler.scale_],
+        'coef': [[float(w) for w in row] for row in lr.coef_], 'intercept': [float(b) for b in lr.intercept_],
+        'classIndices': [int(c) for c in lr.classes_],
+    }}
+
+
+def evaluate_portable(doc, x):
+    """Pure-Python evaluation of the portable form, mirroring the pod's TypeScript, to verify the export."""
+    if doc['kind'] == 'forest':
+        total = [0.0] * 4
+        for tree in doc['trees']:
+            node = 0
+            while tree['f'][node] >= 0:
+                node = tree['l'][node] if x[tree['f'][node]] <= tree['t'][node] else tree['r'][node]
+            votes = tree['v'][node]
+            s = sum(votes)
+            for c in range(4):
+                total[c] += votes[c] / s if s > 0 else 0.25
+        return max(range(4), key=lambda c: total[c])
+    lr = doc['logistic']
+    z = [(v - m) / s if s else 0.0 for v, m, s in zip(x, lr['mean'], lr['scale'])]
+    scores = [sum(w * zi for w, zi in zip(row, z)) + b for row, b in zip(lr['coef'], lr['intercept'])]
+    if len(lr['classIndices']) == 2:
+        return lr['classIndices'][1] if 1 / (1 + math.exp(-scores[0])) > 0.5 else lr['classIndices'][0]
+    return lr['classIndices'][max(range(len(scores)), key=lambda i: scores[i])]
+
+
 def export(data, kind, columns, out_dir, pooled, per_night):
-    import coremltools as ct
     from pathlib import Path
     rows = oversample([r for _, night in data for r in night])
     clf = make(kind).fit(np.array([x for x, _ in rows]), np.array([y for _, y in rows]))
-    model = ct.converters.sklearn.convert(clf, columns, 'classLabel')
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    model.save(f'{out_dir}/personal-{kind}.mlmodel')
     originals = [r for _, night in data for r in night]
     stride = max(1, len(originals) // 12)
     vectors = []
@@ -226,8 +275,23 @@ def export(data, kind, columns, out_dir, pooled, per_night):
         vectors.append({'inputs': dict(zip(columns, map(float, x))), 'expected': int(clf.predict(np.array([x]))[0])})
     acc, k = pooled
     nights = len(data)
+    version = f'container-{kind}-{datetime.now(timezone.utc):%Y%m%dT%H%M}'
+    # The pod's portable form, checked against sklearn on every training row before it is written.
+    doc = {
+        'version': version, 'classes': list(STAGES), 'featureContract': columns, 'epochSeconds': EPOCH,
+        'hyperparameters': HYPER[kind], 'trainedAt': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'source': 'sleepypod-core personal-models.py',
+        'metrics': {'lono': {'epochs': len(originals), 'kappa': k, 'accuracy': acc, 'nights': nights}},
+        'testVectors': vectors, **portable(clf, kind, columns),
+    }
+    xs = np.array([x for x, _ in originals])
+    disagreements = sum(int(evaluate_portable(doc, list(map(float, x))) != int(p)) for x, p in zip(xs, clf.predict(xs)))
+    if disagreements:
+        sys.exit(f'portable {kind} disagrees with sklearn on {disagreements} of {len(originals)} rows; not written')
+    with open(f'{out_dir}/personal-{kind}.json', 'w') as f:
+        json.dump(doc, f, separators=(',', ':'))
     card = {
-        'name': f'personal-{kind}', 'version': f'container-{kind}-{datetime.now(timezone.utc):%Y%m%dT%H%M}', 'model': kind,
+        'name': f'personal-{kind}', 'version': version, 'model': kind,
         'classes': list(STAGES), 'features': columns, 'featureContract': columns, 'hyperparameters': HYPER[kind],
         'metrics': {kind: {'lono': {'epochs': len(originals), 'kappa': k, 'accuracy': acc, 'nights': nights}}},
         'training': {'dataset': 'Pod nights with Apple Watch labels, dataset.csv', 'subjects': nights},
@@ -236,7 +300,13 @@ def export(data, kind, columns, out_dir, pooled, per_night):
     }
     with open(f'{out_dir}/personal-{kind}.card.json', 'w') as f:
         json.dump(card, f, indent=2, sort_keys=True)
-    print(f'  wrote {out_dir}/personal-{kind}.mlmodel and card ({len(vectors)} test vectors)')
+    print(f'  wrote {out_dir}/personal-{kind}.json (pod form, {len(doc.get("trees", []))} trees) and card ({len(vectors)} test vectors)')
+    try:
+        import coremltools as ct
+        ct.converters.sklearn.convert(clf, columns, 'classLabel').save(f'{out_dir}/personal-{kind}.mlmodel')
+        print(f'  wrote {out_dir}/personal-{kind}.mlmodel')
+    except ImportError:
+        print('  coremltools not installed; skipped the .mlmodel (uv run --with coremltools … to include it)')
 
 
 def synthetic_night(seed=7, minutes=330):
