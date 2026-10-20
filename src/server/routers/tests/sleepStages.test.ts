@@ -490,15 +490,25 @@ describe('sleepStages router', () => {
       // Removing the model returns the side to the rules.
       await caller.setModel({ side: 'left', model: null })
       expect((await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })).stagedBy?.engine).toBe('rules')
+      // A stored model the evaluator cannot run (an unknown contract written straight to the table) falls back to the rules.
+      const main = dbHolder.main as ReturnType<typeof drizzle<typeof mainSchema>>
+      const odd = { ...model, version: 'odd', featureContract: ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction', 'extra'],
+        trees: [{ f: [4, -1, -1], t: [0, 0, 0], l: [1, -1, -1], r: [2, -1, -1], v: [[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]] }],
+        testVectors: [{ inputs: { hrZ: 0, hrStdZ: 0, motionZ: 0, nightFraction: 0, extra: -1 }, expected: 2 }] }
+      main.insert(mainSchema.sideStageModels).values({ side: 'left', model: odd, version: 'odd', uploadedAt: new Date(), active: true }).run()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect((await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })).stagedBy).toEqual({ engine: 'rules', version: null })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('personal model odd failed'))
+      warn.mockRestore()
     })
 
     it('refuses an inline model that fails its vectors and wraps unexpected failures', async () => {
       const main = dbHolder.main as ReturnType<typeof drizzle<typeof mainSchema>>
       const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
       expect((await rejectionOf(caller.previewModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
-      // A stored document that no longer validates reads back as nothing stored.
-      main.insert(mainSchema.sideStageModels).values({ side: 'right', model: { nonsense: true }, version: 'x', uploadedAt: new Date() }).run()
-      expect((await caller.getModel({ side: 'right' })).model).toBeNull()
+      // A stored document that no longer validates reads back as nothing stored, and cannot be active.
+      main.insert(mainSchema.sideStageModels).values({ side: 'right', model: { nonsense: true }, version: 'x', uploadedAt: new Date(), active: true }).run()
+      expect(await caller.getModel({ side: 'right' })).toEqual({ model: null, uploadedAt: expect.any(Number), active: false })
       expect((await rejectionOf(caller.previewModel({ side: 'right' }))).code).toBe('NOT_FOUND')
       dbHolder.bio = throwing(new Error('disk gone'))
       const error = await rejectionOf(caller.previewModel({ side: 'left', model }))

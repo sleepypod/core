@@ -124,6 +124,13 @@ describe('SleepScreen night view', () => {
     }))
     render(<SleepScreen />)
     expect(screen.getByText('Personal model').getAttribute('title')).toBe('container-forest-test')
+    cleanup()
+    state.stages.mockImplementation(() => ({
+      data: { ...stagesFor(at(22, 23, 20), 12), stagedBy: { engine: 'model', version: null } },
+      isLoading: false,
+    }))
+    render(<SleepScreen />)
+    expect(screen.getByText('Personal model').getAttribute('title')).toBeNull()
   })
 
   it('reads out the heart rate under the pointer with the epoch time', () => {
