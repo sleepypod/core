@@ -106,9 +106,9 @@ type StagedBy = z.infer<typeof stagedBySchema>
  */
 function stageNight(
   vitalsData: Parameters<typeof classifySleepStages>[0], movementData: Parameters<typeof classifySleepStages>[1],
-  calibrationQuality: number, ruleset: StageRuleset, model: StageModel | null, window: { start: Date, end: Date } | null,
+  calibrationQuality: number, ruleset: StageRuleset, model: StageModel | null, window: { start: Date, end: Date },
 ): { epochs: SleepEpoch[], stagedBy: StagedBy } {
-  if (model && window) {
+  if (model) {
     try {
       const epochs = classifyWithStageModel(model, window.start, window.end, vitalsData, movementData, ruleset)
       if (epochs.length > 0) return { epochs, stagedBy: { engine: 'model', version: model.version } }
@@ -1794,7 +1794,7 @@ export const biometricsRouter = router({
 
         // Classify stages: the side's active personal model over the record window, else the rules.
         const { epochs, stagedBy } = stageNight(vitalsData, movementData, calibrationQuality, classifier.ruleset,
-          loadActiveStageModel(input.side), sleepRecordId !== null ? { start: windowStart, end: windowEnd } : null)
+          loadActiveStageModel(input.side), { start: windowStart, end: windowEnd })
 
         if (epochs.length === 0) {
           return {
