@@ -464,5 +464,19 @@ describe('sleepStages router', () => {
       const inline = await caller.previewModel({ side: 'right', model, nights: 3 })
       expect(inline.nights).toHaveLength(0)
     })
+
+    it('refuses an inline model that fails its vectors and wraps unexpected failures', async () => {
+      const main = dbHolder.main as ReturnType<typeof drizzle<typeof mainSchema>>
+      const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
+      expect((await rejectionOf(caller.previewModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
+      // A stored document that no longer validates reads back as nothing stored.
+      main.insert(mainSchema.sideStageModels).values({ side: 'right', model: { nonsense: true }, version: 'x', uploadedAt: new Date() }).run()
+      expect((await caller.getModel({ side: 'right' })).model).toBeNull()
+      expect((await rejectionOf(caller.previewModel({ side: 'right' }))).code).toBe('NOT_FOUND')
+      dbHolder.bio = throwing(new Error('disk gone'))
+      const error = await rejectionOf(caller.previewModel({ side: 'left', model }))
+      expect(error.code).toBe('INTERNAL_SERVER_ERROR')
+      expect(error.message).toBe('Failed to preview stage model: disk gone')
+    })
   })
 })
