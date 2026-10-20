@@ -247,6 +247,16 @@ const expectedTables: Record<string, TableSpec> = {
     ],
     indexes: [],
   },
+  sideStageModels: {
+    name: 'side_stage_models',
+    columns: [
+      { name: 'side', notNull: true, default: undefined },
+      { name: 'model', notNull: true, default: undefined },
+      { name: 'version', notNull: true, default: undefined },
+      { name: 'uploaded_at', notNull: true, default: undefined },
+    ],
+    indexes: [],
+  },
   stageClassifierChanges: {
     name: 'stage_classifier_changes',
     columns: [
