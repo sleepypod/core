@@ -192,6 +192,23 @@ Two parity checks keep the container and the phone honest:
   vectors, so a converter mismatch shows up at load. Needs `coremltools`
   (`uv run --with coremltools …`).
 
+### One command on the Mac
+
+`scripts/train-personal-models.py` chains the whole thing: snapshot the pod's
+database over SSH, build the dataset, train both models on a contract with
+leave-one-night-out scoring, export the pod form, and upload the model with
+the higher pooled κ. About five seconds on Apple silicon; nothing runs on the
+phone.
+
+```sh
+scripts/train-personal-models.py --pod <pod-ip> --side left            # contract B, best model, uploaded
+scripts/train-personal-models.py --pod <pod-ip> --side left --no-upload --contract A
+scripts/train-personal-models.py --pod <pod-ip> --snapshot poddb/biometrics.db   # reuse a snapshot
+```
+
+The pod needs the model endpoints below, and the Watch stages must already be
+on it (section 2b).
+
 ### Running a model on the pod
 
 `--export out/` also writes `personal-<kind>.json`, the pod's portable form
