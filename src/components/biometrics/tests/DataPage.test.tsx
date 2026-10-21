@@ -28,6 +28,7 @@ vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     biometrics: {
       getReferenceStages: { useQuery: () => ({ data: [] }) },
+      getReferenceVitals: { useQuery: () => ({ data: [] }) },
       getReferenceSamples: { useQuery: () => ({ data: [] }) },
       getSleepRecords: { useQuery: state.sleep },
       getSleepStages: { useQuery: state.stages },

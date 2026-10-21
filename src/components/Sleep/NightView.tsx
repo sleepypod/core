@@ -7,7 +7,6 @@ import { Activity, BrainCircuit, Heart, Wind } from 'lucide-react'
 import {
   Card,
   InlineError,
-  LineChart,
   QualityRing,
   SectionLabel,
   Skeleton,
@@ -21,7 +20,6 @@ import { cn } from '@/lib/utils'
 import { SleepRecordActions } from '@/src/components/biometrics/SleepRecordActions'
 import {
   average,
-  downsample,
   formatDuration,
   formatNightLong,
   formatNightShort,
@@ -38,7 +36,7 @@ import {
   type SleepRecordRow,
 } from './sleepData'
 import { EmptyNote, NightHypnogram, qualityColor, VitalTile } from './parts'
-import { NightHrv } from './NightHrv'
+import { NightHeartRate, NightHrv } from './NightHrv'
 import { useWeekNights, useWeekRecords } from './useSleepData'
 
 interface NightViewProps {
@@ -95,9 +93,6 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       distribution: stages?.distribution,
       stagedBy: stages?.stagedBy,
       date: key && record ? keyToDate(key) : start != null ? keyToDate(toNightKey(new Date(start))) : key ? keyToDate(key) : null,
-      hr: downsample(epochs.map(e => e.heartRate)),
-      // Same chunking as `hr`, over the epochs that have a reading, so each point knows its time.
-      hrTimes: downsample(epochs.filter(e => e.heartRate != null).map(e => e.start)),
       avgHr: average(epochs.map(e => e.heartRate)),
       avgHrv: average(epochs.map(e => e.hrv)),
       avgBr: average(epochs.map(e => e.breathingRate)),
@@ -112,7 +107,6 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
 
   const selectedKey = key ?? (night.start != null ? toNightKey(new Date(night.start)) : null)
   const round = (v: number | null) => (v == null ? '—' : Math.round(v))
-  const hrValues = epochsHr(night.epochs)
 
   return (
     <div className="grid items-start gap-4 @min-[960px]:grid-cols-[minmax(0,1fr)_300px]">
@@ -130,29 +124,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
 
         {referenceQuery.error && <InlineError>Could not load Apple Watch sleep stages.</InlineError>}
         {night.start != null && night.end != null && <NightHrv side={side} start={night.start} end={night.end} epochs={night.epochs} />}
-        <Card className="gap-2.5 px-5">
-          <SectionLabel right={hrValues.length > 0 && (
-            <span className="font-mono">
-              {`min ${Math.round(Math.min(...hrValues))} · avg ${round(night.avgHr)} · max ${Math.round(Math.max(...hrValues))} bpm`}
-            </span>
-          )}
-          >
-            <span className="min-[900px]:hidden">Heart rate</span>
-            <span className="max-[899px]:hidden">Heart rate through the night</span>
-          </SectionLabel>
-          {loading
-            ? <div className="h-24 animate-pulse rounded-ctl bg-active" />
-            : hrValues.length > 1
-              ? (
-                  <LineChart
-                    series={[{ data: night.hr, color: 'var(--chart-hr)', fill: true, width: 1.5 }]}
-                    height={96}
-                    xLabel={i => (night.hrTimes[i] != null ? formatClock(new Date(night.hrTimes[i]), { hour: 'numeric', minute: '2-digit' }) : '')}
-                    format={v => `${Math.round(v)} bpm`}
-                  />
-                )
-              : <EmptyNote className="h-24 py-0">No heart-rate data for this night</EmptyNote>}
-        </Card>
+        {night.start != null && night.end != null && <NightHeartRate side={side} start={night.start} end={night.end} epochs={night.epochs} />}
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
@@ -193,10 +165,6 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       </div>
     </div>
   )
-}
-
-function epochsHr(epochs: Array<{ heartRate: number | null }>): number[] {
-  return epochs.map(e => e.heartRate).filter((v): v is number => v != null)
 }
 
 interface Night {
