@@ -98,13 +98,14 @@ export function referenceRuns(points: ReferencePoint[], gapMs = REFERENCE_GAP_MS
 const REFERENCE_TOL_MS = 5 * 60_000
 const REFERENCE_STROKE = 'var(--text-2)'
 
-export function VitalsChart({ sessions, stall, bands, reference = [], movement = [], onSelectWindow }: {
+export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], movement = [], onSelectWindow }: {
   sessions: Session[]
   /** In bed with no vitals: from the last reading to now. */
   stall: { start: number, end: number } | null
   bands: Record<MetricKey, Band>
   /** Imported Apple Watch heart rate, time-sorted. */
   reference?: ReferencePoint[]
+  referenceHrv?: Array<{ t: number, value: number }>
   movement?: Array<{ bucketStart: Date, eventCount: number }>
   onSelectWindow?: (window: RangeWindow) => void
 }) {
@@ -164,6 +165,11 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
             </g>
           )
         })}
+        {referenceHrv.filter(p => p.t >= session.start && p.t <= session.end).map((p, i) => (
+          <circle key={`hrv-${i}`} data-testid="vitals-watch-hrv" cx={axis.xOf(seg, p.t)} cy={yOf(1, p.value)} r={4} fill="var(--status-ok)" stroke="var(--surface-card)" strokeWidth={1}>
+            <title>{`Apple Watch SDNN · ${Math.round(p.value)} ms`}</title>
+          </circle>
+        ))}
         {referenceBySession[seg.index]?.length > 0 && (() => {
           // Lift the pen across sampling gaps (Watch taken off) and
           // mark samples with no neighbour, which a path cannot show.
@@ -199,7 +205,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
         })()}
       </g>
     )
-  }), [axis, sessions, bands, smooth, referenceBySession])
+  }), [axis, sessions, bands, smooth, referenceBySession, referenceHrv])
 
   return (
     <div ref={wrapRef} className="relative w-full" style={{ height: HEAD_H + PLOT_H + AXIS_H }} data-testid="vitals-chart">
@@ -370,13 +376,19 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
   )
 }
 
-export function VitalsLegend({ bandLabel, stalled, reference = false }: { bandLabel: string, stalled: boolean, reference?: boolean }) {
+export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-fg-2">
       <span className="flex items-center gap-2">
         <span className="h-0.5 w-4 rounded bg-fg-2" />
         9-min average
       </span>
+      {referenceHrv && (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-ok" />
+          Apple Watch HRV · SDNN
+        </span>
+      )}
       {reference && (
         <span className="flex items-center gap-2">
           <span className="h-0 w-4 border-t border-dashed border-fg-2" />

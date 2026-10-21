@@ -217,3 +217,21 @@ it('cancels selection and leaves touch, secondary-click, and Shift gestures unse
   fireEvent.pointerLeave(overlay, { pointerType: 'mouse' })
   expect(screen.queryByTestId('vitals-reference-hover')).toBeNull()
 })
+
+it('draws Watch HRV as distinct samples only within the visible sessions', () => {
+  withWidth()
+  render(
+    <VitalsChart
+      sessions={sessions}
+      stall={null}
+      bands={bands}
+      referenceHrv={[
+        { t: START + 10 * MIN, value: 35 },
+        { t: START + 4 * 60 * MIN, value: 80 },
+      ]}
+    />
+  )
+  const dot = screen.getByTestId('vitals-watch-hrv')
+  expect(dot.getAttribute('fill')).toBe('var(--status-ok)')
+  expect(dot.textContent).toBe('Apple Watch SDNN · 35 ms')
+})
