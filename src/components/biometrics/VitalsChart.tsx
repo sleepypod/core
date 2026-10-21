@@ -96,9 +96,9 @@ export function referenceRuns(points: ReferencePoint[], gapMs = REFERENCE_GAP_MS
 }
 
 const REFERENCE_TOL_MS = 5 * 60_000
-const REFERENCE_STROKE = 'var(--text-2)'
+const REFERENCE_STROKE = 'var(--text-1)'
 
-export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], movement = [], onSelectWindow }: {
+export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceBr = [], movement = [], onSelectWindow }: {
   sessions: Session[]
   /** In bed with no vitals: from the last reading to now. */
   stall: { start: number, end: number } | null
@@ -106,6 +106,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   /** Imported Apple Watch heart rate, time-sorted. */
   reference?: ReferencePoint[]
   referenceHrv?: Array<{ t: number, value: number }>
+  referenceBr?: Array<{ t: number, value: number }>
   movement?: Array<{ bucketStart: Date, eventCount: number }>
   onSelectWindow?: (window: RangeWindow) => void
 }) {
@@ -166,8 +167,13 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
           )
         })}
         {referenceHrv.filter(p => p.t >= session.start && p.t <= session.end).map((p, i) => (
-          <circle key={`hrv-${i}`} data-testid="vitals-watch-hrv" cx={axis.xOf(seg, p.t)} cy={yOf(1, p.value)} r={4} fill="var(--status-ok)" stroke="var(--surface-card)" strokeWidth={1}>
+          <circle key={`hrv-${i}`} data-testid="vitals-watch-hrv" cx={axis.xOf(seg, p.t)} cy={yOf(1, p.value)} r={4} fill="var(--surface-card)" stroke="var(--chart-vital-hrv)" strokeWidth={2}>
             <title>{`Apple Watch SDNN · ${Math.round(p.value)} ms`}</title>
+          </circle>
+        ))}
+        {referenceBr.filter(p => p.t >= session.start && p.t <= session.end).map((p, i) => (
+          <circle key={`br-${i}`} data-testid="vitals-watch-br" cx={axis.xOf(seg, p.t)} cy={yOf(2, p.value)} r={4} fill="var(--surface-card)" stroke="var(--chart-vital-br)" strokeWidth={2}>
+            <title>{`Apple Watch breathing · ${p.value.toFixed(1)} br/min`}</title>
           </circle>
         ))}
         {referenceBySession[seg.index]?.length > 0 && (() => {
@@ -205,7 +211,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
         })()}
       </g>
     )
-  }), [axis, sessions, bands, smooth, referenceBySession, referenceHrv])
+  }), [axis, sessions, bands, smooth, referenceBySession, referenceHrv, referenceBr])
 
   return (
     <div ref={wrapRef} className="relative w-full" style={{ height: HEAD_H + PLOT_H + AXIS_H }} data-testid="vitals-chart">
@@ -376,7 +382,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   )
 }
 
-export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean }) {
+export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceBr = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean, referenceBr?: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-fg-2">
       <span className="flex items-center gap-2">
@@ -385,13 +391,19 @@ export function VitalsLegend({ bandLabel, stalled, reference = false, referenceH
       </span>
       {referenceHrv && (
         <span className="inline-flex items-center gap-1.5">
-          <span className="size-2 rounded-full bg-ok" />
+          <span className="size-2 rounded-full border-2 border-vital-hrv" />
           Apple Watch HRV · SDNN
+        </span>
+      )}
+      {referenceBr && (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-2 rounded-full border-2 border-vital-br" />
+          Apple Watch breathing
         </span>
       )}
       {reference && (
         <span className="flex items-center gap-2">
-          <span className="h-0 w-4 border-t border-dashed border-fg-2" />
+          <span className="h-0 w-4 border-t border-dashed border-fg" />
           Apple Watch heart rate
         </span>
       )}

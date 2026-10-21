@@ -232,6 +232,15 @@ it('draws Watch HRV as distinct samples only within the visible sessions', () =>
     />
   )
   const dot = screen.getByTestId('vitals-watch-hrv')
-  expect(dot.getAttribute('fill')).toBe('var(--status-ok)')
+  expect(dot.getAttribute('stroke')).toBe('var(--chart-vital-hrv)')
   expect(dot.textContent).toBe('Apple Watch SDNN · 35 ms')
+})
+
+it('uses the breathing color for round Watch breathing samples', () => {
+  withWidth()
+  render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceBr={[{ t: START + 10 * MIN, value: 14.5 }]} />)
+  const dot = screen.getByTestId('vitals-watch-br')
+  expect(dot.tagName).toBe('circle')
+  expect(dot.getAttribute('stroke')).toBe('var(--chart-vital-br)')
+  expect(dot.textContent).toBe('Apple Watch breathing · 14.5 br/min')
 })

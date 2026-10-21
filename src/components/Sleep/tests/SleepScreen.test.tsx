@@ -46,6 +46,7 @@ vi.mock('@/src/utils/trpc', () => ({
     settings: { getAll: { useQuery: () => ({ data: undefined }) } },
   },
 }))
+vi.mock('../NightVitals', () => ({ NightVitals: ({ side, start, end }: { side: string, start: number, end: number }) => <div data-testid="night-vitals">{`${side}:${start}:${end}`}</div> }))
 vi.mock('@/src/components/MovementChart/MovementChart', () => ({ MovementChart: () => <div data-testid="movement" /> }))
 vi.mock('@/src/components/biometrics/RawDataButton', () => ({ RawDataButton: () => <div data-testid="raw-data" /> }))
 vi.mock('@/src/components/biometrics/SleepRecordActions', () => ({
@@ -114,7 +115,7 @@ describe('SleepScreen night view', () => {
     // Asleep excludes the awake epoch (3 × 5 min).
     expect(screen.getByText('Asleep').nextSibling?.textContent).toBe('15m')
     expect(screen.getByText('Bed exits').nextSibling?.textContent).toBe('1')
-    expect(screen.getByText('min 54 · avg 63 · max 70 bpm')).toBeTruthy()
+    expect(screen.getByTestId('night-vitals').textContent).toContain('left:')
     expect(screen.getByTestId('record-actions').textContent).toBe('12')
     expect(screen.getByTestId('raw-data')).toBeTruthy()
   })
@@ -136,18 +137,6 @@ describe('SleepScreen night view', () => {
     }))
     render(<SleepScreen />)
     expect(screen.getByText('Personal model').getAttribute('title')).toBeNull()
-  })
-
-  it('reads out the heart rate under the pointer with the epoch time', () => {
-    render(<SleepScreen />)
-    const box = screen.getByTestId('night-hr-plot')
-    vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 300, height: 96, right: 300, bottom: 96, toJSON: () => ({}) })
-    fireEvent.pointerMove(box, { clientX: 0, clientY: 10 })
-    expect(screen.getByTestId('chart-hover').textContent).toBe('11:20 PM · 70 bpm')
-    fireEvent.pointerMove(box, { clientX: 300, clientY: 10 })
-    expect(screen.getByTestId('chart-hover').textContent).toBe('11:35 PM · 66 bpm')
-    fireEvent.pointerLeave(box)
-    expect(screen.queryByTestId('chart-hover')).toBeNull()
   })
 
   it('opens another night from the This week bars', () => {

@@ -36,7 +36,7 @@ import {
   type SleepRecordRow,
 } from './sleepData'
 import { EmptyNote, NightHypnogram, qualityColor, VitalTile } from './parts'
-import { NightHeartRate, NightHrv } from './NightHrv'
+import { NightVitals } from './NightVitals'
 import { useWeekNights, useWeekRecords } from './useSleepData'
 
 interface NightViewProps {
@@ -123,8 +123,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
             )}
 
         {referenceQuery.error && <InlineError>Could not load Apple Watch sleep stages.</InlineError>}
-        {night.start != null && night.end != null && <NightHrv side={side} start={night.start} end={night.end} epochs={night.epochs} />}
-        {night.start != null && night.end != null && <NightHeartRate side={side} start={night.start} end={night.end} epochs={night.epochs} />}
+        {night.start != null && night.end != null && <NightVitals side={side} start={night.start} end={night.end} />}
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
