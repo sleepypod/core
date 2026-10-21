@@ -723,7 +723,7 @@ describe('SleepStageRules', () => {
       }
       render(<SleepStageRules side="left" onSideChange={() => {}} />)
       expect(screen.getByText('container-forest-test')).toBeTruthy()
-      expect(screen.getByText(/κ 0\.25/)).toBeTruthy()
+      expect(screen.getByLabelText('κ 0.25')).toBeTruthy()
       fireEvent.click(screen.getByRole('switch', { name: 'Stage nights with this model' }))
       expect(trpcMock.activeMutate).toHaveBeenCalledWith({ side: 'left', active: true })
     })

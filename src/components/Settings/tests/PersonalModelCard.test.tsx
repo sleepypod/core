@@ -25,7 +25,7 @@ const model = {
 function choose(contents: string) {
   const file = new File([contents], 'candidate.json', { type: 'application/json' })
   Object.defineProperty(file, 'text', { value: () => Promise.resolve(contents) })
-  fireEvent.change(screen.getByLabelText('Upload model JSON'), { target: { files: [file] } })
+  fireEvent.change(screen.getByLabelText('Upload model'), { target: { files: [file] } })
 }
 beforeEach(() => {
   vi.clearAllMocks()
@@ -57,9 +57,9 @@ it('requires an explicit action after choosing a saved model', () => {
     { id: 2, version: 'two', kind: 'forest', selected: false, active: false },
   ]
   render(<PersonalModelCard side="left" />)
-  fireEvent.change(screen.getByLabelText('Saved models'), { target: { value: '2' } })
+  fireEvent.click(screen.getByRole('radio', { name: 'two' }))
   expect(mock.select).not.toHaveBeenCalled()
-  expect(screen.getByText('two').tagName).toBe('CODE')
+  expect(screen.getAllByText('two')[0].tagName).toBe('CODE')
   fireEvent.click(screen.getByRole('button', { name: 'Use this model' }))
   expect(mock.select).toHaveBeenCalledWith({ side: 'left', id: 2, active: true })
 })

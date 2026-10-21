@@ -1,12 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { stageModelSchema } from '@/src/lib/personal-stage-model'
 import { Button, Card, CardHeader, InlineError, Toggle } from '@/src/components/ds'
 
+import { ModelScorecard, modelScore } from './ModelScorecard'
+
 /** Uploads only save candidates. Activation is a separate, explicit user action. */
 export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
+  const fileInput = useRef<HTMLInputElement>(null)
   const utils = trpc.useUtils()
   const model = trpc.sleepStages.getModel.useQuery({ side })
   const library = trpc.sleepStages.listModels.useQuery({ side })
@@ -34,10 +37,9 @@ export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
   const selected = models.find(m => String(m.id) === selectedId)
   const stored = model.data?.model
   const busy = reading || upload.isPending || select.isPending || activate.isPending
-  const metrics = selected?.metrics ?? stored?.metrics
-  const score = metrics?.lono as { kappa?: number, nights?: number } | undefined
-  const kappa = typeof score?.kappa === 'number' && Number.isFinite(score.kappa) ? score.kappa.toFixed(2) : null
-  const version = selected?.version ?? stored?.version
+  const metrics = choice === 'rules' ? undefined : selected ? selected.metrics : stored?.metrics
+  const score = modelScore(metrics)
+  const version = choice === 'rules' ? 'Rules only' : selected?.version ?? stored?.version
   const kind = selected?.kind ?? stored?.kind
   const error = fileError ?? upload.error?.message ?? select.error?.message ?? activate.error?.message ?? library.error?.message ?? model.error?.message
 
@@ -63,110 +65,97 @@ export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
   }
 
   return (
-    <Card className="gap-3 p-4">
-      <CardHeader
-        title="Personal model"
-        right={stored && (!selected || selected.selected) && (
-          <Toggle
-            on={model.data?.active ?? false}
-            disabled={busy}
-            label="Stage nights with this model"
-            onChange={(active) => {
-              setMessage(null)
-              activate.mutate({ side, active })
-            }}
-          />
-        )}
-      />
-      <p className="text-sm text-fg-2">
+    <Card className="@container gap-5 p-5 min-[900px]:p-7">
+      <CardHeader title="Staging model" right={<Button size="sm" disabled={busy || library.isLoading || model.isLoading} onClick={() => fileInput.current?.click()}>Upload model</Button>} />
+      <p className="-mt-3 text-sm text-fg-2">
         {version
           ? (
               <>
-                {kind === 'forest' ? 'Random forest' : 'Logistic regression'}
-                {' '}
-                <code className="break-all rounded bg-field px-1 font-mono">{version}</code>
-                {kappa !== null && (
-                  <>
-                    {' '}
-                    ·
-                    <code className="rounded bg-field px-1 font-mono">
-                      {`κ ${kappa}`}
-                    </code>
-                    {' '}
-                    against the Watch, held out
-                    {score?.nights ? ` over ${score.nights} nights` : ''}
-                  </>
-                )}
+                <code className="break-all font-mono text-fg">{version}</code>
+                {choice !== 'rules' && ` · ${kind === 'forest' ? 'Random forest' : 'Logistic regression'}${score.nights ? ` · ${score.nights} held-out nights` : ''}`}
               </>
             )
-          : 'None stored. Upload candidate.json from a training run to get started.'}
+          : 'None stored. Upload a model from a training run to get started.'}
       </p>
-      {kappa !== null && <p className="text-xs text-fg-2">κ (kappa) measures agreement with Watch stages after accounting for chance. 1 is perfect agreement, 0 is chance-level agreement; negative values are worse than chance. This is not a measure of clinical accuracy.</p>}
-      {models.length > 0 && (
-        <div className="flex flex-wrap items-end gap-2">
-          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
-            Saved models
-            <select
-              aria-label="Saved models"
-              className="w-full min-w-0 rounded border border-line-2 bg-field p-2"
-              value={selectedId}
+      {version && choice !== 'rules' && <ModelScorecard metrics={metrics} />}
+      <div className="border-t border-line pt-5">
+        <p className="mb-3 text-xs uppercase tracking-wider text-fg-3">Switch model</p>
+        <div role="radiogroup" aria-label="Saved models" className="flex flex-col gap-1">
+          {models.map(m => (
+            <label key={m.id} className={`flex cursor-pointer items-center gap-3 rounded-ctl px-3 py-3 text-sm ${String(m.id) === selectedId ? 'bg-active' : ''}`}>
+              <input
+                type="radio"
+                name={`model-${side}`}
+                value={m.id}
+                checked={String(m.id) === selectedId}
+                disabled={busy}
+                onChange={() => {
+                  setChoice(String(m.id))
+                  setMessage(null)
+                }}
+                aria-label={m.version}
+              />
+              <code className="min-w-0 flex-1 break-all font-mono">{m.version}</code>
+              <code className="font-mono">{modelScore(m.metrics).kappa?.toFixed(2) ?? '—'}</code>
+              <span className="w-16 text-right text-xs text-ok">{m.active ? 'Active' : ''}</span>
+            </label>
+          ))}
+          <label className={`flex cursor-pointer items-center gap-3 rounded-ctl px-3 py-3 text-sm ${choice === 'rules' ? 'bg-active' : ''}`}>
+            <input
+              type="radio"
+              name={`model-${side}`}
+              value="rules"
+              checked={choice === 'rules'}
               disabled={busy}
-              onChange={(event) => {
-                setChoice(event.target.value)
+              onChange={() => {
+                setChoice('rules')
                 setMessage(null)
               }}
-            >
-              {models.map(m => (
-                <option key={m.id} value={m.id}>
-                  {m.version}
-                  {' '}
-                  · #
-                  {m.id}
-                  {m.active ? ' · Active' : m.selected ? ' · Selected, off' : ''}
-                </option>
-              ))}
-            </select>
+            />
+            <span className="flex-1">Rules only</span>
+            <span className="text-xs text-fg-2">{model.data?.active ? 'Fallback' : 'Active'}</span>
           </label>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-fg-3">Choose a model to review its scores, then apply it.</p>
           <Button
             size="sm"
-            disabled={busy || !selected || selected.active}
+            disabled={busy || (choice === 'rules' ? !model.data?.active : !selected || selected.active)}
             onClick={() => {
-              if (selected) select.mutate({ side, id: selected.id, active: true })
+              if (choice === 'rules') activate.mutate({ side, active: false })
+              else if (selected) select.mutate({ side, id: selected.id, active: true })
             }}
           >
-            Use this model
+            {choice === 'rules' ? 'Use rules only' : 'Use this model'}
           </Button>
         </div>
-      )}
-      <label className="flex flex-col gap-1 text-sm">
-        Upload model JSON
-        <input
-          aria-label="Upload model JSON"
-          type="file"
-          accept=".json,application/json"
-          disabled={busy || library.isLoading || model.isLoading}
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            event.target.value = ''
-            if (file) void readFile(file)
+      </div>
+      <input
+        ref={fileInput}
+        className="sr-only"
+        aria-label="Upload model"
+        type="file"
+        accept=".json,application/json"
+        disabled={busy || library.isLoading || model.isLoading}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file) void readFile(file)
+        }}
+      />
+      {stored && (!selected || selected.selected) && choice !== 'rules' && (
+        <Toggle
+          on={model.data?.active ?? false}
+          disabled={busy}
+          label="Stage nights with this model"
+          onChange={(active) => {
+            setMessage(null)
+            activate.mutate({ side, active })
           }}
         />
-      </label>
-      <p className="text-xs text-fg-2">Uploads are saved for this side without replacing or activating another model.</p>
-      {stored && (
-        <p className="text-xs text-fg-2">
-          {model.data?.active
-            ? (
-                <>
-                  Nights are staged by
-                  {' '}
-                  <code className="break-all font-mono">{stored.version}</code>
-                  ; the rules below are the fallback when it cannot stage a night.
-                </>
-              )
-            : 'Off: nights are staged by the rules below. Turn on to stage with the selected model instead; the rules remain the fallback.'}
-        </p>
       )}
+      <p className="text-xs text-fg-2">Uploads are saved for this side without replacing or activating another model.</p>
+      {stored && <p className="text-xs text-fg-2">{model.data?.active ? 'Nights are staged by the active model; the rules below are the fallback when it cannot stage a night.' : 'Nights are staged by the rules below. Activate a model to use it instead.'}</p>}
       {message && <p role="status" className="text-sm">{message}</p>}
       {error && <InlineError>{error}</InlineError>}
     </Card>
