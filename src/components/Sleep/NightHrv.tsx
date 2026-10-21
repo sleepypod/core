@@ -31,7 +31,7 @@ export function NightHrv({ side, start, end, epochs }: {
                   ? <line key={p.start} x1={x(prev.start)} y1={y(prev.hrv)} x2={x(p.start)} y2={y(p.hrv)} stroke="var(--chart-hr)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                   : <circle key={p.start} cx={x(p.start)} cy={y(p.hrv)} r={2} fill="var(--chart-hr)" />
               })}
-              {samples.map((p, i) => <circle key={i} cx={x(p.start)} cy={y(p.hrv)} r={3} className="fill-fg"><title>{`${formatClock(p.start)} · Watch SDNN ${Math.round(p.hrv)} ms`}</title></circle>)}
+              {samples.map((p, i) => <circle key={i} cx={x(p.start)} cy={y(p.hrv)} r={5} fill="var(--status-ok)" stroke="var(--surface)" strokeWidth={1.5} vectorEffect="non-scaling-stroke"><title>{`${formatClock(p.start)} · Watch SDNN ${Math.round(p.hrv)} ms`}</title></circle>)}
             </svg>
           )
         : <p className="py-6 text-center text-xs text-fg-2">{watch.isLoading ? 'Loading HRV…' : 'No HRV data for this night'}</p>}
@@ -42,7 +42,12 @@ export function NightHrv({ side, start, end, epochs }: {
       </div>
       <div className="flex flex-wrap gap-4 text-xs text-fg-2">
         <span>Colored line · sleepypod HRV</span>
-        {samples.length > 0 && <span>Dots · Apple Watch SDNN</span>}
+        {samples.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-fg">
+            <span className="size-2.5 rounded-full bg-ok" aria-hidden="true" />
+            {`Apple Watch SDNN · ${samples.length} samples`}
+          </span>
+        )}
       </div>
       {samples.length > 0 && <p className="text-xs text-fg-3">SDNN measures variation between heartbeats. Watch samples are intermittent; the pod may use a different HRV method, so values are not always directly comparable.</p>}
     </Card>

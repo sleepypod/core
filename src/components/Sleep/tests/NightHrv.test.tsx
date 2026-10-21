@@ -12,7 +12,7 @@ it('places intermittent Watch samples by timestamp and requests the selected sid
   render(<NightHrv side="right" start={0} end={10000} epochs={[]} />)
   const dots = screen.getByRole('img').querySelectorAll('circle')
   expect([...dots].map(p => p.getAttribute('cx'))).toEqual(['250', '750'])
-  expect(screen.getByText('Dots · Apple Watch SDNN')).toBeTruthy()
+  expect(screen.getByText('Apple Watch SDNN · 2 samples')).toBeTruthy()
   expect(query).toHaveBeenCalledWith(expect.objectContaining({ side: 'right', metric: 'hrv_sdnn' }))
 })
 it('keeps the pod chart visible when Watch loading fails', () => {
@@ -20,7 +20,7 @@ it('keeps the pod chart visible when Watch loading fails', () => {
   render(<NightHrv side="left" start={0} end={10000} epochs={[{ start: 100, hrv: 30 }]} />)
   expect(screen.getByRole('img')).toBeTruthy()
   expect(screen.getByText('Could not load Apple Watch HRV.')).toBeTruthy()
-  expect(screen.queryByText('Dots · Apple Watch SDNN')).toBeNull()
+  expect(screen.queryByText(/Apple Watch SDNN ·/)).toBeNull()
 })
 it('connects adjacent stage transitions but never bridges missing Watch intervals', () => {
   render(
