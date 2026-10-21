@@ -225,6 +225,13 @@
       "when": 1792538319908,
       "tag": "0031_side_stage_models_active",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1792617694402,
+      "tag": "0032_curious_robin_chapel",
+      "breakpoints": true
     }
   ]
 }

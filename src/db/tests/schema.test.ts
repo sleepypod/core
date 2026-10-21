@@ -483,7 +483,7 @@ describe('db schema definitions', () => {
     // exercised against real migrations by the profile repository tests.
     expect(actualTableExports).toEqual([...Object.keys(expectedTables),
       'biometricProfileRevisions', 'biometricProfileBindings',
-      'biometricActivationEvents', 'biometricConfigOutbox',
+      'biometricActivationEvents', 'biometricConfigOutbox', 'stageModelLibrary',
     ].sort())
   })
 })

@@ -423,6 +423,45 @@ describe('sleepStages router', () => {
       ],
     }
 
+    it('keeps multiple uploads without changing staging, deduplicates, and switches per side', async () => {
+      const first = await caller.uploadModel({ side: 'left', model })
+      expect(await caller.uploadModel({ side: 'left', model })).toEqual(first)
+      expect((await caller.getModel({ side: 'left' })).model).toBeNull()
+      await caller.selectModel({ side: 'left', id: first.id, active: true })
+      const second = await caller.uploadModel({ side: 'left', model: { ...model, version: 'second' } })
+      expect((await caller.getModel({ side: 'left' })).model?.version).toBe('test-forest')
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+      expect(await caller.listModels({ side: 'right' })).toEqual([])
+      expect((await rejectionOf(caller.selectModel({ side: 'right', id: first.id, active: true }))).code).toBe('NOT_FOUND')
+      await caller.selectModel({ side: 'left', id: second.id, active: true })
+      const list = await caller.listModels({ side: 'left' })
+      expect(list).toHaveLength(2)
+      expect(list.filter(m => m.active).map(m => m.version)).toEqual(['second'])
+      await caller.selectModel({ side: 'left', id: first.id, active: false })
+      expect((await caller.getModel({ side: 'left' })).active).toBe(false)
+      expect((await caller.getModel({ side: 'left' })).model?.version).toBe('test-forest')
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(2)
+    })
+
+    it('rejects invalid library uploads without storing a candidate or changing the active model', async () => {
+      await caller.setModel({ side: 'left', model })
+      await caller.setModelActive({ side: 'left', active: true })
+      const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
+      expect((await rejectionOf(caller.uploadModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(1)
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+    })
+
+    it('archives legacy uploads and preserves the existing active-state contract', async () => {
+      await caller.setModel({ side: 'left', model })
+      await caller.setModelActive({ side: 'left', active: true })
+      await caller.setModel({ side: 'left', model: { ...model, version: 'legacy replacement' } })
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(2)
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+      await caller.setModel({ side: 'left', model: null })
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(2)
+    })
+
     it('stores a validated model per side and removes it with null', async () => {
       expect(await caller.getModel({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false })
       const stored = await caller.setModel({ side: 'left', model })

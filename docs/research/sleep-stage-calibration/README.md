@@ -263,3 +263,33 @@ The Python Modules CI workflow runs them on every PR that touches
 `scripts/**/*.py`. The tests use small synthetic fixtures, not a real export. When
 `src/lib/sleep-stages.ts` changes, update the port in the script and the
 classifier cases in the test, which mirror `src/lib/tests/sleep-stages.test.ts`.
+
+
+### Saved model library
+
+Settings → Sleep stages now offers **Upload model JSON** even when no model is
+stored. Upload `candidate.json` from a training run, choose an entry in **Saved
+models**, then press **Use this model** to activate it for the current side.
+Choosing a dropdown entry alone does not switch staging. Uploads save candidates
+without changing the active model, and identical uploads reuse the same entry.
+The model version and held-out κ are displayed as inline code; κ includes an
+explanation. The existing toggle returns the selected model to rules-only staging.
+
+The library is separate for each side. Existing models are copied into it during
+migration without changing their active state. It is stored in the configuration
+database and included with its normal backups.
+
+| Method / path | Request | Behavior |
+| --- | --- | --- |
+| `GET /api/sleep-stages/models` | `?side=left` | List summaries, IDs, selected/active state, and recorded metrics |
+| `POST /api/sleep-stages/models` | `{side, model}` | Validate and save a candidate; return its ID without activation |
+| `PUT /api/sleep-stages/models/selected` | `{side, id, active}` | Select a saved model and explicitly set activation |
+
+The original singular `/api/sleep-stages/model` routes remain compatible with
+existing clients. Singular PUT still selects/replaces the per-side slot and
+preserves its active state, but also archives the old and new model in the
+library. Singular PUT with `model: null` clears the selection without deleting
+saved candidates. Use the plural POST route when an upload must not affect
+staging. Models are validated against known feature contracts and their test
+vectors before upload or selection. These retrospective models do not establish
+prospective or clinical validity.

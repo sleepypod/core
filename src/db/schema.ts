@@ -134,6 +134,15 @@ export const sideStageModels = sqliteTable('side_stage_models', {
   active: integer('active', { mode: 'boolean' }).notNull().default(false),
 })
 
+/** Saved candidates; the legacy per-side row remains the selected model for existing clients. */
+export const stageModelLibrary = sqliteTable('stage_model_library', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  model: text('model', { mode: 'json' }).notNull(),
+  version: text('version').notNull(),
+  uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+}, table => [index('stage_model_library_side_idx').on(table.side)])
+
 export const stageClassifierChanges = sqliteTable('stage_classifier_changes', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
