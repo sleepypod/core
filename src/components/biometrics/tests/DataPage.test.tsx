@@ -27,6 +27,8 @@ vi.mock('@/src/hooks/useWeekNavigator', () => ({
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     biometrics: {
+      getReferenceStages: { useQuery: () => ({ data: [] }) },
+      getReferenceSamples: { useQuery: () => ({ data: [] }) },
       getSleepRecords: { useQuery: state.sleep },
       getSleepStages: { useQuery: state.stages },
       getVitals: { useQuery: state.vitals },
