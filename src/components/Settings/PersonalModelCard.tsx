@@ -85,6 +85,7 @@ export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
             <label key={m.id} className={`flex cursor-pointer items-center gap-3 rounded-ctl px-3 py-3 text-sm ${String(m.id) === selectedId ? 'bg-active' : ''}`}>
               <input
                 type="radio"
+                className="accent-[var(--status-ok)]"
                 name={`model-${side}`}
                 value={m.id}
                 checked={String(m.id) === selectedId}
@@ -103,6 +104,7 @@ export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
           <label className={`flex cursor-pointer items-center gap-3 rounded-ctl px-3 py-3 text-sm ${choice === 'rules' ? 'bg-active' : ''}`}>
             <input
               type="radio"
+              className="accent-[var(--status-ok)]"
               name={`model-${side}`}
               value="rules"
               checked={choice === 'rules'}
@@ -144,15 +146,18 @@ export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
         }}
       />
       {stored && (!selected || selected.selected) && choice !== 'rules' && (
-        <Toggle
-          on={model.data?.active ?? false}
-          disabled={busy}
-          label="Stage nights with this model"
-          onChange={(active) => {
-            setMessage(null)
-            activate.mutate({ side, active })
-          }}
-        />
+        <div className="flex items-center gap-2 text-sm">
+          <span>Stage nights with this model</span>
+          <Toggle
+            on={model.data?.active ?? false}
+            disabled={busy}
+            label="Stage nights with this model"
+            onChange={(active) => {
+              setMessage(null)
+              activate.mutate({ side, active })
+            }}
+          />
+        </div>
       )}
       <p className="text-xs text-fg-2">Uploads are saved for this side without replacing or activating another model.</p>
       {stored && <p className="text-xs text-fg-2">{model.data?.active ? 'Nights are staged by the active model; the rules below are the fallback when it cannot stage a night.' : 'Nights are staged by the rules below. Activate a model to use it instead.'}</p>}

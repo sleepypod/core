@@ -101,15 +101,19 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
       {(query.data.pending?.warning ?? query.data.provenance?.warning) && (
         <InlineError>{query.data.pending?.warning ?? query.data.provenance?.warning}</InlineError>
       )}
-      <PersonalModelCard key={side} side={side} />
-      {/* Toolbar: profile, state, preset, reset */}
-      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[13px]">
+      <div className="flex flex-wrap items-center gap-3">
         <SegmentedControl
           ariaLabel="Stage rules side"
           value={side}
           options={[{ value: 'left', label: leftName }, { value: 'right', label: rightName }]}
           onChange={onSideChange}
         />
+        <span className="text-sm text-fg-2">{`Models and rules below apply to ${side === 'left' ? leftName : rightName}’s side`}</span>
+      </div>
+      <PersonalModelCard key={side} side={side} />
+      {/* Toolbar: profile, state, preset, reset */}
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[13px]">
+
         <span className="text-fg-2">
           {`Profile: ${isDefault ? 'System defaults' : 'Custom rules'}`}
           {lastChange && ` · changed ${shortDate(lastChange.changedAt)}`}
