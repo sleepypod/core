@@ -85,8 +85,8 @@ export function nearestReference(points: ReferencePoint[], t: number, tolMs = RE
 export const REFERENCE_GAP_MS = 15 * 60_000
 
 /** Time-sorted samples split into runs with no gap over `gapMs`. */
-export function referenceRuns(points: ReferencePoint[], gapMs = REFERENCE_GAP_MS): ReferencePoint[][] {
-  const runs: ReferencePoint[][] = []
+export function referenceRuns<T extends { t: number }>(points: T[], gapMs = REFERENCE_GAP_MS): T[][] {
+  const runs: T[][] = []
   for (const p of points) {
     const run = runs[runs.length - 1]
     if (run && p.t - run[run.length - 1].t <= gapMs) run.push(p)
@@ -166,15 +166,24 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
             </g>
           )
         })}
-        {referenceHrv.filter(p => p.t >= session.start && p.t <= session.end).map((p, i) => (
-          <circle key={`hrv-${i}`} data-testid="vitals-watch-hrv" cx={axis.xOf(seg, p.t)} cy={yOf(1, p.value)} r={4} fill="var(--surface-card)" stroke="var(--chart-vital-hrv)" strokeWidth={2}>
-            <title>{`Apple Watch SDNN · ${Math.round(p.value)} ms`}</title>
-          </circle>
-        ))}
-        {referenceBr.filter(p => p.t >= session.start && p.t <= session.end).map((p, i) => (
-          <circle key={`br-${i}`} data-testid="vitals-watch-br" cx={axis.xOf(seg, p.t)} cy={yOf(2, p.value)} r={4} fill="var(--surface-card)" stroke="var(--chart-vital-br)" strokeWidth={2}>
-            <title>{`Apple Watch breathing · ${p.value.toFixed(1)} br/min`}</title>
-          </circle>
+        {[
+          { key: 'hrv', points: referenceHrv, row: 1, title: (value: number) => `Apple Watch SDNN · ${Math.round(value)} ms` },
+          { key: 'br', points: referenceBr, row: 2, title: (value: number) => `Apple Watch breathing · ${value.toFixed(1)} br/min` },
+        ].map(({ key, points, row, title }) => (
+          <g key={key}>
+            {referenceRuns(points.filter(p => p.t >= session.start && p.t <= session.end)).map((run, r) => (
+              <g key={r}>
+                {run.length > 1 && (
+                  <path data-testid={`vitals-watch-${key}-line`} d={pathOf(run.map(p => axis.xOf(seg, p.t)), run.map(p => yOf(row, p.value)))} fill="none" stroke={REFERENCE_STROKE} strokeWidth={1} strokeDasharray="3 3" strokeOpacity={0.8} />
+                )}
+                {run.map((p, i) => (
+                  <circle key={i} data-testid={`vitals-watch-${key}`} cx={axis.xOf(seg, p.t)} cy={yOf(row, p.value)} r={2} fill="var(--surface-card)" stroke={REFERENCE_STROKE} strokeWidth={1} strokeOpacity={0.8}>
+                    <title>{title(p.value)}</title>
+                  </circle>
+                ))}
+              </g>
+            ))}
+          </g>
         ))}
         {referenceBySession[seg.index]?.length > 0 && (() => {
           // Lift the pen across sampling gaps (Watch taken off) and
@@ -391,13 +400,13 @@ export function VitalsLegend({ bandLabel, stalled, reference = false, referenceH
       </span>
       {referenceHrv && (
         <span className="inline-flex items-center gap-1.5">
-          <span className="size-2 rounded-full border-2 border-vital-hrv" />
+          <span className="size-1 rounded-full border border-fg/80" />
           Apple Watch HRV · SDNN
         </span>
       )}
       {referenceBr && (
         <span className="inline-flex items-center gap-1.5">
-          <span className="size-2 rounded-full border-2 border-vital-br" />
+          <span className="size-1 rounded-full border border-fg/80" />
           Apple Watch breathing
         </span>
       )}

@@ -232,15 +232,31 @@ it('draws Watch HRV as distinct samples only within the visible sessions', () =>
     />
   )
   const dot = screen.getByTestId('vitals-watch-hrv')
-  expect(dot.getAttribute('stroke')).toBe('var(--chart-vital-hrv)')
+  expect(dot.getAttribute('stroke')).toBe('var(--text-1)')
   expect(dot.textContent).toBe('Apple Watch SDNN · 35 ms')
 })
 
-it('uses the breathing color for round Watch breathing samples', () => {
+it('uses small thin neutral circles for Watch breathing samples', () => {
   withWidth()
   render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceBr={[{ t: START + 10 * MIN, value: 14.5 }]} />)
   const dot = screen.getByTestId('vitals-watch-br')
   expect(dot.tagName).toBe('circle')
-  expect(dot.getAttribute('stroke')).toBe('var(--chart-vital-br)')
+  expect(dot.getAttribute('r')).toBe('2')
+  expect(dot.getAttribute('stroke-width')).toBe('1')
+  expect(dot.getAttribute('stroke')).toBe('var(--text-1)')
   expect(dot.textContent).toBe('Apple Watch breathing · 14.5 br/min')
+})
+
+it.each(['referenceHrv', 'referenceBr'] as const)('joins nearby %s samples but leaves long gaps disconnected', (prop) => {
+  withWidth()
+  const points = [10, 15, 45, 50].map(m => ({ t: START + m * MIN, value: 30 }))
+  render(<VitalsChart sessions={sessions} stall={null} bands={bands} {...{ [prop]: points }} />)
+  const key = prop === 'referenceHrv' ? 'hrv' : 'br'
+  const lines = screen.getAllByTestId(`vitals-watch-${key}-line`)
+  expect(lines).toHaveLength(2)
+  for (const line of lines) {
+    expect(line.getAttribute('stroke-dasharray')).toBe('3 3')
+    expect(line.getAttribute('d')?.match(/L/g)).toHaveLength(1)
+  }
+  expect(screen.getAllByTestId(`vitals-watch-${key}`)).toHaveLength(4)
 })
