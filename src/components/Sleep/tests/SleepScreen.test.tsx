@@ -4,6 +4,7 @@ import { SleepScreen } from '../SleepScreen'
 import { DEFAULT_STAGE_RULESET } from '@/src/lib/sleep-stage-rules'
 
 const state = vi.hoisted(() => ({
+  reference: vi.fn(),
   sleep: vi.fn(),
   stages: vi.fn(),
   vitals: vi.fn(),
@@ -32,6 +33,8 @@ vi.mock('@/src/hooks/useWeekNavigator', () => ({
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     biometrics: {
+      getReferenceStages: { useQuery: state.reference },
+      getReferenceSamples: { useQuery: () => ({ data: [] }) },
       getSleepRecords: { useQuery: state.sleep },
       getSleepStages: { useQuery: state.stages },
       getVitals: { useQuery: state.vitals },
@@ -82,6 +85,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(new Date(2026, 8, 28, 12))
   vi.clearAllMocks()
+  state.reference.mockReturnValue({ data: [] })
   state.week.isCurrentWeek = true
   state.sleep.mockImplementation(({ limit }: { limit: number }) => ({ data: limit === 100 ? MONTH : WEEK, isLoading: false }))
   state.stages.mockImplementation(({ sleepRecordId }: { sleepRecordId?: number }) => ({
@@ -234,4 +238,12 @@ describe('SleepScreen week and month views', () => {
     expect(screen.getAllByText('August 2026').length).toBeGreaterThan(0)
     expect(state.sleep).toHaveBeenLastCalledWith(expect.objectContaining({ startDate: new Date(2026, 7, 1, 6) }))
   })
+})
+
+it('overlays imported Watch stages for the selected night and side', () => {
+  state.reference.mockReturnValue({ data: [{ start: at(22, 23, 20), end: at(23, 0), stage: 'rem' }] })
+  render(<SleepScreen />)
+  expect(screen.getAllByRole('img', { name: 'Apple Watch sleep stages' })).toHaveLength(2)
+  expect(screen.getByText('Solid line · Apple Watch')).toBeTruthy()
+  expect(state.reference).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', startDate: at(22, 23, 20) }), { enabled: true })
 })

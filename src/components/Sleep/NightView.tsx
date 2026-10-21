@@ -3,7 +3,7 @@
 import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
 
 import { useMemo } from 'react'
-import { Activity, Heart, Wind } from 'lucide-react'
+import { Activity, BrainCircuit, Heart, Wind } from 'lucide-react'
 import {
   Card,
   InlineError,
@@ -38,6 +38,7 @@ import {
   type SleepRecordRow,
 } from './sleepData'
 import { EmptyNote, NightHypnogram, qualityColor, VitalTile } from './parts'
+import { NightHrv } from './NightHrv'
 import { useWeekNights, useWeekRecords } from './useSleepData'
 
 interface NightViewProps {
@@ -103,6 +104,12 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
     }
   }, [stages, record, records, key, timeFormat])
 
+  const referenceRange = { side, startDate: new Date(night.start ?? 0), endDate: new Date(night.end ?? 0) }
+  const referenceQuery = trpc.biometrics.getReferenceStages.useQuery(referenceRange, { enabled: night.start != null && night.end != null })
+  const reference = night.start != null && night.end != null
+    ? toHypnoBlocks((referenceQuery.data ?? []).map(r => ({ start: new Date(r.start).getTime(), end: new Date(r.end).getTime(), stage: r.stage })), night.start, night.end)
+    : []
+
   const selectedKey = key ?? (night.start != null ? toNightKey(new Date(night.start)) : null)
   const round = (v: number | null) => (v == null ? '—' : Math.round(v))
   const hrValues = epochsHr(night.epochs)
@@ -115,11 +122,14 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
           : (
               <NightCard
                 night={night}
+                reference={reference}
                 error={error ? 'Failed to load sleep data' : null}
                 empty={night.start == null}
               />
             )}
 
+        {referenceQuery.error && <InlineError>Could not load Apple Watch sleep stages.</InlineError>}
+        {night.start != null && night.end != null && <NightHrv side={side} start={night.start} end={night.end} epochs={night.epochs} />}
         <Card className="gap-2.5 px-5">
           <SectionLabel right={hrValues.length > 0 && (
             <span className="font-mono">
@@ -205,7 +215,7 @@ interface Night {
   stagedBy?: { engine: 'rules' | 'model', version: string | null }
 }
 
-function NightCard({ night, error, empty }: { night: Night, error: string | null, empty: boolean }) {
+function NightCard({ night, reference, error, empty }: { night: Night, reference: ReturnType<typeof toHypnoBlocks>, error: string | null, empty: boolean }) {
   const { formatClock } = useTimeFormatter()
   if (error) {
     return (
@@ -257,7 +267,10 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
           <span className="font-mono text-xl font-light min-[900px]:hidden">{formatDuration(night.asleepSeconds)}</span>
           <span className="font-mono text-xs text-fg-2">{times}</span>
           {night.hasStages && night.stagedBy?.engine === 'model' && (
-            <span className="font-mono text-xs text-cool" title={night.stagedBy.version ?? undefined}>Personal model</span>
+            <span className="inline-flex w-fit shrink-0 items-center gap-1 rounded-full border border-cool/30 bg-cool/10 px-2 py-1 text-xs text-cool" title={night.stagedBy.version ?? undefined}>
+              <BrainCircuit size={13} aria-hidden="true" />
+              Personal model
+            </span>
           )}
         </div>
         <div className="ml-auto self-start min-[900px]:self-center">{edit}</div>
@@ -275,19 +288,25 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
         </div>
       </div>
 
-      {night.hasStages
+      {(night.hasStages || reference.length > 0)
         ? (
             <>
               <div className="max-[899px]:hidden">
-                <NightHypnogram blocks={night.blocks} ticks={night.ticks} />
+                <NightHypnogram reference={reference} blocks={night.blocks} ticks={night.ticks} />
               </div>
               <div className="min-[900px]:hidden">
-                <NightHypnogram blocks={night.blocks} lane={18} bar={12} labels={false} />
+                <NightHypnogram reference={reference} blocks={night.blocks} lane={18} bar={12} labels={false} />
               </div>
             </>
           )
         : <EmptyNote className="py-6">Not enough vitals to classify stages for this night</EmptyNote>}
 
+      {reference.length > 0 && (
+        <div className="flex flex-wrap gap-4 text-xs text-fg-2">
+          <span>Colored bars · sleepypod</span>
+          <span>Solid line · Apple Watch</span>
+        </div>
+      )}
       <div className="grid grid-cols-4 gap-1.5 text-xs text-fg-2 min-[900px]:hidden">
         {(['awake', 'rem', 'light', 'deep'] as const).map(k => (
           <div key={k}>

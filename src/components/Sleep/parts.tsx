@@ -30,7 +30,8 @@ export function VitalTile({ icon: Icon, iconClassName, value, label, className }
 }
 
 /** Four-lane hypnogram with proportionally placed time ticks. */
-export function NightHypnogram({ blocks, ticks, lane = 26, bar = 18, labels = true }: {
+export function NightHypnogram({ blocks, ticks, reference, lane = 26, bar = 18, labels = true }: {
+  reference?: HypnoBlock[]
   blocks: HypnoBlock[]
   ticks?: Tick[]
   lane?: number
@@ -39,7 +40,7 @@ export function NightHypnogram({ blocks, ticks, lane = 26, bar = 18, labels = tr
 }) {
   return (
     <div className="flex flex-col">
-      <Hypnogram blocks={blocks} lane={lane} bar={bar} labels={labels} />
+      <Hypnogram reference={reference} blocks={blocks} lane={lane} bar={bar} labels={labels} />
       {ticks && ticks.length > 0 && (
         <div className="grid gap-x-2.5" style={{ gridTemplateColumns: labels ? '48px minmax(0,1fr)' : 'minmax(0,1fr)' }}>
           {labels && <div />}
