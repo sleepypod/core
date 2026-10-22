@@ -41,3 +41,11 @@ it('claims held-out evaluation only when a valid score is available', () => {
   rerender(<ModelScorecard metrics={{ lono: { kappa: 0 } }} />)
   expect(screen.getByText(/Held-out nights/)).toBeTruthy()
 })
+
+it.each([
+  [-0.1, 'Below chance agreement'], [0, 'Slight agreement'], [0.5, 'Moderate agreement'],
+  [0.7, 'Substantial agreement'], [0.9, 'Near-perfect agreement'],
+])('describes kappa %s as %s', (kappa, label) => {
+  render(<ModelScorecard metrics={{ lono: { kappa }, rules: { kappa: 1 } }} />)
+  expect(screen.getByText(label)).toBeTruthy()
+})
