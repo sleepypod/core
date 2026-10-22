@@ -1333,11 +1333,12 @@ export const biometricsRouter = router({
       if (!validateDateRange(input.startDate, input.endDate)) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
       }
-      return biometricsDb.select({ timestamp: referenceSamples.timestamp, value: referenceSamples.value })
+      const rows = await biometricsDb.select({ timestamp: referenceSamples.timestamp, value: referenceSamples.value })
         .from(referenceSamples)
         .where(and(eq(referenceSamples.side, input.side), eq(referenceSamples.metric, input.metric),
           gte(referenceSamples.timestamp, input.startDate), lte(referenceSamples.timestamp, input.endDate)))
-        .orderBy(asc(referenceSamples.timestamp)).limit(input.limit)
+        .orderBy(desc(referenceSamples.timestamp)).limit(input.limit)
+      return rows.reverse()
     }),
 
   getReferenceVitals: publicProcedure

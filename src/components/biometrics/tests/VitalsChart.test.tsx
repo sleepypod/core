@@ -260,3 +260,32 @@ it.each(['referenceHrv', 'referenceBr'] as const)('joins nearby %s samples but l
   }
   expect(screen.getAllByTestId(`vitals-watch-${key}`)).toHaveLength(4)
 })
+
+it('exposes Watch SDNN and breathing through the interaction overlay, without bridging gaps', () => {
+  withWidth()
+  const { container, rerender } = render(
+    <VitalsChart
+      sessions={sessions}
+      stall={null}
+      bands={bands}
+      referenceHrv={[{ t: START + 2 * MIN, value: 35 }]}
+      referenceBr={[{ t: START + 2 * MIN, value: 14.5 }]}
+    />
+  )
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  fireEvent.pointerMove(overlay, { clientX: 2, clientY: 50 })
+  expect(screen.getByTestId('vitals-watch-hrv-hover').textContent).toBe('Watch SDNN 35 ms')
+  expect(screen.getByTestId('vitals-watch-br-hover').textContent).toBe('Watch breathing 14.5 br/min')
+  rerender(
+    <VitalsChart
+      sessions={sessions}
+      stall={null}
+      bands={bands}
+      referenceHrv={[{ t: START + 30 * MIN, value: 35 }]}
+      referenceBr={[{ t: START - MIN, value: 14.5 }]}
+    />
+  )
+  expect(screen.queryByTestId('vitals-watch-hrv-hover')).toBeNull()
+  expect(screen.queryByTestId('vitals-watch-br-hover')).toBeNull()
+})

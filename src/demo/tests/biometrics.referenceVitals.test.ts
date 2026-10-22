@@ -50,3 +50,24 @@ describe('demo biometrics.getReferenceVitals', () => {
       .rejects.toThrow(/startDate must be before or equal to endDate/)
   })
 })
+
+describe('demo reference samples and stages', () => {
+  it.each(['hrv_sdnn', 'breathing_rate'] as const)('returns chronological %s samples and keeps the newest when limited', async (metric) => {
+    const night = demoNights('left')[0]
+    const input = { side: 'left' as const, startDate: night.enteredBedAt, endDate: (night.leftBedAt ?? new Date()), metric }
+    const all = await required(biometrics.getReferenceSamples)(input)
+    expect(all.length).toBeGreaterThan(3)
+    expect(all.map(r => r.timestamp.getTime())).toEqual(all.map(r => r.timestamp.getTime()).sort((a, b) => a - b))
+    expect(await required(biometrics.getReferenceSamples)({ ...input, limit: 3 })).toEqual(all.slice(-3))
+    await expect(async () => required(biometrics.getReferenceSamples)({ ...input, startDate: input.endDate, endDate: new Date(0) })).rejects.toThrow(/startDate/)
+  })
+  it('returns overlapping Watch stage blocks for the chosen side and honors the limit', async () => {
+    const night = demoNights('right')[0]
+    const input = { side: 'right' as const, startDate: night.enteredBedAt, endDate: (night.leftBedAt ?? new Date()) }
+    const all = await required(biometrics.getReferenceStages)(input)
+    expect(all.length).toBeGreaterThan(2)
+    expect(all.every(b => b.side === 'right' && b.end > input.startDate && b.start <= input.endDate)).toBe(true)
+    expect(await required(biometrics.getReferenceStages)({ ...input, limit: 2 })).toEqual(all.slice(0, 2))
+    await expect(async () => required(biometrics.getReferenceStages)({ ...input, startDate: input.endDate, endDate: new Date(0) })).rejects.toThrow(/startDate/)
+  })
+})

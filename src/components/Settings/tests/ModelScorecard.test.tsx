@@ -24,3 +24,20 @@ it('separates labels vertically and shows real stage recall when supplied', () =
   expect(screen.getByText('+0.11 over rules (0.14)')).toBeTruthy()
   expect(screen.getByText('61%')).toBeTruthy()
 })
+
+it.each([-2, 2, NaN, Infinity])('omits invalid rules kappa %s from the comparison and scale', (kappa) => {
+  render(<ModelScorecard metrics={{ lono: { kappa: 0.25 }, rules: { kappa } }} />)
+  expect(screen.queryByText('rules')).toBeNull()
+  expect(screen.getByText('Rules comparison not included in this model.')).toBeTruthy()
+})
+it.each([-1, 0, 1])('accepts valid rules kappa %s', (kappa) => {
+  expect(modelScore({ rules: { kappa } }).baseline).toBe(kappa)
+})
+it('claims held-out evaluation only when a valid score is available', () => {
+  const { rerender } = render(<ModelScorecard metrics={undefined} />)
+  expect(screen.getByText('Not evaluated')).toBeTruthy()
+  expect(screen.queryByText(/Held-out nights/)).toBeNull()
+  expect(screen.getByText(/not a measure of clinical accuracy/)).toBeTruthy()
+  rerender(<ModelScorecard metrics={{ lono: { kappa: 0 } }} />)
+  expect(screen.getByText(/Held-out nights/)).toBeTruthy()
+})

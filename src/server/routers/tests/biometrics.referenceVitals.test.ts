@@ -176,6 +176,13 @@ describe('biometrics reference vitals', () => {
   })
 
   describe('getReferenceSamples', () => {
+    it('keeps the newest samples within the limit in chronological order', async () => {
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_sdnn', samples: [
+        { timestamp: T0 + 2 * MIN, value: 52 }, { timestamp: T0, value: 48 }, { timestamp: T0 + MIN, value: 50 },
+      ] })
+      const rows = await caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + 3 * MIN) * 1000), limit: 2 })
+      expect(rows.map(r => r.value)).toEqual([50, 52])
+    })
     it('isolates side, metric and time window, returning chronological samples', async () => {
       for (const side of ['left', 'right'] as const) {
         await caller.importReferenceSamples({ side, source: 'apple_watch', metric: 'hrv_sdnn', samples: [

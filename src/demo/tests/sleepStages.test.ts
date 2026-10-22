@@ -34,6 +34,14 @@ describe('demo sleepStages', () => {
   })
 
   it('has no personal model and refuses to switch one on', async () => {
+    await expect(required(sleepStages.uploadModel)({ side: 'left', model: {
+      version: 'example', kind: 'forest', classes: ['wake', 'light', 'deep', 'rem'],
+      featureContract: ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction'],
+      trees: [{ f: [-1], t: [0], l: [-1], r: [-1], v: [[0, 1, 0, 0]] }],
+      testVectors: [{ inputs: { hrZ: 0, hrStdZ: 0, motionZ: 0, nightFraction: 0 }, expected: 1 }],
+    } })).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('demo') })
+    expect(await required(sleepStages.listModels)({ side: 'left' })).toEqual([])
+    await expect(required(sleepStages.selectModel)({ side: 'left', id: 1, active: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await required(sleepStages.getModel)({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false })
     expect(await required(sleepStages.setModelActive)({ side: 'left', active: false })).toEqual({ active: false, version: null })
     await expect(required(sleepStages.setModelActive)({ side: 'left', active: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })

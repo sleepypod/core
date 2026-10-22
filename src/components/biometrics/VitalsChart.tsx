@@ -73,8 +73,8 @@ export function referenceInSession(reference: ReferencePoint[], s: { start: numb
 }
 
 /** The reference sample nearest `t`, or null when none is within `tolMs`. */
-export function nearestReference(points: ReferencePoint[], t: number, tolMs = REFERENCE_TOL_MS): ReferencePoint | null {
-  let best: ReferencePoint | null = null
+export function nearestReference<T extends { t: number }>(points: T[], t: number, tolMs = REFERENCE_TOL_MS): T | null {
+  let best: T | null = null
   for (const p of points) {
     if (best == null || Math.abs(p.t - t) < Math.abs(best.t - t)) best = p
   }
@@ -345,6 +345,20 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
                     </text>
                   </g>
                 )}
+                {hoverSeg && [
+                  { key: 'hrv', points: referenceHrv, row: 1, label: (v: number) => `Watch SDNN ${Math.round(v)} ms` },
+                  { key: 'br', points: referenceBr, row: 2, label: (v: number) => `Watch breathing ${v.toFixed(1)} br/min` },
+                ].map(({ key, points, row, label }) => {
+                  const sample = nearestReference(points.filter(p => p.t >= hoverSeg.start && p.t <= hoverSeg.end), hovered.t)
+                  if (!sample) return null
+                  const x = axis.xOf(hoverSeg, sample.t)
+                  const flip = x + 180 > plotW
+                  return (
+                    <text key={key} data-testid={`vitals-watch-${key}-hover`} x={x + (flip ? -8 : 8)} y={yOf(row, sample.value) + 14} textAnchor={flip ? 'end' : 'start'} className="fill-fg-2 font-mono" fontSize={10}>
+                      {label(sample.value)}
+                    </text>
+                  )
+                })}
                 <rect x={Math.min(Math.max(0, hoverX - 70), Math.max(0, plotW - 140))} y={HEAD_H + PLOT_H + 4} width={140} height={18} rx={3} fill="var(--border-2)" />
                 <text x={Math.min(Math.max(70, hoverX), Math.max(70, plotW - 70))} y={HEAD_H + PLOT_H + 17} textAnchor="middle" className="fill-fg font-mono" fontSize={11}>{`${new Date(hovered.t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${clock(hovered.t, timeFormat)}`}</text>
               </g>

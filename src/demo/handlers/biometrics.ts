@@ -197,6 +197,29 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       .slice(-(input.limit ?? 5000))
   },
 
+  getReferenceSamples: (input) => {
+    const start = input.startDate.getTime()
+    const end = input.endDate.getTime()
+    if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    return demoVitals(input.side, start, end)
+      .filter((_, i) => i % 5 === 0)
+      .map(v => ({ timestamp: new Date(v.t), value: input.metric === 'hrv_sdnn' ? v.hrv : v.breathingRate }))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+      .slice(-(input.limit ?? 5000))
+  },
+
+  getReferenceStages: (input) => {
+    const start = input.startDate.getTime()
+    const end = input.endDate.getTime()
+    if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    return demoNights(input.side).flatMap(n => mergeIntoBlocks(demoStageEpochs(n, n.enteredBedAt.getTime(), n.leftBedAt?.getTime() ?? Date.now())))
+      .filter(b => b.start <= end && b.end > start)
+      .sort((a, b) => a.start - b.start)
+      .slice(0, input.limit ?? 2000)
+      .map(b => ({ id: Math.floor(b.start / 1000) * 2 + sideBit(input.side), side: input.side, source: 'apple_watch' as const,
+        start: new Date(b.start), end: new Date(b.end), stage: b.stage, createdAt: new Date(b.start) }))
+  },
+
   compareToWatch: async (input) => {
     const endDate = input.endDate ?? new Date()
     const startDate = input.startDate ?? new Date(endDate.getTime() - 14 * DAY)

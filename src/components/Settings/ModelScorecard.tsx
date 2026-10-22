@@ -13,7 +13,8 @@ export function modelScore(metrics: unknown) {
   const evaluation = object(root.nestedSelection ?? root.lono)
   const rawKappa = number(evaluation.kappa)
   const kappa = rawKappa !== null && rawKappa >= -1 && rawKappa <= 1 ? rawKappa : null
-  const baseline = number(object(root.rules).kappa)
+  const rawBaseline = number(object(root.rules).kappa)
+  const baseline = rawBaseline !== null && rawBaseline >= -1 && rawBaseline <= 1 ? rawBaseline : null
   const recall = object(evaluation.recall)
   const nights = number(evaluation.nights)
   return { kappa, baseline, recall, nights }
@@ -82,7 +83,10 @@ export function ModelScorecard({ metrics }: { metrics: unknown }) {
           <p className="text-xs text-fg-3">Share of Watch epochs in each stage the model labels the same. A dash means the export has no score.</p>
         </div>
       </div>
-      <p className="text-xs text-fg-3">κ (kappa) measures agreement with Watch stages beyond chance: 0 is chance-level and 1 is perfect agreement. These descriptive bands are not a measure of clinical accuracy. Held-out nights were excluded from fitting the evaluated model.</p>
+      <p className="text-xs text-fg-3">
+        κ (kappa) measures agreement with Watch stages beyond chance: 0 is chance-level and 1 is perfect agreement. These descriptive bands are not a measure of clinical accuracy.
+        {kappa !== null && ' Held-out nights were excluded from fitting the evaluated model.'}
+      </p>
     </>
   )
 }
