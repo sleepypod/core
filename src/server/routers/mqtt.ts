@@ -153,10 +153,20 @@ export const mqttRouter = router({
     }).strict())
     .output(z.object({ ok: z.boolean(), error: z.string().optional() }))
     .mutation(async ({ input }) => {
+      // The UI never echoes the stored password back (it is write-only), so
+      // an omitted password means "use the one already saved". Only reuse it
+      // for the saved broker URL — this endpoint is unauthenticated, and
+      // sending the stored secret to an arbitrary caller-supplied broker
+      // would leak it.
+      let password = input.password ?? null
+      if (input.password === undefined) {
+        const { config } = await resolveConfig()
+        if (config.url === input.url) password = config.password
+      }
       return testConnection({
         url: input.url,
         username: input.username ?? null,
-        password: input.password ?? null,
+        password,
         tlsEnabled: input.tlsEnabled ?? false,
       })
     }),
