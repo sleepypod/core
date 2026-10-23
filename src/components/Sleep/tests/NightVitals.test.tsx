@@ -44,3 +44,15 @@ it('connects adjacent stage transitions but never bridges missing Watch interval
   expect(paths[1].getAttribute('d')).toBe('M 10 65 V 91 H 20')
   expect(paths[2].getAttribute('d')).toBe('M 40 39 V 39 H 50')
 })
+
+it.each(['hr', 'hrv_sdnn', 'breathing_rate'])('draws reference-only %s sessions with null pod metrics', (metric) => {
+  mock.chart.mockClear()
+  mock.query.mockImplementation(input => ({ data: input.metric === metric
+    ? [{ timestamp: new Date(2000), value: 35 }]
+    : metric === 'hr' && input.limit === 20000 && !input.metric
+      ? [{ timestamp: new Date(2000), heartRate: 62 }]
+      : [] }))
+  render(<NightVitals side="left" start={0} end={10000} />)
+  expect(screen.queryByText('No recorded vitals for this night.')).toBeNull()
+  expect(mock.chart.mock.calls[0][0].sessions[0].points).toEqual([{ t: 2000, hr: null, hrv: null, br: null }])
+})
