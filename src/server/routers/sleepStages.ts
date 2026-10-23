@@ -544,7 +544,7 @@ export const sleepStagesRouter = router({
         if (!parsed?.success) throw new TRPCError({ code: 'NOT_FOUND', message: `No personal stage model stored for ${input.side}` })
         model = parsed.data
       }
-      if (failingTestVectors(model).length > 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Model fails its own test vectors' })
+      validateModel(model)
       try {
         const loaded = await loadNights(input.side, input.sleepRecordId, input.nights ?? 1)
         const ruleset = (await loadStageClassifier(input.side)).ruleset

@@ -545,6 +545,14 @@ describe('sleepStages router', () => {
       const main = dbHolder.main as ReturnType<typeof drizzle<typeof mainSchema>>
       const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
       expect((await rejectionOf(caller.previewModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
+      // An unknown feature contract is bad input too, even when its own vectors pass.
+      const rename = (name: string) => `${name}_unknown`
+      const unknown = {
+        ...model,
+        featureContract: model.featureContract.map(rename),
+        testVectors: model.testVectors.map(v => ({ ...v, inputs: Object.fromEntries(Object.entries(v.inputs).map(([k, x]) => [rename(k), x])) })),
+      }
+      expect((await rejectionOf(caller.previewModel({ side: 'left', model: unknown }))).code).toBe('BAD_REQUEST')
       // A stored document that no longer validates reads back as nothing stored, and cannot be active.
       main.insert(mainSchema.sideStageModels).values({ side: 'right', model: { nonsense: true }, version: 'x', uploadedAt: new Date(), active: true }).run()
       expect(await caller.getModel({ side: 'right' })).toEqual({ model: null, uploadedAt: expect.any(Number), active: false })
