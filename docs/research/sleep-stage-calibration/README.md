@@ -205,11 +205,11 @@ Two parity checks keep the container and the phone honest:
 `scripts/train-personal-models.py` chains the whole thing: snapshot the pod's
 database over SSH, build the dataset, train both models on a contract with
 leave-one-night-out scoring, export the pod form, and upload the model with
-the higher pooled κ. About five seconds on Apple silicon; nothing runs on the
+the higher pooled κ as an unselected candidate, then print its preview. About five seconds on Apple silicon; nothing runs on the
 phone.
 
 ```sh
-scripts/train-personal-models.py --pod <pod-ip> --side left            # contract B, best model, uploaded
+scripts/train-personal-models.py --pod <pod-ip> --side left            # contract B, candidate stored and previewed
 scripts/train-personal-models.py --pod <pod-ip> --side left --no-upload --contract A
 scripts/train-personal-models.py --pod <pod-ip> --snapshot poddb/biometrics.db   # reuse a snapshot
 ```
@@ -217,8 +217,12 @@ scripts/train-personal-models.py --pod <pod-ip> --snapshot poddb/biometrics.db  
 The pod needs the model endpoints below, and the Watch stages must already be
 on it (section 2b). The run leaves the dataset and the exported models (about
 half a megabyte) in the work directory and deletes the ~75 MB database
-snapshot unless `--keep-snapshot`; the pod keeps one model row per side,
-replaced on every upload.
+snapshot unless `--keep-snapshot`. Candidates accumulate in the model library; the
+current selection and activation stay unchanged. `--select` explicitly selects the
+candidate inactive (turning personal staging off); `--activate` selects it active,
+after preview succeeds. The two flags are mutually exclusive; neither can be
+combined with `--no-upload`. Preview
+scores on training nights are in-sample, not held-out validation.
 
 ### Running a model on the pod
 
@@ -232,13 +236,19 @@ same synthetic fixture is replayed by `src/lib/tests/personal-stage-model.test.t
 and refuses a model that fails its own test vectors.
 
 ```sh
-# store the container's forest on the pod for the left side
-curl -X PUT http://<pod-ip>:3000/api/sleep-stages/model   -H 'content-type: application/json'   -d "$(jq -c '{side:"left", model:.}' out/personal-forest.json)"
+# store a candidate without changing the selection
+curl -X POST http://<pod-ip>:3000/api/sleep-stages/models   -H 'content-type: application/json'   -d "$(jq -c '{side:"left", model:.}' out/personal-forest.json)"
 # score it beside the rules against the Watch on the last 14 nights
-curl -X POST http://<pod-ip>:3000/api/sleep-stages/model/preview   -H 'content-type: application/json' -d '{"side":"left","nights":14}'
+curl -X POST http://<pod-ip>:3000/api/sleep-stages/model/preview   -H 'content-type: application/json' -d "$(jq -c '{side:"left", nights:14, model:.}' out/personal-forest.json)"
 ```
 
-The stored model can also stage the side's nights: `PUT /api/sleep-stages/model/active`
+The legacy singular `PUT /api/sleep-stages/model` replaces the selected model in
+place and preserves its active state, so it immediately changes staging on an
+active side. It archives both the previous selection and the uploaded model in
+the library. To select a library candidate explicitly, use
+`PUT /api/sleep-stages/models/selected` with `{side, id, active}`.
+
+The selected model can also stage the side's nights: `PUT /api/sleep-stages/model/active`
 with `{"side":"left","active":true}` (or the "Stage nights with this model"
 switch on the Settings → Sleep stages page) makes `getSleepStages` and the
 Watch comparison classify with the model, with the profile's rules as the
