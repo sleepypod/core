@@ -106,6 +106,17 @@ describe('snoozeManager', () => {
     expect(mockSetAlarm).toHaveBeenCalledTimes(1)
   })
 
+  it('brings a linked alarm (single sleeper) back on both sides', async () => {
+    const solo = { ...config, linkedSide: 'right' as const, ownerSide: 'left' as const }
+    snoozeAlarm('left', 60, solo)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockSetAlarm.mock.calls).toEqual([
+      ['left', { ...solo, snoozeCount: 1 }],
+      ['right', { ...solo, snoozeCount: 1, linkedSide: 'left' }],
+    ])
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('right', { ...solo, snoozeCount: 1, linkedSide: 'left' })
+  })
+
   it('counts each snooze of the same alarm', async () => {
     snoozeAlarm('left', 60, { ...config, snoozeCount: 2 })
     await vi.advanceTimersByTimeAsync(60_000)

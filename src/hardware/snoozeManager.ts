@@ -14,6 +14,7 @@
 import { getSharedHardwareClient } from './dacMonitor.instance'
 import { loadAlarmState, updateAlarmState, type AlarmConfig } from './alarmPersistence'
 import { markAlarmStarted } from './alarmState'
+import { ringLinked } from './linkedAlarm'
 export { MIN_SNOOZE_SECONDS, nextSnoozeSeconds } from './snoozeLength'
 import type { Side } from './types'
 
@@ -54,6 +55,8 @@ function schedule(side: Side, snoozeUntil: Date, config: AlarmConfig, now: numbe
       const client = getSharedHardwareClient()
       await client.setAlarm(side, config)
       await markAlarmStarted(side, config)
+      // A single sleeper's alarm comes back on both sides, as it rang.
+      await ringLinked(client, side, config)
     }
     catch (err) {
       console.error(`[Snooze] Failed to restart alarm for ${side}:`, err)

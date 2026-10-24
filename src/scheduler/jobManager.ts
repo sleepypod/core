@@ -21,11 +21,12 @@ import { HardwareCommand } from '@/src/hardware/types'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
 import { cancelAutoOffTimer } from '@/src/services/autoOffWatcher'
 import { markSideMutated } from '@/src/hardware/deviceStateSync'
-import { markAlarmStarted } from '@/src/hardware/alarmState'
+import { markAlarmStarted, type AlarmConfig } from '@/src/hardware/alarmState'
+import { ringLinked } from '@/src/hardware/linkedAlarm'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { timeToDate, nowInTimezone } from './timeUtils'
-import { activeSleeperSides, type BedState, mirrorSideFor, scheduleSourceSide, singleSleeperSideFor } from '@/src/lib/singleSleeper'
+import { activeSleeperSides, alarmPartnerSide, type BedState, mirrorSideFor, scheduleSourceSide, singleSleeperSideFor } from '@/src/lib/singleSleeper'
 import { WakeWindows, slotBefore } from './wakeWindow'
 import { ALARM_HOLD_AFTER_MIN, alarmWarmupMinutes } from '@/src/temperature/baseline'
 
@@ -694,8 +695,9 @@ export class JobManager {
     // Schedule page no longer shows these rows. The mirror side's alarm
     // temperature follows through the controller's baseline, not from here.
     if (!activeSleeperSides(await this.awayModes()).includes(sched.side)) return
-    await withSideLock(sched.side, async () => {
-      if (!activeSleeperSides(await this.awayModes()).includes(sched.side)) return
+    const rang = await withSideLock(sched.side, async (): Promise<AlarmConfig | null> => {
+      const modes = await this.awayModes()
+      if (!activeSleeperSides(modes).includes(sched.side)) return null
       // Vibration must fire regardless of power state — the alarm's purpose is
       // to wake the user, who often sleeps with the bed off or on a power
       // schedule that hasn't kicked in yet at wake time. Temperature, however,
@@ -716,18 +718,30 @@ export class JobManager {
       else {
         console.log(`Alarm job alarm-${sched.id} — ${sched.side} not powered; skipping temperature, firing vibration only`)
       }
-      const alarm = {
+      // A single sleeper's alarm rings on both sides (they may have rolled
+      // over); the other side's temperature follows through its zone policy.
+      const partner = alarmPartnerSide(sched.side, modes)
+      const alarm: AlarmConfig = {
         vibrationIntensity: sched.vibrationIntensity,
         vibrationPattern: sched.vibrationPattern,
         duration: sched.duration,
         snoozeDuration: sched.snoozeDuration,
         snoozeTaper: sched.snoozeTaper,
+        ...(partner ? { linkedSide: partner, ownerSide: sched.side } : {}),
       }
       await client.setAlarm(sched.side, alarm)
       // Recorded, not just broadcast: a tap gesture reads it to decide
       // whether it snoozes or dismisses this alarm.
       await markAlarmStarted(sched.side, alarm)
+      return alarm
     })
+    const partner = rang?.linkedSide
+    if (rang && partner) {
+      await withSideLock(partner, async () => {
+        markSideMutated(partner)
+        await ringLinked(getSharedHardwareClient(), sched.side, rang)
+      })
+    }
   }
 
   /**
