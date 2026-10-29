@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   summary: undefined as unknown,
   frames: {} as Record<string, unknown>,
+  device: undefined as unknown,
   timeFormat: '12h' as '12h' | '24h',
   // 8 PM local on a Monday: inside tonight's 5 PM → 9 AM window.
   nowMinute: Math.floor(new Date(2026, 8, 28, 20, 0).getTime() / 60_000),
@@ -63,6 +64,7 @@ vi.mock('@/src/utils/trpc', () => {
       if (key === 'health.maintenance') return { data: mocks.maintenance }
       if (key === 'health.system') return { data: { scheduler: { drift: { drifted: false } } } }
       if (key === 'waterLevel.getLatest') return { data: mocks.water }
+      if (key === 'device.getStatus') return { data: mocks.device }
       if (key === 'schedules.getAll') return { data: mocks.schedules[input?.side ?? ''] }
       if (key === 'health.thermal') return { data: mocks.thermal, isLoading: false, isFetching: false, error: null, dataUpdatedAt: 1 }
       if (key === 'health.scheduler') return { data: mocks.scheduler, isLoading: false }
@@ -112,6 +114,7 @@ beforeEach(() => {
   mocks.timeFormat = '12h'
   mocks.dataPath = undefined
   mocks.frames = {}
+  mocks.device = undefined
   single.sides = null
   mocks.thermal = {
     pumpStallProtectionEnabled: true,
@@ -224,6 +227,13 @@ describe('DiagnosticsConsole dashboard', () => {
     mocks.frames = {}
     rerender(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
     expect(screen.queryByTestId('attention')).toBeNull()
+  })
+
+  it('falls back to the DAC water level before the first water reading', () => {
+    mocks.water = undefined
+    mocks.device = { waterLevel: 'low', isPriming: false }
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    expect(within(screen.getByTestId('attention')).getByText('Water level is low')).toBeTruthy()
   })
 
   it('adds a water tank fact only once frzWater arrives', () => {
