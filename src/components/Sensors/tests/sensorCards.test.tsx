@@ -94,6 +94,28 @@ it('shows stored and live freezer readings, water warnings and pump RPM', () => 
   expect(screen.getByText(/therm 1.0\/2.0/)).toBeTruthy()
 })
 
+it('keeps the binary water level until a frzWater frame arrives, then shows the tank gauge', () => {
+  const live = { frzTemp: { left: 24, right: 26, amb: 20, hs: 30 }, frzHealth: { left: { tecCurrent: 1, pumpRpm: 2400, flowrate: null }, right: { tecCurrent: 2, pumpRpm: 2400, flowrate: 2 }, fan: { rpm: 200 } } }
+  mock.frames = { ...live }
+  mock.data.water = { level: 'ok' }
+  const { rerender } = render(<FreezerHealthCard />)
+  // Older firmware: no frzWater, so no gauge and the DAC level stays in the secondary line.
+  expect(screen.queryByTestId('water-tank')).toBeNull()
+  expect(screen.getByText(/water ok$/)).toBeTruthy()
+
+  mock.frames = { ...live, frzWater: { type: 'frzWater', ts: 1, isPriming: true, hasWater: true, capValid: true, capLevel: 2, needsPriming: false } }
+  rerender(<FreezerHealthCard />)
+  expect(screen.queryByText(/water ok/)).toBeNull()
+  expect(screen.getAllByRole('img', { name: 'Water tank 2 of 5' })).toHaveLength(2)
+  expect(screen.getAllByText('Priming…')).toHaveLength(2)
+  expect(screen.getByTestId('freezer-secondary').textContent).toMatch(/^tank 2\/5Priming… · fan 200 rpm/)
+
+  mock.frames = { ...live, frzWater: { type: 'frzWater', ts: 2, isPriming: false, hasWater: false, capValid: false, capLevel: 5, needsPriming: true } }
+  rerender(<FreezerHealthCard />)
+  expect(screen.getAllByRole('img', { name: 'Water low, tank level unavailable' })).toHaveLength(2)
+  expect(screen.getAllByText('Needs prime')).toHaveLength(2)
+})
+
 it('uses server occupancy while visualizing frame variance independently', () => {
   const { rerender } = render(<PresenceCard />)
   expect(screen.getByTestId('presence-left').textContent).toContain('left · --')

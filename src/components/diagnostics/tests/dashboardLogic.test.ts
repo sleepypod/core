@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  attentionItems, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow,
+  attentionItems, disconnectedCovers, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow,
 } from '../dashboardLogic'
 import type { SchedJob } from '../diagnosticsLogic'
 
@@ -84,5 +84,29 @@ describe('attentionItems', () => {
   })
   it('flags low water', () => {
     expect(attentionItems(ok, 'low', now).map(i => i.id)).toEqual(['water'])
+  })
+  it('leads with a disconnected cover sensor, per side', () => {
+    const [right] = attentionItems(ok, 'ok', now, ['left'], ['right'])
+    expect(right).toMatchObject({ id: 'cover', title: 'Right cover sensor disconnected' })
+    expect(attentionItems(ok, 'ok', now, [], ['left'])[0].title).toBe('Left cover sensor disconnected')
+    expect(attentionItems(ok, 'ok', now, [], ['left', 'right'])[0].title).toBe('Left and right cover sensors disconnected')
+    expect(attentionItems(ok, 'ok', now, [], [])).toEqual([])
+  })
+})
+
+describe('disconnectedCovers', () => {
+  const frame = (left: boolean, right: boolean) => ({ type: 'sensHealth' as const, ts: 1, version: 1, left: { connected: left }, right: { connected: right } })
+  it('is empty without a sensHealth frame (older firmware)', () => {
+    expect(disconnectedCovers(undefined)).toEqual([])
+  })
+  it('lists each side that reports no link', () => {
+    expect(disconnectedCovers(frame(true, true))).toEqual([])
+    expect(disconnectedCovers(frame(false, true))).toEqual(['left'])
+    expect(disconnectedCovers(frame(true, false))).toEqual(['right'])
+    expect(disconnectedCovers(frame(false, false))).toEqual(['left', 'right'])
+  })
+  it('only counts an explicit connected: false', () => {
+    expect(disconnectedCovers({ type: 'sensHealth', ts: 1 } as never)).toEqual([])
+    expect(disconnectedCovers({ type: 'sensHealth', ts: 1, left: {}, right: { connected: null } } as never)).toEqual([])
   })
 })

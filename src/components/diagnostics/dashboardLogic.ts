@@ -1,3 +1,4 @@
+import type { SensHealthFrame } from '@/src/hooks/useSensorStream'
 import { DAYS_OF_WEEK, type DayOfWeek } from '@/src/lib/scheduleTime'
 import type { SchedJob } from './diagnosticsLogic'
 
@@ -58,7 +59,7 @@ export function nextTemperatureJob(jobs: SchedJob[] | undefined, now: number): S
 }
 
 export interface AttentionItem {
-  id: 'pump-stall' | 'prime' | 'water' | 'occupancy'
+  id: 'pump-stall' | 'prime' | 'water' | 'occupancy' | 'cover'
   title: string
   detail: string
 }
@@ -74,6 +75,16 @@ export interface MaintenanceFacts {
 const PRIME_STALE_MS = 7 * 24 * HOUR
 
 /**
+ * Sides whose cover sensor reports no link in the latest `sensHealth` frame.
+ * Empty without a frame: older firmware never sends one. Only an explicit
+ * `connected: false` counts.
+ */
+export function disconnectedCovers(frame: SensHealthFrame | undefined): Array<'left' | 'right'> {
+  if (!frame) return []
+  return (['left', 'right'] as const).filter(side => frame[side]?.connected === false)
+}
+
+/**
  * Things on the pod that need someone to act. Empty means the Dashboard hides
  * the card. A daily prime schedule counts as covered; otherwise a missing
  * prime in 7 days (or none recorded yet) is flagged.
@@ -83,8 +94,19 @@ export function attentionItems(
   waterLevel: string | undefined,
   now: number,
   suspectSides: ReadonlyArray<string> = [],
+  disconnected: ReadonlyArray<'left' | 'right'> = [],
 ): AttentionItem[] {
   const out: AttentionItem[] = []
+  if (disconnected.length > 0) {
+    const both = disconnected.length === 2
+    out.push({
+      id: 'cover',
+      title: both ? 'Left and right cover sensors disconnected' : `${disconnected[0] === 'left' ? 'Left' : 'Right'} cover sensor disconnected`,
+      detail: both
+        ? 'No presence or vitals from either side until the cover reconnects. Check its connection at the hub.'
+        : 'No presence or vitals from that side until it reconnects. Check the cover\'s connection at the hub.',
+    })
+  }
   if (suspectSides.length > 0) {
     out.push({
       id: 'occupancy',

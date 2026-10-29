@@ -12,6 +12,7 @@ import type { AppRouter } from '@/src/server/routers/app'
 import { trpc } from '@/src/utils/trpc'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useShownSides } from '@/src/providers/SideProvider'
+import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { Button, Card, HoverMark, InlineError, KeyValue, Skeleton, StatusDot, useHoverFraction } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
@@ -20,11 +21,13 @@ import { langFromPath } from '@/src/components/AppShell/navItems'
 import { HealthRing } from '@/src/components/status/HealthCircle'
 import { PumpAlertsCard } from '@/src/components/status/PumpAlertsCard'
 import { formatUptime, useStatusSummary } from '@/src/components/status/StatusScreen'
+import { WaterTankGauge } from '@/src/components/status/WaterTankGauge'
+import { waterTank } from '@/src/components/status/waterTank'
 import { CurveChart, CurveLegend, buildTimeline, readAt, useNowMinute } from '@/src/components/Schedule/CurveChart'
 import { bedTrace } from '@/src/components/Schedule/bedTrace'
 import { formatCountdown, nightSetPoints } from '@/src/components/Schedule/bothNight'
 import { fmtClock, fmtF, thermalDirection, type SchedJob } from './diagnosticsLogic'
-import { attentionItems, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow, TONIGHT_END_H, TONIGHT_START_H } from './dashboardLogic'
+import { attentionItems, disconnectedCovers, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow, TONIGHT_END_H, TONIGHT_START_H } from './dashboardLogic'
 import { nearestPoint, panelDomain, seriesPath, THERMAL_PANELS } from './thermalHistoryLogic'
 import type { DiagSection } from './DiagnosticsConsole'
 import { OccupancyCheck } from './OccupancyCheck'
@@ -64,6 +67,8 @@ export function DashboardPanel({ thermal, onJump }: { thermal: ThermalData | und
 
 function StatusLine() {
   const s = useStatusSummary()
+  // Newer thermal firmware only; older pods keep the line as it was.
+  const tank = waterTank(useSensorFrame('frzWater'))
   const checks = Object.values(s.groups).flat()
   const failing = checks.filter(c => c.status !== 'ok')
   const commit = s.version && s.version.commitHash !== 'unknown' ? s.version.commitHash.slice(0, 7) : null
@@ -121,6 +126,7 @@ function StatusLine() {
           : <StatusDot tone="warn" label={`Missing ${s.firewall.missing.length === 1 ? s.firewall.missing[0] : `${s.firewall.missing.length} rules`}`} className="text-[13px]" />,
       title: s.firewall && !s.firewall.ok ? `Missing firewall rules: ${s.firewall.missing.join(', ')}` : undefined,
     },
+    ...(tank ? [{ label: 'Water', value: <WaterTankGauge tank={tank} /> }] : []),
     {
       label: 'Disk',
       value: s.diskPercent !== undefined
@@ -200,6 +206,7 @@ function AttentionCard() {
   const water = trpc.waterLevel.getLatest.useQuery({}, { refetchInterval: 30_000 })
   const device = trpc.device.getStatus.useQuery({}, { refetchInterval: 10_000 })
   const dataPath = trpc.health.dataPath.useQuery({}, { refetchInterval: 60_000 })
+  const sensHealth = useSensorFrame('sensHealth')
   const enableGuard = trpc.settings.updateDevice.useMutation({
     onSuccess: () => {
       void utils.health.maintenance.invalidate()
@@ -214,7 +221,7 @@ function AttentionCard() {
   if (nowMinute == null) return null
   const occupancy = dataPath.data?.occupancy
   const suspectSides = occupancy ? shown.filter(s => occupancy[s] === 'suspect') : []
-  const items = attentionItems(maintenance.data, water.data?.level ?? device.data?.waterLevel, nowMinute * 60_000, suspectSides)
+  const items = attentionItems(maintenance.data, water.data?.level ?? device.data?.waterLevel, nowMinute * 60_000, suspectSides, disconnectedCovers(sensHealth))
   if (items.length === 0) return null
   const priming = device.data?.isPriming ?? false
 

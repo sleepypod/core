@@ -82,6 +82,7 @@ class DemoSensorSocket {
       const ts = f.nowSec()
       this.emit(f.bedTempFrame(ts))
       for (const frame of f.freezerFrames(ts)) this.emit(frame)
+      this.emit(f.sensHealthFrame(ts))
     })
   }
 }

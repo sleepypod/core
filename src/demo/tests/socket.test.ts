@@ -30,7 +30,7 @@ describe('demo sensor socket', () => {
     expect(messages[0]).toMatchObject({ type: 'subscribed' })
     const snapshot = messages[1] as unknown as { type: string, latest: Message[], waveform: Message[], range: { min: number, max: number } }
     expect(snapshot.type).toBe('snapshot')
-    expect(snapshot.latest.map(f => f.type)).toEqual(expect.arrayContaining(['bedTemp2', 'capSense2', 'frzTemp', 'frzTherm', 'frzHealth', 'log', 'deviceStatus']))
+    expect(snapshot.latest.map(f => f.type)).toEqual(expect.arrayContaining(['bedTemp2', 'capSense2', 'frzTemp', 'frzTherm', 'frzHealth', 'frzWater', 'sensHealth', 'log', 'deviceStatus']))
     expect(snapshot.waveform).toHaveLength(10)
     expect(snapshot.range.max).toBeGreaterThan(snapshot.range.min)
     socket.close()
@@ -61,6 +61,8 @@ describe('demo sensor socket', () => {
     const frz = normalizeFrame(ofType('frzTemp')[0]) as { left: number | null }
     expect(frz.left).toBeGreaterThan(5)
     expect(normalizeFrame(ofType('frzTherm')[0])).toMatchObject({ type: 'frzTherm' })
+    expect(normalizeFrame(ofType('frzWater')[0])).toMatchObject({ capValid: true, capLevel: 4, isPriming: false })
+    expect(normalizeFrame(ofType('sensHealth')[0])).toMatchObject({ left: { connected: true }, right: { connected: true } })
 
     expect(ofType('deviceStatus').length).toBeGreaterThanOrEqual(4)
     expect(ofType('log').length).toBeGreaterThan(0)

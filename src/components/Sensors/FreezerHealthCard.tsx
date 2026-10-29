@@ -8,6 +8,8 @@ import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatDisplayTemp, sensorCToDisplay } from '@/src/lib/tempUtils'
 import { Card, SectionLabel, Skeleton, StatusDot, type Tone } from '@/src/components/ds'
+import { WaterTankGauge } from '@/src/components/status/WaterTankGauge'
+import { waterTank } from '@/src/components/status/waterTank'
 
 /** Overcurrent threshold in Amperes. Eight Sleep TECs pull ~10-11.5A during startup
  * circuit calibration and up to 12A under peak thermal demand. Real overcurrent is >13.5A. */
@@ -43,6 +45,9 @@ export function freezerStatus(
  * Combines live WebSocket frames (frzTemp, frzHealth, frzTherm) with tRPC data:
  * - environment.getLatestFreezerTemp for stored freezer temps when WS is not streaming
  * - waterLevel.getLatest for current water level status
+ *
+ * Newer thermal firmware also sends frzWater; while it does, the tank gauge
+ * replaces the binary water level in the secondary line.
  */
 export function FreezerHealthCard() {
   const { unit } = useTemperatureUnit()
@@ -51,6 +56,7 @@ export function FreezerHealthCard() {
   const frzTemp = useSensorFrame('frzTemp')
   const frzHealth = useSensorFrame('frzHealth')
   const frzTherm = useSensorFrame('frzTherm')
+  const tank = waterTank(useSensorFrame('frzWater'))
 
   // tRPC: latest freezer temp from DB (fallback when WS hasn't sent data)
   const latestFreezerTemp = trpc.environment.getLatestFreezerTemp.useQuery(
@@ -116,7 +122,7 @@ export function FreezerHealthCard() {
     frzHealth && `tec ${frzHealth.left.tecCurrent.toFixed(1)}/${frzHealth.right.tecCurrent.toFixed(1)} A`,
     frzTherm && `therm ${frzTherm.left.toFixed(1)}/${frzTherm.right.toFixed(1)}`,
     temps && `hub ${t(temps.ambient)}`,
-    waterLevel && `water ${waterLevel}`,
+    !tank && waterLevel && `water ${waterLevel}`,
   ].filter(Boolean) as string[]
 
   return (
@@ -125,6 +131,7 @@ export function FreezerHealthCard() {
       <Card className="flex-row items-center gap-2.5 px-4 py-3.5 min-[900px]:hidden">
         <span className="sp-label">Freezer</span>
         <StatusDot tone={status.tone} label={status.label} className="text-[13px]" />
+        {tank && <WaterTankGauge tank={tank} className="font-mono text-xs text-fg-2" />}
         <span className="ml-auto truncate font-mono text-xs text-fg-2">
           {temps ? `${t(temps.heatsink, 0)} sink · ${t(temps.leftWater ?? temps.rightWater, 0)} water` : '--'}
         </span>
@@ -142,11 +149,19 @@ export function FreezerHealthCard() {
           <BigStat value={rpm(frzHealth?.left.pumpRpm)} label="Pump L · rpm" warn={frzHealth?.left.pumpRpm === 0} />
           <BigStat value={rpm(frzHealth?.right.pumpRpm)} label="Pump R · rpm" warn={frzHealth?.right.pumpRpm === 0} />
         </div>
-        {secondary.length > 0 && (
-          <div className="border-t border-line pt-2.5 font-mono text-[11px] leading-relaxed text-fg-2">
-            {secondary.join(' · ')}
-          </div>
-        )}
+        {tank
+          ? (
+              <div className="border-t border-line pt-2.5 font-mono text-[11px] leading-relaxed text-fg-2" data-testid="freezer-secondary">
+                {'tank '}
+                <WaterTankGauge tank={tank} className="align-middle" />
+                {secondary.length > 0 && ` · ${secondary.join(' · ')}`}
+              </div>
+            )
+          : secondary.length > 0 && (
+            <div className="border-t border-line pt-2.5 font-mono text-[11px] leading-relaxed text-fg-2">
+              {secondary.join(' · ')}
+            </div>
+          )}
       </Card>
     </>
   )

@@ -8,13 +8,14 @@ import { activeNavId, langFromPath, pathWithoutLang } from '../navItems'
 const state = vi.hoisted(() => ({
   path: '/en', query: '', active: true, base: undefined as { configured: boolean } | undefined,
   status: undefined as unknown, health: undefined as unknown,
-  version: undefined as unknown, water: undefined as unknown,
+  version: undefined as unknown, water: undefined as unknown, frames: {} as Record<string, unknown>,
   start: vi.fn(), end: vi.fn(),
 }))
 vi.mock('next/navigation', () => ({ usePathname: () => state.path, useSearchParams: () => new URLSearchParams(state.query) }))
 vi.mock('@/src/hooks/useScheduleActive', () => ({ useScheduleActive: () => ({ isActive: state.active }) }))
 vi.mock('@/src/hooks/useSwipeNavigation', () => ({ useSwipeNavigation: () => ({ onTouchStart: state.start, onTouchEnd: state.end }) }))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => 29000000 }))
+vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorFrame: (type: string) => state.frames[type] }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   base: { getAvailability: { useQuery: () => ({ data: state.base }) } },
   device: { getStatus: { useQuery: () => ({ data: state.status }) } },
@@ -24,7 +25,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
 } }))
 
 beforeEach(() => {
-  Object.assign(state, { path: '/en', query: '', active: true, status: undefined, health: undefined, version: undefined, water: undefined, base: undefined })
+  Object.assign(state, { path: '/en', query: '', active: true, status: undefined, health: undefined, version: undefined, water: undefined, base: undefined, frames: {} })
   vi.clearAllMocks()
 })
 
@@ -90,6 +91,17 @@ describe('responsive navigation', () => {
     fireEvent.click(chip)
     fireEvent.pointerDown(document.body)
     expect(screen.queryByTestId('build-details')).toBeNull()
+  })
+  it('lists a disconnected cover sensor only when sensHealth reports it', () => {
+    state.health = { status: 'ok', database: { status: 'ok' }, scheduler: {}, iptables: { ok: true } }
+    const { rerender } = render(<Sidebar />)
+    expect(screen.queryByTestId('footer-issues')).toBeNull()
+    state.frames = { sensHealth: { type: 'sensHealth', ts: 1, version: 1, left: { connected: true }, right: { connected: true } } }
+    rerender(<Sidebar />)
+    expect(screen.queryByTestId('footer-issues')).toBeNull()
+    state.frames = { sensHealth: { type: 'sensHealth', ts: 2, version: 1, left: { connected: false }, right: { connected: true } } }
+    rerender(<Sidebar />)
+    expect(within(screen.getByTestId('footer-issues')).getAllByRole('listitem').map(li => li.textContent)).toEqual(['Left cover sensor disconnected'])
   })
   it('shows release versions and preserves an unknown model name', () => {
     state.status = { podVersion: 'Future pod' }
