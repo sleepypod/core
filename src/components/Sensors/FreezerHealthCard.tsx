@@ -106,7 +106,8 @@ export function FreezerHealthCard() {
       </>
     )
   }
-  const status = freezerStatus(frzHealth, waterLevel, hasData)
+  // A low tank from frzWater warns too, even while the DAC still reads ok.
+  const status = freezerStatus(frzHealth, tank?.tone === 'warn' ? 'low' : waterLevel, hasData)
 
   const t = (v: number | null | undefined, decimals = 1) =>
     formatDisplayTemp(v, unit, { decimals, includeUnit: false, nullDisplay: '--' })

@@ -2,7 +2,7 @@
 
 import { Droplets, Play } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { useSensorFrame } from '@/src/hooks/useSensorStream'
+import { useSensorFrame, useSensorSubscription } from '@/src/hooks/useSensorStream'
 import { Button, Card, CardHeader, Skeleton } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import { dailyWaterLevels, useWaterHistory, type WaterDay } from './waterHistory'
@@ -34,6 +34,7 @@ function dayLabel(level: WaterDay): string {
 export function WaterLevelCard({ onOpen }: { onOpen: () => void }) {
   const { data: history, isLoading: historyLoading } = useWaterHistory()
   const { data: status, isLoading: statusLoading } = trpc.device.getStatus.useQuery({}, { refetchInterval: 10_000 })
+  useSensorSubscription({ sensors: ['frzWater'] })
   const frzWater = useSensorFrame('frzWater')
   const tank = waterTank(frzWater)
   const priming = !!status?.isPriming || !!frzWater?.isPriming

@@ -16,6 +16,7 @@ import {
   useSensorFrame,
   useSensorStream,
   useSensorStreamStatus,
+  useSensorSubscription,
 } from '../useSensorStream'
 
 const sensorSingleton = (globalThis as any).__sleepypod_sensorStream
@@ -394,6 +395,56 @@ describe('useSensorStream', () => {
     act(() => ws.triggerMessage('not json'))
     expect(result.current.status).toBe('connected')
     unmount()
+  })
+})
+
+describe('useSensorSubscription', () => {
+  it('merges its sensors with other consumers without re-rendering on frames', async () => {
+    const stream = renderHook(() => useSensorStream({ sensors: ['capSense'] }))
+    let renders = 0
+    const sub = renderHook(() => {
+      renders++
+      useSensorSubscription({ sensors: ['sensHealth'] })
+    })
+    await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    const last = () => JSON.parse(ws.sent.at(-1) as string)
+    expect(last()).toEqual({ type: 'subscribe', snapshot: true, sensors: expect.arrayContaining(['capSense', 'sensHealth']) })
+    const before = renders
+    act(() => ws.triggerMessage({ type: 'capSense', ts: 1, left: 1, right: 2 }))
+    expect(renders).toBe(before)
+
+    // The other consumer leaves: the connection stays up with sensHealth alone.
+    stream.unmount()
+    expect(ws.readyState).toBe(1)
+    expect(last().sensors).toEqual(['sensHealth'])
+    sub.unmount()
+    expect(ws.readyState).toBe(3)
+  })
+
+  it('re-requests a snapshot after a dropped connection so frames recover', async () => {
+    const sub = renderHook(() => useSensorSubscription({ sensors: ['sensHealth'] }))
+    const frame = renderHook(() => useSensorFrame('sensHealth'))
+    await waitFor(() => expect(wsMock.sockets.length).toBeGreaterThan(0))
+    vi.useFakeTimers()
+    const ws = wsMock.sockets[0] as FakeWS
+    act(() => ws.triggerOpen())
+    act(() => ws.triggerClose())
+    act(() => vi.advanceTimersByTime(1_000))
+    const next = wsMock.sockets[1] as FakeWS
+    act(() => next.triggerOpen())
+    expect(JSON.parse(next.sent.at(-1) as string)).toEqual({ type: 'subscribe', snapshot: true, sensors: ['sensHealth'] })
+    const health = { type: 'sensHealth', ts: 5, version: 1, left: { connected: false }, right: { connected: true } }
+    act(() => next.triggerMessage({ type: 'snapshot', latest: [health], waveform: [] }))
+    expect(frame.result.current).toEqual(health)
+    frame.unmount()
+    sub.unmount()
+  })
+
+  it('stays closed when disabled', () => {
+    renderHook(() => useSensorSubscription({ sensors: ['frzWater'], enabled: false }))
+    expect(wsMock.sockets.length).toBe(0)
   })
 })
 

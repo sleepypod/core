@@ -14,7 +14,8 @@ const mock = vi.hoisted(() => ({
   statusLoading: false,
   frames: {} as Record<string, unknown>,
 }))
-vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorFrame: (type: string) => mock.frames[type] }))
+const subscription = vi.hoisted(() => vi.fn())
+vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorFrame: (type: string) => mock.frames[type], useSensorSubscription: subscription }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   waterLevel: { getHistory: { useQuery: () => ({ data: mock.history, isLoading: mock.historyLoading }) } },
   device: { getStatus: { useQuery: () => ({ data: mock.status, isLoading: mock.statusLoading }) } },
@@ -64,6 +65,7 @@ it('opens the prime dialog and disables the button while priming', () => {
 it('keeps the header and prime state from device status without a frzWater frame', () => {
   mock.status = { isPriming: false }
   render(<WaterLevelCard onOpen={() => {}} />)
+  expect(subscription).toHaveBeenCalledWith({ sensors: ['frzWater'] })
   expect(screen.queryByTestId('water-tank')).toBeNull()
   expect(screen.getByText('7 days')).toBeTruthy()
   expect((screen.getByRole('button', { name: /start prime/i }) as HTMLButtonElement).disabled).toBe(false)

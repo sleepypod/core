@@ -696,6 +696,32 @@ export interface UseSensorStreamOptions {
  * ```
  */
 export function useSensorStream(options: UseSensorStreamOptions = {}) {
+  useSensorSubscription(options)
+
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+
+  // Stable references for seek API (no deps — they use the singleton directly)
+  const seek = useCallback((timestamp: number) => sendSeek(timestamp), [])
+  const getTimeRange = useCallback(() => sendGetTimeRange(), [])
+
+  return {
+    ...snapshot,
+    seekWaveform,
+    goLive,
+    /** Send a seek request — server replays frames from the given timestamp (epoch seconds). */
+    seek,
+    /** Request the available time range for scrubbing. */
+    getTimeRange,
+  }
+}
+
+/**
+ * Keep the shared connection open and add `sensors` to the merged
+ * subscription, without re-rendering on stream state. For long-lived
+ * consumers (the app shell) that read frames through `useSensorFrame`.
+ * Each reconnect re-requests a snapshot, so the latest frames come back.
+ */
+export function useSensorSubscription(options: UseSensorStreamOptions = {}) {
   const { sensors = null, enabled = true } = options
   const sensorsKey = sensors ? sensors.slice().sort().join(',') : 'all'
 
@@ -735,22 +761,6 @@ export function useSensorStream(options: UseSensorStreamOptions = {}) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sensorsKey, enabled, subId])
-
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
-
-  // Stable references for seek API (no deps — they use the singleton directly)
-  const seek = useCallback((timestamp: number) => sendSeek(timestamp), [])
-  const getTimeRange = useCallback(() => sendGetTimeRange(), [])
-
-  return {
-    ...snapshot,
-    seekWaveform,
-    goLive,
-    /** Send a seek request — server replays frames from the given timestamp (epoch seconds). */
-    seek,
-    /** Request the available time range for scrubbing. */
-    getTimeRange,
-  }
 }
 
 /**

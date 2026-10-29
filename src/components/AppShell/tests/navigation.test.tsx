@@ -15,7 +15,8 @@ vi.mock('next/navigation', () => ({ usePathname: () => state.path, useSearchPara
 vi.mock('@/src/hooks/useScheduleActive', () => ({ useScheduleActive: () => ({ isActive: state.active }) }))
 vi.mock('@/src/hooks/useSwipeNavigation', () => ({ useSwipeNavigation: () => ({ onTouchStart: state.start, onTouchEnd: state.end }) }))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => 29000000 }))
-vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorFrame: (type: string) => state.frames[type] }))
+const subscription = vi.hoisted(() => vi.fn())
+vi.mock('@/src/hooks/useSensorStream', () => ({ useSensorFrame: (type: string) => state.frames[type], useSensorSubscription: subscription }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   base: { getAvailability: { useQuery: () => ({ data: state.base }) } },
   device: { getStatus: { useQuery: () => ({ data: state.status }) } },
@@ -95,6 +96,8 @@ describe('responsive navigation', () => {
   it('lists a disconnected cover sensor only when sensHealth reports it', () => {
     state.health = { status: 'ok', database: { status: 'ok' }, scheduler: {}, iptables: { ok: true } }
     const { rerender } = render(<Sidebar />)
+    // The shell keeps sensHealth subscribed on every page, not just System.
+    expect(subscription).toHaveBeenCalledWith({ sensors: ['sensHealth'] })
     expect(screen.queryByTestId('footer-issues')).toBeNull()
     state.frames = { sensHealth: { type: 'sensHealth', ts: 1, version: 1, left: { connected: true }, right: { connected: true } } }
     rerender(<Sidebar />)

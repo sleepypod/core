@@ -105,6 +105,7 @@ it('keeps the binary water level until a frzWater frame arrives, then shows the 
 
   mock.frames = { ...live, frzWater: { type: 'frzWater', ts: 1, isPriming: true, hasWater: true, capValid: true, capLevel: 2, needsPriming: false } }
   rerender(<FreezerHealthCard />)
+  expect(screen.getAllByText('Normal')).toHaveLength(2)
   expect(screen.queryByText(/water ok/)).toBeNull()
   expect(screen.getAllByRole('img', { name: 'Water tank 2 of 5' })).toHaveLength(2)
   expect(screen.getAllByText('Priming…')).toHaveLength(2)
@@ -114,6 +115,9 @@ it('keeps the binary water level until a frzWater frame arrives, then shows the 
   rerender(<FreezerHealthCard />)
   expect(screen.getAllByRole('img', { name: 'Water low, tank level unavailable' })).toHaveLength(2)
   expect(screen.getAllByText('Needs prime')).toHaveLength(2)
+  // The DAC still reads ok, but the tank says no water: the status dot warns too.
+  expect(screen.getAllByText('Water low')).toHaveLength(2)
+  expect(screen.queryByText('Normal')).toBeNull()
 })
 
 it('uses server occupancy while visualizing frame variance independently', () => {
