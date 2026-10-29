@@ -73,8 +73,8 @@ export function referenceInSession(reference: ReferencePoint[], s: { start: numb
 }
 
 /** The reference sample nearest `t`, or null when none is within `tolMs`. */
-export function nearestReference(points: ReferencePoint[], t: number, tolMs = REFERENCE_TOL_MS): ReferencePoint | null {
-  let best: ReferencePoint | null = null
+export function nearestReference<T extends { t: number }>(points: T[], t: number, tolMs = REFERENCE_TOL_MS): T | null {
+  let best: T | null = null
   for (const p of points) {
     if (best == null || Math.abs(p.t - t) < Math.abs(best.t - t)) best = p
   }
@@ -85,8 +85,8 @@ export function nearestReference(points: ReferencePoint[], t: number, tolMs = RE
 export const REFERENCE_GAP_MS = 15 * 60_000
 
 /** Time-sorted samples split into runs with no gap over `gapMs`. */
-export function referenceRuns(points: ReferencePoint[], gapMs = REFERENCE_GAP_MS): ReferencePoint[][] {
-  const runs: ReferencePoint[][] = []
+export function referenceRuns<T extends { t: number }>(points: T[], gapMs = REFERENCE_GAP_MS): T[][] {
+  const runs: T[][] = []
   for (const p of points) {
     const run = runs[runs.length - 1]
     if (run && p.t - run[run.length - 1].t <= gapMs) run.push(p)
@@ -96,15 +96,17 @@ export function referenceRuns(points: ReferencePoint[], gapMs = REFERENCE_GAP_MS
 }
 
 const REFERENCE_TOL_MS = 5 * 60_000
-const REFERENCE_STROKE = 'var(--text-2)'
+const REFERENCE_STROKE = 'var(--text-1)'
 
-export function VitalsChart({ sessions, stall, bands, reference = [], movement = [], onSelectWindow }: {
+export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceBr = [], movement = [], onSelectWindow }: {
   sessions: Session[]
   /** In bed with no vitals: from the last reading to now. */
   stall: { start: number, end: number } | null
   bands: Record<MetricKey, Band>
   /** Imported Apple Watch heart rate, time-sorted. */
   reference?: ReferencePoint[]
+  referenceHrv?: Array<{ t: number, value: number }>
+  referenceBr?: Array<{ t: number, value: number }>
   movement?: Array<{ bucketStart: Date, eventCount: number }>
   onSelectWindow?: (window: RangeWindow) => void
 }) {
@@ -164,6 +166,25 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
             </g>
           )
         })}
+        {[
+          { key: 'hrv', points: referenceHrv, row: 1, title: (value: number) => `Apple Watch SDNN · ${Math.round(value)} ms` },
+          { key: 'br', points: referenceBr, row: 2, title: (value: number) => `Apple Watch breathing · ${value.toFixed(1)} br/min` },
+        ].map(({ key, points, row, title }) => (
+          <g key={key}>
+            {referenceRuns(points.filter(p => p.t >= session.start && p.t <= session.end)).map((run, r) => (
+              <g key={r}>
+                {run.length > 1 && (
+                  <path data-testid={`vitals-watch-${key}-line`} d={pathOf(run.map(p => axis.xOf(seg, p.t)), run.map(p => yOf(row, p.value)))} fill="none" stroke={REFERENCE_STROKE} strokeWidth={1} strokeDasharray="3 3" strokeOpacity={0.8} />
+                )}
+                {run.map((p, i) => (
+                  <circle key={i} data-testid={`vitals-watch-${key}`} cx={axis.xOf(seg, p.t)} cy={yOf(row, p.value)} r={2} fill="var(--surface-card)" stroke={REFERENCE_STROKE} strokeWidth={1} strokeOpacity={0.8}>
+                    <title>{title(p.value)}</title>
+                  </circle>
+                ))}
+              </g>
+            ))}
+          </g>
+        ))}
         {referenceBySession[seg.index]?.length > 0 && (() => {
           // Lift the pen across sampling gaps (Watch taken off) and
           // mark samples with no neighbour, which a path cannot show.
@@ -199,7 +220,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
         })()}
       </g>
     )
-  }), [axis, sessions, bands, smooth, referenceBySession])
+  }), [axis, sessions, bands, smooth, referenceBySession, referenceHrv, referenceBr])
 
   return (
     <div ref={wrapRef} className="relative w-full" style={{ height: HEAD_H + PLOT_H + AXIS_H }} data-testid="vitals-chart">
@@ -324,6 +345,20 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
                     </text>
                   </g>
                 )}
+                {hoverSeg && [
+                  { key: 'hrv', points: referenceHrv, row: 1, label: (v: number) => `Watch SDNN ${Math.round(v)} ms` },
+                  { key: 'br', points: referenceBr, row: 2, label: (v: number) => `Watch breathing ${v.toFixed(1)} br/min` },
+                ].map(({ key, points, row, label }) => {
+                  const sample = nearestReference(points.filter(p => p.t >= hoverSeg.start && p.t <= hoverSeg.end), hovered.t)
+                  if (!sample) return null
+                  const x = axis.xOf(hoverSeg, sample.t)
+                  const flip = x + 180 > plotW
+                  return (
+                    <text key={key} data-testid={`vitals-watch-${key}-hover`} x={x + (flip ? -8 : 8)} y={yOf(row, sample.value) + 14} textAnchor={flip ? 'end' : 'start'} className="fill-fg-2 font-mono" fontSize={10}>
+                      {label(sample.value)}
+                    </text>
+                  )
+                })}
                 <rect x={Math.min(Math.max(0, hoverX - 70), Math.max(0, plotW - 140))} y={HEAD_H + PLOT_H + 4} width={140} height={18} rx={3} fill="var(--border-2)" />
                 <text x={Math.min(Math.max(70, hoverX), Math.max(70, plotW - 70))} y={HEAD_H + PLOT_H + 17} textAnchor="middle" className="fill-fg font-mono" fontSize={11}>{`${new Date(hovered.t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${clock(hovered.t, timeFormat)}`}</text>
               </g>
@@ -370,16 +405,28 @@ export function VitalsChart({ sessions, stall, bands, reference = [], movement =
   )
 }
 
-export function VitalsLegend({ bandLabel, stalled, reference = false }: { bandLabel: string, stalled: boolean, reference?: boolean }) {
+export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceBr = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean, referenceBr?: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-fg-2">
       <span className="flex items-center gap-2">
         <span className="h-0.5 w-4 rounded bg-fg-2" />
         9-min average
       </span>
+      {referenceHrv && (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-1 rounded-full border border-fg/80" />
+          Apple Watch HRV · SDNN
+        </span>
+      )}
+      {referenceBr && (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-1 rounded-full border border-fg/80" />
+          Apple Watch breathing
+        </span>
+      )}
       {reference && (
         <span className="flex items-center gap-2">
-          <span className="h-0 w-4 border-t border-dashed border-fg-2" />
+          <span className="h-0 w-4 border-t border-dashed border-fg" />
           Apple Watch heart rate
         </span>
       )}

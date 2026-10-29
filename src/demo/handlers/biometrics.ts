@@ -12,6 +12,7 @@ import {
   findDemoNight,
   summarizeEpochs,
   type DemoNight,
+  type DemoVital,
   type Side,
 } from '../history'
 import type { DemoHandlers, RouterOutputs } from '../types'
@@ -50,6 +51,26 @@ function range(input: { startDate?: Date, endDate?: Date }) {
 
 const sidesFor = (side?: Side) => (side ? [side] : SIDES)
 const sideBit = (side: Side) => (side === 'right' ? 1 : 0)
+
+// Watch samples have their own exact five-minute Unix grid. Select from the
+// complete night's unchanged two-minute pod series so query edges cannot alter values.
+const REFERENCE_STEP = 5 * MINUTE
+function referenceGrid(side: Side, start: number, end: number): DemoVital[] {
+  return demoNightsOverlapping(side, start, end).flatMap((night) => {
+    const points = night.vitals
+    const first = points[0]
+    const last = points.at(-1)
+    if (!first || !last) return []
+    const result: DemoVital[] = []
+    let index = 0
+    for (let t = Math.ceil(Math.max(start, first.t) / REFERENCE_STEP) * REFERENCE_STEP; t <= Math.min(end, last.t); t += REFERENCE_STEP) {
+      while (index + 1 < points.length && Math.abs(points[index + 1].t - t) < Math.abs(points[index].t - t)) index++
+      // Don't bridge missing pod intervals when synthesizing reference values.
+      if (Math.abs(points[index].t - t) <= MINUTE) result.push({ ...points[index], t })
+    }
+    return result
+  }).sort((a, b) => a.t - b.t)
+}
 
 const emptyStages = (sleepRecordId: number | null = null, enteredBedAt: number | null = null, leftBedAt: number | null = null) => ({
   epochs: [],
@@ -183,8 +204,7 @@ export const biometrics: DemoHandlers<'biometrics'> = {
     const start = input.startDate.getTime()
     const end = input.endDate.getTime()
     if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
-    return demoVitals(input.side, start, end)
-      .filter((_, i) => i % 5 === 0)
+    return referenceGrid(input.side, start, end)
       .map(v => ({
         id: Math.floor(v.t / 1000) * 2 + sideBit(input.side),
         side: input.side,
@@ -195,6 +215,28 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       }))
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       .slice(-(input.limit ?? 5000))
+  },
+
+  getReferenceSamples: (input) => {
+    const start = input.startDate.getTime()
+    const end = input.endDate.getTime()
+    if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    return referenceGrid(input.side, start, end)
+      .map(v => ({ timestamp: new Date(v.t), value: Math.round((input.metric === 'hrv_sdnn' ? v.hrv * 0.7 : v.breathingRate - 0.8) * 10) / 10 }))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+      .slice(-(input.limit ?? 5000))
+  },
+
+  getReferenceStages: (input) => {
+    const start = input.startDate.getTime()
+    const end = input.endDate.getTime()
+    if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    return demoNights(input.side).flatMap(n => mergeIntoBlocks(demoStageEpochs(n, n.enteredBedAt.getTime(), n.leftBedAt?.getTime() ?? Date.now())))
+      .filter(b => b.start <= end && b.end > start)
+      .sort((a, b) => a.start - b.start)
+      .slice(0, input.limit ?? 2000)
+      .map(b => ({ id: Math.floor(b.start / 1000) * 2 + sideBit(input.side), side: input.side, source: 'apple_watch' as const,
+        start: new Date(b.start), end: new Date(b.end), stage: b.stage, createdAt: new Date(b.start) }))
   },
 
   compareToWatch: async (input) => {

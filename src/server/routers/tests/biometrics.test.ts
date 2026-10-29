@@ -92,6 +92,7 @@ const dbMock = vi.hoisted(() => {
 })
 
 // Top-level db mock for device settings (timezone fetch in getSleepStages default)
+// and the side's stored personal model (`.get()`, none stored here, so the rules stage every night).
 const topDbMock = vi.hoisted(() => {
   const makeChain = () => {
     const chain: Record<string, unknown> = {}
@@ -99,6 +100,7 @@ const topDbMock = vi.hoisted(() => {
     chain.from = vi.fn(() => chain)
     chain.where = vi.fn(() => chain)
     chain.limit = vi.fn(() => chain)
+    chain.get = vi.fn(() => undefined)
     return chain
   }
   return { select: vi.fn(() => makeChain()) }
@@ -1638,6 +1640,7 @@ describe('biometrics.getSleepStages query window', () => {
     const out = await caller.getSleepStages({ side: 'left', sleepRecordId: 3 })
     expect(out).toEqual({
       stageView: expect.objectContaining({ provenance: expect.objectContaining({ interpretation: 'current_classifier_view' }) }),
+      stagedBy: { engine: 'rules', version: null },
       epochs: [],
       blocks: [],
       distribution: { wake: 0, light: 0, deep: 0, rem: 0 },

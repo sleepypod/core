@@ -29,6 +29,26 @@ export const vitals = sqliteTable('vitals', {
   index('idx_vitals_timestamp').on(t.timestamp),
 ])
 
+// Detected heartbeat times, one row per side per ~60 s chunk, written by the
+// piezo-processor's beat detector. Beats are stored rather than intervals so
+// discontinuities are explicit: `beats` is a JSON array of millisecond offsets
+// from `timestamp`, where `null` marks a break (rejected beat, missed beat or
+// signal gap) — no interval may be computed across it. Sleep staging turns
+// these into RR intervals for its HRV features, so a better model later can
+// re-score past nights without re-reading raw sensor data.
+export const heartbeats = sqliteTable('heartbeats', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(), // chunk start
+  beats: text('beats', { mode: 'json' }).notNull(), // (number | null)[] ms offsets
+  quality: real('quality'), // 0–1 mean beat confidence over the chunk
+}, t => [
+  // Restart replays the current RAW file; the writer ignores conflicts.
+  uniqueIndex('uq_heartbeats_side_timestamp').on(t.side, t.timestamp),
+  // See idx_vitals_timestamp — retention pruning needs a timestamp seek.
+  index('idx_heartbeats_timestamp').on(t.timestamp),
+])
+
 export const sleepRecords = sqliteTable('sleep_records', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

@@ -189,6 +189,61 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(inboundMdns?.present).toBe(false)
   })
 
+  it('treats a chain that allows everything as satisfying its allow rules', async () => {
+    // Internet access allowed: every rule flushed, policy ACCEPT, nothing dropped.
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.includes('-L INPUT')) return 'Chain INPUT (policy ACCEPT)\ntarget     prot opt source               destination\n'
+      if (cmd.includes('-L OUTPUT')) return 'Chain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination\n'
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().ok).toBe(true)
+  })
+
+  it('still requires the allow rules in front of a jump to a blocking custom chain', async () => {
+    // scripts/internet-control block: OUTPUT jumps to SLEEPYPOD-BLOCK, which ends in DROP.
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.includes('-L INPUT')) return 'Chain INPUT (policy ACCEPT)\ntarget     prot opt source               destination\nSLEEPYPOD-BLOCK  all  --  0.0.0.0/0   0.0.0.0/0\n'
+      if (cmd.includes('-L OUTPUT')) return 'Chain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination\nSLEEPYPOD-BLOCK  all  --  0.0.0.0/0   0.0.0.0/0\n'
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    const result = checkIptables()
+    expect(result.ok).toBe(false)
+    expect(result.rules.find(r => r.name === 'NTP outbound (UDP 123)')?.present).toBe(false)
+    expect(result.rules.find(r => r.name === 'mDNS outbound (UDP 5353)')?.present).toBe(false)
+    expect(result.rules.find(r => r.name === 'mDNS inbound (UDP 5353)')?.present).toBe(false)
+  })
+
+  it('treats a chain of only ACCEPT, LOG and RETURN rules as open', async () => {
+    const { chainAllowsAll } = await import('../iptablesCheck')
+    const header = 'Chain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination\n'
+    expect(chainAllowsAll(header + 'ACCEPT     all  --  0.0.0.0/0  0.0.0.0/0\nLOG        all  --  0.0.0.0/0  0.0.0.0/0  LOG flags 0 level 4\nRETURN     all  --  0.0.0.0/0  0.0.0.0/0\n')).toBe(true)
+    expect(chainAllowsAll(header + 'REJECT     all  --  0.0.0.0/0  0.0.0.0/0  reject-with icmp-port-unreachable\n')).toBe(false)
+    expect(chainAllowsAll('Chain OUTPUT (policy DROP)\ntarget     prot opt source               destination\n')).toBe(false)
+    expect(chainAllowsAll('')).toBe(false)
+  })
+
+  it('still requires the allow rules in front of a drop', async () => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.includes('-L INPUT')) return 'Chain INPUT (policy ACCEPT)\nDROP       all  --  0.0.0.0/0            0.0.0.0/0\n'
+      if (cmd.includes('-L OUTPUT')) return 'Chain OUTPUT (policy DROP)\nACCEPT     udp  --  0.0.0.0/0  0.0.0.0/0  udp dpt:123\n'
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    const result = checkIptables()
+    expect(result.ok).toBe(false)
+    expect(result.rules.find(r => r.name === 'NTP outbound (UDP 123)')?.present).toBe(true)
+    expect(result.rules.find(r => r.name === 'mDNS outbound (UDP 5353)')?.present).toBe(false)
+    expect(result.rules.find(r => r.name === 'LAN access (192.168.0.0/16)')?.present).toBe(false)
+  })
+
   it('treats Permission denied / Operation not permitted from listing as "assume ok"', async () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
@@ -476,4 +531,17 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     expect(repairs.every(cmd => / -I (?:INPUT|OUTPUT) 1 /.test(cmd))).toBe(true)
     log.mockRestore()
   })
+})
+
+it.each(['target', 'Chain'])('retains a jump named %s when checking whether a chain is open', async (target) => {
+  const { chainAllowsAll, checkIptables } = await import('../iptablesCheck')
+  const listing = `Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination
+${target}     all  --  0.0.0.0/0            0.0.0.0/0
+`
+  expect(chainAllowsAll(listing)).toBe(false)
+  setExecHandler(() => listing)
+  const status = checkIptables('/sbin/iptables')
+  expect(status.rules.every(rule => !rule.present)).toBe(true)
+  expect(status.ok).toBe(false)
 })

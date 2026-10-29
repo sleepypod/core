@@ -34,6 +34,7 @@ export const TABLES: TableSpec[] = [
     vitals_id: 'COALESCE((SELECT m.id FROM main.vitals m JOIN snap.vitals v ON m.side IS v.side AND m.timestamp IS v.timestamp WHERE v.id = s.vitals_id), s.vitals_id)',
   } },
   { table: 'movement', key: ['side', 'timestamp'], mode: 'append' },
+  { table: 'heartbeats', key: ['side', 'timestamp'], mode: 'append' },
   { table: 'sleep_records', key: ['side', 'entered_bed_at', 'left_bed_at'], mode: 'state' },
   { table: 'cap_sense_frames', key: ['side', 'timestamp'], mode: 'append' },
   { table: 'bed_temp', key: ['timestamp'], mode: 'append' },

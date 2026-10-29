@@ -14,6 +14,7 @@
 import { getSharedHardwareClient } from './dacMonitor.instance'
 import { loadAlarmState, updateAlarmState, type AlarmConfig } from './alarmPersistence'
 import { markAlarmStarted } from './alarmState'
+export { MIN_SNOOZE_SECONDS, nextSnoozeSeconds } from './snoozeLength'
 import type { Side } from './types'
 
 /** A snooze whose restart was missed by at most this much (the server was
@@ -72,9 +73,11 @@ export function snoozeAlarm(
   durationSeconds = Math.min(durationSeconds, Math.floor(MAX_DELAY_MS / 1000))
   const now = Date.now()
   const snoozeUntil = new Date(now + durationSeconds * 1000)
-  schedule(side, snoozeUntil, config, now)
+  // The alarm comes back counting this snooze, so a tapered next one is shorter.
+  const restart = { ...config, snoozeCount: (config.snoozeCount ?? 0) + 1 }
+  schedule(side, snoozeUntil, restart, now)
   updateAlarmState((s) => {
-    s.snoozes[side] = { until: snoozeUntil.getTime(), config }
+    s.snoozes[side] = { until: snoozeUntil.getTime(), config: restart }
   })
   return snoozeUntil
 }

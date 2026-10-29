@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PersonalModelCard } from './PersonalModelCard'
 import { RotateCcw } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, Card, CardHeader, InlineError, SegmentedControl, SelectValue, Skeleton, Slider, Toggle } from '@/src/components/ds'
@@ -100,14 +101,19 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
       {(query.data.pending?.warning ?? query.data.provenance?.warning) && (
         <InlineError>{query.data.pending?.warning ?? query.data.provenance?.warning}</InlineError>
       )}
-      {/* Toolbar: profile, state, preset, reset */}
-      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[13px]">
+      <div className="flex flex-wrap items-center gap-3">
         <SegmentedControl
           ariaLabel="Stage rules side"
           value={side}
           options={[{ value: 'left', label: leftName }, { value: 'right', label: rightName }]}
           onChange={onSideChange}
         />
+        <span className="text-sm text-fg-2">{`Models and rules below apply to ${side === 'left' ? leftName : rightName}’s side`}</span>
+      </div>
+      <PersonalModelCard key={side} side={side} />
+      {/* Toolbar: profile, state, preset, reset */}
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[13px]">
+
         <span className="text-fg-2">
           {`Profile: ${isDefault ? 'System defaults' : 'Custom rules'}`}
           {lastChange && ` · changed ${shortDate(lastChange.changedAt)}`}
@@ -270,6 +276,11 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
   )
 }
 
+/**
+ * The personal model stored on the pod for this side (trained on a Mac from the pod's nights with the
+ * Apple Watch as the label) and the switch that makes it stage the side's nights. The rules below stay
+ * the fallback for any night the model cannot stage.
+ */
 /**
  * Debounced preview of the draft. Re-runs when the draft, the saved rules
  * (after a save) or the night span change; an invalid draft shows no

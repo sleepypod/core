@@ -79,6 +79,26 @@ export const wakeWindowSchema = z
     { message: `Wake window must be one of ${WAKE_WINDOW_MINUTES.join(', ')} minutes` },
   )
 
+/** How long a snooze lasts, in seconds (1-30 minutes). */
+export const snoozeDurationSchema = z
+  .number()
+  .int()
+  .min(60, 'Snooze must be at least 1 minute')
+  .max(1800, 'Snooze must not exceed 30 minutes')
+
+/**
+ * Snooze taper: percent by which each later snooze of the same alarm is
+ * shorter than the one before. 0 turns it off.
+ */
+export const SNOOZE_TAPER_PERCENTS = [0, 30, 40, 50, 60] as const
+export const snoozeTaperSchema = z
+  .number()
+  .int()
+  .refine(
+    (v): v is typeof SNOOZE_TAPER_PERCENTS[number] => (SNOOZE_TAPER_PERCENTS as readonly number[]).includes(v),
+    { message: `Snooze taper must be one of ${SNOOZE_TAPER_PERCENTS.join(', ')} percent` },
+  )
+
 /**
  * Vibration pattern enum
  */

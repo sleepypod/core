@@ -74,9 +74,10 @@ describe('snoozeManager', () => {
     expect(mockSetAlarm).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
 
-    expect(mockSetAlarm).toHaveBeenCalledWith('left', config)
+    // Comes back as it was, counting the snooze (for Snooze taper).
+    expect(mockSetAlarm).toHaveBeenCalledWith('left', { ...config, snoozeCount: 1 })
     // Recorded as vibrating (so a tap can snooze it again), not just broadcast.
-    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('left', config)
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('left', { ...config, snoozeCount: 1 })
     expect(getSnoozeStatus('left')).toEqual({ active: false, snoozeUntil: null })
     expect(loadAlarmState().snoozes.left).toBeUndefined()
   })
@@ -101,8 +102,14 @@ describe('snoozeManager', () => {
     vi.advanceTimersByTime(60_000)
     await vi.runAllTimersAsync()
 
-    expect(mockSetAlarm).toHaveBeenCalledWith('left', config2)
+    expect(mockSetAlarm).toHaveBeenCalledWith('left', { ...config2, snoozeCount: 1 })
     expect(mockSetAlarm).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts each snooze of the same alarm', async () => {
+    snoozeAlarm('left', 60, { ...config, snoozeCount: 2 })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('left', { ...config, snoozeCount: 3 })
   })
 
   it('clamps delays to the signed 32-bit setTimeout ceiling', () => {
@@ -134,7 +141,7 @@ describe('snoozeManager', () => {
     it('keeps a pending snooze on disk until it fires or is cancelled', async () => {
       vi.setSystemTime(10_000)
       snoozeAlarm('left', 300, config)
-      expect(loadAlarmState().snoozes.left).toEqual({ until: 310_000, config })
+      expect(loadAlarmState().snoozes.left).toEqual({ until: 310_000, config: { ...config, snoozeCount: 1 } })
       cancelSnooze('left')
       expect(loadAlarmState().snoozes.left).toBeUndefined()
     })

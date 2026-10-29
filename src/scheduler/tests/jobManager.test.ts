@@ -956,6 +956,8 @@ describe('JobManager incremental upsert/cancel', () => {
     duration: 120,
     alarmTemperature: 80,
     wakeWindow: 0,
+    snoozeDuration: 300,
+    snoozeTaper: 0,
     enabled: true,
     createdAt: new Date(0),
     updatedAt: new Date(0),
@@ -1761,6 +1763,8 @@ describe('JobManager residual mutation contracts', () => {
         ...row,
         id: 25,
         wakeWindow: 0,
+        snoozeDuration: 300,
+        snoozeTaper: 0,
         side: 'right',
         dayOfWeek: 'monday',
         time: '06:30',
@@ -2149,6 +2153,8 @@ describe('JobManager residual mutation contracts', () => {
       time: '06:30',
       alarmTemperature: 88,
       wakeWindow: 0,
+      snoozeDuration: 300,
+      snoozeTaper: 0,
       vibrationIntensity: 50,
       vibrationPattern: 'rise',
       duration: 30,
@@ -2211,6 +2217,8 @@ describe('JobManager residual mutation contracts', () => {
       time: '06:30',
       alarmTemperature: 88,
       wakeWindow: 0,
+      snoozeDuration: 300,
+      snoozeTaper: 0,
       vibrationIntensity: 50,
       vibrationPattern: 'rise',
       duration: 30,
@@ -2221,6 +2229,8 @@ describe('JobManager residual mutation contracts', () => {
       vibrationIntensity: 50,
       vibrationPattern: 'rise',
       duration: 30,
+      snoozeDuration: 300,
+      snoozeTaper: 0,
     })
     expect(warn).toHaveBeenCalledWith(
       '[jobManager] skipped alarm temperature alarm-43: pump stall guard blocks right; firing vibration only',
@@ -2240,11 +2250,13 @@ describe('JobManager residual mutation contracts', () => {
         time: '06:50',
         alarmTemperature: 80,
         wakeWindow: 0,
+        snoozeDuration: 300,
+        snoozeTaper: 0,
         vibrationIntensity: 100,
         vibrationPattern: 'rise',
         duration: 120,
       })
-      expect(getActiveAlarmConfig('left')).toEqual({ vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120 })
+      expect(getActiveAlarmConfig('left')).toEqual({ vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, snoozeDuration: 300, snoozeTaper: 0 })
     }
     finally {
       suspendActiveAlarms()

@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { TRPCError } from '@trpc/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const callerMock = vi.hoisted(() => {
   const fn = () => vi.fn()
@@ -27,7 +27,10 @@ const callerMock = vi.hoisted(() => {
       getMovementSummary: fn(), getVitalsBaseline: fn(), getOccupancy: fn(), importReferenceVitals: fn(), importReferenceSamples: fn(), importReferenceStages: fn(),
       getReferenceStages: fn(), getReferenceVitals: fn(), getVitals: fn(), compareToWatch: fn(),
     },
-    sleepStages: { getClassifier: fn(), previewClassifier: fn(), setClassifier: fn() },
+    sleepStages: {
+      getClassifier: fn(), previewClassifier: fn(), setClassifier: fn(),
+      listModels: fn(), previewModel: fn(), uploadModel: fn(), selectModel: fn(), setModelActive: fn(),
+    },
     environment: {
       getSummary: fn(), getAmbientLightSummary: fn(), getLatestBedTemp: fn(), getLatestFreezerTemp: fn(),
       getLatestAmbientLight: fn(),
@@ -114,6 +117,7 @@ describe('sleepypod MCP server', () => {
     const client = await connect()
     const { tools } = await client.listTools()
     expect(tools.map(t => t.name).sort()).toEqual([
+      'add_stage_model',
       'apply_biometric_profile',
       'apply_sleep_curve',
       'backtest_biometrics',
@@ -132,6 +136,7 @@ describe('sleepypod MCP server', () => {
       'get_sleep_history',
       'get_sleep_stage_rules',
       'get_sleep_summary',
+      'get_stage_models',
       'get_vitals_trend',
       'import_apple_watch_data',
       'import_biometric_reference',
@@ -143,16 +148,19 @@ describe('sleepypod MCP server', () => {
       'manage_schedule',
       'pod_maintenance',
       'preview_sleep_stage_rules',
+      'preview_stage_model',
       'prime_pod',
       'propose_biometric_profile',
       'release_biometric_artifacts',
       'resume_schedule',
       'run_once_curve',
       'schedule_biometric_shadow',
+      'select_stage_model',
       'set_device_settings',
       'set_power',
       'set_side_settings',
       'set_sleep_stage_rules',
+      'set_stage_model_active',
       'set_temperature',
       'stop_biometric_shadow',
     ])
@@ -1383,11 +1391,19 @@ describe('sleep stage tuning tools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // Keep the October reference fixtures inside the rolling 14-day window.
+    // Leave transport timers real so MCP requests can complete normally.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-13T13:00:00Z'))
     callerMock.sleepStages.getClassifier.mockResolvedValue(classifierState())
     callerMock.biometrics.getReferenceStages.mockResolvedValue([])
     callerMock.biometrics.getSleepRecords.mockResolvedValue([])
     callerMock.biometrics.getReferenceVitals.mockResolvedValue([])
     callerMock.biometrics.getVitals.mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   async function call(name: string, args: Record<string, unknown>) {
@@ -1589,6 +1605,20 @@ describe('sleep stage tuning tools', () => {
     })
   })
 
+  it('get_sleep_stage_rules clips reference epochs to the rolling coverage window', async () => {
+    vi.setSystemTime(new Date('2026-10-26T09:00:00Z'))
+    const expired = { ...segment, id: 2, start: new Date('2026-10-11T06:00:00Z'), end: new Date('2026-10-11T12:00:00Z') }
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([segment, expired])
+    callerMock.biometrics.getSleepRecords.mockResolvedValue([record])
+
+    const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
+    expect(result).toMatchObject({ referenceCoverage: { epochs: 36 } })
+    expect(callerMock.biometrics.getReferenceStages).toHaveBeenCalledWith(expect.objectContaining({
+      startDate: new Date('2026-10-12T09:00:00Z'),
+      endDate: new Date('2026-10-26T09:00:00Z'),
+    }))
+  })
+
   it('get_sleep_stage_rules marks coverage as truncated when a query hits its row cap', async () => {
     callerMock.biometrics.getReferenceStages.mockResolvedValue([segment])
     callerMock.biometrics.getSleepRecords.mockResolvedValue(Array.from({ length: 100 }, (_, i) => ({ ...record, id: i + 1 })))
@@ -1707,5 +1737,145 @@ describe('sleep stage tuning tools', () => {
     expect(callerMock.sleepStages.setClassifier).toHaveBeenCalledWith({
       side: 'left', classifier: { engine: 'rules', ruleset: STAGE_RULESET_PRESETS.movementOnly.ruleset },
     })
+  })
+})
+
+describe('personal stage model tools', () => {
+  const CONTRACT = ['hrZ', 'motionZ']
+  const MODEL = {
+    version: 'research-test-1',
+    kind: 'forest' as const,
+    classes: ['wake', 'light', 'deep', 'rem'],
+    featureContract: CONTRACT,
+    epochSeconds: 300,
+    trees: [{ f: [-1], t: [0], l: [-1], r: [-1], v: [[0, 1, 0, 0]] }],
+    testVectors: [{ inputs: { hrZ: 0, motionZ: 0 }, expected: 1 }],
+  }
+  const AGREEMENT = { epochs: 10, accuracy: 0.7, kappa: 0.4, confusion: {}, recall: { wake: null, light: 0.8, deep: 0.5, rem: 0.6 } }
+  const LIBRARY = [
+    { id: 3, version: 'new', kind: 'forest', uploadedAt: 1_800_000_000_000, selected: false, active: false },
+    { id: 1, version: 'old', kind: 'forest', uploadedAt: 1_790_000_000_000, metrics: { kappa: 0.25 }, selected: true, active: true },
+  ]
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('lists the library with ISO times and names the active entry', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue(LIBRARY)
+    const result = await (await connect()).callTool({ name: 'get_stage_models', arguments: { side: 'left' } }) as CallToolResult
+    expect(callerMock.sleepStages.listModels).toHaveBeenCalledWith({ side: 'left' })
+    expect(parse(result)).toMatchObject({ side: 'left', active: 1, models: [{ id: 3, uploadedAt: new Date(1_800_000_000_000).toISOString() }, { id: 1, metrics: { kappa: 0.25 } }] })
+  })
+
+  it('reports no active model when none is active', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue([{ ...LIBRARY[0] }])
+    const result = await (await connect()).callTool({ name: 'get_stage_models', arguments: { side: 'right' } }) as CallToolResult
+    expect(parse(result)).toMatchObject({ active: null })
+  })
+
+  it('previews the selected model over seven nights by default and drops the per-epoch blocks', async () => {
+    callerMock.sleepStages.previewModel.mockResolvedValue({
+      version: 'old', pooled: AGREEMENT, rulesPooled: { ...AGREEMENT, kappa: 0 },
+      nights: [{ sleepRecordId: 9, enteredBedAt: 1_800_000_000_000, leftBedAt: 1_800_030_000_000, blocks: [{ start: 1, end: 2, stage: 'deep' }], agreement: AGREEMENT, rulesAgreement: null }],
+    })
+    const result = await (await connect()).callTool({ name: 'preview_stage_model', arguments: { side: 'left' } }) as CallToolResult
+    expect(callerMock.sleepStages.previewModel).toHaveBeenCalledWith({ side: 'left', model: undefined, sleepRecordId: undefined, nights: 7 })
+    const body = parse(result) as { note: string, nights: Array<Record<string, unknown>> }
+    expect(body.note).toMatch(/in-sample/)
+    expect(body.nights[0]).toEqual({
+      sleepRecordId: 9, enteredBedAt: new Date(1_800_000_000_000).toISOString(), leftBedAt: new Date(1_800_030_000_000).toISOString(),
+      model: { epochs: 10, accuracy: 0.7, kappa: 0.4 }, rules: null,
+    })
+  })
+
+  it('previews an inline candidate for one record without a night count', async () => {
+    callerMock.sleepStages.previewModel.mockResolvedValue({ version: MODEL.version, pooled: null, rulesPooled: null, nights: [] })
+    await (await connect()).callTool({ name: 'preview_stage_model', arguments: { side: 'right', model: MODEL, sleepRecordId: 4, nights: 3 } })
+    expect(callerMock.sleepStages.previewModel).toHaveBeenCalledWith({ side: 'right', model: expect.objectContaining({ version: 'research-test-1' }), sleepRecordId: 4, nights: undefined })
+  })
+
+  it('surfaces a preview without a stored model as an error', async () => {
+    callerMock.sleepStages.previewModel.mockRejectedValue(new TRPCError({ code: 'NOT_FOUND', message: 'No personal stage model stored for left' }))
+    const result = await (await connect()).callTool({ name: 'preview_stage_model', arguments: { side: 'left' } }) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe('NOT_FOUND: No personal stage model stored for left')
+  })
+
+  it('adds a model to the library without selecting it', async () => {
+    callerMock.sleepStages.uploadModel.mockResolvedValue({ id: 5, version: MODEL.version })
+    const result = await (await connect()).callTool({ name: 'add_stage_model', arguments: { side: 'left', model: MODEL } }) as CallToolResult
+    expect(callerMock.sleepStages.uploadModel).toHaveBeenCalledWith({ side: 'left', model: expect.objectContaining({ trees: MODEL.trees }) })
+    expect(parse(result)).toMatchObject({ side: 'left', id: 5, selected: false })
+    expect(callerMock.sleepStages.selectModel).not.toHaveBeenCalled()
+  })
+
+  it('reports a model the pod refuses for its contract or test vectors', async () => {
+    callerMock.sleepStages.uploadModel.mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST', message: 'Model fails its test vectors' }))
+    const result = await (await connect()).callTool({ name: 'add_stage_model', arguments: { side: 'left', model: MODEL } }) as CallToolResult
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe('BAD_REQUEST: Model fails its test vectors')
+  })
+
+  it('refuses inline models over the size cap and points to the REST upload', async () => {
+    const leaves = 20_000
+    const big = { ...MODEL, trees: [{ f: Array(leaves).fill(-1), t: Array(leaves).fill(0.123456789), l: Array(leaves).fill(-1), r: Array(leaves).fill(-1), v: Array(leaves).fill([0, 1, 0, 0]) }] }
+    const client = await connect()
+    for (const name of ['add_stage_model', 'preview_stage_model']) {
+      const result = await client.callTool({ name, arguments: { side: 'left', model: big } }) as CallToolResult
+      expect(result.isError).toBe(true)
+      expect(text(result)).toMatch(/at most 256 KB.*POST \/api\/sleep-stages\/models/)
+    }
+    expect(callerMock.sleepStages.uploadModel).not.toHaveBeenCalled()
+    expect(callerMock.sleepStages.previewModel).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed model and an unknown side before calling the pod', async () => {
+    const client = await connect()
+    const bad = await client.callTool({ name: 'add_stage_model', arguments: { side: 'left', model: { ...MODEL, kind: 'svm' } } }) as CallToolResult
+    expect(bad.isError).toBe(true)
+    const side = await client.callTool({ name: 'get_stage_models', arguments: { side: 'middle' } }) as CallToolResult
+    expect(side.isError).toBe(true)
+    expect(callerMock.sleepStages.uploadModel).not.toHaveBeenCalled()
+    expect(callerMock.sleepStages.listModels).not.toHaveBeenCalled()
+  })
+
+  it('selects a library model and returns the previous selection to switch back to', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue(LIBRARY)
+    callerMock.sleepStages.selectModel.mockResolvedValue({ version: 'new', active: true })
+    const result = await (await connect()).callTool({ name: 'select_stage_model', arguments: { side: 'left', id: 3, active: true } }) as CallToolResult
+    expect(callerMock.sleepStages.selectModel).toHaveBeenCalledWith({ side: 'left', id: 3, active: true })
+    expect(parse(result)).toEqual({ side: 'left', id: 3, version: 'new', active: true, previous: { id: 1, version: 'old', active: true } })
+  })
+
+  it('selects with no previous model and reports a missing library entry', async () => {
+    callerMock.sleepStages.listModels.mockResolvedValue([])
+    callerMock.sleepStages.selectModel.mockResolvedValueOnce({ version: 'new', active: false })
+    const client = await connect()
+    const ok = await client.callTool({ name: 'select_stage_model', arguments: { side: 'right', id: 3, active: false } }) as CallToolResult
+    expect(parse(ok)).toMatchObject({ previous: null, active: false })
+    callerMock.sleepStages.selectModel.mockRejectedValueOnce(new TRPCError({ code: 'NOT_FOUND', message: 'Model not found for this side' }))
+    const missing = await client.callTool({ name: 'select_stage_model', arguments: { side: 'right', id: 99, active: true } }) as CallToolResult
+    expect(text(missing)).toBe('NOT_FOUND: Model not found for this side')
+  })
+
+  it('turns the model off, and reports activation without a stored model', async () => {
+    callerMock.sleepStages.setModelActive.mockResolvedValueOnce({ active: false, version: 'old' })
+    const client = await connect()
+    const off = await client.callTool({ name: 'set_stage_model_active', arguments: { side: 'left', active: false } }) as CallToolResult
+    expect(parse(off)).toEqual({ side: 'left', active: false, version: 'old' })
+    callerMock.sleepStages.setModelActive.mockRejectedValueOnce(new TRPCError({ code: 'NOT_FOUND', message: 'No valid personal stage model stored for right' }))
+    const on = await client.callTool({ name: 'set_stage_model_active', arguments: { side: 'right', active: true } }) as CallToolResult
+    expect(on.isError).toBe(true)
+    expect(text(on)).toMatch(/No valid personal stage model stored for right/)
+  })
+
+  it('marks reads read-only and selection and activation destructive', async () => {
+    const { tools } = await (await connect()).listTools()
+    const hints = Object.fromEntries(tools.filter(t => /stage_model/.test(t.name)).map(t => [t.name, t.annotations]))
+    expect(hints.get_stage_models).toMatchObject({ readOnlyHint: true })
+    expect(hints.preview_stage_model).toMatchObject({ readOnlyHint: true })
+    expect(hints.add_stage_model).toMatchObject({ readOnlyHint: false, destructiveHint: false })
+    expect(hints.select_stage_model).toMatchObject({ destructiveHint: true })
+    expect(hints.set_stage_model_active).toMatchObject({ destructiveHint: true })
+    expect(tools.map(t => t.name)).not.toContain('set_stage_model')
   })
 })

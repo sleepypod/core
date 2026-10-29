@@ -3,7 +3,7 @@
  * adjust sliders, saving / resetting / reverting payloads, presets,
  * validation, and the debounced preview with its per-rule statistics.
  */
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_STAGE_CLASSIFIER,
@@ -16,8 +16,11 @@ import {
 const trpcMock = vi.hoisted(() => {
   const setMutate = vi.fn()
   const previewMutate = vi.fn()
+  const activeMutate = vi.fn()
   const invalidate = vi.fn()
   const state = {
+    model: { model: null, uploadedAt: null, active: false } as { model: { version: string, kind: string, metrics?: Record<string, unknown> } | null, uploadedAt: number | null, active: boolean },
+    activeError: null as { message: string } | null,
     classifier: null as unknown as StageClassifier,
     pending: null as { classifier: StageClassifier, generation: number, warning: string | null } | null,
     movementOnly: null as unknown as StageClassifier['ruleset'],
@@ -35,11 +38,17 @@ const trpcMock = vi.hoisted(() => {
   return {
     setMutate,
     previewMutate,
+    activeMutate,
     invalidate,
     state,
     trpc: {
-      useUtils: () => ({ sleepStages: { getClassifier: { invalidate } } }),
+      useUtils: () => ({ sleepStages: { getClassifier: { invalidate }, getModel: { invalidate: vi.fn() }, listModels: { invalidate: vi.fn() } }, biometrics: { getSleepStages: { invalidate: vi.fn() } } }),
       sleepStages: {
+        getModel: { useQuery: () => ({ data: state.model }) },
+        listModels: { useQuery: () => ({ data: [] }) },
+        uploadModel: { useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }) },
+        selectModel: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
+        setModelActive: { useMutation: () => ({ mutate: activeMutate, isPending: false, error: state.activeError }) },
         getClassifier: {
           useQuery: () => ({
             data: state.loading || state.queryError
@@ -679,5 +688,44 @@ describe('SleepStageRules', () => {
     fireEvent.change(screen.getByLabelText('Start from preset'), { target: { value: '' } })
     expect(screen.getByLabelText('Rule 2 stage')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true)
+  })
+  describe('personal model card', () => {
+    it('says when no model is stored on the pod', () => {
+      trpcMock.state.model = { model: null, uploadedAt: null, active: false }
+      render(<SleepStageRules side="left" onSideChange={() => {}} />)
+      expect(screen.getByText(/None stored/)).toBeTruthy()
+      expect(screen.queryByRole('switch', { name: 'Stage nights with this model' })).toBeNull()
+    })
+
+    it('describes an active logistic model without metrics and shows a switch error', () => {
+      trpcMock.state.model = { model: { version: 'container-logistic-test', kind: 'logistic' }, uploadedAt: 1, active: true }
+      render(<SleepStageRules side="left" onSideChange={() => {}} />)
+      expect(screen.getAllByText('container-logistic-test')[0]).toBeTruthy()
+      expect(screen.getByText(/Nights are staged by/)).toBeTruthy()
+      const toggle = screen.getByRole('switch', { name: 'Stage nights with this model' })
+      expect(toggle.getAttribute('aria-checked')).toBe('true')
+      fireEvent.click(toggle)
+      expect(trpcMock.activeMutate).toHaveBeenCalledWith({ side: 'left', active: false })
+      cleanup()
+      trpcMock.state.activeError = { message: 'No valid personal stage model stored for left' }
+      trpcMock.state.model = { model: { version: 'v', kind: 'forest', metrics: { lono: { kappa: null, nights: null } } }, uploadedAt: 1, active: false }
+      render(<SleepStageRules side="left" onSideChange={() => {}} />)
+      expect(screen.getByText('No valid personal stage model stored for left')).toBeTruthy()
+      expect(screen.getByText('v')).toBeTruthy()
+      trpcMock.state.activeError = null
+    })
+
+    it('shows the stored model and switches staging to it', () => {
+      trpcMock.state.model = {
+        model: { version: 'container-forest-test', kind: 'forest', metrics: { lono: { kappa: 0.25, nights: 11 } } },
+        uploadedAt: 1,
+        active: false,
+      }
+      render(<SleepStageRules side="left" onSideChange={() => {}} />)
+      expect(screen.getByText('container-forest-test')).toBeTruthy()
+      expect(screen.getByLabelText('κ 0.25')).toBeTruthy()
+      fireEvent.click(screen.getByRole('switch', { name: 'Stage nights with this model' }))
+      expect(trpcMock.activeMutate).toHaveBeenCalledWith({ side: 'left', active: true })
+    })
   })
 })

@@ -8,6 +8,7 @@ import {
   flowReadings,
   freezerTemp,
   healthRuns,
+  heartbeats,
   movement,
   pumpAlerts,
   thermalState,
@@ -27,7 +28,8 @@ import {
  * Tables covered (all write at ≥1/minute and have no referential joins):
  *   vitals, movement, bed_temp, freezer_temp, flow_readings,
  *   ambient_light, water_level_readings, pump_alerts, vitals_quality,
- *   thermal_state, health_runs, flash_write_samples
+ *   thermal_state, health_runs, flash_write_samples,
+ *   heartbeats (~150 KB per side per night of beat times)
  *
  * vitals_quality shares vitals' timestamp cutoff so each quality row dies
  * with its paired vitals row (vitals_id is a logical, unenforced reference —
@@ -46,6 +48,7 @@ const RETENTION_TABLES = [
   { table: vitals, column: vitals.timestamp, name: 'vitals' },
   { table: vitalsQuality, column: vitalsQuality.timestamp, name: 'vitals_quality' },
   { table: movement, column: movement.timestamp, name: 'movement' },
+  { table: heartbeats, column: heartbeats.timestamp, name: 'heartbeats' },
   { table: bedTemp, column: bedTemp.timestamp, name: 'bed_temp' },
   { table: freezerTemp, column: freezerTemp.timestamp, name: 'freezer_temp' },
   { table: flowReadings, column: flowReadings.timestamp, name: 'flow_readings' },

@@ -149,6 +149,120 @@ docs/research/sleep-stage-calibration/feat2.py dataset.csv
 
 It needs numpy and scikit-learn; its shebang pulls them through `uv`.
 
+## 6. Personal models, container side
+
+`personal-models.py` trains the two ojwalch/sleep_classifiers models (logistic
+regression, random forest with 200 trees of depth 8) on the same features the
+iPhone computes for its on-device personal models
+(sleepypod-ios `docs/design/on-device-stage-training.md`), so the container
+run and the phone fit can be cross-checked:
+
+```sh
+docs/research/sleep-stage-calibration/personal-models.py dataset.csv --contract A   # the challenger's four inputs
+docs/research/sleep-stage-calibration/personal-models.py dataset.csv --contract B   # pod native: adds HRV, breathing, 15-min windows
+```
+
+Rows are 5-minute epochs from each night's first Watch-labeled sample, labeled
+by the Watch stage at the epoch midpoint, rare classes oversampled instead of
+class-weighted (Create ML has no class weights), scored leave-one-night-out
+with Cohen's κ against the Watch, pooled and per night. On the ten left-side
+nights to 2026-10-18 (724 labeled epochs):
+
+| contract | logistic κ | forest κ |
+|---|---|---|
+| A | 0.08 | 0.05 |
+| B | 0.11 | 0.20 |
+
+The bundled challenger scores κ 0.12 on these nights and the pod's rules about
+0.02, so contract B's forest is the first model to clear both.
+
+A sweep on the same nights (leave-one-night-out, contract B) chose the forest's
+depth: 200 trees at depth 3/4/6/8/unlimited gave κ 0.18/0.21/0.22/0.26/0.23,
+and 100, 500 or 1000 trees changed nothing at any depth, so the forest is
+pinned at 200 trees, depth 8. Logistic regression was flat (κ 0.10–0.11) across
+C from 0.01 to 100. Histogram gradient boosting at depth 3 reached κ 0.27, the
+best single number but within noise of the depth-8 forest on eleven nights;
+it would need its own export format and is a candidate once more nights exist.
+
+Two parity checks keep the container and the phone honest:
+
+- Features: `--fixture night-fixture.json` writes a synthetic night's raw rows
+  (deterministic, nobody's sleep) and the feature rows under both contracts.
+  Copy it to `sleepypod-ios/SleepypodTests/Fixtures/stage-features-night.json`;
+  the Swift `StageFeatureParityTests` suite recomputes every column from the raw
+  rows and fails on any difference above 1e-6. `--fixture-real` uses the first
+  real labeled night instead, for a local check only: it carries timestamps and
+  per-minute biometrics and must never be committed.
+- Conversion: `--export out/` fits each model on all nights and writes
+  `personal-<kind>.mlmodel` with a card in the challenger's schema (test vectors
+  are the model's own predictions on 12 training rows). The phone's
+  `StageChallenger.load(modelURL:cardURL:)` refuses a model that fails its
+  vectors, so a converter mismatch shows up at load. Needs `coremltools`
+  (`uv run --with coremltools …`).
+
+### One command on the Mac
+
+`scripts/train-personal-models.py` chains the whole thing: snapshot the pod's
+database over SSH, build the dataset, train both models on a contract with
+leave-one-night-out scoring, export the pod form, and upload the model with
+the higher pooled κ as an unselected candidate, then print its preview. About five seconds on Apple silicon; nothing runs on the
+phone.
+
+```sh
+scripts/train-personal-models.py --pod <pod-ip> --side left            # contract B, candidate stored and previewed
+scripts/train-personal-models.py --pod <pod-ip> --side left --no-upload --contract A
+scripts/train-personal-models.py --pod <pod-ip> --snapshot poddb/biometrics.db   # reuse a snapshot
+```
+
+The pod needs the model endpoints below, and the Watch stages must already be
+on it (section 2b). The run leaves the dataset and the exported models (about
+half a megabyte) in the work directory and deletes the ~75 MB database
+snapshot unless `--keep-snapshot`. Candidates accumulate in the model library; the
+current selection and activation stay unchanged. `--select` explicitly selects the
+candidate inactive (turning personal staging off); `--activate` selects it active,
+after preview succeeds. The two flags are mutually exclusive; neither can be
+combined with `--no-upload`. Preview
+scores on training nights are in-sample, not held-out validation.
+
+### Running a model on the pod
+
+`--export out/` also writes `personal-<kind>.json`, the pod's portable form
+(forest trees as parallel arrays with four-class leaf votes, logistic as
+scaler plus weights, the feature contract, hyperparameters and the test
+vectors), checked against scikit-learn on every training row before it is
+written. The pod evaluates it with `src/lib/personal-stage-model.ts`, which
+computes the same feature contracts from a night's vitals and movement (the
+same synthetic fixture is replayed by `src/lib/tests/personal-stage-model.test.ts`)
+and refuses a model that fails its own test vectors.
+
+```sh
+# store a candidate without changing the selection
+curl -X POST http://<pod-ip>:3000/api/sleep-stages/models   -H 'content-type: application/json'   -d "$(jq -c '{side:"left", model:.}' out/personal-forest.json)"
+# score it beside the rules against the Watch on the last 14 nights
+curl -X POST http://<pod-ip>:3000/api/sleep-stages/model/preview   -H 'content-type: application/json' -d "$(jq -c '{side:"left", nights:14, model:.}' out/personal-forest.json)"
+```
+
+The legacy singular `PUT /api/sleep-stages/model` replaces the selected model in
+place and preserves its active state, so it immediately changes staging on an
+active side. It archives both the previous selection and the uploaded model in
+the library. To select a library candidate explicitly, use
+`PUT /api/sleep-stages/models/selected` with `{side, id, active}`.
+
+The selected model can also stage the side's nights: `PUT /api/sleep-stages/model/active`
+with `{"side":"left","active":true}` (or the "Stage nights with this model"
+switch on the Settings → Sleep stages page) makes `getSleepStages` and the
+Watch comparison classify with the model, with the profile's rules as the
+fallback for any night it cannot stage. Every stage read carries `stagedBy`
+(`rules` or `model` plus the version), and the web Night view marks
+model-staged nights. The profile system and its manifest are untouched: the
+rules remain the configured classifier and the model is a per-side switch
+beside it, which is why no manifest-hash migration was needed. On the ten left-side nights to 2026-10-19
+the container's contract-B forest, evaluated by the pod's TypeScript,
+reached in-sample κ 0.33 (leave-one-night-out 0.20 in training).
+
+The Mac analysis container is not checked in here; add its Dockerfile location
+when it is.
+
 ## Tests
 
 ```sh
@@ -159,3 +273,33 @@ The Python Modules CI workflow runs them on every PR that touches
 `scripts/**/*.py`. The tests use small synthetic fixtures, not a real export. When
 `src/lib/sleep-stages.ts` changes, update the port in the script and the
 classifier cases in the test, which mirror `src/lib/tests/sleep-stages.test.ts`.
+
+
+### Saved model library
+
+Settings → Sleep stages now offers **Upload model JSON** even when no model is
+stored. Upload `candidate.json` from a training run, choose an entry in **Saved
+models**, then press **Use this model** to activate it for the current side.
+Choosing a dropdown entry alone does not switch staging. Uploads save candidates
+without changing the active model, and identical uploads reuse the same entry.
+The model version and held-out κ are displayed as inline code; κ includes an
+explanation. The existing toggle returns the selected model to rules-only staging.
+
+The library is separate for each side. Existing models are copied into it during
+migration without changing their active state. It is stored in the configuration
+database and included with its normal backups.
+
+| Method / path | Request | Behavior |
+| --- | --- | --- |
+| `GET /api/sleep-stages/models` | `?side=left` | List summaries, IDs, selected/active state, and recorded metrics |
+| `POST /api/sleep-stages/models` | `{side, model}` | Validate and save a candidate; return its ID without activation |
+| `PUT /api/sleep-stages/models/selected` | `{side, id, active}` | Select a saved model and explicitly set activation |
+
+The original singular `/api/sleep-stages/model` routes remain compatible with
+existing clients. Singular PUT still selects/replaces the per-side slot and
+preserves its active state, but also archives the old and new model in the
+library. Singular PUT with `model: null` clears the selection without deleting
+saved candidates. Use the plural POST route when an upload must not affect
+staging. Models are validated against known feature contracts and their test
+vectors before upload or selection. These retrospective models do not establish
+prospective or clinical validity.

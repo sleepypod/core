@@ -19,6 +19,8 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
   wakeWindowSchema,
+  snoozeDurationSchema,
+  snoozeTaperSchema,
 } from '@/src/server/validation-schemas'
 
 const temperatureScheduleOutput = z.object({
@@ -55,6 +57,8 @@ const alarmScheduleOutput = z.object({
   duration: z.number(),
   alarmTemperature: z.number(),
   wakeWindow: z.number(),
+  snoozeDuration: z.number(),
+  snoozeTaper: z.number(),
   enabled: z.boolean(),
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -454,6 +458,8 @@ export const schedulesRouter = router({
           duration: alarmDurationSchema,
           alarmTemperature: temperatureSchema,
           wakeWindow: wakeWindowSchema.default(0),
+          snoozeDuration: snoozeDurationSchema.default(300),
+          snoozeTaper: snoozeTaperSchema.default(0),
           enabled: z.boolean().default(true),
         })
         .strict()
@@ -503,6 +509,8 @@ export const schedulesRouter = router({
           duration: alarmDurationSchema.optional(),
           alarmTemperature: temperatureSchema.optional(),
           wakeWindow: wakeWindowSchema.optional(),
+          snoozeDuration: snoozeDurationSchema.optional(),
+          snoozeTaper: snoozeTaperSchema.optional(),
           enabled: z.boolean().optional(),
         })
         .strict()
@@ -650,6 +658,8 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema,
             alarmTemperature: temperatureSchema,
             wakeWindow: wakeWindowSchema.default(0),
+            snoozeDuration: snoozeDurationSchema.default(300),
+            snoozeTaper: snoozeTaperSchema.default(0),
             enabled: z.boolean().default(true),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
@@ -676,6 +686,8 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema.optional(),
             alarmTemperature: temperatureSchema.optional(),
             wakeWindow: wakeWindowSchema.optional(),
+            snoozeDuration: snoozeDurationSchema.optional(),
+            snoozeTaper: snoozeTaperSchema.optional(),
             enabled: z.boolean().optional(),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),

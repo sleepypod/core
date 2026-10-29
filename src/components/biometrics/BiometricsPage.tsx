@@ -81,6 +81,11 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   // must not sit over this side's pod line while the new query loads.
   const referenceQ = trpc.biometrics.getReferenceVitals.useQuery({ side, startDate, endDate, limit: 20000 }, { refetchInterval: 5 * 60_000 })
 
+  const watchHrvQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'hrv_sdnn', limit: 20000 }, { refetchInterval: 5 * 60_000 })
+  const watchBrQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'breathing_rate', limit: 20000 }, { refetchInterval: 5 * 60_000 })
+  const referenceBr = (watchBrQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
+  const referenceHrv = (watchHrvQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
+
   const rows = (vitalsQ.data ?? []) as VitalRow[]
   const points: VitalPoint[] = rows.map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate, hrv: r.hrv, br: r.breathingRate,
     provenanceKey: r.provenance?.processingRunId ?? r.processingRunId ?? 'legacy_unknown', hrvMetricId: r.provenance?.hrvMetricId ?? null }))
@@ -270,9 +275,10 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
           : sessions.length === 0 && !stall
             ? <div className="grid h-[200px] place-items-center text-[13px] text-fg-3">No vitals in this range</div>
             : (
-                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} reference={reference} movement={movementQ.data ?? []} />
+                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceHrv={referenceHrv} referenceBr={referenceBr} reference={reference} movement={movementQ.data ?? []} />
               )}
-        <VitalsLegend bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
+        {referenceHrv.length > 0 && <p className="text-xs text-fg-3"><Trans>Watch SDNN and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values.</Trans></p>}
+        <VitalsLegend referenceBr={referenceBr.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
       </div>
 
       <SidesCard occupancy={occupancyQ.data} sideName={sideName} />

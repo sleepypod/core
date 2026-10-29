@@ -247,6 +247,17 @@ const expectedTables: Record<string, TableSpec> = {
     ],
     indexes: [],
   },
+  sideStageModels: {
+    name: 'side_stage_models',
+    columns: [
+      { name: 'side', notNull: true, default: undefined },
+      { name: 'model', notNull: true, default: undefined },
+      { name: 'version', notNull: true, default: undefined },
+      { name: 'uploaded_at', notNull: true, default: undefined },
+      { name: 'active', notNull: true, default: false },
+    ],
+    indexes: [],
+  },
   stageClassifierChanges: {
     name: 'stage_classifier_changes',
     columns: [
@@ -341,6 +352,8 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'duration', notNull: true, default: undefined },
       { name: 'alarm_temperature', notNull: true, default: undefined },
       { name: 'wake_window', notNull: true, default: 0 },
+      { name: 'snooze_duration', notNull: true, default: 300 },
+      { name: 'snooze_taper', notNull: true, default: 0 },
       { name: 'enabled', notNull: true, default: true },
       { name: 'created_at', notNull: true, default: 'sql' },
       { name: 'updated_at', notNull: true, default: 'sql' },
@@ -472,7 +485,7 @@ describe('db schema definitions', () => {
     // exercised against real migrations by the profile repository tests.
     expect(actualTableExports).toEqual([...Object.keys(expectedTables),
       'biometricProfileRevisions', 'biometricProfileBindings',
-      'biometricActivationEvents', 'biometricConfigOutbox',
+      'biometricActivationEvents', 'biometricConfigOutbox', 'stageModelLibrary',
     ].sort())
   })
 })

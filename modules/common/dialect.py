@@ -47,6 +47,8 @@ KNOWN_RECORD_TYPES = frozenset({
     "capSense", "capSense2", "piezo-dual",
     "bedTemp", "bedTemp2",
     "frzTemp", "frzHealth", "frzTherm",
+    "sensHealth", "frzWater", "lps",
+    "tap-gesture", "alarm-info",
 })
 
 # Track unknown record types seen so we only log each once per process.

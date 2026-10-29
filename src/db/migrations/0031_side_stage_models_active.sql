@@ -1,0 +1,1 @@
+ALTER TABLE `side_stage_models` ADD `active` integer DEFAULT false NOT NULL;

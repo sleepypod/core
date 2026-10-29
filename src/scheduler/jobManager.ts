@@ -720,6 +720,8 @@ export class JobManager {
         vibrationIntensity: sched.vibrationIntensity,
         vibrationPattern: sched.vibrationPattern,
         duration: sched.duration,
+        snoozeDuration: sched.snoozeDuration,
+        snoozeTaper: sched.snoozeTaper,
       }
       await client.setAlarm(sched.side, alarm)
       // Recorded, not just broadcast: a tap gesture reads it to decide

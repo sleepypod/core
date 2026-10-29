@@ -409,4 +409,158 @@ describe('sleepStages router', () => {
       expect(out.saved?.agreement?.accuracy).toBeLessThan(1)
     })
   })
+  describe('personal stage model', () => {
+    /** One tree: deep when hrZ <= -0.5, else light. */
+    const model = {
+      version: 'test-forest',
+      kind: 'forest' as const,
+      classes: ['wake', 'light', 'deep', 'rem'] as ['wake', 'light', 'deep', 'rem'],
+      featureContract: ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction'],
+      trees: [{ f: [0, -1, -1], t: [-0.5, 0, 0], l: [1, -1, -1], r: [2, -1, -1], v: [[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]] }],
+      testVectors: [
+        { inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 2 },
+        { inputs: { hrZ: 1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 },
+      ],
+    }
+
+    it('keeps multiple uploads without changing staging, deduplicates, and switches per side', async () => {
+      const first = await caller.uploadModel({ side: 'left', model })
+      expect(await caller.uploadModel({ side: 'left', model })).toEqual(first)
+      expect((await caller.getModel({ side: 'left' })).model).toBeNull()
+      await caller.selectModel({ side: 'left', id: first.id, active: true })
+      const second = await caller.uploadModel({ side: 'left', model: { ...model, version: 'second' } })
+      expect((await caller.getModel({ side: 'left' })).model?.version).toBe('test-forest')
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+      expect(await caller.listModels({ side: 'right' })).toEqual([])
+      expect((await rejectionOf(caller.selectModel({ side: 'right', id: first.id, active: true }))).code).toBe('NOT_FOUND')
+      await caller.selectModel({ side: 'left', id: second.id, active: true })
+      const list = await caller.listModels({ side: 'left' })
+      expect(list).toHaveLength(2)
+      expect(list.filter(m => m.active).map(m => m.version)).toEqual(['second'])
+      await caller.selectModel({ side: 'left', id: first.id, active: false })
+      expect((await caller.getModel({ side: 'left' })).active).toBe(false)
+      expect((await caller.getModel({ side: 'left' })).model?.version).toBe('test-forest')
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(2)
+    })
+
+    it('rejects invalid library uploads without storing a candidate or changing the active model', async () => {
+      await caller.setModel({ side: 'left', model })
+      await caller.setModelActive({ side: 'left', active: true })
+      const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
+      expect((await rejectionOf(caller.uploadModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(1)
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+    })
+
+    it('archives legacy uploads and preserves the existing active-state contract', async () => {
+      await caller.setModel({ side: 'left', model })
+      await caller.setModelActive({ side: 'left', active: true })
+      await caller.setModel({ side: 'left', model: { ...model, version: 'legacy replacement' } })
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(2)
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+      await caller.setModel({ side: 'left', model: null })
+      expect(await caller.listModels({ side: 'left' })).toHaveLength(2)
+    })
+
+    it('stores a validated model per side and removes it with null', async () => {
+      expect(await caller.getModel({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false })
+      const stored = await caller.setModel({ side: 'left', model })
+      expect(stored).toEqual({ stored: true, version: 'test-forest' })
+      const out = await caller.getModel({ side: 'left' })
+      expect(out.model?.version).toBe('test-forest')
+      expect(out.uploadedAt).not.toBeNull()
+      expect(out.active).toBe(false)
+      expect((await caller.getModel({ side: 'right' })).model).toBeNull()
+      expect(await caller.setModel({ side: 'left', model: null })).toEqual({ stored: false, version: null })
+      expect((await caller.getModel({ side: 'left' })).model).toBeNull()
+    })
+
+    it('refuses a model that fails its own vectors or names an unknown contract', async () => {
+      const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
+      expect((await rejectionOf(caller.setModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
+      const unknown = { ...model, featureContract: ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction', 'extra'],
+        trees: [{ f: [4, -1, -1], t: [0, 0, 0], l: [1, -1, -1], r: [2, -1, -1], v: [[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]] }],
+        testVectors: [{ inputs: { hrZ: 0, hrStdZ: 0, motionZ: 0, nightFraction: 0, extra: -1 }, expected: 2 }] }
+      expect((await rejectionOf(caller.setModel({ side: 'left', model: unknown }))).code).toBe('BAD_REQUEST')
+    })
+
+    it('scores the model and the rules against the Watch on the same nights', async () => {
+      seedNight()
+      bio.insert(bioSchema.referenceStages).values([
+        { side: 'left', source: 'apple_watch', start: BED, end: at(20), stage: 'light' },
+        { side: 'left', source: 'apple_watch', start: at(20), end: at(40), stage: 'deep' },
+        { side: 'left', source: 'apple_watch', start: at(40), end: at(60), stage: 'light' },
+      ]).run()
+      expect((await rejectionOf(caller.previewModel({ side: 'left' }))).code).toBe('NOT_FOUND')
+      await caller.setModel({ side: 'left', model })
+      const out = await caller.previewModel({ side: 'left' })
+      expect(out.version).toBe('test-forest')
+      expect(out.nights).toHaveLength(1)
+      // The HR dip in minutes 20–40 is the only low-z stretch: the tree calls it deep, matching the Watch exactly.
+      expect(out.nights[0].blocks.map(b => b.stage)).toEqual(['light', 'deep', 'light'])
+      expect(out.nights[0].agreement?.accuracy).toBe(1)
+      expect(out.pooled?.epochs).toBe(12)
+      expect(out.rulesPooled?.epochs).toBe(12)
+      const inline = await caller.previewModel({ side: 'right', model, nights: 3 })
+      expect(inline.nights).toHaveLength(0)
+    })
+
+    it('stages the side with the model once it is made active, and falls back to the rules without one', async () => {
+      const { biometricsRouter } = await import('@/src/server/routers/biometrics')
+      const bio = biometricsRouter.createCaller({})
+      const record = seedNight()
+      expect((await rejectionOf(caller.setModelActive({ side: 'left', active: true }))).code).toBe('NOT_FOUND')
+      expect(await caller.setModelActive({ side: 'left', active: false })).toEqual({ active: false, version: null })
+      await caller.setModel({ side: 'left', model })
+      const rules = await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })
+      expect(rules.stagedBy).toEqual({ engine: 'rules', version: null })
+      expect(await caller.setModelActive({ side: 'left', active: true })).toEqual({ active: true, version: 'test-forest' })
+      expect((await caller.getModel({ side: 'left' })).active).toBe(true)
+      const staged = await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })
+      expect(staged.stagedBy).toEqual({ engine: 'model', version: 'test-forest' })
+      // The model works in 5-minute epochs from bed entry over the 60-minute record.
+      expect(staged.epochs).toHaveLength(12)
+      expect(staged.epochs.every(e => e.duration === 300_000)).toBe(true)
+      expect(staged.blocks.map(b => b.stage)).toEqual(['light', 'deep', 'light'])
+      // The "last night" lookup finds no overnight record in this fixture and answers empty, before any staging.
+      const latest = await bio.getSleepStages({ side: 'left' })
+      expect(latest.sleepRecordId).toBeNull()
+      expect(latest.stagedBy).toBeUndefined()
+      // Removing the model returns the side to the rules.
+      await caller.setModel({ side: 'left', model: null })
+      expect((await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })).stagedBy?.engine).toBe('rules')
+      // A stored model the evaluator cannot run (an unknown contract written straight to the table) falls back to the rules.
+      const main = dbHolder.main as ReturnType<typeof drizzle<typeof mainSchema>>
+      const odd = { ...model, version: 'odd', featureContract: ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction', 'extra'],
+        trees: [{ f: [4, -1, -1], t: [0, 0, 0], l: [1, -1, -1], r: [2, -1, -1], v: [[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]] }],
+        testVectors: [{ inputs: { hrZ: 0, hrStdZ: 0, motionZ: 0, nightFraction: 0, extra: -1 }, expected: 2 }] }
+      main.insert(mainSchema.sideStageModels).values({ side: 'left', model: odd, version: 'odd', uploadedAt: new Date(), active: true }).run()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect((await bio.getSleepStages({ side: 'left', sleepRecordId: record.id })).stagedBy).toEqual({ engine: 'rules', version: null })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('personal model odd failed'))
+      warn.mockRestore()
+    })
+
+    it('refuses an inline model that fails its vectors and wraps unexpected failures', async () => {
+      const main = dbHolder.main as ReturnType<typeof drizzle<typeof mainSchema>>
+      const wrong = { ...model, testVectors: [{ inputs: { hrZ: -1, hrStdZ: 0, motionZ: 0, nightFraction: 0.5 }, expected: 1 }] }
+      expect((await rejectionOf(caller.previewModel({ side: 'left', model: wrong }))).code).toBe('BAD_REQUEST')
+      // An unknown feature contract is bad input too, even when its own vectors pass.
+      const rename = (name: string) => `${name}_unknown`
+      const unknown = {
+        ...model,
+        featureContract: model.featureContract.map(rename),
+        testVectors: model.testVectors.map(v => ({ ...v, inputs: Object.fromEntries(Object.entries(v.inputs).map(([k, x]) => [rename(k), x])) })),
+      }
+      expect((await rejectionOf(caller.previewModel({ side: 'left', model: unknown }))).code).toBe('BAD_REQUEST')
+      // A stored document that no longer validates reads back as nothing stored, and cannot be active.
+      main.insert(mainSchema.sideStageModels).values({ side: 'right', model: { nonsense: true }, version: 'x', uploadedAt: new Date(), active: true }).run()
+      expect(await caller.getModel({ side: 'right' })).toEqual({ model: null, uploadedAt: expect.any(Number), active: false })
+      expect((await rejectionOf(caller.previewModel({ side: 'right' }))).code).toBe('NOT_FOUND')
+      dbHolder.bio = throwing(new Error('disk gone'))
+      const error = await rejectionOf(caller.previewModel({ side: 'left', model }))
+      expect(error.code).toBe('INTERNAL_SERVER_ERROR')
+      expect(error.message).toBe('Failed to preview stage model: disk gone')
+    })
+  })
 })

@@ -119,6 +119,30 @@ export const sideSettings = sqliteTable('side_settings', {
  * recent changes with their effect and revert one. `before`/`after` are
  * classifiers ({ engine, ruleset }) or null for the defaults.
  */
+/**
+ * A personal sleep-stage model uploaded for a side (sleepypod-ios training or
+ * the analysis container's export), validated by stageModelSchema. It is
+ * scored beside the rules on read; it does not replace the side's classifier.
+ */
+export const sideStageModels = sqliteTable('side_stage_models', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  model: text('model', { mode: 'json' }).notNull(),
+  version: text('version').notNull(),
+  uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+  // When set, the side's stages are classified by this model instead of the profile's rules; the rules
+  // remain the fallback whenever the model cannot stage a night.
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
+})
+
+/** Saved candidates; the legacy per-side row remains the selected model for existing clients. */
+export const stageModelLibrary = sqliteTable('stage_model_library', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  model: text('model', { mode: 'json' }).notNull(),
+  version: text('version').notNull(),
+  uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+}, table => [index('stage_model_library_side_idx').on(table.side)])
+
 export const stageClassifierChanges = sqliteTable('stage_classifier_changes', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
@@ -151,6 +175,7 @@ export const tapGestures = sqliteTable('tap_gestures', {
   temperatureAmount: integer('temperature_amount'), // 0-10
   // For alarm actions
   alarmBehavior: text('alarm_behavior', { enum: ['snooze', 'dismiss'] }),
+  // No longer read: the snooze length is set per alarm (alarm_schedules).
   alarmSnoozeDuration: integer('alarm_snooze_duration'), // 60-600 seconds
   alarmInactiveBehavior: text('alarm_inactive_behavior', {
     enum: ['power', 'none'],
@@ -267,6 +292,11 @@ export const alarmSchedules = sqliteTable('alarm_schedules', {
   alarmTemperature: real('alarm_temperature').notNull(), // Temperature during alarm
   // Minutes before `time` in which movement fires the alarm early; 0 = off.
   wakeWindow: integer('wake_window').notNull().default(0),
+  // How long a snooze lasts (seconds), and Snooze taper: each later snooze of
+  // the same alarm is this percent shorter (0 = off). Tap gestures and the
+  // HomeKit switch snooze with these.
+  snoozeDuration: integer('snooze_duration').notNull().default(300),
+  snoozeTaper: integer('snooze_taper').notNull().default(0),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()

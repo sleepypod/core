@@ -605,6 +605,22 @@ if [ "$(cat "$EXECUTION_LOCK_DROPIN" 2>/dev/null || true)" != "$execution_lock_c
   systemctl daemon-reload
 fi
 
+# Load the iptables kernel modules as root before the service starts. The
+# service user has CAP_NET_ADMIN but cannot load modules, and Pod 4 boots
+# without them, so the internet access toggle failed after every reboot.
+# Fresh installs get this ExecStartPre in the unit; OTA upgrades get it here.
+IPTABLES_MODULES_DROPIN=/etc/systemd/system/sleepypod.service.d/iptables-modules.conf
+mkdir -p "$(dirname "$IPTABLES_MODULES_DROPIN")"
+iptables_modules_content=$(cat << 'EOF'
+[Service]
+ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin modprobe -a ip_tables iptable_filter iptable_nat 2>/dev/null; true'
+EOF
+)
+if [ "$(cat "$IPTABLES_MODULES_DROPIN" 2>/dev/null || true)" != "$iptables_modules_content" ]; then
+  printf '%s\n' "$iptables_modules_content" > "$IPTABLES_MODULES_DROPIN"
+  systemctl daemon-reload
+fi
+
 # Replace the pre-existing ExecStart fallback (`pnpm start`, which cannot run
 # as the sleepypod user and crash-loops with a misleading pnpm error) with a
 # clear failure when .next/standalone/server.js is missing. Drop-in so OTA

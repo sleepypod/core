@@ -60,6 +60,10 @@ class StatefulSideProcessor:
         # merges both zones into the home side, so only the home side's
         # processor may treat `bed_occupied() is True` as its own evidence.
         self.home_side: Optional[Callable[[], Optional[str]]] = None
+        # Receives this side's tracked window heart rate as a period (s);
+        # main() points it at the beat tracker so it starts from the right
+        # rhythm. It doesn't change any vitals value.
+        self.rate_hint: Optional[Callable[[float], None]] = None
 
     def install_runtime(self, parameters, run_context, reset_side=False):
         if parameters != self.parameters or reset_side:
@@ -195,6 +199,8 @@ class StatefulSideProcessor:
                                              np.array(self._hrv_buf))
         hr, hrv, br = estimate.heart_rate, estimate.hrv_index, estimate.breathing_rate
         hr_raw, hr_score = estimate.hr_raw, estimate.hr_score
+        if hr is not None and hr > 0 and self.rate_hint is not None:
+            self.rate_hint(60.0 / hr)
 
         if hr is not None or hrv is not None or br is not None:
             ts = datetime.fromtimestamp(now, timezone.utc)

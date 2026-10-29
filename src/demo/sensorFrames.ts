@@ -2,7 +2,7 @@ import { recordedBedTemperature } from './bedTemperatureSamples'
 import { getDemoDeviceStatus } from './handlers/device'
 import { randomBetween, toCelsius } from './util'
 
-export const ALL_SENSORS = ['piezo-dual', 'capSense', 'capSense2', 'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log', 'deviceStatus', 'gesture', 'lps']
+export const ALL_SENSORS = ['piezo-dual', 'capSense', 'capSense2', 'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log', 'deviceStatus', 'gesture', 'lps', 'frzWater', 'sensHealth']
 const PIEZO_HZ = 500
 const NO_SENSOR = -327.68
 

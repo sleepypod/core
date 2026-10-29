@@ -135,6 +135,10 @@ describe('pruneOldBiometrics', () => {
       { vitalsId: 1, side: 'left', timestamp: old, qualityScore: 0.5 },
       { vitalsId: 2, side: 'left', timestamp: fresh, qualityScore: 0.9 },
     ]).run()
+    db.insert(schema.heartbeats).values([
+      { side: 'left', timestamp: old, beats: [0, 1000, null, 3000] },
+      { side: 'left', timestamp: fresh, beats: [0, 1000] },
+    ]).run()
 
     // Pruned by when the run last held, not when it started.
     db.insert(schema.healthRuns).values([
@@ -149,11 +153,12 @@ describe('pruneOldBiometrics', () => {
 
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(12)
+    expect(result.rowsDeleted).toBe(13)
     expect(result.perTable).toEqual({
       vitals: 1,
       vitals_quality: 1,
       movement: 1,
+      heartbeats: 1,
       bed_temp: 1,
       freezer_temp: 1,
       flow_readings: 1,
@@ -263,6 +268,7 @@ describe('pruneOldBiometrics', () => {
       vitals: 0,
       vitals_quality: 0,
       movement: 0,
+      heartbeats: 0,
       bed_temp: 0,
       freezer_temp: 0,
       flow_readings: 0,
