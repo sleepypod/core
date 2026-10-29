@@ -153,8 +153,14 @@
       "dbus-next@0.10.2": "patches/dbus-next@0.10.2.patch"
     },
     "overrides": {
-      "dbus-next>usocket": "-",
-      "@babel/runtime": "8.0.7"
+      "dbus-next>usocket": "-"
+    },
+    "packageExtensions": {
+      "mqtt": {
+        "dependencies": {
+          "@babel/runtime": "^7.29.7"
+        }
+      }
     }
   }
 }
