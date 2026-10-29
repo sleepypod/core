@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AlarmGroup } from '../AlarmCard'
 import { AlarmEditor } from '../AlarmEditor'
@@ -30,6 +30,8 @@ const group: AlarmGroup = {
   duration: 60,
   alarmTemperature: 84,
   wakeWindow: 20,
+  snoozeDuration: 120,
+  snoozeTaper: 30,
   enabled: false,
 }
 
@@ -72,6 +74,8 @@ describe('AlarmEditor', () => {
       duration: 30,
       alarmTemperature: 75,
       wakeWindow: 0,
+      snoozeDuration: 300,
+      snoozeTaper: 0,
       enabled: true,
     })
     expect(payload.creates.alarm.map((a: { dayOfWeek: string }) => a.dayOfWeek)).toEqual(['monday', 'tuesday', 'wednesday', 'thursday', 'friday'])
@@ -107,6 +111,8 @@ describe('AlarmEditor', () => {
       duration: 90,
       alarmTemperature: 85,
       wakeWindow: 20,
+      snoozeDuration: 120,
+      snoozeTaper: 30,
       enabled: false,
     })
   })
@@ -154,10 +160,11 @@ describe('AlarmEditor', () => {
 
   it('shows and saves the wake window', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
-    expect(s.getByRole('tab', { name: '20' }).getAttribute('aria-selected')).toBe('true')
+    const wakeWindow = within(s.getByRole('tablist', { name: 'Wake window' }))
+    expect(wakeWindow.getByRole('tab', { name: '20' }).getAttribute('aria-selected')).toBe('true')
     expect(s.getByText(/up to 20 min early, the first time you move after 7:40 AM\. Otherwise it goes off at 8:00 AM/)).toBeTruthy()
 
-    fireEvent.click(s.getByRole('tab', { name: '30 min' }))
+    fireEvent.click(wakeWindow.getByRole('tab', { name: '30 min' }))
     expect(s.getByText(/up to 30 min early, the first time you move after 7:30 AM/)).toBeTruthy()
     fireEvent.click(saveButton(s))
     await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
@@ -167,11 +174,31 @@ describe('AlarmEditor', () => {
   it('wraps the window start across midnight and turns off', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, time: '00:10' }} />)
     expect(s.getByText(/first time you move after 11:50 PM/)).toBeTruthy()
-    fireEvent.click(s.getByRole('tab', { name: 'Off' }))
+    fireEvent.click(within(s.getByRole('tablist', { name: 'Wake window' })).getByRole('tab', { name: 'Off' }))
     expect(s.getByText('Goes off at the set time.')).toBeTruthy()
     fireEvent.click(saveButton(s))
     await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
     expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0].wakeWindow).toBe(0)
+  })
+
+  it('shows and saves the snooze length and Snooze taper', async () => {
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    const taper = within(s.getByRole('tablist', { name: 'Snooze taper' }))
+    expect(taper.getByRole('tab', { name: '30' }).getAttribute('aria-selected')).toBe('true')
+    expect(taper.queryByRole('tab', { name: '20' })).toBeNull()
+    expect(s.getByText(/Each snooze is 30% shorter than the last.*: 2, 1\.4, 1, 0\.7 min…$/)).toBeTruthy()
+
+    fireEvent.click(taper.getByRole('tab', { name: '50' }))
+    fireEvent.click(s.getByRole('button', { name: /Increase snooze length/i }))
+    expect(s.getByText(/Each snooze is 50% shorter than the last.*: 3, 1\.5, 0\.8, 0\.4 min…$/)).toBeTruthy()
+    fireEvent.click(saveButton(s))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
+    expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0]).toMatchObject({ snoozeDuration: 180, snoozeTaper: 50 })
+  })
+
+  it('a new alarm snoozes 5 minutes with no taper', async () => {
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" />)
+    expect(s.getByText('Every snooze lasts 5 min. Snooze taper makes each one shorter than the last.')).toBeTruthy()
   })
 
   it('surfaces save failures and stays open', async () => {
@@ -229,4 +256,21 @@ it('selects individual repeat days and saves precisely that selection', async ()
   fireEvent.click(saveButton(s))
   await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
   expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm).toEqual([expect.objectContaining({ dayOfWeek: 'monday' })])
+})
+
+it.each([90, 61, 1799])('preserves a %s-second snooze when editing only alarm time', async (snoozeDuration) => {
+  const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, snoozeDuration }} />)
+  fireEvent.change(s.getByLabelText('Wake at'), { target: { value: '08:30' } })
+  fireEvent.click(saveButton(s))
+  await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
+  expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0].snoozeDuration).toBe(snoozeDuration)
+})
+it('increments a fractional-minute snooze by one minute when explicitly changed', async () => {
+  const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, snoozeDuration: 90 }} />)
+  expect(s.getByText('1.5 min')).toBeTruthy()
+  fireEvent.click(s.getByRole('button', { name: 'Increase snooze length' }))
+  expect(s.getByText('2.5 min')).toBeTruthy()
+  fireEvent.click(saveButton(s))
+  await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
+  expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0].snoozeDuration).toBe(150)
 })

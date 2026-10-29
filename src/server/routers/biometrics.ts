@@ -1322,6 +1322,25 @@ export const biometricsRouter = router({
    * samples the newest survive (like getVitals), so the latest night is
    * never the one that goes missing.
    */
+  getReferenceSamples: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/reference-samples', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({ side: sideSchema, startDate: z.date(), endDate: z.date(),
+      metric: z.enum(['breathing_rate', 'hrv_sdnn']),
+      limit: z.number().int().min(1).max(20000).default(5000),
+    }).strict())
+    .output(z.array(z.object({ timestamp: z.date(), value: z.number() })))
+    .query(async ({ input }) => {
+      if (!validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+      }
+      const rows = await biometricsDb.select({ timestamp: referenceSamples.timestamp, value: referenceSamples.value })
+        .from(referenceSamples)
+        .where(and(eq(referenceSamples.side, input.side), eq(referenceSamples.metric, input.metric),
+          gte(referenceSamples.timestamp, input.startDate), lte(referenceSamples.timestamp, input.endDate)))
+        .orderBy(desc(referenceSamples.timestamp)).limit(input.limit)
+      return rows.reverse()
+    }),
+
   getReferenceVitals: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/reference-vitals', protect: false, tags: ['Biometrics'] } })
     .output(z.array(z.object({

@@ -212,8 +212,9 @@ export interface HypnoBlock {
 }
 
 /** Four-lane hypnogram (AWAKE / REM / LIGHT / DEEP). */
-export function Hypnogram({ blocks, lane = 26, bar = 16, labels = true, ticks }: {
+export function Hypnogram({ blocks, lane = 26, bar = 16, labels = true, ticks, reference = [] }: {
   blocks: HypnoBlock[]
+  reference?: HypnoBlock[]
   lane?: number
   bar?: number
   labels?: boolean
@@ -245,6 +246,17 @@ export function Hypnogram({ blocks, lane = 26, bar = 16, labels = true, ticks }:
             }}
           />
         ))}
+        {reference.length > 0 && (
+          <svg className="absolute inset-0 h-full w-full overflow-visible text-fg" viewBox={`0 0 100 ${lane * 4}`} preserveAspectRatio="none" role="img" aria-label="Apple Watch sleep stages">
+            {reference.map((b, i) => {
+              const y = (LANE_ORDER.indexOf(b.stage) + 0.5) * lane
+              const previous = reference[i - 1]
+              const connected = previous && Math.abs(previous.startPct + previous.widthPct - b.startPct) < 0.001
+              const fromY = connected ? (LANE_ORDER.indexOf(previous.stage) + 0.5) * lane : y
+              return <path key={i} d={`M ${b.startPct} ${fromY} V ${y} H ${b.startPct + b.widthPct}`} fill="none" stroke="currentColor" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+            })}
+          </svg>
+        )}
       </div>
       {ticks && labels && <div />}
       {ticks && (

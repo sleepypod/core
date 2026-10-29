@@ -38,6 +38,8 @@ export interface AlarmSchedule {
   duration: number
   alarmTemperature: number
   wakeWindow: number
+  snoozeDuration: number
+  snoozeTaper: number
   enabled: boolean
 }
 
@@ -347,7 +349,7 @@ export function useSchedule() {
         const alarmDeletes: number[] = []
         const tempCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, temperature: number, enabled: boolean }> = []
         const powerCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, onTime: string, offTime: string, endAction?: 'turn_off' | 'maintain', onTemperature: number, enabled: boolean }> = []
-        const alarmCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number, alarmTemperature: number, wakeWindow: number, enabled: boolean }> = []
+        const alarmCreates: Array<{ side: Side, dayOfWeek: DayOfWeek, time: string, vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number, alarmTemperature: number, wakeWindow: number, snoozeDuration: number, snoozeTaper: number, enabled: boolean }> = []
 
         const sourceTemp = daySchedule.temperature || []
         const sourcePower = daySchedule.power || []
@@ -396,6 +398,8 @@ export function useSchedule() {
               duration: a.duration,
               alarmTemperature: Math.round(a.alarmTemperature),
               wakeWindow: a.wakeWindow,
+              snoozeDuration: a.snoozeDuration,
+              snoozeTaper: a.snoozeTaper,
               enabled: a.enabled,
             })
           }

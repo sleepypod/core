@@ -6,7 +6,7 @@ database over SSH (README section 1), the per-minute dataset of pod vitals
 with Apple Watch labels (scripts/sleep-stage-dataset.py --from-db), the two
 models on a feature contract with leave-one-night-out scoring and the pod's
 portable JSON export (docs/research/sleep-stage-calibration/personal-models.py
---export), then PUT /api/sleep-stages/model on the pod with the model whose
+--export), then stores and previews a candidate on the pod with the model whose
 pooled kappa is higher. Seconds on Apple silicon; nothing runs on the phone.
 
 Usage:
@@ -61,17 +61,31 @@ def kappa_of(output, kind):
     return float(match.group(1)) if match else None
 
 
-def upload(pod, side, path):
-    model = json.loads(path.read_text())
-    body = json.dumps({'side': side, 'model': model}).encode()
-    request = urllib.request.Request(f'http://{pod}:3000/api/sleep-stages/model', data=body, method='PUT',
+def request_json(pod, endpoint, body, method='POST'):
+    request = urllib.request.Request(f'http://{pod}:3000/api/sleep-stages/{endpoint}',
+                                     data=json.dumps(body).encode(), method=method,
                                      headers={'content-type': 'application/json'})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors='replace')
-        sys.exit(f'pod refused the model ({error.code}): {detail[:400]}')
+        sys.exit(f'pod refused {endpoint} ({error.code}): {detail[:400]}')
+
+
+def upload(pod, side, path, *, select=False, activate=False):
+    """Store and preview a candidate. Selection requires explicit opt-in."""
+    model = json.loads(path.read_text())
+    stored = request_json(pod, 'models', {'side': side, 'model': model})
+    print(f'pod stored candidate {stored}')
+    preview = request_json(pod, 'model/preview', {'side': side, 'nights': 14, 'model': model})
+    print('Preview (training nights are in-sample):')
+    print(json.dumps(preview, indent=2))
+    if select or activate:
+        selected = request_json(pod, 'models/selected',
+                                {'side': side, 'id': stored['id'], 'active': activate}, 'PUT')
+        print(f'pod selected {selected}')
+    return stored
 
 
 def main():
@@ -83,8 +97,14 @@ def main():
     ap.add_argument('--work', default='personal-models', help='working directory (default ./personal-models)')
     ap.add_argument('--snapshot', help='an existing biometrics.db snapshot instead of taking one')
     ap.add_argument('--no-upload', action='store_true', help='train and export only')
+    ap.add_argument('--select', action='store_true', help='select the candidate, inactive (disables personal staging)')
+    ap.add_argument('--activate', action='store_true', help='select and activate the candidate after preview')
     ap.add_argument('--keep-snapshot', action='store_true', help='leave the ~75 MB database snapshot in the work dir (deleted after a run by default)')
     args = ap.parse_args()
+    if args.select and args.activate:
+        ap.error('--select and --activate cannot be combined')
+    if args.no_upload and (args.select or args.activate):
+        ap.error('--no-upload cannot be combined with --select or --activate')
 
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
@@ -112,10 +132,7 @@ def main():
     print(f'chosen: {kind} (pooled kappa {scores[kind]}) -> {path}')
     if args.no_upload:
         return
-    stored = upload(args.pod, args.side, path)
-    print(f'pod stored {stored}')
-    print(f'score it there: curl -X POST http://{args.pod}:3000/api/sleep-stages/model/preview '
-          f"-H 'content-type: application/json' -d '{{\"side\":\"{args.side}\",\"nights\":14}}'")
+    upload(args.pod, args.side, path, select=args.select, activate=args.activate)
 
 
 if __name__ == '__main__':

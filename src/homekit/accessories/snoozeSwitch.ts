@@ -1,6 +1,7 @@
 /**
  * HomeKit Switch that snoozes (on) or cancels snooze (off) a side's alarm.
- * Snooze duration mirrors the iOS default (9 minutes) at neutral pattern.
+ * Snooze length comes from the ringing alarm (with its snooze taper); an
+ * alarm without one snoozes for the iOS default, 9 minutes.
  */
 
 import { Service, Characteristic } from 'hap-nodejs'
@@ -9,6 +10,7 @@ import {
   getSnoozeStatus,
   snoozeAlarm,
 } from '@/src/hardware/snoozeManager'
+import { nextSnoozeSeconds } from '@/src/hardware/snoozeLength'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getActiveAlarmConfig, markAlarmEnded } from '@/src/hardware/alarmState'
 import type { Side } from '@/src/hardware/types'
@@ -42,7 +44,7 @@ export function buildSnoozeSwitch(side: Side): SnoozeSwitchAccessory {
         catch (e) {
           console.warn(`[homekit] clearAlarm(${side}) failed during snooze:`, e instanceof Error ? e.message : e)
         }
-        snoozeAlarm(side, SNOOZE_SECONDS, config)
+        snoozeAlarm(side, nextSnoozeSeconds(config, SNOOZE_SECONDS), config)
         await markAlarmEnded(side)
       }
       else {

@@ -83,8 +83,8 @@ jobs:
             target: .
             cov_source: .
             deps: ""
-          # Stdlib-only repo scripts; tests load them by path from
-          # scripts/tests/.
+          # Repo scripts, including the NumPy-backed personal-model label helper.
+          # Reuse the locked numerical environment for reproducible tests.
           - name: scripts
             workdir: scripts
             target: tests
@@ -113,6 +113,8 @@ jobs:
           if [ "${{ matrix.module.name }}" = "common" ]; then
             # Keep common's cwd/import layout while using the numerical lock.
             UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --project piezo-processor --locked --no-install-project
+          elif [ "${{ matrix.module.name }}" = "scripts" ]; then
+            UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --project ../modules/piezo-processor --locked --no-install-project
           elif [ -f uv.lock ]; then
             uv sync --locked --no-install-project
           else

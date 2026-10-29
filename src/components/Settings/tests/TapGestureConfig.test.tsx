@@ -57,13 +57,13 @@ describe('gesture descriptions', () => {
     expect(idleDescription(gesture({}))).toBe('Temperature +2°')
     // A temperature tap with no ringing action stops the alarm (the firmware does on any tap).
     expect(ringingDescription(gesture({}))).toBe('Stop alarm')
-    expect(ringingDescription(gesture({ alarmBehavior: 'snooze', alarmSnoozeDuration: 420 }))).toBe('Snooze 7 min')
+    expect(ringingDescription(gesture({ alarmBehavior: 'snooze', alarmSnoozeDuration: 420 }))).toBe('Snooze')
     expect(idleDescription(gesture({ alarmBehavior: 'snooze' }))).toBe('Temperature +2°')
   })
 
   it('describes alarm-type gestures by context', () => {
     const snooze = gesture({ actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 420, alarmInactiveBehavior: 'power' })
-    expect(ringingDescription(snooze)).toBe('Snooze 7 min')
+    expect(ringingDescription(snooze)).toBe('Snooze')
     expect(idleDescription(snooze)).toBe('Power on / off')
     const dismiss = gesture({ actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'none' })
     expect(ringingDescription(dismiss)).toBe('Stop alarm')
@@ -83,7 +83,6 @@ describe('TapGestureConfig', () => {
       temperatureChange: 'increment',
       temperatureAmount: 2,
       alarmBehavior: 'dismiss',
-      alarmSnoozeDuration: undefined,
     })
   })
 
@@ -100,7 +99,6 @@ describe('TapGestureConfig', () => {
       temperatureChange: 'increment',
       temperatureAmount: 3,
       alarmBehavior: 'snooze',
-      alarmSnoozeDuration: 300,
     })
   })
 
@@ -115,9 +113,16 @@ describe('TapGestureConfig', () => {
       tapType: 'doubleTap',
       actionType: 'alarm',
       alarmBehavior: 'snooze',
-      alarmSnoozeDuration: 420,
       alarmInactiveBehavior: 'power',
     })
+  })
+
+  it('leaves the snooze length to the alarm', () => {
+    render(<TapGestureConfig filterSide="left" />)
+    fireEvent.click(screen.getByLabelText('Double tap while ringing: Not set'))
+    fireEvent.click(screen.getByText('Snooze'))
+    expect(screen.getByText('How long a snooze lasts is set on each alarm.')).toBeTruthy()
+    expect(screen.queryByLabelText(/snooze duration/i)).toBeNull()
   })
 
   it('a new tap opened from the ringing column gets no normal action', () => {
@@ -130,12 +135,11 @@ describe('TapGestureConfig', () => {
       tapType: 'quadTap',
       actionType: 'alarm',
       alarmBehavior: 'snooze',
-      alarmSnoozeDuration: 300,
       alarmInactiveBehavior: 'none',
     })
   })
 
-  it('saves nothing normally and stop while ringing, omitting the snooze duration', () => {
+  it('saves nothing normally and stop while ringing', () => {
     render(<TapGestureConfig filterSide="left" />)
     fireEvent.click(screen.getByLabelText('Quad tap: Not set'))
     fireEvent.click(screen.getByText('Nothing'))
@@ -146,7 +150,6 @@ describe('TapGestureConfig', () => {
       tapType: 'quadTap',
       actionType: 'alarm',
       alarmBehavior: 'dismiss',
-      alarmSnoozeDuration: undefined,
       alarmInactiveBehavior: 'none',
     })
   })

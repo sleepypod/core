@@ -2167,11 +2167,13 @@ class TestBeatFrontRouting:
         from beats import Chunk
         conn = TestWriteVitalsResilience()._make_db()
         holder = main.DBHolder(conn)
-        front = main.BeatFront(holder, _Mode(None))
+        now = [0.0]
+        front = main.BeatFront(holder, _Mode(None), clock=lambda: now[0])
         front._write({"left": [Chunk(60, [0, 1000], 0.8)], "right": []})
         assert holder.write_failures == 1
         conn.execute("CREATE TABLE heartbeats (id INTEGER PRIMARY KEY AUTOINCREMENT, side TEXT, "
                      "timestamp INTEGER, beats TEXT, quality REAL, UNIQUE(side, timestamp))")
+        now[0] += main.HEARTBEAT_RETRY_INTERVAL_S
         front._write({"left": [], "right": []})
         assert _hb_rows(conn) == [("left", 60, [0, 1000], 0.8)]
         assert holder.write_failures == 0
@@ -2306,3 +2308,122 @@ class TestRateHint:
         assert hints == []
 
 
+
+class TestHeartbeatRetryBackoff:
+    @pytest.mark.parametrize('message', ['database is locked', 'disk I/O error'])
+    def test_outage_backoff_preserves_order_and_limits_reconnects(self, monkeypatch, message):
+        import sqlite3
+        import main
+        from beats import Chunk
+        from unittest.mock import MagicMock
+        now = [100.0]
+        conn = MagicMock()
+        conn.execute.side_effect = sqlite3.OperationalError(message)
+        holder = main.DBHolder(conn)
+        reconnect = MagicMock()
+        monkeypatch.setattr(main, '_reconnect_db', reconnect)
+        front = main.BeatFront(holder, _Mode(None), clock=lambda: now[0])
+        chunks = [Chunk(t, [0, 1000], .8) for t in range(60, 601, 60)]
+        front._write({'left': chunks})
+        assert conn.execute.call_count == 1
+        assert holder.write_failures == 1
+        for _ in range(100):
+            front._write({})
+        assert conn.execute.call_count == 1
+        # Even forced shutdown flush must respect backoff.
+        front.flush()
+        assert conn.execute.call_count == 1
+        for attempt in range(2, main._DB_RECONNECT_THRESHOLD + 1):
+            now[0] += main.HEARTBEAT_RETRY_INTERVAL_S
+            front._write({})
+            assert conn.execute.call_count == attempt
+        assert reconnect.call_count == 1
+        assert holder.write_failures == 0
+        assert [c for _, c in front._retry] == chunks
+        conn.execute.side_effect = None
+        now[0] += main.HEARTBEAT_RETRY_INTERVAL_S
+        front._write({'right': [Chunk(660, [0], .7)]})
+        successful = conn.execute.call_args_list[main._DB_RECONNECT_THRESHOLD:]
+        assert [call.args[1][1] for call in successful] == list(range(60, 661, 60))
+        assert front._retry == []
+        assert holder.write_failures == 0
+
+    def test_failure_after_success_stops_and_capacity_stays_bounded(self, monkeypatch):
+        import main
+        from beats import Chunk
+        from unittest.mock import Mock
+        conn, holder = _hb_db()
+        writer = Mock(side_effect=[True, False])
+        monkeypatch.setattr(main, 'write_heartbeats', writer)
+        front = main.BeatFront(holder, _Mode(None), clock=lambda: 0)
+        front._write({'left': [Chunk(t, [0], .8) for t in range(35)]})
+        assert writer.call_count == 2
+        assert len(front._retry) == main.HEARTBEAT_RETRY_MAX
+        assert [c.start for _, c in front._retry] == list(range(5, 35))
+        front._write({})
+        assert writer.call_count == 2
+        conn.close()
+
+class TestHeartbeatLifecycleRetries:
+    @pytest.mark.parametrize('recovers', [True, False])
+    def test_shutdown_gets_one_final_attempt_inside_backoff(self, monkeypatch, recovers):
+        import main
+        from beats import Chunk
+        from unittest.mock import Mock
+        _, holder = _hb_db()
+        writer = Mock(return_value=False)
+        monkeypatch.setattr(main, 'write_heartbeats', writer)
+        front = main.BeatFront(holder, _Mode(None), clock=lambda: 0)
+        chunks = [Chunk(60, [0], .8), Chunk(120, [0], .8)]
+        front._write({'left': chunks})
+        writer.return_value = recovers
+        front.flush(shutdown=True)
+        assert writer.call_count == (3 if recovers else 2)
+        assert [c for _, c in front._retry] == ([] if recovers else chunks)
+        assert [call.args[2].start for call in writer.call_args_list] == ([60, 60, 120] if recovers else [60, 60])
+        holder.conn.close()
+
+    def test_idle_poll_retries_only_after_deadline(self, monkeypatch):
+        import main
+        from beats import Chunk
+        from unittest.mock import Mock
+        _, holder = _hb_db()
+        writer = Mock(return_value=False)
+        monkeypatch.setattr(main, 'write_heartbeats', writer)
+        now = [0.0]
+        front = main.BeatFront(holder, _Mode(None), clock=lambda: now[0])
+        front._write({'left': [Chunk(60, [0], .8)]})
+        writer.return_value = True
+        now[0] = main.HEARTBEAT_RETRY_INTERVAL_S - .01
+        front.tick()
+        assert writer.call_count == 1
+        now[0] += .01
+        front.tick()
+        assert writer.call_count == 2
+        assert front._retry == []
+        holder.conn.close()
+
+    def test_main_wires_idle_poll_and_shutdown_flush(self, monkeypatch, tmp_path):
+        import main
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(main, 'BIOMETRICS_DB', tmp_path / 'biometrics.db')
+        conn = MagicMock()
+        monkeypatch.setattr(main, 'open_biometrics_db', lambda: conn)
+        for name in ['PumpGate', 'FrzHealthPumpState', 'SideProcessor', 'SingleSleeperMode',
+                     'BedPresence', 'RuntimeCoordinator', 'report_health']:
+            monkeypatch.setattr(main, name, MagicMock())
+        front, vitals = MagicMock(), MagicMock()
+        monkeypatch.setattr(main, 'BeatFront', MagicMock(return_value=front))
+        monkeypatch.setattr(main, 'SingleSleeperVitals', MagicMock(return_value=vitals))
+        follower = MagicMock()
+        def read_records(*, on_poll):
+            on_poll()
+            return iter(())
+        follower.read_records.side_effect = read_records
+        monkeypatch.setattr(main, 'create_follower', MagicMock(return_value=follower))
+        main.main()
+        front.tick.assert_called_once_with()
+        vitals.tick.assert_called_once_with()
+        front.flush.assert_called_once_with(shutdown=True)
+        vitals.flush.assert_called_once_with()
+        conn.close.assert_called_once_with()

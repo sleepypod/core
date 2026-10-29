@@ -49,7 +49,7 @@ export function idleDescription(g: GestureRecord | undefined): string {
  */
 export function ringingDescription(g: GestureRecord | undefined): string {
   if (!g) return 'Not set'
-  if (g.alarmBehavior === 'snooze') return `Snooze ${Math.round((g.alarmSnoozeDuration ?? 300) / 60)} min`
+  if (g.alarmBehavior === 'snooze') return 'Snooze'
   return 'Stop alarm'
 }
 
@@ -63,7 +63,6 @@ interface EditState {
   temperatureChange: 'increment' | 'decrement'
   temperatureAmount: number
   ringing: 'snooze' | 'dismiss'
-  alarmSnoozeDuration: number
 }
 
 // A new tap opened from the ringing column starts with no normal action, so
@@ -75,7 +74,6 @@ const defaultEditState = (side: Side, tapType: TapType, fromRinging = false): Ed
   temperatureChange: 'increment',
   temperatureAmount: 2,
   ringing: 'dismiss',
-  alarmSnoozeDuration: 300,
 })
 
 function editStateFromGesture(g: GestureRecord): EditState {
@@ -86,7 +84,6 @@ function editStateFromGesture(g: GestureRecord): EditState {
     temperatureChange: g.temperatureChange ?? 'increment',
     temperatureAmount: g.temperatureAmount ?? 2,
     ringing: g.alarmBehavior ?? 'dismiss',
-    alarmSnoozeDuration: g.alarmSnoozeDuration ?? 300,
   }
 }
 
@@ -147,10 +144,8 @@ export function TapGestureConfig({ filterSide = 'left', onSideChange }: {
     if (!editing) return
 
     // Both actions are saved together, whichever column opened the editor.
-    const ringing = {
-      alarmBehavior: editing.ringing,
-      alarmSnoozeDuration: editing.ringing === 'snooze' ? editing.alarmSnoozeDuration : undefined,
-    }
+    // The snooze length is the ringing alarm's (set on the alarm), not the tap's.
+    const ringing = { alarmBehavior: editing.ringing }
     if (editing.idle === 'temperature') {
       setGesture.mutate({
         side: editing.side,
@@ -324,16 +319,9 @@ function GestureEditPanel({
         onChange={ringing => onChange({ ...state, ringing })}
       />
       {state.ringing === 'snooze' && (
-        <SettingRow label="Snooze for">
-          <Stepper
-            label="Snooze duration"
-            value={Math.round(state.alarmSnoozeDuration / 60)}
-            min={1}
-            max={10}
-            format={v => `${v} min`}
-            onChange={mins => onChange({ ...state, alarmSnoozeDuration: mins * 60 })}
-          />
-        </SettingRow>
+        <span className="text-xs leading-[1.4] text-fg-3">
+          How long a snooze lasts is set on each alarm.
+        </span>
       )}
     </div>
   )

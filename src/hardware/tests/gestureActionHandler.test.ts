@@ -257,19 +257,32 @@ describe('GestureActionHandler', () => {
       expect(alarm.snooze).toHaveBeenCalledWith('left', 300, DEFAULT_SNOOZE_ALARM)
     })
 
-    test('a snoozed alarm comes back with its own settings', async () => {
-      const scheduled: AlarmConfig = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120 }
+    test('a snoozed alarm comes back with its own settings, for its own snooze length', async () => {
+      const scheduled: AlarmConfig = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, snoozeDuration: 540 }
       const alarm = makeAlarmHooks(scheduled)
       // ended() forgets the active alarm, so its settings must be read first.
       alarm.ended.mockImplementation(async () => {
         alarm.activeConfig.mockReturnValue(null)
       })
-      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 540 }
+      // The tap's own (legacy) length is ignored: the alarm sets it.
+      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 120 }
       const { deps } = makeDeps(gesture, { isAlarmVibrating: true }, makeMockClient(), alarm)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'doubleTap'))
 
       expect(alarm.snooze).toHaveBeenCalledWith('right', 540, scheduled)
+    })
+
+    test('each later snooze of an alarm with a snooze taper is shorter', async () => {
+      // Third snooze of a 9 min alarm tapering 20%: 9 × 0.8² ≈ 5.8 min.
+      const ringing: AlarmConfig = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 60, snoozeDuration: 540, snoozeTaper: 20, snoozeCount: 2 }
+      const alarm = makeAlarmHooks(ringing)
+      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze' }
+      const { deps } = makeDeps(gesture, { isAlarmVibrating: true }, makeMockClient(), alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(alarm.snooze).toHaveBeenCalledWith('left', 346, ringing)
     })
 
     test.each([
@@ -337,11 +350,11 @@ describe('GestureActionHandler', () => {
     })
 
     test('a temperature gesture can snooze while ringing and still step temperature otherwise', async () => {
-      const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 2, alarmBehavior: 'snooze', alarmSnoozeDuration: 420 }
+      const gesture = { actionType: 'temperature', temperatureChange: 'increment', temperatureAmount: 2, alarmBehavior: 'snooze' }
       const ringing = makeDeps(gesture, { isAlarmVibrating: true, targetTemperature: 70 })
       await new GestureActionHandler(SOCKET_PATH, ringing.deps).handle(makeEvent('left', 'doubleTap'))
       expect(ringing.client.clearAlarm).toHaveBeenCalledWith('left')
-      expect(ringing.alarm.snooze).toHaveBeenCalledWith('left', 420, expect.anything())
+      expect(ringing.alarm.snooze).toHaveBeenCalledWith('left', 300, expect.anything())
       expect(ringing.client.setTemperature).not.toHaveBeenCalled()
 
       const idle = makeDeps(gesture, { isAlarmVibrating: false, targetTemperature: 70 })

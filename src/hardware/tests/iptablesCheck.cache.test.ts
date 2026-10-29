@@ -71,6 +71,17 @@ describe('asynchronous firewall health', () => {
     expect(mocks.runFile).toHaveBeenCalledTimes(5)
   })
 
+  it('reports no missing rules while internet access is allowed (chains open)', async () => {
+    mocks.runFile.mockImplementation(async (file, args) => ({
+      stdout: file === 'which'
+        ? '/sbin/iptables\n'
+        : `Chain ${args[1]} (policy ACCEPT)\ntarget     prot opt source               destination\n`,
+    }))
+    const status = await checkIptablesCached()
+    expect(status.ok).toBe(true)
+    expect(status.rules.every(rule => rule.present)).toBe(true)
+  })
+
   it('does not let an in-flight pre-repair result overwrite a newer check', async () => {
     let release!: (value: { stdout: string }) => void
     mocks.runFile.mockImplementationOnce(() => new Promise((resolve) => {

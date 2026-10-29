@@ -39,6 +39,8 @@ export interface AlarmSchedule {
   duration: number
   alarmTemperature: number
   wakeWindow: number
+  snoozeDuration: number
+  snoozeTaper: number
   enabled: boolean
   createdAt: Date
   updatedAt: Date

@@ -1456,6 +1456,12 @@ ExecStartPre=+/usr/local/bin/sp-maintenance
 # Create or adopt it for the service user on every start (/run is tmpfs).
 # Append-open, never truncate or replace: a surviving worker may hold it.
 ExecStartPre=+/bin/sh -c ': >> /run/sleepypod-shadow.lock && chown sleepypod:sleepypod /run/sleepypod-shadow.lock && chmod 600 /run/sleepypod-shadow.lock'
+# Internet access toggles iptables as the sleepypod user, which has
+# CAP_NET_ADMIN but cannot load kernel modules. Pod 4 boots without the
+# iptables modules, so legacy iptables fails ("Table does not exist (do you
+# need to insmod?)") until something running as root loads them. Load them
+# here as root; best-effort, as some kernels build them in.
+ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin modprobe -a ip_tables iptable_filter iptable_nat 2>/dev/null; true'
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 # No fallback when the build is missing: pnpm start cannot run as the
 # sleepypod user (home is /nonexistent), so it only crash-looped with a

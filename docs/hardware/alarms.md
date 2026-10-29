@@ -55,6 +55,24 @@ inside a window opens it immediately; the record of an early fire lives in
 memory, so a restart between an early fire and the set time lets the alarm
 fire again at the set time. See `src/scheduler/wakeWindow.ts`.
 
+## Snooze length and Snooze taper
+
+Each alarm sets how long a snooze lasts (`snoozeDuration`, 1–30 minutes,
+default 5) and an optional **Snooze taper** (`snoozeTaper`: off, 30, 40, 50
+or 60%). With a taper, each later snooze of the same alarm is that much
+shorter than the one before — 9 min at 30% gives 9, 6.3, 4.4, 3.1 min… — so
+you ease out of bed instead of drifting back to sleep. A snooze never gets
+shorter than 5 seconds (`MIN_SNOOZE_SECONDS`).
+
+The scheduled alarm carries both settings in its `AlarmConfig`, and
+`snoozeManager` brings a snoozed alarm back with `snoozeCount` one higher;
+`nextSnoozeSeconds` (`src/hardware/snoozeLength.ts`) turns those into the
+next snooze's length. Tap gestures and the HomeKit snooze switch use it (an
+alarm without these settings — one started from the API — snoozes 5 minutes
+from a tap, 9 from HomeKit). `device.snoozeAlarm` still takes an explicit
+duration. Tap gestures used to carry their own snooze length; migration
+`0034_alarm_snooze_from_gestures` copied each side's onto its alarms.
+
 ## Alarm temperature warm-up
 
 An alarm's temperature used to be a set point at the alarm time: the bed only
@@ -255,7 +273,8 @@ re-armed by us, and a tap only snoozes if we know an alarm is vibrating.
   calls `markAlarmEnded`, and an alarm nobody stops ends when its duration
   runs out — so the flag can't linger for a later tap to "snooze".
 - A tap configured to snooze clears the alarm and snoozes it through
-  `snoozeManager` with the snoozed alarm's own settings (the gesture, API
+  `snoozeManager` with the snoozed alarm's own settings, for the alarm's
+  snooze length (see Snooze length and Snooze taper above; the gesture, API
   and HomeKit paths all share it). Any other tap during an alarm just
   records it ended, since the firmware already stopped it.
 - Taps come from two places (`src/hardware/gestureDispatch.ts`): the tap

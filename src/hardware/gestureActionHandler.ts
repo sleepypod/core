@@ -2,6 +2,7 @@ import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
 import type { AlarmConfig } from './alarmPersistence'
+import { nextSnoozeSeconds } from './snoozeLength'
 import { getTemperatureController } from '@/src/temperature/instance'
 import { shouldBlock as pumpStallShouldBlock } from './pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
@@ -162,7 +163,8 @@ export class GestureActionHandler {
         const config = this.deps.alarm.activeConfig(event.side) ?? DEFAULT_SNOOZE_ALARM
         await clear()
         await this.deps.alarm.ended(event.side)
-        this.deps.alarm.snooze(event.side, gesture.alarmSnoozeDuration ?? 300, config)
+        // The alarm sets the snooze length (and how it tapers), not the tap.
+        this.deps.alarm.snooze(event.side, nextSnoozeSeconds(config), config)
       }
       else {
         await clear()

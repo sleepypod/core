@@ -79,6 +79,13 @@ export const sleepStages: DemoHandlers<'sleepStages'> = {
 
   // The demo has no Mac-trained model: the Settings card shows "none stored", and the switch cannot be turned on.
   getModel: async () => ({ model: null, uploadedAt: null, active: false }),
+  listModels: async () => [],
+  uploadModel: async () => {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Upload personal models on your pod. Model uploads are unavailable in the demo.' })
+  },
+  selectModel: async () => {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'No personal stage models are stored in the demo.' })
+  },
   setModelActive: async (input) => {
     if (input.active) throw new TRPCError({ code: 'NOT_FOUND', message: `No valid personal stage model stored for ${input.side}` })
     return { active: false, version: null }

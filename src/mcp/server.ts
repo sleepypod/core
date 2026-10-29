@@ -18,6 +18,7 @@ import { registerMaintenanceTools } from '@/src/mcp/tools/maintenance'
 import { registerScheduleTools } from '@/src/mcp/tools/schedules'
 import { registerSettingsTools } from '@/src/mcp/tools/settings'
 import { registerSleepTools } from '@/src/mcp/tools/sleep'
+import { registerStageModelTools } from '@/src/mcp/tools/stageModels'
 import { buildPodStatus, registerStatusTools } from '@/src/mcp/tools/status'
 
 export const MCP_SERVER_NAME = 'sleepypod'
@@ -30,7 +31,8 @@ Confirm with the user before prime_pod, pod_maintenance and manage_schedule dele
 Run apply_sleep_curve with mode "preview" and show the result before calling it with mode "apply".
 Run preview_sleep_stage_rules before set_sleep_stage_rules and apply a tuned ruleset only when it improves kappa against the reference stages; a reset or rollback the user asks for does not need to.
 Nights without reference stages cannot be scored (see get_sleep_stage_rules coverage); import Apple Watch stages with import_apple_watch_data first.
-Every classifier change is recorded in the change log with the ruleset before it, and can be reverted by setting that previous ruleset again.`
+Every classifier change is recorded in the change log with the ruleset before it, and can be reverted by setting that previous ruleset again.
+Personal stage models: run preview_stage_model before select_stage_model, report in-sample scores as in-sample, and select or activate a model only after the user approves; set_stage_model_active with active false returns a side to the rules.`
 
 function json(uri: string, value: unknown) {
   return { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(value, null, 2) }] }
@@ -44,6 +46,7 @@ export function createSleepypodMcpServer(): McpServer {
 
   registerStatusTools(server)
   registerSleepTools(server)
+  registerStageModelTools(server)
   registerControlTools(server)
   registerScheduleTools(server)
   registerSettingsTools(server)

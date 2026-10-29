@@ -52,6 +52,9 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | "Would the movement-only preset match my watch better?" / "Try deep below 0.90" (dry run) | [`preview_sleep_stage_rules`](#sleep-stage-tuning) | `sleepStages.getClassifier`, `previewClassifier` |
 | "Apply that ruleset" / "Go back to the default rules" | [`set_sleep_stage_rules`](#sleep-stage-tuning) | `sleepStages.getClassifier`, `setClassifier` |
 | "How far is the pod from my watch?" / "Did that change bring HR closer?" | [`compare_vitals_to_watch`](#watch-deviation-report) | `biometrics.compareToWatch` |
+| "Which personal stage models do I have?" | [`get_stage_models`](#personal-stage-models) | `sleepStages.listModels` |
+| "How would this model have staged last week?" (dry run) | [`preview_stage_model`](#personal-stage-models) | `sleepStages.previewModel` |
+| "Add this model" / "Use model 3" / "Go back to the rules" | [`add_stage_model`, `select_stage_model`, `set_stage_model_active`](#personal-stage-models) | `sleepStages.uploadModel`, `selectModel`, `setModelActive` |
 
 ### Control tonight
 
@@ -269,6 +272,26 @@ logged), and can be reverted by saving that previous ruleset again (`before: nul
 means `reset: true`). Pass the preview's `candidateRuleset` as `ruleset` to save exactly what was
 previewed; overrides are re-resolved against the rules saved at save time. A `CONFLICT` means
 another save landed first: re-read with `get_sleep_stage_rules` and retry.
+
+### Personal stage models
+
+`get_stage_models` lists a side's model library (newest first) with each entry's `id`,
+`selected` and `active` flags. `preview_stage_model` is read-only: it stages the most recent
+`nights` (default 7) with an inline `model` or, when omitted, the side's selected model, and
+returns pooled agreement with the Watch next to the rules' agreement plus per-night epochs,
+accuracy and kappa. Nights the model trained on are in-sample. `add_stage_model` stores a model
+in the library without selecting it; the router refuses unknown feature contracts and models
+that fail their own test vectors, and identical uploads return the existing id.
+`select_stage_model` makes a library entry the side's model (`active` decides whether it stages
+nights) and returns the previously selected entry so it can be restored;
+`set_stage_model_active` with `active: false` returns the side to the rules. Both change what
+the pod shows and are meant for after the user approves a preview.
+
+Models travel inline in the tool call, capped at 256 KB of JSON. Logistic models fit; the
+forests sleepypod/training exports are about 1-2 MB, more than a host can write into a call, so
+upload those with `POST /api/sleep-stages/models` and use these tools to preview, select and
+activate them. `PUT /api/sleep-stages/model` replaces the side's model in place (and keeps it
+active) and is deliberately not exposed.
 
 ### Watch deviation report
 

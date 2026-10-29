@@ -18,6 +18,12 @@ export interface AlarmConfig {
   vibrationPattern: 'double' | 'rise'
   /** Vibration length in seconds. */
   duration: number
+  /** Snooze length in seconds set on the alarm; callers fall back without it. */
+  snoozeDuration?: number
+  /** Snooze taper: percent each later snooze is shorter (0 = off). */
+  snoozeTaper?: number
+  /** Snoozes already taken for this alarm occurrence. */
+  snoozeCount?: number
 }
 
 export interface TimedAlarm {

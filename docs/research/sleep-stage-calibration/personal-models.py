@@ -123,17 +123,20 @@ def features(rows, entered, left, contract):
 def label(epochs, rows):
     """The Watch stage of the labeled row containing the epoch midpoint (first match), as StageDataset.label."""
     segments = []
+    interrupted = False
     for r in rows:
         t = int(r['ts'])
         if not r['watch_stage']:
             # An explicit unlabeled row ends the running segment; a missing sample (gap) is bridged below.
             if segments:
                 segments[-1][1] = min(segments[-1][1], t)
+            interrupted = True
             continue
-        if segments and segments[-1][2] == r['watch_stage'] and 0 <= t - segments[-1][1] <= 120:
+        if not interrupted and segments and segments[-1][2] == r['watch_stage'] and 0 <= t - segments[-1][1] <= 120:
             segments[-1][1] = t + 60
         else:
             segments.append([t, t + 60, r['watch_stage']])
+        interrupted = False
     out = []
     for e in epochs:
         mid = e['start'] + EPOCH / 2

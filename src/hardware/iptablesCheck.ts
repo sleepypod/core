@@ -89,7 +89,8 @@ export function checkIptablesCached(): Promise<IptablesStatus> {
     const outputs = Object.fromEntries(chains)
     const rules = buildRequiredRules(iptables).map(rule => ({
       name: rule.name, chain: rule.chain, critical: rule.critical,
-      present: outputs[rule.chain] === null || !!outputs[rule.chain]?.includes(rule.check),
+      present: outputs[rule.chain] === null || chainAllowsAll(outputs[rule.chain] ?? '')
+        || !!outputs[rule.chain]?.includes(rule.check),
     }))
     const value = { ok: rules.every(rule => !rule.critical || rule.present), rules, repaired: [] }
     if (state.generation === generation) {
@@ -137,6 +138,24 @@ function resolveIptablesPath(override?: string): string {
 
   // Fall back to bare name and let execSync resolve via PATH
   return 'iptables'
+}
+
+/**
+ * True when a `iptables -L <chain> -n` listing shows a chain that lets
+ * everything through: policy ACCEPT and only ACCEPT/LOG/RETURN rules. The
+ * required allow rules only matter in front of a drop, so with internet
+ * access allowed (all rules flushed) they are satisfied, not missing. Any
+ * other target — DROP, REJECT, or a jump to a custom chain that may drop
+ * (e.g. scripts/internet-control's SLEEPYPOD-BLOCK) — falls back to the
+ * exact-rule check.
+ */
+export function chainAllowsAll(listing: string): boolean {
+  const lines = listing.split('\n')
+  if (!lines.some(l => /^Chain \S+ \(policy ACCEPT/.test(l))) return false
+  return lines
+    .filter(l => l.trim() && !/^Chain \S+ \(policy ACCEPT[^)]*\)\s*$/.test(l)
+      && !/^target\s+prot\s+opt\s+source\s+destination\s*$/.test(l))
+    .every(l => /^(?:ACCEPT|LOG|RETURN)\b/.test(l))
 }
 
 function buildRequiredRules(iptables: string) {
@@ -196,7 +215,7 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
         encoding: 'utf-8',
         timeout: 5000,
       })
-      present = output.includes(rule.check)
+      present = chainAllowsAll(output) || output.includes(rule.check)
     }
     catch (e) {
       const msg = e instanceof Error ? e.message : ''

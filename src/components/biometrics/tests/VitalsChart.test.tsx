@@ -217,3 +217,75 @@ it('cancels selection and leaves touch, secondary-click, and Shift gestures unse
   fireEvent.pointerLeave(overlay, { pointerType: 'mouse' })
   expect(screen.queryByTestId('vitals-reference-hover')).toBeNull()
 })
+
+it('draws Watch HRV as distinct samples only within the visible sessions', () => {
+  withWidth()
+  render(
+    <VitalsChart
+      sessions={sessions}
+      stall={null}
+      bands={bands}
+      referenceHrv={[
+        { t: START + 10 * MIN, value: 35 },
+        { t: START + 4 * 60 * MIN, value: 80 },
+      ]}
+    />
+  )
+  const dot = screen.getByTestId('vitals-watch-hrv')
+  expect(dot.getAttribute('stroke')).toBe('var(--text-1)')
+  expect(dot.textContent).toBe('Apple Watch SDNN · 35 ms')
+})
+
+it('uses small thin neutral circles for Watch breathing samples', () => {
+  withWidth()
+  render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceBr={[{ t: START + 10 * MIN, value: 14.5 }]} />)
+  const dot = screen.getByTestId('vitals-watch-br')
+  expect(dot.tagName).toBe('circle')
+  expect(dot.getAttribute('r')).toBe('2')
+  expect(dot.getAttribute('stroke-width')).toBe('1')
+  expect(dot.getAttribute('stroke')).toBe('var(--text-1)')
+  expect(dot.textContent).toBe('Apple Watch breathing · 14.5 br/min')
+})
+
+it.each(['referenceHrv', 'referenceBr'] as const)('joins nearby %s samples but leaves long gaps disconnected', (prop) => {
+  withWidth()
+  const points = [10, 15, 45, 50].map(m => ({ t: START + m * MIN, value: 30 }))
+  render(<VitalsChart sessions={sessions} stall={null} bands={bands} {...{ [prop]: points }} />)
+  const key = prop === 'referenceHrv' ? 'hrv' : 'br'
+  const lines = screen.getAllByTestId(`vitals-watch-${key}-line`)
+  expect(lines).toHaveLength(2)
+  for (const line of lines) {
+    expect(line.getAttribute('stroke-dasharray')).toBe('3 3')
+    expect(line.getAttribute('d')?.match(/L/g)).toHaveLength(1)
+  }
+  expect(screen.getAllByTestId(`vitals-watch-${key}`)).toHaveLength(4)
+})
+
+it('exposes Watch SDNN and breathing through the interaction overlay, without bridging gaps', () => {
+  withWidth()
+  const { container, rerender } = render(
+    <VitalsChart
+      sessions={sessions}
+      stall={null}
+      bands={bands}
+      referenceHrv={[{ t: START + 2 * MIN, value: 35 }]}
+      referenceBr={[{ t: START + 2 * MIN, value: 14.5 }]}
+    />
+  )
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  fireEvent.pointerMove(overlay, { clientX: 2, clientY: 50 })
+  expect(screen.getByTestId('vitals-watch-hrv-hover').textContent).toBe('Watch SDNN 35 ms')
+  expect(screen.getByTestId('vitals-watch-br-hover').textContent).toBe('Watch breathing 14.5 br/min')
+  rerender(
+    <VitalsChart
+      sessions={sessions}
+      stall={null}
+      bands={bands}
+      referenceHrv={[{ t: START + 30 * MIN, value: 35 }]}
+      referenceBr={[{ t: START - MIN, value: 14.5 }]}
+    />
+  )
+  expect(screen.queryByTestId('vitals-watch-hrv-hover')).toBeNull()
+  expect(screen.queryByTestId('vitals-watch-br-hover')).toBeNull()
+})

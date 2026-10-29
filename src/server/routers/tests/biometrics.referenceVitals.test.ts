@@ -175,6 +175,29 @@ describe('biometrics reference vitals', () => {
     })
   })
 
+  describe('getReferenceSamples', () => {
+    it('keeps the newest samples within the limit in chronological order', async () => {
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_sdnn', samples: [
+        { timestamp: T0 + 2 * MIN, value: 52 }, { timestamp: T0, value: 48 }, { timestamp: T0 + MIN, value: 50 },
+      ] })
+      const rows = await caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + 3 * MIN) * 1000), limit: 2 })
+      expect(rows.map(r => r.value)).toEqual([50, 52])
+    })
+    it('isolates side, metric and time window, returning chronological samples', async () => {
+      for (const side of ['left', 'right'] as const) {
+        await caller.importReferenceSamples({ side, source: 'apple_watch', metric: 'hrv_sdnn', samples: [
+          { timestamp: T0 + 2 * MIN, value: 52 }, { timestamp: T0, value: 48 },
+        ] })
+      }
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: [{ timestamp: T0, value: 15 }] })
+      expect(await caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([{ timestamp: new Date(T0 * 1000), value: 48 }])
+      expect((await caller.getReferenceSamples({ side: 'right', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + 3 * MIN) * 1000) })).map(r => r.value)).toEqual([48, 52])
+    })
+    it('rejects reversed ranges', async () => {
+      await expect(caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(2000), endDate: new Date(1000) })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    })
+  })
+
   describe('getReferenceVitals', () => {
     beforeEach(async () => {
       await caller.importReferenceVitals({ side: 'left', source: 'apple_watch', samples })

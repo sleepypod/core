@@ -42,9 +42,12 @@ const trpcMock = vi.hoisted(() => {
     invalidate,
     state,
     trpc: {
-      useUtils: () => ({ sleepStages: { getClassifier: { invalidate }, getModel: { invalidate: vi.fn() } }, biometrics: { getSleepStages: { invalidate: vi.fn() } } }),
+      useUtils: () => ({ sleepStages: { getClassifier: { invalidate }, getModel: { invalidate: vi.fn() }, listModels: { invalidate: vi.fn() } }, biometrics: { getSleepStages: { invalidate: vi.fn() } } }),
       sleepStages: {
         getModel: { useQuery: () => ({ data: state.model }) },
+        listModels: { useQuery: () => ({ data: [] }) },
+        uploadModel: { useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }) },
+        selectModel: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
         setModelActive: { useMutation: () => ({ mutate: activeMutate, isPending: false, error: state.activeError }) },
         getClassifier: {
           useQuery: () => ({
@@ -697,8 +700,8 @@ describe('SleepStageRules', () => {
     it('describes an active logistic model without metrics and shows a switch error', () => {
       trpcMock.state.model = { model: { version: 'container-logistic-test', kind: 'logistic' }, uploadedAt: 1, active: true }
       render(<SleepStageRules side="left" onSideChange={() => {}} />)
-      expect(screen.getByText(/Logistic regression container-logistic-test/)).toBeTruthy()
-      expect(screen.getByText(/Nights are staged by the model/)).toBeTruthy()
+      expect(screen.getAllByText('container-logistic-test')[0]).toBeTruthy()
+      expect(screen.getByText(/Nights are staged by/)).toBeTruthy()
       const toggle = screen.getByRole('switch', { name: 'Stage nights with this model' })
       expect(toggle.getAttribute('aria-checked')).toBe('true')
       fireEvent.click(toggle)
@@ -708,7 +711,7 @@ describe('SleepStageRules', () => {
       trpcMock.state.model = { model: { version: 'v', kind: 'forest', metrics: { lono: { kappa: null, nights: null } } }, uploadedAt: 1, active: false }
       render(<SleepStageRules side="left" onSideChange={() => {}} />)
       expect(screen.getByText('No valid personal stage model stored for left')).toBeTruthy()
-      expect(screen.getByText(/Random forest v$/)).toBeTruthy()
+      expect(screen.getByText('v')).toBeTruthy()
       trpcMock.state.activeError = null
     })
 
@@ -719,8 +722,8 @@ describe('SleepStageRules', () => {
         active: false,
       }
       render(<SleepStageRules side="left" onSideChange={() => {}} />)
-      expect(screen.getByText(/Random forest container-forest-test/)).toBeTruthy()
-      expect(screen.getByText(/κ 0\.25/)).toBeTruthy()
+      expect(screen.getByText('container-forest-test')).toBeTruthy()
+      expect(screen.getByLabelText('κ 0.25')).toBeTruthy()
       fireEvent.click(screen.getByRole('switch', { name: 'Stage nights with this model' }))
       expect(trpcMock.activeMutate).toHaveBeenCalledWith({ side: 'left', active: true })
     })
