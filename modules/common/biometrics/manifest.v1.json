@@ -647,7 +647,7 @@
   },
   "dependencyHashes": {
     "modules/piezo-processor/uv.lock": "2803397e553a32588071d6be84c2bce5326552da03076261f48afce0ba919869",
-    "pnpm-lock.yaml": "a2d93ae43d061ce9eeded3664ed7b79e5e5f61e157b03b3d138c77a9c501b9c9"
+    "pnpm-lock.yaml": "c4a4ad5306768919942ee174cbf6bd221480d4aaaf7c5f48dba52b05cf62a578"
   },
   "legacySourceHashes": {
     "modules/piezo-processor/main.py": "c98bdb3d6ee38b5de5d36760238978a8fefe2153a0cdf3e82ea1872d2d0da34f",
