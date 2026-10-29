@@ -948,7 +948,7 @@ fi
 # Install Node.js via binary download (works on any Linux, no apt required)
 # ============================================================================
 NODE_WANTED=24
-NODE_FULL="24.16.0"
+NODE_FULL="24.22.1"
 NODE_DIR="/usr/local/lib/nodejs"
 
 # Detect architecture
@@ -960,9 +960,17 @@ case "$ARCH" in
   *)             echo "Error: Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
-# Check if adequate Node is already installed
-CURRENT_NODE_MAJOR=$(node -v 2>/dev/null | cut -d. -f1 | tr -d v || echo "0")
-if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
+# Check the security patch floor as well as the supported major version.
+# A major-only check would leave vulnerable Node 24 installations untouched.
+node_version_is_supported() {
+  local version="${1#v}" major minor patch
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r major minor patch <<< "$version"
+  [ "$major" -eq "$NODE_WANTED" ] &&
+    { [ "$minor" -gt 22 ] || { [ "$minor" -eq 22 ] && [ "$patch" -ge 1 ]; }; }
+}
+CURRENT_NODE_VERSION=$(node -v 2>/dev/null || true)
+if ! node_version_is_supported "$CURRENT_NODE_VERSION"; then
   echo "Installing Node.js $NODE_FULL ($NODE_ARCH)..."
   NODE_TARBALL="node-v${NODE_FULL}-linux-${NODE_ARCH}.tar.gz"
   NODE_BASE_URL="https://nodejs.org/dist/v${NODE_FULL}"
@@ -1016,13 +1024,12 @@ if [ "$CURRENT_NODE_MAJOR" -lt "$NODE_WANTED" ]; then
 
   echo "Node.js $(node -v) installed."
 else
-  echo "Node.js $(node -v) already installed (>= $NODE_WANTED)."
+  echo "Node.js $(node -v) already installed (>= $NODE_FULL, major $NODE_WANTED)."
 fi
 
 # Verify Node.js version
-NODE_MAJOR=$(node -v | cut -d. -f1 | tr -d v)
-if [ "$NODE_MAJOR" -lt "$NODE_WANTED" ]; then
-  echo "Error: Node.js >= $NODE_WANTED required, found $(node -v)" >&2
+if ! node_version_is_supported "$(node -v)"; then
+  echo "Error: Node.js >= $NODE_FULL (major $NODE_WANTED) required, found $(node -v)" >&2
   exit 1
 fi
 

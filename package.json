@@ -1,4 +1,7 @@
 {
+  "engines": {
+    "node": ">=24.22.1 <25"
+  },
   "name": "@sleepypod/core",
   "type": "module",
   "private": true,
@@ -94,7 +97,7 @@
     "@lingui/loader": "^6.0.0",
     "@lingui/swc-plugin": "^6.0.0",
     "@lingui/vite-plugin": "^6.0.0",
-    "@playwright/test": "1.58.2",
+    "@playwright/test": "1.64.1",
     "@rolldown/plugin-babel": "^0.2.4",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^11.0.0",
@@ -118,7 +121,7 @@
     "@types/three": "0.186.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.0",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "4.1.12",
     "conventional-changelog-conventionalcommits": "^9.1.0",
     "drizzle-kit": "^0.31.9",
     "esbuild": "0.28.2",
@@ -139,7 +142,7 @@
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.0.18"
   },
-  "packageManager": "pnpm@10.34.6",
+  "packageManager": "pnpm@10.34.7",
   "pnpm": {
     "onlyBuiltDependencies": [
       "cbor-extract",
@@ -154,7 +157,7 @@
     },
     "overrides": {
       "dbus-next>usocket": "-",
-      "@babel/runtime": "7.29.7"
+      "@babel/runtime": "7.29.10"
     }
   }
 }
