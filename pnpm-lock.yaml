@@ -6,7 +6,8 @@ settings:
 
 overrides:
   dbus-next>usocket: '-'
-  '@babel/runtime': 7.29.10
+
+packageExtensionsChecksum: sha256-stsLKx7gkNv90vsQWE0rNRvkh27LKUKGaXJ1P61C2+M=
 
 patchedDependencies:
   dbus-next@0.10.2:
@@ -147,6 +148,9 @@ importers:
         specifier: ^5.4.6
         version: 5.4.6(zod@4.6.5)
     devDependencies:
+      '@babel/runtime':
+        specifier: ^8.0.8
+        version: 8.0.8
       '@codecov/nextjs-webpack-plugin':
         specifier: ^2.0.1
         version: 2.0.1(next@16.4.3(@babel/core@7.29.7)(@playwright/test@1.64.1)(@types/node@25.9.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(webpack@5.111.1(esbuild@0.28.2))
@@ -173,13 +177,13 @@ importers:
         version: 6.7.1(@lingui/core@6.9.1(@babel/core@7.29.7))
       '@lingui/vite-plugin':
         specifier: ^6.0.0
-        version: 6.9.1(@babel/core@7.29.7)(@lingui/babel-plugin-lingui-macro@6.9.1(@babel/core@7.29.7))(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(esbuild@0.28.2)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+        version: 6.9.1(@babel/core@7.29.7)(@lingui/babel-plugin-lingui-macro@6.9.1(@babel/core@7.29.7))(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(esbuild@0.28.2)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
       '@playwright/test':
         specifier: 1.64.1
         version: 1.64.1
       '@rolldown/plugin-babel':
         specifier: ^0.2.4
-        version: 0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+        version: 0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
       '@semantic-release/commit-analyzer':
         specifier: ^13.0.1
         version: 13.0.1(semantic-release@25.0.9(typescript@6.0.3))
@@ -245,7 +249,7 @@ importers:
         version: 8.18.2
       '@vitejs/plugin-react':
         specifier: ^6.0.0
-        version: 6.1.2(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+        version: 6.1.2(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
       '@vitest/coverage-v8':
         specifier: 4.1.12
         version: 4.1.12(vitest@4.1.12)
@@ -511,6 +515,9 @@ packages:
   '@babel/runtime@7.29.10':
     resolution: {integrity: sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==}
     engines: {node: '>=6.9.0'}
+
+  '@babel/runtime@8.0.8':
+    resolution: {integrity: sha512-dEu8nGlRqjsJsvviUUoSMfcRHpwomCiRlXsc2mPfJ79+ffTpDm+JtfUtTMzUrqCApHQnCsVPD3gT1ZT8RgBRCQ==}
 
   '@babel/template@7.29.7':
     resolution: {integrity: sha512-puq+Gf35oI24FeN11LkoUQFqv9uwNeWpxXZi/Ji3rRIoKAzKnxRaZ+Gkj0vKS9ZCiTESfng1N9LyOyXvo+m+Gg==}
@@ -2119,7 +2126,7 @@ packages:
     peerDependencies:
       '@babel/core': ^7.29.0 || ^8.0.0-rc.1
       '@babel/plugin-transform-runtime': ^7.29.0 || ^8.0.0-rc.1
-      '@babel/runtime': 7.29.10
+      '@babel/runtime': ^7.27.0 || ^8.0.0-rc.1
       rolldown: ^1.0.0-rc.5
       vite: ^8.0.0
     peerDependenciesMeta:
@@ -7765,6 +7772,8 @@ snapshots:
 
   '@babel/runtime@7.29.10': {}
 
+  '@babel/runtime@8.0.8': {}
+
   '@babel/template@7.29.7':
     dependencies:
       '@babel/code-frame': 7.29.7
@@ -7795,7 +7804,7 @@ snapshots:
 
   '@base-ui/react@1.9.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@babel/runtime': 7.29.10
+      '@babel/runtime': 8.0.8
       '@base-ui/utils': 0.5.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@floating-ui/react-dom': 2.1.9(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@floating-ui/utils': 0.2.12
@@ -7807,7 +7816,7 @@ snapshots:
 
   '@base-ui/utils@0.5.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@babel/runtime': 7.29.10
+      '@babel/runtime': 8.0.8
       '@floating-ui/utils': 0.2.12
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
@@ -8753,7 +8762,7 @@ snapshots:
       '@lingui/conf': 6.9.0
       '@lingui/core': 6.9.1(@babel/core@7.29.7)
 
-  '@lingui/vite-plugin@6.9.1(@babel/core@7.29.7)(@lingui/babel-plugin-lingui-macro@6.9.1(@babel/core@7.29.7))(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(esbuild@0.28.2)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))':
+  '@lingui/vite-plugin@6.9.1(@babel/core@7.29.7)(@lingui/babel-plugin-lingui-macro@6.9.1(@babel/core@7.29.7))(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(esbuild@0.28.2)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
       '@lingui/cli': 6.9.1(esbuild@0.28.2)(rolldown@1.2.13)
       '@lingui/conf': 6.9.1
@@ -8762,7 +8771,7 @@ snapshots:
     optionalDependencies:
       '@babel/core': 7.29.7
       '@lingui/babel-plugin-lingui-macro': 6.9.1(@babel/core@7.29.7)
-      '@rolldown/plugin-babel': 0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+      '@rolldown/plugin-babel': 0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
       rolldown: 1.2.13
     transitivePeerDependencies:
       - babel-plugin-macros
@@ -9061,13 +9070,13 @@ snapshots:
   '@rolldown/binding-win32-x64-msvc@1.2.13':
     optional: true
 
-  '@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))':
+  '@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
       '@babel/core': 7.29.7
       picomatch: 4.0.7
       rolldown: 1.2.13
     optionalDependencies:
-      '@babel/runtime': 7.29.10
+      '@babel/runtime': 8.0.8
       vite: 8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
 
   '@rolldown/pluginutils@1.0.1': {}
@@ -9761,12 +9770,12 @@ snapshots:
       next: 16.4.3(@babel/core@7.29.7)(@playwright/test@1.64.1)(@types/node@25.9.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react: 19.3.0
 
-  '@vitejs/plugin-react@6.1.2(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))':
+  '@vitejs/plugin-react@6.1.2(@rolldown/plugin-babel@0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)))(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
     optionalDependencies:
-      '@rolldown/plugin-babel': 0.2.4(@babel/core@7.29.7)(@babel/runtime@7.29.10)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+      '@rolldown/plugin-babel': 0.2.4(@babel/core@7.29.7)(@babel/runtime@8.0.8)(rolldown@1.2.13)(vite@8.3.4(@types/node@25.9.9)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
 
   '@vitest/coverage-v8@4.1.12(vitest@4.1.12)':
     dependencies:
@@ -12692,6 +12701,7 @@ snapshots:
 
   mqtt@5.16.0:
     dependencies:
+      '@babel/runtime': 7.29.10
       '@types/readable-stream': 4.0.25
       '@types/ws': 8.18.2
       commist: 3.2.0
