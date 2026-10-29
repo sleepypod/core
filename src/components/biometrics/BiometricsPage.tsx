@@ -277,6 +277,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
             : (
                 <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceHrv={referenceHrv} referenceBr={referenceBr} reference={reference} movement={movementQ.data ?? []} />
               )}
+        {referenceHrv.length > 0 && <p className="text-xs text-fg-3"><Trans>Watch SDNN and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values.</Trans></p>}
         <VitalsLegend referenceBr={referenceBr.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
       </div>
 

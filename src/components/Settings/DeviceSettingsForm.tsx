@@ -47,6 +47,7 @@ export const TIMEZONES = [
   'Europe/Paris',
   'Europe/Berlin',
   'Europe/Amsterdam',
+  'Europe/Bucharest',
   'Asia/Tokyo',
   'Asia/Shanghai',
   'Asia/Kolkata',

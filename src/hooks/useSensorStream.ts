@@ -14,6 +14,7 @@ export const ALL_SENSOR_TYPES = [
   'piezo-dual', 'capSense', 'capSense2',
   'bedTemp', 'bedTemp2', 'frzTemp', 'frzTherm', 'frzHealth', 'log',
   'deviceStatus', 'gesture', 'lps',
+  'frzWater', 'sensHealth',
 ] as const
 
 export type SensorType = typeof ALL_SENSOR_TYPES[number]
@@ -134,6 +135,26 @@ export interface GestureFrame {
   tapType: string
 }
 
+/** Freezer water reservoir and priming status frame. */
+export interface FrzWaterFrame {
+  type: 'frzWater'
+  ts: number
+  isPriming: boolean
+  hasWater: boolean
+  capValid: boolean
+  capLevel: number
+  needsPriming: boolean
+}
+
+/** Cover sensor health and connectivity status frame. */
+export interface SensHealthFrame {
+  type: 'sensHealth'
+  ts: number
+  left: { connected: boolean }
+  right: { connected: boolean }
+  version?: number
+}
+
 /** Device status frame — pushed on DacMonitor's adaptive poll (1s active /
  * 2s default / 5s idle) and immediately after mutations via
  * broadcastMutationStatus. Sides carry the full SideStatus payload the
@@ -181,6 +202,8 @@ export type SensorFrame
     | LogFrame
     | DeviceStatusFrame
     | GestureFrame
+    | FrzWaterFrame
+    | SensHealthFrame
 
 // ---------------------------------------------------------------------------
 // Server → Client control messages

@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { TRPCError } from '@trpc/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const callerMock = vi.hoisted(() => {
   const fn = () => vi.fn()
@@ -1391,11 +1391,19 @@ describe('sleep stage tuning tools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // Keep the October reference fixtures inside the rolling 14-day window.
+    // Leave transport timers real so MCP requests can complete normally.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-13T13:00:00Z'))
     callerMock.sleepStages.getClassifier.mockResolvedValue(classifierState())
     callerMock.biometrics.getReferenceStages.mockResolvedValue([])
     callerMock.biometrics.getSleepRecords.mockResolvedValue([])
     callerMock.biometrics.getReferenceVitals.mockResolvedValue([])
     callerMock.biometrics.getVitals.mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   async function call(name: string, args: Record<string, unknown>) {
@@ -1595,6 +1603,20 @@ describe('sleep stage tuning tools', () => {
       referenceCoverage: { nights: 1, segments: 2, epochs: 144, latestReferenceAt: segment.end.toISOString(), source: 'apple_watch', truncated: false },
       hint: null,
     })
+  })
+
+  it('get_sleep_stage_rules clips reference epochs to the rolling coverage window', async () => {
+    vi.setSystemTime(new Date('2026-10-26T09:00:00Z'))
+    const expired = { ...segment, id: 2, start: new Date('2026-10-11T06:00:00Z'), end: new Date('2026-10-11T12:00:00Z') }
+    callerMock.biometrics.getReferenceStages.mockResolvedValue([segment, expired])
+    callerMock.biometrics.getSleepRecords.mockResolvedValue([record])
+
+    const result = parse(await call('get_sleep_stage_rules', { side: 'left' }))
+    expect(result).toMatchObject({ referenceCoverage: { epochs: 36 } })
+    expect(callerMock.biometrics.getReferenceStages).toHaveBeenCalledWith(expect.objectContaining({
+      startDate: new Date('2026-10-12T09:00:00Z'),
+      endDate: new Date('2026-10-26T09:00:00Z'),
+    }))
   })
 
   it('get_sleep_stage_rules marks coverage as truncated when a query hits its row cap', async () => {

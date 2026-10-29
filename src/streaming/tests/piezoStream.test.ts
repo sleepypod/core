@@ -782,6 +782,41 @@ describe('piezoStream — server lifecycle and protocol', () => {
     }
   })
 
+  it('supports frzWater and sensHealth subscriptions without unknown frame warnings', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    __test__.warnedUnknownTypes.delete('frzWater')
+    __test__.warnedUnknownTypes.delete('sensHealth')
+    const client = await connectClient(startAndPort())
+    try {
+      client.ws.send(JSON.stringify({ type: 'subscribe', sensors: ['frzWater', 'sensHealth'] }))
+      const ack = await client.waitFor(m => m.type === 'subscribed')
+      expect(ack.sensors).toEqual(['frzWater', 'sensHealth'])
+
+      const waterFrame = {
+        type: 'frzWater', ts: 12345,
+        isPriming: false, hasWater: true, capValid: true, capLevel: 5, needsPriming: false,
+      }
+      const healthFrame = {
+        type: 'sensHealth', ts: 12346,
+        left: { connected: true }, right: { connected: true }, version: 1,
+      }
+
+      __test__.dispatchSensorFrame(waterFrame)
+      __test__.dispatchSensorFrame(healthFrame)
+
+      const receivedWater = await client.waitFor(m => m.type === 'frzWater')
+      expect(receivedWater).toEqual(waterFrame)
+
+      const receivedHealth = await client.waitFor(m => m.type === 'sensHealth')
+      expect(receivedHealth).toEqual(healthFrame)
+
+      expect(warn.mock.calls.filter(args => args[1] === 'frzWater' || args[1] === 'sensHealth')).toEqual([])
+    }
+    finally {
+      await client.close()
+    }
+  })
+
   it('subscribe with an empty sensors array → subscribes to all types', async () => {
     const logSpy = vi.spyOn(console, 'log')
     const port = startAndPort()

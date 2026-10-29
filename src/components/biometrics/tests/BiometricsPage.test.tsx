@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   timeFormat: '12h' as '12h' | '24h',
   shown: ['left', 'right'] as Array<'left' | 'right'>,
   reference: [] as Array<{ timestamp: Date, heartRate: number }>,
+  referenceHrv: [] as Array<{ timestamp: Date, value: number }>,
   referenceOpts: undefined as Record<string, unknown> | undefined,
 }))
 
@@ -55,7 +56,7 @@ vi.mock('@/src/utils/trpc', () => ({
       },
       getFileCount: { useQuery: () => ({ data: { rawFiles: { left: 4, right: 4 }, totalSizeMB: 8.45 } }) },
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
-      getReferenceSamples: { useQuery: () => ({ data: [] }) },
+      getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : [] }) },
       getReferenceVitals: {
         useQuery: (_input: unknown, opts: Record<string, unknown>) => {
           state.referenceOpts = opts
@@ -83,6 +84,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
+  state.referenceHrv = []
   state.occupied = true
   state.timeFormat = '12h'
   state.dataPath = { occupancy: { left: 'occupied', right: 'empty' } }
@@ -301,4 +303,12 @@ it('clears session focus when switching people and ignores clearing the date fie
   const input = state.vitals.mock.calls.at(-1)?.[0]
   fireEvent.change(screen.getByLabelText('Biometrics date'), { target: { value: '' } })
   expect(state.vitals.mock.calls.at(-1)?.[0]).toEqual(input)
+})
+
+it('explains SDNN comparability only when Watch HRV is overlaid', () => {
+  const view = render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText(/Watch SDNN and sleepypod/)).toBeNull()
+  state.referenceHrv = [{ timestamp: new Date(LAST_VITAL), value: 30 }]
+  view.rerender(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.getByText(/Watch SDNN and sleepypod/)).toBeTruthy()
 })

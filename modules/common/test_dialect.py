@@ -130,7 +130,9 @@ class TestDispatch:
 class TestKnownRecordTypes:
     def test_covers_all_parsed_dialects(self):
         for t in ("capSense", "capSense2", "piezo-dual", "bedTemp", "bedTemp2",
-                  "frzTemp", "frzHealth", "frzTherm"):
+                  "frzTemp", "frzHealth", "frzTherm",
+                  "sensHealth", "frzWater", "lps",
+                  "tap-gesture", "alarm-info"):
             assert t in KNOWN_RECORD_TYPES
 
     def test_excludes_new_unconsumed_types(self):
