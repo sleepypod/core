@@ -17,6 +17,9 @@ import { Card, SectionLabel, Skeleton, StatusDot } from '@/src/components/ds'
  * agree on bed state. The head/torso/legs bars are a live visualization of
  * capSense channel variance — useful for seeing what the sensor is doing
  * right now, but NOT the source of truth for occupancy.
+ *
+ * Newer cover firmware sends sensHealth; a side it reports unlinked gets a
+ * Disconnected dot. Without the frame (older firmware) nothing is added.
  */
 
 const VARIANCE_WINDOW = 20
@@ -55,6 +58,7 @@ export function PresenceCard() {
   const capSense = useSensorFrame('capSense')
   const capSense2 = useSensorFrame('capSense2')
   const frame: CapSenseFrame | CapSense2Frame | undefined = capSense2 ?? capSense
+  const sensHealth = useSensorFrame('sensHealth')
   const { sideName } = useSideNames()
 
   const occupancyQuery = trpc.biometrics.getOccupancy.useQuery(undefined, {
@@ -125,6 +129,7 @@ export function PresenceCard() {
                     sub={occ ? presenceSub(occ) : '--'}
                     variance={side === 'left' ? variance.leftVariance : variance.rightVariance}
                     hasFrames={!!frame}
+                    disconnected={sensHealth?.[side]?.connected === false}
                   />
                 )
               })}
@@ -134,7 +139,7 @@ export function PresenceCard() {
   )
 }
 
-function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames }: {
+function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames, disconnected }: {
   name: string
   side: 'left' | 'right'
   occupied: boolean
@@ -142,6 +147,7 @@ function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames }:
   sub: string
   variance: number[]
   hasFrames: boolean
+  disconnected: boolean
 }) {
   const accent = side === 'left' ? 'var(--accent-cool)' : 'var(--accent-warm)'
   const activity = ZONES.map((_, zone) => zoneActivity(variance, zone))
@@ -153,6 +159,7 @@ function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames }:
         <StatusDot tone={occupied ? 'ok' : 'muted'} />
         <span className="truncate">{`${name} · ${known ? (occupied ? 'in bed' : 'empty') : '--'}`}</span>
       </span>
+      {disconnected && <StatusDot tone="warn" label="Disconnected" className="text-[11px]" />}
       <span className="font-mono text-[11px] text-fg-2">{sub}</span>
       <div className="flex h-[34px] items-end gap-1" aria-label={`${name} zone activity`}>
         {ZONES.map((zone, i) => (

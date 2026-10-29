@@ -134,6 +134,23 @@ it('uses server occupancy while visualizing frame variance independently', () =>
   expect(screen.getByTestId('presence-right').textContent).toContain('in bedstill')
 })
 
+it('marks a side Disconnected only when sensHealth reports it unlinked', () => {
+  mock.data.occupancy = { left: { occupied: false, available: true, classification: 'none', movement: { active: false } }, right: { occupied: false, available: true, classification: 'none', movement: { active: false } } }
+  const { rerender } = render(<PresenceCard />)
+  // Older firmware: no sensHealth frame, nothing extra.
+  expect(screen.queryByText('Disconnected')).toBeNull()
+  mock.frames.sensHealth = { type: 'sensHealth', ts: 1, version: 1, left: { connected: true }, right: { connected: true } }
+  rerender(<PresenceCard />)
+  expect(screen.queryByText('Disconnected')).toBeNull()
+  mock.frames.sensHealth = { type: 'sensHealth', ts: 2, version: 1, left: { connected: true }, right: { connected: false } }
+  rerender(<PresenceCard />)
+  expect(within(screen.getByTestId('presence-right')).getByText('Disconnected')).toBeTruthy()
+  expect(within(screen.getByTestId('presence-left')).queryByText('Disconnected')).toBeNull()
+  mock.frames.sensHealth = { type: 'sensHealth', ts: 3, version: 1, left: { connected: false }, right: { connected: false } }
+  rerender(<PresenceCard />)
+  expect(screen.getAllByText('Disconnected')).toHaveLength(2)
+})
+
 it('switches flow units and ranges with live readings and downsampled history', () => {
   const { rerender } = render(<FlowrateChart />)
   expect(screen.getByText('No flow history')).toBeTruthy()

@@ -33,6 +33,13 @@ describe('waterTank', () => {
     expect(waterTank(frame({ capLevel: 3, hasWater: false }))?.tone).toBe('warn')
   })
 
+  it('reads the 0/1 integer flags a Pod 3 on thermal v1.6.114 sends', () => {
+    const live = JSON.parse('{"type":"frzWater","version":1,"ts":1793239885,"isPriming":1,"hasWater":1,"capValid":0,"capLevel":0,"needsPriming":0}') as FrzWaterFrame
+    expect(waterTank(live)).toEqual({ level: null, label: 'OK', tone: 'ok', prime: 'priming' })
+    expect(waterTank({ ...live, isPriming: 0, capValid: 1, capLevel: 3 })).toEqual({ level: 3, label: '3/5', tone: 'ok', prime: null })
+    expect(waterTank({ ...live, isPriming: 0, hasWater: 0, needsPriming: 1 })).toEqual({ level: null, label: 'Low', tone: 'warn', prime: 'needed' })
+  })
+
   it('reports priming ahead of a pending prime', () => {
     expect(waterTank(frame({ needsPriming: true }))?.prime).toBe('needed')
     expect(waterTank(frame({ isPriming: true, needsPriming: true }))?.prime).toBe('priming')

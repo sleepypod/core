@@ -2,9 +2,12 @@
 
 import { Droplets, Play } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
+import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import { Button, Card, CardHeader, Skeleton } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 import { dailyWaterLevels, useWaterHistory, type WaterDay } from './waterHistory'
+import { WaterTankGauge } from './WaterTankGauge'
+import { waterTank } from './waterTank'
 
 const DAY_TONE: Record<'ok' | 'low' | 'none', { past: string, today: string }> = {
   ok: { past: 'bg-ok-line', today: 'bg-ok' },
@@ -25,10 +28,15 @@ function dayLabel(level: WaterDay): string {
  * Wires into:
  * - waterLevel.getHistory → 7-day strip
  * - device.getStatus → priming state + prime-complete timestamp
+ * - frzWater (newer thermal firmware) → tank gauge in the header; its
+ *   isPriming also blocks Start prime
  */
 export function WaterLevelCard({ onOpen }: { onOpen: () => void }) {
   const { data: history, isLoading: historyLoading } = useWaterHistory()
   const { data: status, isLoading: statusLoading } = trpc.device.getStatus.useQuery({}, { refetchInterval: 10_000 })
+  const frzWater = useSensorFrame('frzWater')
+  const tank = waterTank(frzWater)
+  const priming = !!status?.isPriming || !!frzWater?.isPriming
 
   const days = dailyWaterLevels(history)
   const lastPrimed = status?.primeCompletedNotification?.timestamp
@@ -39,7 +47,14 @@ export function WaterLevelCard({ onOpen }: { onOpen: () => void }) {
         title="Water level"
         icon={Droplets}
         iconClassName="text-cool"
-        right={<span className="font-mono text-xs text-fg-2">7 days</span>}
+        right={tank
+          ? (
+              <span className="flex items-center gap-3 font-mono text-xs text-fg-2">
+                <WaterTankGauge tank={tank} />
+                7 days
+              </span>
+            )
+          : <span className="font-mono text-xs text-fg-2">7 days</span>}
       />
       {historyLoading
         ? <Skeleton className="h-[22px]" data-testid="water-history-loading" />
@@ -64,14 +79,14 @@ export function WaterLevelCard({ onOpen }: { onOpen: () => void }) {
           ? <Skeleton className="h-4 flex-1" data-testid="water-status-loading" />
           : (
               <span className="min-w-0 flex-1 truncate">
-                {status?.isPriming
+                {priming
                   ? 'Priming…'
                   : lastPrimed
                     ? `Last primed ${new Date(lastPrimed).toLocaleDateString([], { month: 'short', day: 'numeric' })}`
                     : 'No recent prime'}
               </span>
             )}
-        <Button icon={Play} onClick={onOpen} disabled={statusLoading || status?.isPriming}>
+        <Button icon={Play} onClick={onOpen} disabled={statusLoading || priming}>
           Start prime
         </Button>
       </div>

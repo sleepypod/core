@@ -135,15 +135,17 @@ export interface GestureFrame {
   tapType: string
 }
 
-/** Freezer water reservoir and priming status frame. */
+/** Freezer water reservoir and priming status frame. Firmware sends the
+ * flags as 0/1 integers; read them by truthiness, never `=== true`. */
 export interface FrzWaterFrame {
   type: 'frzWater'
   ts: number
-  isPriming: boolean
-  hasWater: boolean
-  capValid: boolean
+  version?: number
+  isPriming: boolean | 0 | 1
+  hasWater: boolean | 0 | 1
+  capValid: boolean | 0 | 1
   capLevel: number
-  needsPriming: boolean
+  needsPriming: boolean | 0 | 1
 }
 
 /** Cover sensor health and connectivity status frame. */
