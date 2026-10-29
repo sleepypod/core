@@ -54,6 +54,7 @@ export function presenceSub(occ: { available: boolean, classification: 'person' 
 export function PresenceCard() {
   const capSense = useSensorFrame('capSense')
   const capSense2 = useSensorFrame('capSense2')
+  const sensHealth = useSensorFrame('sensHealth')
   const frame: CapSenseFrame | CapSense2Frame | undefined = capSense2 ?? capSense
   const { sideName } = useSideNames()
 
@@ -115,6 +116,7 @@ export function PresenceCard() {
             <div className="grid grid-cols-2 gap-3">
               {(['left', 'right'] as const).map((side) => {
                 const occ = occupancyQuery.data?.[side]
+                const disconnected = sensHealth ? !sensHealth[side].connected : false
                 return (
                   <PresenceSide
                     key={side}
@@ -125,6 +127,7 @@ export function PresenceCard() {
                     sub={occ ? presenceSub(occ) : '--'}
                     variance={side === 'left' ? variance.leftVariance : variance.rightVariance}
                     hasFrames={!!frame}
+                    disconnected={disconnected}
                   />
                 )
               })}
@@ -134,7 +137,7 @@ export function PresenceCard() {
   )
 }
 
-function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames }: {
+function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames, disconnected }: {
   name: string
   side: 'left' | 'right'
   occupied: boolean
@@ -142,6 +145,7 @@ function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames }:
   sub: string
   variance: number[]
   hasFrames: boolean
+  disconnected?: boolean
 }) {
   const accent = side === 'left' ? 'var(--accent-cool)' : 'var(--accent-warm)'
   const activity = ZONES.map((_, zone) => zoneActivity(variance, zone))
@@ -150,10 +154,10 @@ function PresenceSide({ name, side, occupied, known, sub, variance, hasFrames }:
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-testid={`presence-${side}`}>
       <span className="flex min-w-0 items-center gap-1.5 text-[13px]">
-        <StatusDot tone={occupied ? 'ok' : 'muted'} />
-        <span className="truncate">{`${name} · ${known ? (occupied ? 'in bed' : 'empty') : '--'}`}</span>
+        <StatusDot tone={disconnected ? 'warn' : occupied ? 'ok' : 'muted'} />
+        <span className="truncate">{`${name} · ${disconnected ? 'disconnected' : known ? (occupied ? 'in bed' : 'empty') : '--'}`}</span>
       </span>
-      <span className="font-mono text-[11px] text-fg-2">{sub}</span>
+      <span className="font-mono text-[11px] text-fg-2">{disconnected ? 'cover disconnected' : sub}</span>
       <div className="flex h-[34px] items-end gap-1" aria-label={`${name} zone activity`}>
         {ZONES.map((zone, i) => (
           <span

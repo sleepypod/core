@@ -9,11 +9,15 @@ const state = vi.hoisted(() => ({
   path: '/en', query: '', active: true, base: undefined as { configured: boolean } | undefined,
   status: undefined as unknown, health: undefined as unknown,
   version: undefined as unknown, water: undefined as unknown,
+  sensHealth: undefined as unknown,
   start: vi.fn(), end: vi.fn(),
 }))
 vi.mock('next/navigation', () => ({ usePathname: () => state.path, useSearchParams: () => new URLSearchParams(state.query) }))
 vi.mock('@/src/hooks/useScheduleActive', () => ({ useScheduleActive: () => ({ isActive: state.active }) }))
 vi.mock('@/src/hooks/useSwipeNavigation', () => ({ useSwipeNavigation: () => ({ onTouchStart: state.start, onTouchEnd: state.end }) }))
+vi.mock('@/src/hooks/useSensorStream', () => ({
+  useSensorFrame: (type: string) => (type === 'sensHealth' ? state.sensHealth : undefined),
+}))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => 29000000 }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   base: { getAvailability: { useQuery: () => ({ data: state.base }) } },
@@ -24,7 +28,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
 } }))
 
 beforeEach(() => {
-  Object.assign(state, { path: '/en', query: '', active: true, status: undefined, health: undefined, version: undefined, water: undefined, base: undefined })
+  Object.assign(state, { path: '/en', query: '', active: true, status: undefined, health: undefined, version: undefined, water: undefined, base: undefined, sensHealth: undefined })
   vi.clearAllMocks()
 })
 
@@ -121,6 +125,14 @@ describe('responsive navigation', () => {
     rerender(<TabBar />)
     expect(screen.getByTestId('system-health-dot').getAttribute('data-tone')).toBe('warn')
     expect(screen.getByRole('link', { name: /SYSTEM, 1 issue/ })).toBeTruthy()
+  })
+  it('surfaces cover sensor disconnect warning in the sidebar footer and tab bar', () => {
+    state.sensHealth = { type: 'sensHealth', version: 1, left: { connected: false }, right: { connected: true } }
+    state.health = { status: 'ok', database: { status: 'ok' }, scheduler: {}, iptables: { ok: true } }
+    render(<Sidebar />)
+    const footer = screen.getByRole('link', { name: /Open System dashboard/ })
+    expect(footer.textContent).toContain('1 issue')
+    expect(within(screen.getByTestId('footer-issues')).getAllByRole('listitem').map(li => li.textContent)).toEqual(['Left cover sensor disconnected'])
   })
   it('renders page content and forwards swipe gestures', () => {
     render(<AppShell><h1>Temperature</h1></AppShell>)

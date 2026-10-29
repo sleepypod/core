@@ -3,11 +3,13 @@
 import { SensorAge } from './SensorAge'
 
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
-import type { FrzHealthFrame } from '@/src/hooks/useSensorStream'
+import type { FrzHealthFrame, FrzWaterFrame } from '@/src/hooks/useSensorStream'
 import { trpc } from '@/src/utils/trpc'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatDisplayTemp, sensorCToDisplay } from '@/src/lib/tempUtils'
 import { Card, SectionLabel, Skeleton, StatusDot, type Tone } from '@/src/components/ds'
+import { cn } from '@/lib/utils'
+import { WaterTankGauge } from '@/src/components/status/WaterTankGauge'
 
 /** Overcurrent threshold in Amperes. Eight Sleep TECs pull ~10-11.5A during startup
  * circuit calibration and up to 12A under peak thermal demand. Real overcurrent is >13.5A. */
@@ -24,9 +26,15 @@ export function freezerStatus(
   health: FrzHealthFrame | undefined,
   waterLevel: 'low' | 'ok' | undefined,
   hasData: boolean,
+  frzWater?: FrzWaterFrame | undefined,
 ): { tone: Tone, label: string } {
   if (!hasData) return { tone: 'muted', label: 'No data' }
-  if (waterLevel === 'low') return { tone: 'warn', label: 'Water low' }
+  const isLow = frzWater
+    ? (frzWater.capValid ? frzWater.capLevel <= 1 : !frzWater.hasWater)
+    : waterLevel === 'low'
+  if (isLow) return { tone: 'warn', label: 'Water low' }
+  if (frzWater?.isPriming) return { tone: 'ok', label: 'Priming' }
+  if (frzWater?.needsPriming) return { tone: 'warn', label: 'Needs prime' }
   if (health && (health.left.tecCurrent > TEC_OVERCURRENT_AMPS || health.right.tecCurrent > TEC_OVERCURRENT_AMPS)) {
     return { tone: 'warn', label: 'High TEC' }
   }
@@ -51,6 +59,7 @@ export function FreezerHealthCard() {
   const frzTemp = useSensorFrame('frzTemp')
   const frzHealth = useSensorFrame('frzHealth')
   const frzTherm = useSensorFrame('frzTherm')
+  const frzWater = useSensorFrame('frzWater')
 
   // tRPC: latest freezer temp from DB (fallback when WS hasn't sent data)
   const latestFreezerTemp = trpc.environment.getLatestFreezerTemp.useQuery(
@@ -89,7 +98,7 @@ export function FreezerHealthCard() {
       : null
 
   const waterLevel = waterLevelLatest.data?.level as 'low' | 'ok' | undefined
-  const hasData = !!(temps || frzHealth || frzTherm)
+  const hasData = !!(temps || frzHealth || frzTherm || frzWater)
 
   // First paint with no live frames yet: hold the slot while the stored fallback loads.
   if (!hasData && latestFreezerTemp.isLoading) {
@@ -100,7 +109,7 @@ export function FreezerHealthCard() {
       </>
     )
   }
-  const status = freezerStatus(frzHealth, waterLevel, hasData)
+  const status = freezerStatus(frzHealth, waterLevel, hasData, frzWater)
 
   const t = (v: number | null | undefined, decimals = 1) =>
     formatDisplayTemp(v, unit, { decimals, includeUnit: false, nullDisplay: '--' })
@@ -111,12 +120,22 @@ export function FreezerHealthCard() {
     : '--'
   const rpm = (v: number | undefined) => v === undefined ? '--' : v.toLocaleString()
 
+  const tankText = frzWater
+    ? (frzWater.isPriming
+        ? 'priming…'
+        : frzWater.needsPriming
+          ? 'needs prime'
+          : frzWater.capValid
+            ? `tank ${frzWater.capLevel}/5`
+            : `water ${frzWater.hasWater ? 'ok' : 'low'}`)
+    : (waterLevel && `water ${waterLevel}`)
+
   const secondary = [
     frzHealth && `fan ${frzHealth.fan.rpm.toLocaleString()} rpm`,
     frzHealth && `tec ${frzHealth.left.tecCurrent.toFixed(1)}/${frzHealth.right.tecCurrent.toFixed(1)} A`,
     frzTherm && `therm ${frzTherm.left.toFixed(1)}/${frzTherm.right.toFixed(1)}`,
     temps && `hub ${t(temps.ambient)}`,
-    waterLevel && `water ${waterLevel}`,
+    tankText,
   ].filter(Boolean) as string[]
 
   return (
@@ -125,7 +144,15 @@ export function FreezerHealthCard() {
       <Card className="flex-row items-center gap-2.5 px-4 py-3.5 min-[900px]:hidden">
         <span className="sp-label">Freezer</span>
         <StatusDot tone={status.tone} label={status.label} className="text-[13px]" />
-        <span className="ml-auto truncate font-mono text-xs text-fg-2">
+        <WaterTankGauge
+          capLevel={frzWater?.capLevel}
+          capValid={frzWater?.capValid}
+          isPriming={frzWater?.isPriming}
+          needsPriming={frzWater?.needsPriming}
+          waterLevel={waterLevel}
+          className="ml-auto"
+        />
+        <span className={cn('truncate font-mono text-xs text-fg-2', !frzWater?.capValid && 'ml-auto')}>
           {temps ? `${t(temps.heatsink, 0)} sink · ${t(temps.leftWater ?? temps.rightWater, 0)} water` : '--'}
         </span>
       </Card>
@@ -138,7 +165,19 @@ export function FreezerHealthCard() {
         </SectionLabel>
         <div className="grid grid-cols-2 gap-2.5">
           <BigStat value={temps ? `${t(temps.heatsink)}` : '--'} label="Heatsink" warn={false} />
-          <BigStat value={water} label="Water" warn={false} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="truncate font-mono text-lg font-light">{water}</span>
+              <WaterTankGauge
+                capLevel={frzWater?.capLevel}
+                capValid={frzWater?.capValid}
+                isPriming={frzWater?.isPriming}
+                needsPriming={frzWater?.needsPriming}
+                waterLevel={waterLevel}
+              />
+            </div>
+            <div className="text-[11px] text-fg-2">Water</div>
+          </div>
           <BigStat value={rpm(frzHealth?.left.pumpRpm)} label="Pump L · rpm" warn={frzHealth?.left.pumpRpm === 0} />
           <BigStat value={rpm(frzHealth?.right.pumpRpm)} label="Pump R · rpm" warn={frzHealth?.right.pumpRpm === 0} />
         </div>

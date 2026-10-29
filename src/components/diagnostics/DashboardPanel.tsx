@@ -28,6 +28,7 @@ import { attentionItems, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobL
 import { nearestPoint, panelDomain, seriesPath, THERMAL_PANELS } from './thermalHistoryLogic'
 import type { DiagSection } from './DiagnosticsConsole'
 import { OccupancyCheck } from './OccupancyCheck'
+import { useSensorFrame } from '@/src/hooks/useSensorStream'
 
 type ThermalData = inferRouterOutputs<AppRouter>['health']['thermal']
 type ThermalSide = ThermalData['sides'][number]
@@ -209,12 +210,19 @@ function AttentionCard() {
   const prime = trpc.device.startPriming.useMutation({
     onSuccess: () => void utils.device.getStatus.invalidate(),
   })
+  const sensHealth = useSensorFrame('sensHealth')
 
   const nowMinute = useNowMinute()
   if (nowMinute == null) return null
   const occupancy = dataPath.data?.occupancy
   const suspectSides = occupancy ? shown.filter(s => occupancy[s] === 'suspect') : []
-  const items = attentionItems(maintenance.data, water.data?.level ?? device.data?.waterLevel, nowMinute * 60_000, suspectSides)
+  const coverDisconnects = sensHealth
+    ? {
+        left: shown.includes('left') && !sensHealth.left.connected,
+        right: shown.includes('right') && !sensHealth.right.connected,
+      }
+    : undefined
+  const items = attentionItems(maintenance.data, water.data?.level ?? device.data?.waterLevel, nowMinute * 60_000, suspectSides, coverDisconnects)
   if (items.length === 0) return null
   const priming = device.data?.isPriming ?? false
 

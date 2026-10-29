@@ -3,8 +3,10 @@
 import { Droplets, Play } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, Card, CardHeader, Skeleton } from '@/src/components/ds'
+import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import { cn } from '@/lib/utils'
 import { dailyWaterLevels, useWaterHistory, type WaterDay } from './waterHistory'
+import { WaterTankGauge } from './WaterTankGauge'
 
 const DAY_TONE: Record<'ok' | 'low' | 'none', { past: string, today: string }> = {
   ok: { past: 'bg-ok-line', today: 'bg-ok' },
@@ -29,9 +31,11 @@ function dayLabel(level: WaterDay): string {
 export function WaterLevelCard({ onOpen }: { onOpen: () => void }) {
   const { data: history, isLoading: historyLoading } = useWaterHistory()
   const { data: status, isLoading: statusLoading } = trpc.device.getStatus.useQuery({}, { refetchInterval: 10_000 })
+  const frzWater = useSensorFrame('frzWater')
 
   const days = dailyWaterLevels(history)
   const lastPrimed = status?.primeCompletedNotification?.timestamp
+  const isPriming = frzWater?.isPriming ?? status?.isPriming ?? false
 
   return (
     <Card>
@@ -39,7 +43,18 @@ export function WaterLevelCard({ onOpen }: { onOpen: () => void }) {
         title="Water level"
         icon={Droplets}
         iconClassName="text-cool"
-        right={<span className="font-mono text-xs text-fg-2">7 days</span>}
+        right={(
+          <div className="flex items-center gap-2.5">
+            <WaterTankGauge
+              capLevel={frzWater?.capLevel}
+              capValid={frzWater?.capValid}
+              isPriming={isPriming}
+              needsPriming={frzWater?.needsPriming}
+              waterLevel={status?.waterLevel}
+            />
+            <span className="font-mono text-xs text-fg-2">7 days</span>
+          </div>
+        )}
       />
       {historyLoading
         ? <Skeleton className="h-[22px]" data-testid="water-history-loading" />
@@ -64,14 +79,16 @@ export function WaterLevelCard({ onOpen }: { onOpen: () => void }) {
           ? <Skeleton className="h-4 flex-1" data-testid="water-status-loading" />
           : (
               <span className="min-w-0 flex-1 truncate">
-                {status?.isPriming
+                {isPriming
                   ? 'Priming…'
-                  : lastPrimed
-                    ? `Last primed ${new Date(lastPrimed).toLocaleDateString([], { month: 'short', day: 'numeric' })}`
-                    : 'No recent prime'}
+                  : frzWater?.needsPriming
+                    ? 'Needs priming'
+                    : lastPrimed
+                      ? `Last primed ${new Date(lastPrimed).toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+                      : 'No recent prime'}
               </span>
             )}
-        <Button icon={Play} onClick={onOpen} disabled={statusLoading || status?.isPriming}>
+        <Button icon={Play} onClick={onOpen} disabled={statusLoading || isPriming}>
           Start prime
         </Button>
       </div>

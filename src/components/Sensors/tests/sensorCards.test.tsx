@@ -92,6 +92,37 @@ it('shows stored and live freezer readings, water warnings and pump RPM', () => 
   expect(screen.getAllByText('Normal')).toHaveLength(2)
   expect(screen.getByText('2,400')).toBeTruthy()
   expect(screen.getByText(/therm 1.0\/2.0/)).toBeTruthy()
+
+  // With frzWater frame, displays capacitive tank gauge and secondary text
+  mock.frames.frzWater = { type: 'frzWater', capLevel: 3, capValid: true, hasWater: true, isPriming: false, needsPriming: false }
+  rerender(<FreezerHealthCard />)
+  expect(screen.getAllByTestId('water-tank-gauge')).toHaveLength(2)
+  expect(screen.getAllByText('3/5')).toHaveLength(2)
+  expect(screen.getByText(/tank 3\/5/)).toBeTruthy()
+
+  // When priming in progress
+  mock.frames.frzWater = { type: 'frzWater', capLevel: 3, capValid: true, hasWater: true, isPriming: true, needsPriming: false }
+  rerender(<FreezerHealthCard />)
+  expect(screen.getAllByText('Priming')).toHaveLength(2)
+  expect(screen.getByText(/priming…/)).toBeTruthy()
+
+  // When tank needs priming
+  mock.frames.frzWater = { type: 'frzWater', capLevel: 3, capValid: true, hasWater: true, isPriming: false, needsPriming: true }
+  rerender(<FreezerHealthCard />)
+  expect(screen.getAllByText('Needs prime')).toHaveLength(2)
+  expect(screen.getByText(/fan.*needs prime/)).toBeTruthy()
+
+  // When capValid is false and hasWater is true
+  mock.frames.frzWater = { type: 'frzWater', capLevel: 0, capValid: false, hasWater: true, isPriming: false, needsPriming: false }
+  rerender(<FreezerHealthCard />)
+  expect(screen.getAllByText('Normal')).toHaveLength(2)
+  expect(screen.getByText(/fan.*water ok/)).toBeTruthy()
+
+  // When capValid is false and hasWater is false
+  mock.frames.frzWater = { type: 'frzWater', capLevel: 0, capValid: false, hasWater: false, isPriming: false, needsPriming: false }
+  rerender(<FreezerHealthCard />)
+  expect(screen.getAllByText('Water low')).toHaveLength(2)
+  expect(screen.getByText(/fan.*water low/)).toBeTruthy()
 })
 
 it('uses server occupancy while visualizing frame variance independently', () => {
@@ -110,6 +141,20 @@ it('uses server occupancy while visualizing frame variance independently', () =>
   rerender(<PresenceCard />)
   expect(screen.getByTestId('presence-left').textContent).toContain('in bedlight load')
   expect(screen.getByTestId('presence-right').textContent).toContain('in bedstill')
+})
+
+it('warns when a cover sensor is disconnected according to sensHealth', () => {
+  mock.frames.sensHealth = { type: 'sensHealth', left: { connected: false }, right: { connected: true } }
+  mock.data.occupancy = { left: { occupied: false, available: true, classification: 'none', movement: { active: false } }, right: { occupied: false, available: true, classification: 'none', movement: { active: false } } }
+  const { rerender } = render(<PresenceCard />)
+  expect(screen.getByTestId('presence-left').textContent).toContain('disconnected')
+  expect(screen.getByTestId('presence-left').textContent).toContain('cover disconnected')
+  expect(screen.getByTestId('presence-right').textContent).not.toContain('disconnected')
+
+  // When sensHealth is absent (older firmware), it does not show disconnected
+  delete mock.frames.sensHealth
+  rerender(<PresenceCard />)
+  expect(screen.getByTestId('presence-left').textContent).not.toContain('disconnected')
 })
 
 it('switches flow units and ranges with live readings and downsampled history', () => {

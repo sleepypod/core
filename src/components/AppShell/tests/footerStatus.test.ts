@@ -26,6 +26,10 @@ describe('footerStatus', () => {
     const s = footerStatus(ok, [{ id: 'pump-stall', title: 'Pump-stall protection is off', detail: '' }])
     expect(s).toEqual({ tone: 'warn', summary: '1 issue', issues: ['Pump-stall protection is off'] })
   })
+  it('counts cover-disconnect attention items', () => {
+    const s = footerStatus(ok, [{ id: 'cover-disconnect', title: 'Left cover sensor disconnected', detail: '' }])
+    expect(s).toEqual({ tone: 'warn', summary: '1 issue', issues: ['Left cover sensor disconnected'] })
+  })
 })
 
 describe('buildLine', () => {

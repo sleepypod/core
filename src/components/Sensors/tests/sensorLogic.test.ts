@@ -15,8 +15,10 @@ describe('streamGroups', () => {
     expect(groupForType('piezo-dual')).toBe('piezo')
     expect(groupForType('capSense')).toBe('presence')
     expect(groupForType('capSense2')).toBe('presence')
+    expect(groupForType('sensHealth')).toBe('presence')
     expect(groupForType('bedTemp2')).toBe('bedTemp')
     expect(groupForType('frzTherm')).toBe('freezer')
+    expect(groupForType('frzWater')).toBe('freezer')
     expect(groupForType('gesture')).toBe('log')
     expect(groupForType('unknown')).toBeUndefined()
   })
@@ -73,6 +75,16 @@ describe('freezerStatus', () => {
     expect(freezerStatus(health({ fan: 99, fanDuty: 50 }), 'ok', true)).toEqual({ tone: 'warn', label: 'Fan slow' })
     expect(freezerStatus(health({ fan: 0, fanDuty: 0 }), 'ok', true).label).toBe('Normal')
     expect(freezerStatus(health({ fan: 100, fanDuty: 50 }), 'ok', true).label).toBe('Normal')
+  })
+
+  it('evaluates water level and priming state when frzWater frame is available', () => {
+    const baseWater = { type: 'frzWater' as const, ts: 1, capLevel: 4, capValid: true, hasWater: true, isPriming: false, needsPriming: false }
+    expect(freezerStatus(health(), 'ok', true, { ...baseWater, capLevel: 1 })).toEqual({ tone: 'warn', label: 'Water low' })
+    expect(freezerStatus(health(), 'ok', true, { ...baseWater, capLevel: 4 })).toEqual({ tone: 'ok', label: 'Normal' })
+    expect(freezerStatus(health(), 'ok', true, { ...baseWater, isPriming: true })).toEqual({ tone: 'ok', label: 'Priming' })
+    expect(freezerStatus(health(), 'ok', true, { ...baseWater, needsPriming: true })).toEqual({ tone: 'warn', label: 'Needs prime' })
+    expect(freezerStatus(health(), 'ok', true, { ...baseWater, capValid: false, hasWater: false })).toEqual({ tone: 'warn', label: 'Water low' })
+    expect(freezerStatus(health(), 'ok', true, { ...baseWater, capValid: false, hasWater: true })).toEqual({ tone: 'ok', label: 'Normal' })
   })
 })
 

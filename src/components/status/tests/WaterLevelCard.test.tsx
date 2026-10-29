@@ -12,6 +12,10 @@ const mock = vi.hoisted(() => ({
   historyLoading: false,
   status: undefined as unknown,
   statusLoading: false,
+  frzWater: undefined as unknown,
+}))
+vi.mock('@/src/hooks/useSensorStream', () => ({
+  useSensorFrame: (type: string) => (type === 'frzWater' ? mock.frzWater : undefined),
 }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   waterLevel: { getHistory: { useQuery: () => ({ data: mock.history, isLoading: mock.historyLoading }) } },
@@ -23,6 +27,7 @@ beforeEach(() => {
   mock.historyLoading = false
   mock.status = undefined
   mock.statusLoading = false
+  mock.frzWater = undefined
 })
 
 it('holds the day strip and prime line with skeletons while queries load', () => {
@@ -56,4 +61,27 @@ it('opens the prime dialog and disables the button while priming', () => {
   rerender(<WaterLevelCard onOpen={onOpen} />)
   expect(screen.getByText('Priming…')).toBeTruthy()
   expect((screen.getByRole('button', { name: /start prime/i }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+it('renders capacitive gauge and needs priming state when frzWater is present', () => {
+  mock.frzWater = { capLevel: 3, capValid: true, hasWater: true, isPriming: false, needsPriming: true }
+  mock.status = { isPriming: false, waterLevel: 'ok' }
+  const { rerender } = render(<WaterLevelCard onOpen={() => {}} />)
+  expect(screen.getByTestId('water-tank-gauge')).toBeTruthy()
+  expect(screen.getByText('3/5')).toBeTruthy()
+  expect(screen.getByText('Needs priming')).toBeTruthy()
+
+  // When frzWater indicates priming is in progress
+  mock.frzWater = { capLevel: 3, capValid: true, hasWater: true, isPriming: true, needsPriming: false }
+  mock.status = { isPriming: false }
+  rerender(<WaterLevelCard onOpen={() => {}} />)
+  expect(screen.getByText('Priming…')).toBeTruthy()
+  expect((screen.getByRole('button', { name: /start prime/i }) as HTMLButtonElement).disabled).toBe(true)
+
+  // When frzWater is absent, falls back to binary state without gauge
+  mock.frzWater = undefined
+  mock.status = { isPriming: false, primeCompletedNotification: { timestamp: new Date(2026, 9, 20).toISOString() } }
+  rerender(<WaterLevelCard onOpen={() => {}} />)
+  expect(screen.queryByTestId('water-tank-gauge')).toBeNull()
+  expect(screen.getByText(/Last primed/)).toBeTruthy()
 })

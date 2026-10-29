@@ -85,4 +85,21 @@ describe('attentionItems', () => {
   it('flags low water', () => {
     expect(attentionItems(ok, 'low', now).map(i => i.id)).toEqual(['water'])
   })
+
+  it('flags cover sensor disconnects when explicitly reported by sensHealth', () => {
+    expect(attentionItems(ok, 'ok', now, [], { left: false, right: false })).toEqual([])
+    expect(attentionItems(ok, 'ok', now, [], undefined)).toEqual([])
+
+    const leftOnly = attentionItems(ok, 'ok', now, [], { left: true, right: false })
+    expect(leftOnly.map(i => i.id)).toContain('cover-disconnect')
+    expect(leftOnly.find(i => i.id === 'cover-disconnect')?.title).toBe('Left cover sensor disconnected')
+
+    const rightOnly = attentionItems(ok, 'ok', now, [], { left: false, right: true })
+    expect(rightOnly.map(i => i.id)).toContain('cover-disconnect')
+    expect(rightOnly.find(i => i.id === 'cover-disconnect')?.title).toBe('Right cover sensor disconnected')
+
+    const both = attentionItems(ok, 'ok', now, [], { left: true, right: true })
+    expect(both.map(i => i.id)).toContain('cover-disconnect')
+    expect(both.find(i => i.id === 'cover-disconnect')?.title).toBe('Both cover sensors disconnected')
+  })
 })

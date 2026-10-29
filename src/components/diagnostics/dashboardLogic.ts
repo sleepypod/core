@@ -58,7 +58,7 @@ export function nextTemperatureJob(jobs: SchedJob[] | undefined, now: number): S
 }
 
 export interface AttentionItem {
-  id: 'pump-stall' | 'prime' | 'water' | 'occupancy'
+  id: 'pump-stall' | 'prime' | 'water' | 'occupancy' | 'cover-disconnect'
   title: string
   detail: string
 }
@@ -83,8 +83,30 @@ export function attentionItems(
   waterLevel: string | undefined,
   now: number,
   suspectSides: ReadonlyArray<string> = [],
+  coverDisconnects?: { left?: boolean, right?: boolean },
 ): AttentionItem[] {
   const out: AttentionItem[] = []
+  if (coverDisconnects?.left && coverDisconnects?.right) {
+    out.push({
+      id: 'cover-disconnect',
+      title: 'Both cover sensors disconnected',
+      detail: 'Check physical cable connections to the left and right cover sensors.',
+    })
+  }
+  else if (coverDisconnects?.left) {
+    out.push({
+      id: 'cover-disconnect',
+      title: 'Left cover sensor disconnected',
+      detail: 'Check the physical cable connection to the left cover sensor.',
+    })
+  }
+  else if (coverDisconnects?.right) {
+    out.push({
+      id: 'cover-disconnect',
+      title: 'Right cover sensor disconnected',
+      detail: 'Check the physical cable connection to the right cover sensor.',
+    })
+  }
   if (suspectSides.length > 0) {
     out.push({
       id: 'occupancy',

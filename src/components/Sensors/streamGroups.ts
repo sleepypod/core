@@ -12,9 +12,9 @@ export interface StreamGroup {
 export const STREAM_GROUPS: readonly StreamGroup[] = [
   { key: 'status', label: 'Device', types: ['deviceStatus'] },
   { key: 'piezo', label: 'Piezo', types: ['piezo-dual', 'lps'] },
-  { key: 'presence', label: 'Presence', types: ['capSense2', 'capSense'] },
+  { key: 'presence', label: 'Presence', types: ['capSense2', 'capSense', 'sensHealth'] },
   { key: 'bedTemp', label: 'Bed temp', types: ['bedTemp2', 'bedTemp'] },
-  { key: 'freezer', label: 'Freezer', types: ['frzHealth', 'frzTemp', 'frzTherm'] },
+  { key: 'freezer', label: 'Freezer', types: ['frzHealth', 'frzTemp', 'frzTherm', 'frzWater'] },
   { key: 'log', label: 'Log', types: ['log', 'gesture'] },
 ]
 
