@@ -81,7 +81,8 @@ fi
 HOSTS_MARKER_BEGIN="# BEGIN sleepypod-telemetry-block"
 HOSTS_MARKER_END="# END sleepypod-telemetry-block"
 
-# Known Eight Sleep cloud domains
+# Known Eight Sleep cloud domains, plus the AWS endpoint the stock vector
+# service ships the journal to (not an 8slp.net name, but Eight Sleep's).
 EIGHTSLEEP_DOMAINS=(
   "raw-api-upload.8slp.net"   # frankenfirmware raw sensor data upload
   "device-api-ws.8slp.net"    # Capybara WebSocket device API hub
@@ -90,6 +91,7 @@ EIGHTSLEEP_DOMAINS=(
   "api.8slp.net"              # general API
   "app-api.8slp.net"          # mobile app API
   "client-api.8slp.net"       # client API
+  "kinesis.us-east-1.amazonaws.com"  # stock vector journal shipper
 )
 
 # Zones the dnsmasq layer answers with 0.0.0.0 / :: for the zone and every

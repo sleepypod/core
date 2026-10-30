@@ -288,6 +288,7 @@ sudo scripts/internet-control status
 - `update-api.8slp.net` — stock OTA endpoint (`/etc/swupdate.cfg`)
 - `device-api.8slp.net` — `/home/dac/app/config/default.json`
 - `api.8slp.net`, `app-api.8slp.net`, `client-api.8slp.net` — preemptive
+- `kinesis.us-east-1.amazonaws.com` — stock `vector` journal shipper
 - With dnsmasq: every `*.8slp.net` name and `kinesis.us-east-1.amazonaws.com`
 
 ### Why not just stop frank/Capybara?

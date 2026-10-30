@@ -86,8 +86,9 @@ afterEach(() => {
 })
 
 describe('internet-control hosts-block', () => {
-  it('blocks the swupdate and dac API names', () => {
-    expect(DOMAINS).toEqual(expect.arrayContaining(['update-api.8slp.net', 'device-api.8slp.net', 'raw-api-upload.8slp.net']))
+  it('blocks the swupdate and dac API names and the vector Kinesis endpoint', () => {
+    expect(DOMAINS).toEqual(expect.arrayContaining(['update-api.8slp.net', 'device-api.8slp.net', 'raw-api-upload.8slp.net', 'kinesis.us-east-1.amazonaws.com']))
+    expect(DOMAINS).toHaveLength(8)
   })
 
   it('rewrites an existing block in place when the domain list changed', () => {
@@ -176,7 +177,7 @@ describe('internet-control status', () => {
     writeFileSync(join(root, 'units', 'vector.service'), 'masked')
     expect(run('status').stdout).toMatch(/Layer 2 \(names\): +INACTIVE/)
     run('hosts-block')
-    expect(run('status').stdout).toMatch(/Layer 2 \(names\): +ACTIVE — \/etc\/hosts only \(7 domains/)
+    expect(run('status').stdout).toMatch(new RegExp(`Layer 2 \\(names\\): +ACTIVE — /etc/hosts only \\(${DOMAINS.length} domains`))
     run('dns-block')
     const out = run('status').stdout
     expect(out).toMatch(/ACTIVE — dnsmasq wildcard \(8slp\.net kinesis\.us-east-1\.amazonaws\.com\) \+ \/etc\/hosts/)
