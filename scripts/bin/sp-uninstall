@@ -53,9 +53,19 @@ fi
 
 echo "=== Uninstalling SleepyPod ==="
 
+# Put /etc/resolv.conf back on the original resolver before the dnsmasq
+# blackhole (scripts/internet-control dns-block) and /etc/sleepypod go away;
+# otherwise it would point at a deleted file and DNS would stop working.
+if [ "$(readlink /etc/resolv.conf 2>/dev/null || true)" = /etc/sleepypod/resolv.conf ] \
+  && [ -s /etc/sleepypod/resolv.conf.orig-target ]; then
+  echo "Restoring /etc/resolv.conf..."
+  ln -sfn "$(cat /etc/sleepypod/resolv.conf.orig-target)" /etc/resolv.conf
+fi
+
 # Stop and disable services
 echo "Stopping services..."
 SERVICES=(
+  sleepypod-dns.service
   sleepypod.service
   sleepypod-maintenance.timer
   sleepypod-maintenance.service

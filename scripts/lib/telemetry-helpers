@@ -49,10 +49,21 @@ apply_name_blocking() {
   local control="$1/scripts/internet-control"
   [ -f "$control" ] || return 0
   bash "$control" hosts-block || echo "Warning: /etc/hosts telemetry block failed (continuing)" >&2
-  bash "$control" dns-block || echo "Warning: dnsmasq wildcard block not applied; /etc/hosts fallback in use (continuing)" >&2
 }
 
+# Runs before WAN opens: nothing here touches DNS resolution.
 block_stock_telemetry() {
   disable_stock_telemetry
   apply_name_blocking "$1"
+}
+
+# The dnsmasq wildcard swaps /etc/resolv.conf, so callers run it only after
+# every download has finished. Never fails: a DNS problem must not abort an
+# install or update, and dns-block rolls itself back.
+# $1: source tree root holding scripts/internet-control.
+apply_dns_blackhole() {
+  local control="$1/scripts/internet-control"
+  [ -f "$control" ] || return 0
+  bash "$control" dns-block || echo "Warning: dnsmasq wildcard block not applied; /etc/hosts fallback in use (continuing)" >&2
+  return 0
 }

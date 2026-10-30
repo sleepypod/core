@@ -1846,6 +1846,13 @@ if [ -d "$PUSH_SRC" ]; then
   systemctl enable --now sleepypod-archive-push.timer
 fi
 
+# dnsmasq wildcard blackhole, now that every download has finished: it swaps
+# /etc/resolv.conf, and a DNS problem must never abort the install.
+if [ -f "$INSTALL_DIR/scripts/lib/telemetry-helpers" ]; then
+  source "$INSTALL_DIR/scripts/lib/telemetry-helpers"
+  apply_dns_blackhole "$INSTALL_DIR" || true
+fi
+
 # Re-fix DB permissions after all services restarted with new UMask.
 # On upgrades, old services (without UMask=0002) may have recreated WAL/SHM
 # files with 0644 between the initial fixup and the service restarts above.

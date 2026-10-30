@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, dnsFail?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -49,8 +49,11 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   put(join(bundle, 'scripts/lib/iptables-helpers'), helper)
   // The real helper edits /etc/hosts, masks units and restarts NetworkManager
   // through scripts/internet-control. These stubs only record which tree ran.
-  put(join(app, 'scripts/lib/telemetry-helpers'), 'block_stock_telemetry() { echo "telemetry old" >> "$TEST_LOG"; }\n')
-  put(join(bundle, 'scripts/lib/telemetry-helpers'), 'block_stock_telemetry() { echo "telemetry new" >> "$TEST_LOG"; }\n')
+  for (const [tree, label] of [[app, 'old'], [bundle, 'new']] as const) {
+    put(join(tree, 'scripts/lib/telemetry-helpers'), `block_stock_telemetry() { echo "telemetry ${label}" >> "$TEST_LOG"; }
+apply_dns_blackhole() { echo "dns ${label}" >> "$TEST_LOG"; [ "$TEST_DNS_FAIL" = 1 ] && return 1; return 0; }
+`)
+  }
   put(join(bundle, 'package.json'), '{"packageManager":"pnpm@10.34.5"}')
   put(join(bundle, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
   put(join(bundle, '.next/required-server-files.json'), '{}')
@@ -123,7 +126,7 @@ exec '${tar}' "$@"
     env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log,
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
-      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
+      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_DNS_FAIL: options.dnsFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
       TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
   })
   return { result, app, dir, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
@@ -166,6 +169,24 @@ describe('sp-update staged deployment', () => {
     expect(lines.indexOf('telemetry old')).toBeLessThan(lines.indexOf('unblock'))
     expect(lines.indexOf('telemetry new')).toBeGreaterThan(lines.indexOf('unblock'))
     expect(lines.indexOf('telemetry new')).toBeLessThan(lines.findIndex(line => line.startsWith('pnpm install')))
+  })
+
+  it('swaps DNS only after every download, before re-blocking WAN and starting', () => {
+    const { result, log } = updater({ blocked: true, branch: 'dev' })
+    expect(result.status, result.stderr).toBe(0)
+    const lines = log.split('\n')
+    const dns = lines.indexOf('dns new')
+    expect(lines.filter(line => line.startsWith('dns '))).toEqual(['dns new'])
+    expect(dns).toBeGreaterThan(lines.findLastIndex(line => line.startsWith('curl ') || line.startsWith('pnpm install')))
+    expect(dns).toBeLessThan(lines.indexOf('restore'))
+    expect(dns).toBeLessThan(lines.indexOf('systemctl start sleepypod.service'))
+  })
+
+  it('finishes the update when the DNS layer fails', () => {
+    const { result, log } = updater({ archive: true, dnsFail: true })
+    expect(result.status, result.stderr).toBe(0)
+    expect(log).toContain('dns new')
+    expect(log).toContain('systemctl start sleepypod.service')
   })
 
   it('blocks telemetry whatever the WAN state', () => {
