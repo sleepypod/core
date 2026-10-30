@@ -8,6 +8,20 @@ install_maintenance_timer() {
   systemctl daemon-reload
   systemctl enable --now sleepypod-maintenance.timer
   reconcile_stock_telemetry
+  reconcile_internet_choice_restore
+}
+
+# Same first-update problem for the root ExecStartPre that re-applies a block
+# saved in Settings at boot (scripts/lib/internet-choice-helpers): older
+# updaters don't write its drop-in or the root-owned sp-internet-control.
+# Idempotent; runs in a subshell so it can't abort the caller's update.
+reconcile_internet_choice_restore() {
+  [ -f "$INSTALL_DIR/scripts/lib/internet-choice-helpers" ] || return 0
+  (
+    source "$INSTALL_DIR/scripts/lib/internet-choice-helpers"
+    install_internet_choice_restore "$INSTALL_DIR"
+  ) || echo "Warning: saved internet access restore setup failed (continuing)" >&2
+  return 0
 }
 
 # Updaters from before scripts/lib/telemetry-helpers (v3.5.0 and older) source

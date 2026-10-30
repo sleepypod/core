@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -92,5 +92,73 @@ describe('install_maintenance_timer telemetry reconcile', () => {
     const run = runOldUpdaterStep()
     expect(run.status).toBe(0)
     expect(calls().some(l => l.startsWith('block_stock_telemetry'))).toBe(false)
+  })
+})
+
+describe('install_maintenance_timer saved internet access restore', () => {
+  const dropIn = () => join(root, 'etc/systemd/system/sleepypod.service.d/iptables-saved-choice.conf')
+  const copy = () => join(root, 'usr/local/bin/sp-internet-control')
+
+  /** The new tree's real helper; install(1) only really writes inside the sandbox root. */
+  function choiceTree() {
+    mkdirSync(join(installDir, 'scripts/lib'), { recursive: true })
+    copyFileSync(resolve('scripts/lib/internet-choice-helpers'), join(installDir, 'scripts/lib/internet-choice-helpers'))
+    writeFileSync(join(installDir, 'scripts/internet-control'), '#!/bin/bash\necho control\n')
+    stub(join(root, 'bin/install'), `echo "install $*" >> "$ROOT/calls.log"
+case "$*" in *"$ROOT/usr/local/bin/"*) exec /usr/bin/install "$@" ;; esac`)
+    stub(join(root, 'bin/chown'), 'echo "chown $*" >> "$ROOT/calls.log"')
+  }
+
+  /** An older updater's step, with every path the helper writes under the sandbox root. */
+  function runSandboxed() {
+    return spawnSync('bash', ['-c', `set -euo pipefail
+source "${maintenanceHelpers}"
+install_maintenance_timer
+echo "update continued"`], {
+      env: { ...process.env, ROOT: root, SLEEPYPOD_ROOT: root, INSTALL_DIR: installDir, PATH: `${join(root, 'bin')}:${process.env.PATH}` },
+      encoding: 'utf8',
+    })
+  }
+
+  it('writes the drop-in and a root-owned copy on an older updater\'s first update', () => {
+    choiceTree()
+    const run = runSandboxed()
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.stdout).toContain('update continued')
+    expect(readFileSync(dropIn(), 'utf8')).toBe(
+      '[Service]\nExecStartPre=+/bin/sh -c \'PATH=/usr/sbin:/sbin:/usr/bin:/bin /usr/local/bin/sp-internet-control restore; true\'\n',
+    )
+    expect(readFileSync(copy(), 'utf8')).toBe('#!/bin/bash\necho control\n')
+    expect(statSync(copy()).mode & 0o7777).toBe(0o755)
+    expect(calls()).toContain(`chown root:root ${copy()}`)
+  })
+
+  it('reloads systemd for the drop-in only when it is written', () => {
+    choiceTree()
+    expect(runSandboxed().status).toBe(0)
+    const reloads = () => calls().filter(l => l === 'systemctl daemon-reload').length
+    // First run: the timer's reload plus the drop-in's.
+    expect(reloads()).toBe(2)
+    expect(runSandboxed().status).toBe(0)
+    expect(reloads()).toBe(3)
+  })
+
+  it('warns and continues the update when the helper is broken', () => {
+    mkdirSync(join(installDir, 'scripts/lib'), { recursive: true })
+    writeFileSync(join(installDir, 'scripts/lib/internet-choice-helpers'), 'install_internet_choice_restore() {\n')
+    const run = runSandboxed()
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('update continued')
+    expect(run.stderr).toContain('saved internet access restore setup failed (continuing)')
+  })
+
+  it('warns, writes no drop-in, and continues when the copy cannot be made root-owned', () => {
+    choiceTree()
+    stub(join(root, 'bin/chown'), 'exit 1')
+    const run = runSandboxed()
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('update continued')
+    expect(run.stderr).toContain('saved internet access restore setup failed (continuing)')
+    expect(existsSync(dropIn())).toBe(false)
   })
 })

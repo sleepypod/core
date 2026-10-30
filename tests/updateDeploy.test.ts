@@ -47,6 +47,9 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   put(join(app, '.env'), 'POD_SECRET=keep')
   put(join(app, 'scripts/lib/iptables-helpers'), helper)
   put(join(bundle, 'scripts/lib/iptables-helpers'), helper)
+  // The real helper; SLEEPYPOD_ROOT below keeps its writes inside the fixture.
+  put(join(bundle, 'scripts/lib/internet-choice-helpers'), readFileSync(join(repo, 'scripts/lib/internet-choice-helpers'), 'utf8'))
+  put(join(bundle, 'scripts/internet-control'), '#!/bin/bash\necho control\n')
   // The real helper edits /etc/hosts, masks units and restarts NetworkManager
   // through scripts/internet-control. These stubs only record which tree ran.
   for (const [tree, label] of [[app, 'old'], [bundle, 'new']] as const) {
@@ -95,6 +98,7 @@ echo 'Filesystem Size Used Available Use% Mounted'
 echo "fixture 1000 100 $available 10% /"
 `)
   put(join(bin, 'sleep'), '#!/bin/bash\nexit 0\n')
+  put(join(bin, 'chown'), '#!/bin/bash\necho "chown $*" >> "$TEST_LOG"\n')
   put(join(bin, 'pnpm'), `#!/bin/bash
 if [ "$1" = --version ]; then echo "$TEST_PNPM_VERSION"; exit; fi
 echo "pnpm $*" >> "$TEST_LOG"
@@ -123,7 +127,7 @@ exec '${tar}' "$@"
 `)
   const result = spawnSync('bash', [join(dir, 'update'), ...(options.archive ? ['--archive', archive] : [options.branch ?? 'fix/test'])], {
     encoding: 'utf8',
-    env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log,
+    env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log, SLEEPYPOD_ROOT: join(dir, 'root'),
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
       TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_DNS_FAIL: options.dnsFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
@@ -196,11 +200,14 @@ describe('sp-update staged deployment', () => {
     expect(log.split('\n').filter(line => line.startsWith('telemetry '))).toEqual(['telemetry old', 'telemetry new'])
   })
 
-  it('adds the root ExecStartPre that re-applies a block saved in Settings, before starting', () => {
+  it('installs the root ExecStartPre that re-applies a block saved in Settings, before starting', () => {
     const { result, dir, log } = updater({ archive: true })
     expect(result.status, result.stderr).toBe(0)
-    const dropIn = readFileSync(join(dir, 'systemd/sleepypod.service.d/iptables-saved-choice.conf'), 'utf8')
+    const dropIn = readFileSync(join(dir, 'root/etc/systemd/system/sleepypod.service.d/iptables-saved-choice.conf'), 'utf8')
     expect(dropIn).toBe('[Service]\nExecStartPre=+/bin/sh -c \'PATH=/usr/sbin:/sbin:/usr/bin:/bin /usr/local/bin/sp-internet-control restore; true\'\n')
+    const copy = join(dir, 'root/usr/local/bin/sp-internet-control')
+    expect(readFileSync(copy, 'utf8')).toBe('#!/bin/bash\necho control\n')
+    expect(log).toContain(`chown root:root ${copy}`)
     expect(log.indexOf('systemctl daemon-reload')).toBeLessThan(log.indexOf('systemctl start sleepypod.service'))
   })
 

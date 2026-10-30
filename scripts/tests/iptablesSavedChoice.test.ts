@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -12,7 +12,9 @@ const controlScript = resolve('scripts/internet-control')
 const installScript = readFileSync(resolve('scripts/install'), 'utf8')
 const updateScript = readFileSync(resolve('scripts/bin/sp-update'), 'utf8')
 
-const RESTORE_LINE = /^ExecStartPre=\+\/bin\/sh -c '[^']*\/usr\/local\/bin\/sp-internet-control restore; true'$/m
+const choiceHelpers = resolve('scripts/lib/internet-choice-helpers')
+const DROPIN = 'etc/systemd/system/sleepypod.service.d/iptables-saved-choice.conf'
+const COPY = 'usr/local/bin/sp-internet-control'
 
 let root: string
 let bin: string
@@ -149,55 +151,99 @@ describe('internet-control restore', () => {
   })
 })
 
-function dropInBlock(): string {
-  const match = updateScript.match(/IPTABLES_CHOICE_DROPIN=[\s\S]*?\nfi\n/)
-  if (!match) throw new Error('Could not find the saved-choice drop-in in sp-update')
-  return match[0]
+/**
+ * Run install_internet_choice_restore against a sandbox root, with chown and
+ * systemctl stubbed to log. $1 is the source tree.
+ */
+function installRestore(tree: string) {
+  stub(join(bin, 'chown'), 'echo "chown $*" >> "$ROOT/calls.log"')
+  stub(join(bin, 'systemctl'), 'echo "systemctl $*" >> "$ROOT/calls.log"')
+  return spawnSync('/bin/bash', ['-c', `set -euo pipefail
+source "${choiceHelpers}"
+install_internet_choice_restore "${tree}"`], {
+    encoding: 'utf8',
+    env: { NODE_ENV: process.env.NODE_ENV, PATH: `${bin}:/usr/bin:/bin`, ROOT: root, SLEEPYPOD_ROOT: root },
+  })
 }
+const calls = () => existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8').trim().split('\n') : []
+const restoreCommand = () => readFileSync(join(root, DROPIN), 'utf8').match(/-c '(.*)'$/m)?.[1] ?? 'false'
 
-describe('saved internet access drop-in', () => {
-  it('fresh installs and OTA updates run the same root-owned restore, best-effort', () => {
-    const fromInstall = installScript.match(RESTORE_LINE)?.[0]
-    const fromUpdate = updateScript.match(RESTORE_LINE)?.[0]
-    expect(fromInstall).toBeDefined()
-    expect(fromUpdate).toBe(fromInstall)
-    // The unit's Environment PATH has no sbin; iptables lives there.
-    expect(fromInstall).toContain('PATH=/usr/sbin:/sbin:')
-    expect(fromInstall).not.toContain('$')
-    expect(fromInstall).not.toContain('/home/dac')
+describe('install_internet_choice_restore', () => {
+  let tree: string
+  beforeEach(() => {
+    tree = join(root, 'app')
+    mkdirSync(join(tree, 'scripts'), { recursive: true })
+    writeFileSync(join(tree, 'scripts/internet-control'), '#!/bin/bash\necho v1\n')
   })
 
-  it('both install the script as a root-owned copy in /usr/local/bin', () => {
-    expect(updateScript).toContain('install -m 0755 "$INSTALL_DIR/scripts/internet-control" /usr/local/bin/sp-internet-control')
-    expect(installScript).toContain('cp "$INSTALL_DIR/scripts/internet-control" /usr/local/bin/sp-internet-control')
-    expect(installScript).toContain('chown root:root /usr/local/bin/sp-internet-control')
-    expect(installScript).toContain('chmod 0755 /usr/local/bin/sp-internet-control')
-  })
-
-  it('sp-update writes the drop-in once and reloads systemd only when it changes', () => {
-    const dropIn = join(root, 'sleepypod.service.d', 'iptables-saved-choice.conf')
-    const reloads = join(root, 'reloads')
-    writeFileSync(reloads, '')
-    const block = dropInBlock().replace(/^IPTABLES_CHOICE_DROPIN=.*$/m, `IPTABLES_CHOICE_DROPIN=${dropIn}`)
-    const script = `systemctl() { echo "$*" >> ${reloads}; }\n${block}${block}`
-    const result = spawnSync('/bin/bash', ['-eu', '-o', 'pipefail', '-c', script], { encoding: 'utf8' })
+  it('installs a root-owned copy and the best-effort ExecStartPre drop-in', () => {
+    const result = installRestore(tree)
     expect(result.status, result.stderr).toBe(0)
-    expect(readFileSync(dropIn, 'utf8')).toMatch(/^\[Service\]\nExecStartPre=\+.*sp-internet-control restore; true'\n$/)
-    expect(readFileSync(reloads, 'utf8')).toBe('daemon-reload\n')
+    expect(readFileSync(join(root, COPY), 'utf8')).toBe('#!/bin/bash\necho v1\n')
+    expect(statSync(join(root, COPY)).mode & 0o7777).toBe(0o755)
+    expect(calls()).toContain(`chown root:root ${join(root, COPY)}`)
+    expect(readFileSync(join(root, DROPIN), 'utf8')).toBe(
+      '[Service]\nExecStartPre=+/bin/sh -c \'PATH=/usr/sbin:/sbin:/usr/bin:/bin /usr/local/bin/sp-internet-control restore; true\'\n',
+    )
+    expect(calls().filter(line => line === 'systemctl daemon-reload')).toHaveLength(1)
+  })
+
+  it('is idempotent: reloads systemd only when the drop-in changes, and refreshes the copy', () => {
+    expect(installRestore(tree).status).toBe(0)
+    writeFileSync(join(tree, 'scripts/internet-control'), '#!/bin/bash\necho v2\n')
+    expect(installRestore(tree).status).toBe(0)
+    expect(readFileSync(join(root, COPY), 'utf8')).toContain('v2')
+    expect(calls().filter(line => line === 'systemctl daemon-reload')).toHaveLength(1)
+    // A tampered drop-in is put back.
+    writeFileSync(join(root, DROPIN), '[Service]\nExecStartPre=+/home/dac/sleepypod-core/scripts/internet-control restore\n')
+    expect(installRestore(tree).status).toBe(0)
+    expect(readFileSync(join(root, DROPIN), 'utf8')).toContain('/usr/local/bin/sp-internet-control restore; true')
+    expect(calls().filter(line => line === 'systemctl daemon-reload')).toHaveLength(2)
+  })
+
+  it('does nothing for a tree without internet-control', () => {
+    rmSync(join(tree, 'scripts/internet-control'))
+    expect(installRestore(tree).status).toBe(0)
+    expect(existsSync(join(root, DROPIN))).toBe(false)
+    expect(calls()).toEqual([])
+  })
+
+  it('writes no drop-in when the copy cannot be made root-owned', () => {
+    stub(join(bin, 'chown'), 'exit 1')
+    const result = spawnSync('/bin/bash', ['-c', `source "${choiceHelpers}"; install_internet_choice_restore "${tree}"`], {
+      encoding: 'utf8', env: { NODE_ENV: process.env.NODE_ENV, PATH: `${bin}:/usr/bin:/bin`, ROOT: root, SLEEPYPOD_ROOT: root },
+    })
+    expect(result.status).not.toBe(0)
+    expect(existsSync(join(root, DROPIN))).toBe(false)
+  })
+
+  it('runs a root-owned copy with sbin on PATH, never the install tree', () => {
+    expect(installRestore(tree).status).toBe(0)
+    const command = restoreCommand()
+    expect(command).toContain('PATH=/usr/sbin:/sbin:')
+    expect(command).not.toContain('$')
+    expect(command).not.toContain('/home/dac')
   })
 
   it.each([
     ['missing', null],
     ['failing', 'exit 1'],
   ])('never fails the service start when sp-internet-control is %s', (_name, body) => {
-    const line = installScript.match(RESTORE_LINE)?.[0] ?? ''
+    expect(installRestore(tree).status).toBe(0)
     const tool = join(bin, 'sp-internet-control')
     if (body) stub(tool, body)
-    const command = (line.match(/-c '(.*)'$/)?.[1] ?? 'false')
+    const command = restoreCommand()
       .replace('PATH=/usr/sbin:/sbin:/usr/bin:/bin', `PATH=${bin}`)
       .replace('/usr/local/bin/sp-internet-control', tool)
     expect(command).toContain(`${tool} restore`)
-    const result = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8' })
-    expect(result.status).toBe(0)
+    expect(spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8' }).status).toBe(0)
+  })
+
+  it('sp-update and install use the helper instead of their own copy', () => {
+    for (const script of [installScript, updateScript]) {
+      expect(script).toContain('source "$INSTALL_DIR/scripts/lib/internet-choice-helpers"')
+      expect(script).toMatch(/install_internet_choice_restore "\$INSTALL_DIR" \|\| echo "Warning:/)
+      expect(script).not.toContain('sp-internet-control restore')
+    }
   })
 })

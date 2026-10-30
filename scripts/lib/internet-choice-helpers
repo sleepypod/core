@@ -1,0 +1,52 @@
+#!/bin/bash
+# Re-apply a block saved in Settings before the app starts.
+#
+# The app (User=sleepypod) can't persist iptables for iptables.service: it
+# can't run iptables-save or write /etc/iptables. It saves the owner's choice
+# in $DATA_DIR/internet-access instead, and this root ExecStartPre re-applies
+# a saved block at boot with `sp-internet-control restore`.
+#
+# The ExecStartPre runs as root, so it runs a root-owned copy in
+# /usr/local/bin, never anything under $INSTALL_DIR. Best-effort (`; true`):
+# it never stops the service starting.
+#
+# Called by scripts/install, sp-update, and install_maintenance_timer (so
+# updaters from before this file apply it on their first update). Idempotent:
+# files are rewritten and systemd reloaded only when something changed.
+# SLEEPYPOD_ROOT prefixes every path for script tests; on a pod it is empty.
+
+INTERNET_CHOICE_DROPIN_NAME=iptables-saved-choice.conf
+
+internet_choice_dropin_content() {
+  cat << 'EOF'
+[Service]
+ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin /usr/local/bin/sp-internet-control restore; true'
+EOF
+}
+
+# $1: source tree root holding scripts/internet-control.
+install_internet_choice_restore() {
+  local tree="$1" root="${SLEEPYPOD_ROOT:-}"
+  local src="$tree/scripts/internet-control"
+  local target="$root/usr/local/bin/sp-internet-control"
+  local dropin="$root/etc/systemd/system/sleepypod.service.d/$INTERNET_CHOICE_DROPIN_NAME"
+  local content
+
+  [ -f "$src" ] || return 0
+
+  if ! cmp -s "$src" "$target"; then
+    mkdir -p "$(dirname "$target")" || return 1
+    # install(1) stages a new inode and renames it over the target.
+    install -m 0755 "$src" "$target" || return 1
+  fi
+  # Root-owned and not group/world-writable: root executes it at boot.
+  chown root:root "$target" || return 1
+  chmod 0755 "$target" || return 1
+
+  content="$(internet_choice_dropin_content)"
+  if [ "$(cat "$dropin" 2>/dev/null || true)" != "$content" ]; then
+    mkdir -p "$(dirname "$dropin")" || return 1
+    printf '%s\n' "$content" > "$dropin" || return 1
+    systemctl daemon-reload
+  fi
+}
