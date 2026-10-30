@@ -3,6 +3,7 @@ import { setupI18n } from '@lingui/core'
 import { I18nProvider } from '@lingui/react'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Modal } from '@/src/components/ds'
 import { SidebarSearch } from '../CommandPalette'
 
 const router = vi.hoisted(() => ({ push: vi.fn() }))
@@ -46,6 +47,23 @@ describe('SidebarSearch', () => {
     expect(document.activeElement).toBe(input())
     fireEvent.keyDown(document.body, { key: 'K', ...mod })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('does not open over another open modal, so one Escape closes only that modal', () => {
+    const onClose = vi.fn()
+    render(
+      <>
+        <SidebarSearch lang="en" hasBase={false} />
+        <Modal open onClose={onClose} title="Edit rule"><p>body</p></Modal>
+      </>,
+      { wrapper },
+    )
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true })
+    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('dialog', { name: 'Search' })).toBeNull()
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledOnce()
   })
 
   it('ignores K without a modifier or with Shift', () => {

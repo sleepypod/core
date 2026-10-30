@@ -18,6 +18,12 @@ function isPaletteShortcut(e: globalThis.KeyboardEvent) {
   return (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k'
 }
 
+/** True while a modal dialog other than the palette is open; the shortcut must not stack over it. */
+function anotherModalOpen() {
+  return [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
+    .some(dialog => !dialog.querySelector('[data-command-palette]'))
+}
+
 /**
  * Sidebar search box. Opens the command palette on click or ⌘K / Ctrl K from
  * anywhere in the app — the sidebar stays mounted (CSS-hidden) on phones, so
@@ -30,7 +36,7 @@ export function SidebarSearch({ lang, hasBase, className }: { lang: string, hasB
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!isPaletteShortcut(e) || e.isComposing) return
+      if (!isPaletteShortcut(e) || e.isComposing || anotherModalOpen()) return
       e.preventDefault()
       setOpen(o => !o)
     }
@@ -156,6 +162,7 @@ function PaletteBody({ lang, hasBase, onClose }: { lang: string, hasBase: boolea
         ref={inputRef}
         type="text"
         role="combobox"
+        data-command-palette
         aria-label={label}
         aria-expanded={results.length > 0}
         aria-controls={listId}
