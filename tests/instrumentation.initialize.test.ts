@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   runMigrations: vi.fn(async () => undefined),
   seedDefaultData: vi.fn(async () => undefined),
   checkAndRepairIptables: vi.fn(() => ({ ok: true, repaired: [] })),
+  restoreInternetAccess: vi.fn(async () => ({ action: 'kept', choice: 'allowed' })),
   rehydratePumpStallGuard: vi.fn(),
   startDatabaseIntegrityChecks: vi.fn(),
   stopDatabaseIntegrityChecks: vi.fn(async () => undefined),
@@ -147,6 +148,9 @@ vi.mock('@/src/db/migrate', () => ({
 vi.mock('@/src/hardware/iptablesCheck', () => ({
   checkAndRepairIptables: mocks.checkAndRepairIptables,
 }))
+vi.mock('@/src/hardware/internetAccess', () => ({
+  restoreInternetAccess: mocks.restoreInternetAccess,
+}))
 vi.mock('@/src/hardware/pumpStallGuard', () => ({
   rehydrate: mocks.rehydratePumpStallGuard,
 }))
@@ -180,6 +184,7 @@ beforeEach(() => {
   mocks.runMigrations.mockResolvedValue(undefined)
   mocks.seedDefaultData.mockResolvedValue(undefined)
   mocks.checkAndRepairIptables.mockReturnValue({ ok: true, repaired: [] })
+  mocks.restoreInternetAccess.mockResolvedValue({ action: 'kept', choice: 'allowed' })
   mocks.getJobManager.mockResolvedValue(jobManager)
   scheduler.getJobs.mockReturnValue([])
   scheduler.getNextInvocation.mockReturnValue(null)
@@ -510,6 +515,35 @@ describe('register()', () => {
     await register()
     expect(logSpy).toHaveBeenCalledWith('[startup] iptables rules verified')
     logSpy.mockRestore()
+  })
+
+  it('re-applies the saved internet access choice before repairing rules', async () => {
+    mocks.restoreInternetAccess.mockResolvedValueOnce({ action: 'reapplied', choice: 'blocked' })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { register } = await fresh()
+    await register()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/saved as blocked but the firewall was open; re-applied/))
+    expect(mocks.restoreInternetAccess.mock.invocationCallOrder[0]).toBeLessThan(mocks.checkAndRepairIptables.mock.invocationCallOrder[0])
+    warnSpy.mockRestore()
+  })
+
+  it('logs an inferred internet access choice', async () => {
+    mocks.restoreInternetAccess.mockResolvedValueOnce({ action: 'inferred', choice: 'blocked' })
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { register } = await fresh()
+    await register()
+    expect(logSpy).toHaveBeenCalledWith('[startup] Saved internet access as blocked (inferred from the current firewall)')
+    logSpy.mockRestore()
+  })
+
+  it('still checks iptables when the internet access restore fails', async () => {
+    mocks.restoreInternetAccess.mockRejectedValueOnce(new Error('EACCES'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { register } = await fresh()
+    await register()
+    expect(warnSpy).toHaveBeenCalledWith('[startup] internet access restore failed:', 'EACCES')
+    expect(mocks.checkAndRepairIptables).toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 
   it('swallows iptables check failures with a warning', async () => {

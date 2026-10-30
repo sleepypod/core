@@ -5,7 +5,6 @@ import { branchNameSchema } from '@/src/server/validation-schemas'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { execFile } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { getStorageReport, runStorageCleanup } from '@/src/lib/podStorage'
@@ -19,6 +18,7 @@ import {
 } from '@/src/lib/firmwareGeneration'
 import { getServerPerformance } from '@/src/lib/serverPerformance'
 import { getSensorFrameTimes } from '@/src/streaming/piezoStream'
+import { isWanBlocked, setInternetAccess } from '@/src/hardware/internetAccess'
 
 const execFileAsync = promisify(execFile)
 
@@ -105,24 +105,6 @@ export function _resetFirmwareSignalsForTest(): void {
 const SENSOR_TRANSPORT_OVERRIDES = ['raw', 'nats'] as const
 
 /**
- * Resolve an executable path, checking common locations on Yocto and Debian.
- * Falls back to bare name (relies on PATH) if no candidate is found.
- */
-function resolveExec(name: string, candidates: string[]): string {
-  for (const p of candidates) {
-    try {
-      accessSync(p, constants.X_OK)
-      return p
-    }
-    catch { /* not found, try next */ }
-  }
-  return name // bare name — let PATH resolve it
-}
-
-const IPTABLES = resolveExec('iptables', ['/sbin/iptables', '/usr/sbin/iptables'])
-const IPTABLES_SAVE = resolveExec('iptables-save', ['/sbin/iptables-save', '/usr/sbin/iptables-save'])
-
-/**
  * Run `df -B1 <path>` and return the parsed totals, or null if the mount
  * is missing / df is unavailable (e.g. macOS dev).
  */
@@ -167,103 +149,6 @@ async function archiveSize(path: string): Promise<{ usedBytes: number, fileCount
 }
 
 /**
- * Simple async mutex to serialize iptables mutations.
- */
-let iptablesLock: Promise<void> = Promise.resolve()
-function withIptablesLock<T>(fn: () => Promise<T>): Promise<T> {
-  const prev = iptablesLock
-  let release: (() => void) | undefined
-  iptablesLock = new Promise<void>(r => release = r)
-  return prev.then(fn).finally(() => release?.())
-}
-
-/**
- * Check if WAN is currently blocked by looking for a DROP rule in the OUTPUT chain.
- */
-async function isWanBlocked(): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync(IPTABLES, ['-L', 'OUTPUT', '-n'])
-    return /^DROP\b/m.test(stdout)
-  }
-  catch {
-    return false
-  }
-}
-
-/**
- * Save current iptables rules, flush to unblock WAN, return saved rules for restore.
- */
-async function unblockWan(): Promise<string> {
-  const { stdout: saved } = await execFileAsync(IPTABLES_SAVE)
-  await execFileAsync(IPTABLES, ['-F'])
-  await execFileAsync(IPTABLES, ['-X'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-F'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-X'])
-  return saved
-}
-
-/**
- * Re-apply LAN-only iptables rules (block WAN).
- * Mirrors the free-sleep block_internet_access.sh logic:
- *   - Allow established connections
- *   - Allow RFC 1918 LAN
- *   - Allow NTP (port 123)
- *   - Allow mDNS (port 5353)
- *   - Allow loopback
- *   - DROP everything else
- */
-async function blockWan(): Promise<void> {
-  // Flush first to avoid duplicate rules
-  await execFileAsync(IPTABLES, ['-F'])
-  await execFileAsync(IPTABLES, ['-X'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-F'])
-  await execFileAsync(IPTABLES, ['-t', 'nat', '-X'])
-
-  const run = (args: string[]) => execFileAsync(IPTABLES, args)
-
-  // Allow established/related
-  await run(['-I', 'INPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'])
-  await run(['-I', 'OUTPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT'])
-
-  // Allow RFC 1918 LAN
-  for (const cidr of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']) {
-    await run(['-A', 'INPUT', '-s', cidr, '-j', 'ACCEPT'])
-    await run(['-A', 'OUTPUT', '-d', cidr, '-j', 'ACCEPT'])
-  }
-
-  // Allow NTP
-  await run(['-I', 'OUTPUT', '-p', 'udp', '--dport', '123', '-j', 'ACCEPT'])
-  await run(['-I', 'INPUT', '-p', 'udp', '--sport', '123', '-j', 'ACCEPT'])
-
-  // Allow mDNS multicast (Bonjour discovery by the apps; 224.0.0.251 is
-  // outside the RFC 1918 ranges above, which already cover unicast mDNS).
-  // Limited to the group so no internet host is reachable on 5353; the
-  // startup check's `udp dpt:5353` / `udp spt:5353` still match these.
-  await run(['-I', 'OUTPUT', '-d', '224.0.0.251', '-p', 'udp', '--dport', '5353', '-j', 'ACCEPT'])
-  await run(['-I', 'INPUT', '-d', '224.0.0.251', '-p', 'udp', '--dport', '5353', '-j', 'ACCEPT'])
-  await run(['-I', 'OUTPUT', '-d', '224.0.0.251', '-p', 'udp', '--sport', '5353', '-j', 'ACCEPT'])
-
-  // Allow loopback
-  await run(['-A', 'INPUT', '-i', 'lo', '-j', 'ACCEPT'])
-  await run(['-A', 'OUTPUT', '-o', 'lo', '-j', 'ACCEPT'])
-
-  // Block everything else
-  await run(['-A', 'INPUT', '-j', 'DROP'])
-  await run(['-A', 'OUTPUT', '-j', 'DROP'])
-
-  // Persist rules
-  try {
-    const { stdout } = await execFileAsync(IPTABLES_SAVE)
-    const { writeFile, mkdir } = await import('node:fs/promises')
-    await mkdir('/etc/iptables', { recursive: true })
-    await writeFile('/etc/iptables/iptables.rules', stdout)
-  }
-  catch {
-    // Best-effort persist — non-fatal
-  }
-}
-
-/**
  * System router — iptables control and self-update triggers.
  *
  * Procedures:
@@ -303,32 +188,24 @@ export const systemRouter = router({
   /**
    * Toggle WAN internet access.
    * `blocked: true`  → apply LAN-only iptables rules
-   * `blocked: false` → flush all iptables rules (allow everything)
+   * `blocked: false` → open the default policies and flush all iptables rules
+   * The choice is saved so a reboot keeps it (src/hardware/internetAccess.ts).
    */
   setInternetAccess: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/system/internet-access', protect: false, tags: ['System'] } })
     .input(z.object({ blocked: z.boolean() }))
     .output(z.object({ blocked: z.boolean() }))
     .mutation(async ({ input }) => {
-      return withIptablesLock(async () => {
-        try {
-          if (input.blocked) {
-            await blockWan()
-          }
-          else {
-            await unblockWan()
-          }
-          const currentState = await isWanBlocked()
-          return { blocked: currentState }
-        }
-        catch (error) {
-          throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: `Failed to update iptables: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            cause: error,
-          })
-        }
-      })
+      try {
+        return { blocked: await setInternetAccess(input.blocked) }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to update iptables: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
     }),
 
   /**

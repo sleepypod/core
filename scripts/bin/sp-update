@@ -638,6 +638,23 @@ if [ "$(cat "$IPTABLES_MODULES_DROPIN" 2>/dev/null || true)" != "$iptables_modul
   systemctl daemon-reload
 fi
 
+# Re-apply a block saved in Settings before the app starts. iptables.service
+# can't restore it (the service user can't run iptables-save or write
+# /etc/iptables), so after a reboot the firewall was open until the app's
+# startup check ran. Runs as root from the root-owned copy installed below,
+# never from $INSTALL_DIR. Best-effort: it never stops the service starting.
+IPTABLES_CHOICE_DROPIN=/etc/systemd/system/sleepypod.service.d/iptables-saved-choice.conf
+mkdir -p "$(dirname "$IPTABLES_CHOICE_DROPIN")"
+iptables_choice_content=$(cat << 'EOF'
+[Service]
+ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin /usr/local/bin/sp-internet-control restore; true'
+EOF
+)
+if [ "$(cat "$IPTABLES_CHOICE_DROPIN" 2>/dev/null || true)" != "$iptables_choice_content" ]; then
+  printf '%s\n' "$iptables_choice_content" > "$IPTABLES_CHOICE_DROPIN"
+  systemctl daemon-reload
+fi
+
 # Replace the pre-existing ExecStart fallback (`pnpm start`, which cannot run
 # as the sleepypod user and crash-loops with a misleading pnpm error) with a
 # clear failure when .next/standalone/server.js is missing. Drop-in so OTA
@@ -701,6 +718,11 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
   for tool in "$INSTALL_DIR/scripts/bin"/sp-*; do
     install -m 0755 "$tool" "/usr/local/bin/$(basename "$tool")"
   done
+fi
+# Root runs this from the unit's ExecStartPre, so it lives with the root-owned
+# sp-* tools rather than in $INSTALL_DIR.
+if [ -f "$INSTALL_DIR/scripts/internet-control" ]; then
+  install -m 0755 "$INSTALL_DIR/scripts/internet-control" /usr/local/bin/sp-internet-control
 fi
 
 # Reconcile the deferred housekeeping timer on existing installations.

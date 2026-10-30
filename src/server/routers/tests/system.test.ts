@@ -32,6 +32,9 @@ const fsPromisesMock = vi.hoisted(() => ({
   readFile: vi.fn(async () => ''),
   writeFile: vi.fn(async () => undefined),
   mkdir: vi.fn(async () => undefined),
+  rename: vi.fn(async () => undefined),
+  unlink: vi.fn(async () => undefined),
+  access: vi.fn(async () => undefined),
   stat: vi.fn(async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }),
 }))
 
@@ -76,6 +79,8 @@ beforeEach(() => {
   fsPromisesMock.readFile.mockReset().mockResolvedValue('')
   fsPromisesMock.writeFile.mockReset().mockResolvedValue(undefined)
   fsPromisesMock.mkdir.mockReset().mockResolvedValue(undefined)
+  fsPromisesMock.rename.mockReset().mockResolvedValue(undefined)
+  fsPromisesMock.unlink.mockReset().mockResolvedValue(undefined)
   fsPromisesMock.stat.mockReset().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
   sensorMock.frameTimes = {}
   sensorMock.perf = { sensorSource: 'pending', firstFrameMs: null, uptimeSeconds: 12 }
@@ -133,14 +138,44 @@ function callTo(calls: ExecCall[], file: string): ExecCall {
   return c
 }
 
+const BLOCKED_OUTPUT = '-P OUTPUT ACCEPT\n-A OUTPUT -d 10.0.0.0/8 -j ACCEPT\n-A OUTPUT -j DROP\n'
+const OPEN_OUTPUT = '-P OUTPUT ACCEPT\n'
+const CHOICE_FILE = 'internet-access'
+
+/** Answer `iptables -S <chain>` from a listing per chain; everything else succeeds silently. */
+function serveChains(chains: Record<string, string>) {
+  return recordExec((file, args) => (file === 'iptables' && args[0] === '-S' ? chains[args[1] ?? ''] ?? '' : ''))
+}
+
+function savedChoice(): string | undefined {
+  const call = fsPromisesMock.writeFile.mock.calls.at(-1) as unknown as [string, string] | undefined
+  expect(fsPromisesMock.rename).toHaveBeenCalledWith(call?.[0], expect.stringMatching(new RegExp(`(^|/)${CHOICE_FILE}$`)))
+  return call?.[1]
+}
+
 describe('system.internetStatus', () => {
-  it('returns blocked=true when iptables -L OUTPUT shows DROP', async () => {
-    queueExec(
-      (_file, args) => args.includes('-L') && args.includes('OUTPUT'),
-      { stdout: 'DROP all -- 0.0.0.0/0\n' },
-    )
+  it('returns blocked=true when OUTPUT ends in DROP', async () => {
+    serveChains({ OUTPUT: BLOCKED_OUTPUT })
     const result = await caller.internetStatus({})
     expect(result.blocked).toBe(true)
+  })
+
+  it('returns blocked=true for a DROP policy with no rules (installer block_wan fallback)', async () => {
+    serveChains({ OUTPUT: '-P OUTPUT DROP\n' })
+    expect((await caller.internetStatus({})).blocked).toBe(true)
+  })
+
+  it('follows the jump into SLEEPYPOD-BLOCK (scripts/internet-control block and restore)', async () => {
+    serveChains({
+      'OUTPUT': '-P OUTPUT ACCEPT\n-A OUTPUT -j SLEEPYPOD-BLOCK\n',
+      'SLEEPYPOD-BLOCK': '-N SLEEPYPOD-BLOCK\n-A SLEEPYPOD-BLOCK -o lo -j ACCEPT\n-A SLEEPYPOD-BLOCK -j DROP\n',
+    })
+    expect((await caller.internetStatus({})).blocked).toBe(true)
+  })
+
+  it('returns blocked=false when an unconditional ACCEPT comes before the DROP', async () => {
+    serveChains({ OUTPUT: '-P OUTPUT ACCEPT\n-A OUTPUT -j ACCEPT\n-A OUTPUT -j DROP\n' })
+    expect((await caller.internetStatus({})).blocked).toBe(false)
   })
 
   it('returns blocked=false on iptables error (dev environment)', async () => {
@@ -151,47 +186,66 @@ describe('system.internetStatus', () => {
 })
 
 describe('system.setInternetAccess', () => {
-  it('unblocks WAN by flushing rules and re-checks state', async () => {
-    // After unblock, isWanBlocked should return false (no DROP)
+  it('unblocks WAN, saves "allowed", and re-checks state', async () => {
+    serveChains({ OUTPUT: OPEN_OUTPUT })
     const result = await caller.setInternetAccess({ blocked: false })
     expect(result.blocked).toBe(false)
+    expect(savedChoice()).toBe('allowed\n')
   })
 
-  it('blocks WAN by applying LAN-only rules and persists iptables-save output', async () => {
-    // Final isWanBlocked check should see DROP after blockWan applies its rules.
-    let callCount = 0
-    execMock.execFile.mockImplementation((...args: unknown[]) => {
-      // promisify(execFile)(file) → (file, callback); with args → (file, args, callback)
-      const second = args[1]
-      const argList: string[] = Array.isArray(second) ? (second as string[]) : []
-      const cb = args[args.length - 1] as (e: unknown, o: { stdout: string }) => void
-      callCount++
-      // iptables-save (no args) → return a sentinel payload for persistence
-      if (argList.length === 0) {
-        cb(null, { stdout: 'saved-rules\n' })
-        return
-      }
-      // The final isWanBlocked call uses -L OUTPUT → fake a DROP rule
-      if (argList.includes('-L') && argList.includes('OUTPUT')) {
-        cb(null, { stdout: 'DROP all -- 0.0.0.0/0\n' })
-        return
-      }
-      cb(null, { stdout: '' })
-    })
+  it('blocks WAN, saves "blocked", and never writes /etc/iptables', async () => {
+    const calls = serveChains({ OUTPUT: BLOCKED_OUTPUT })
     const result = await caller.setInternetAccess({ blocked: true })
     expect(result.blocked).toBe(true)
-    // mkdir + writeFile invoked when persistence runs
-    expect(fsPromisesMock.mkdir).toHaveBeenCalledWith('/etc/iptables', { recursive: true })
-    expect(fsPromisesMock.writeFile).toHaveBeenCalledWith('/etc/iptables/iptables.rules', 'saved-rules\n')
-    // Sanity: many iptables invocations happened (flush, allow rules, drops)
-    expect(callCount).toBeGreaterThan(10)
+    expect(savedChoice()).toBe('blocked\n')
+    expect(calls.some(c => c.file === 'iptables-save')).toBe(false)
+    for (const [file] of fsPromisesMock.writeFile.mock.calls as unknown as [string][]) expect(file).not.toMatch(/^\/etc\//)
+    expect(fsPromisesMock.mkdir).not.toHaveBeenCalledWith('/etc/iptables', expect.anything())
   })
 
-  it('swallows persistence errors during blockWan as best-effort', async () => {
-    fsPromisesMock.mkdir.mockRejectedValueOnce(new Error('readonly fs'))
-    // Default execFile mock returns empty stdout — isWanBlocked sees no DROP → false
-    const result = await caller.setInternetAccess({ blocked: true })
-    expect(result.blocked).toBe(false)
+  it('unblocks as the service user when iptables-save would fail with EACCES', async () => {
+    const calls = recordExec((file, args) => {
+      if (file === 'iptables-save') {
+        throw Object.assign(new Error('Failed to list table names in /proc/net/ip_tables_names: Permission denied'), { code: 'EACCES' })
+      }
+      return file === 'iptables' && args[0] === '-S' ? OPEN_OUTPUT : ''
+    })
+    await expect(caller.setInternetAccess({ blocked: false })).resolves.toEqual({ blocked: false })
+    expect(calls.some(c => c.file === 'iptables-save')).toBe(false)
+  })
+
+  it('saves the choice in the database directory', async () => {
+    const previous = process.env.DATABASE_URL
+    process.env.DATABASE_URL = 'file:/persistent/sleepypod-data/sleepypod.db'
+    try {
+      serveChains({ OUTPUT: BLOCKED_OUTPUT })
+      await caller.setInternetAccess({ blocked: true })
+      expect(fsPromisesMock.rename).toHaveBeenCalledWith(expect.stringMatching(/^\/persistent\/sleepypod-data\/internet-access\..+\.tmp$/), '/persistent/sleepypod-data/internet-access')
+      expect(fsPromisesMock.writeFile).toHaveBeenCalledWith(expect.stringMatching(/^\/persistent\/sleepypod-data\/internet-access\./), 'blocked\n', { mode: 0o644 })
+    }
+    finally {
+      if (previous === undefined) delete process.env.DATABASE_URL
+      else process.env.DATABASE_URL = previous
+    }
+  })
+
+  it('still reports the new state when the choice cannot be saved', async () => {
+    fsPromisesMock.writeFile.mockRejectedValueOnce(Object.assign(new Error('EACCES'), { code: 'EACCES' }))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    serveChains({ OUTPUT: BLOCKED_OUTPUT })
+    await expect(caller.setInternetAccess({ blocked: true })).resolves.toEqual({ blocked: true })
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/won't survive a reboot/), 'EACCES')
+    expect(fsPromisesMock.unlink).toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('does not save the choice when iptables fails', async () => {
+    execMock.execFile.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, o: { stdout: string }) => void
+      cb(new Error('iptables boom'), { stdout: '' })
+    })
+    await expect(caller.setInternetAccess({ blocked: true })).rejects.toThrow(/Failed to update iptables: iptables boom/)
+    expect(fsPromisesMock.writeFile).not.toHaveBeenCalled()
   })
 
   it('wraps execFile failures as INTERNAL_SERVER_ERROR', async () => {
@@ -625,54 +679,46 @@ describe('system.getVersion', () => {
 // are checked (see the mutation-testing baseline, issue #591).
 // ---------------------------------------------------------------------------
 
-describe('system.internetStatus — command + DROP-rule matching', () => {
-  it('inspects the OUTPUT chain via `iptables -L OUTPUT -n`', async () => {
+describe('system.internetStatus — exact command', () => {
+  it('lists the OUTPUT chain with `iptables -S OUTPUT`', async () => {
     const calls = recordExec(() => '')
     await caller.internetStatus({})
-    expect(callTo(calls, 'iptables').args).toEqual(['-L', 'OUTPUT', '-n'])
+    expect(callTo(calls, 'iptables').args).toEqual(['-S', 'OUTPUT'])
   })
 
-  it('treats only a line that STARTS with DROP as blocked (anchored ^)', async () => {
-    // A DROP appearing mid-line (e.g. a reject target) must NOT count.
-    recordExec(() => 'ACCEPT all -- 0.0.0.0/0 reject-with DROP\n')
-    const result = await caller.internetStatus({})
-    expect(result.blocked).toBe(false)
-  })
-
-  it('requires a word boundary after DROP (DROPLET is not a DROP rule)', async () => {
-    recordExec(() => 'DROPLET all -- 0.0.0.0/0\n')
-    const result = await caller.internetStatus({})
-    expect(result.blocked).toBe(false)
+  it('reads SLEEPYPOD-BLOCK only when OUTPUT jumps to it', async () => {
+    const calls = serveChains({ OUTPUT: BLOCKED_OUTPUT })
+    await caller.internetStatus({})
+    expect(calls.filter(c => c.file === 'iptables').map(c => c.args)).toEqual([['-S', 'OUTPUT']])
   })
 })
 
 describe('system.setInternetAccess — exact iptables sequences', () => {
-  it('unblock flushes the filter + nat tables in order after saving rules', async () => {
-    const calls = recordExec(file => (file === 'iptables-save' ? 'saved\n' : ''))
+  it('unblock opens the default policies, then flushes the filter + nat tables', async () => {
+    const calls = serveChains({ OUTPUT: OPEN_OUTPUT })
     await caller.setInternetAccess({ blocked: false })
 
-    // The final isWanBlocked() check also runs `iptables -L OUTPUT -n` — drop it.
-    const seq = calls.filter(c => c.file === 'iptables' && !c.args.includes('-L')).map(c => c.args)
+    // The final isWanBlocked() check runs `iptables -S OUTPUT` — drop it.
+    const seq = calls.filter(c => c.file === 'iptables' && c.args[0] !== '-S').map(c => c.args)
     expect(seq).toEqual([
+      ['-P', 'INPUT', 'ACCEPT'],
+      ['-P', 'OUTPUT', 'ACCEPT'],
+      ['-P', 'FORWARD', 'ACCEPT'],
       ['-F'],
       ['-X'],
       ['-t', 'nat', '-F'],
       ['-t', 'nat', '-X'],
     ])
-    expect(calls.some(c => c.file === 'iptables-save')).toBe(true)
+    expect(calls.map(c => c.file)).not.toContain('iptables-save')
   })
 
   it('block applies the complete LAN-only ruleset in the documented order', async () => {
-    const calls = recordExec((file, args) => {
-      if (file === 'iptables-save') return 'saved-rules\n'
-      if (file === 'iptables' && args.includes('-L') && args.includes('OUTPUT')) return 'DROP all -- 0.0.0.0/0\n'
-      return ''
-    })
+    const calls = serveChains({ OUTPUT: BLOCKED_OUTPUT })
 
     const result = await caller.setInternetAccess({ blocked: true })
     expect(result.blocked).toBe(true)
 
-    const seq = calls.filter(c => c.file === 'iptables' && !c.args.includes('-L')).map(c => c.args)
+    const seq = calls.filter(c => c.file === 'iptables' && c.args[0] !== '-S').map(c => c.args)
     expect(seq).toEqual([
       ['-F'],
       ['-X'],
@@ -696,8 +742,7 @@ describe('system.setInternetAccess — exact iptables sequences', () => {
       ['-A', 'INPUT', '-j', 'DROP'],
       ['-A', 'OUTPUT', '-j', 'DROP'],
     ])
-    // Rules are persisted from the iptables-save output.
-    expect(fsPromisesMock.writeFile).toHaveBeenCalledWith('/etc/iptables/iptables.rules', 'saved-rules\n')
+    expect(calls.map(c => c.file)).not.toContain('iptables-save')
   })
 })
 

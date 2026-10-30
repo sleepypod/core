@@ -1485,6 +1485,11 @@ ExecStartPre=+/bin/sh -c ': >> /run/sleepypod-shadow.lock && chown sleepypod:sle
 # need to insmod?)") until something running as root loads them. Load them
 # here as root; best-effort, as some kernels build them in.
 ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin modprobe -a ip_tables iptable_filter iptable_nat 2>/dev/null; true'
+# Re-apply a block saved in Settings before the app starts: the service user
+# can't persist iptables for iptables.service, so a reboot left the firewall
+# open until the app's startup check. Runs as root from the root-owned copy in
+# /usr/local/bin (installed below), never from \$INSTALL_DIR. Best-effort.
+ExecStartPre=+/bin/sh -c 'PATH=/usr/sbin:/sbin:/usr/bin:/bin /usr/local/bin/sp-internet-control restore; true'
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 # No fallback when the build is missing: pnpm start cannot run as the
 # sleepypod user (home is /nonexistent), so it only crash-looped with a
@@ -1547,6 +1552,14 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
     chown root:root "$target"
     chmod 0755 "$target"
   done
+fi
+# The unit's ExecStartPre runs this as root, so it must not be writable by the
+# service user: install a root-owned copy, like the sp-* tools above.
+if [ -f "$INSTALL_DIR/scripts/internet-control" ]; then
+  rm -f /usr/local/bin/sp-internet-control
+  cp "$INSTALL_DIR/scripts/internet-control" /usr/local/bin/sp-internet-control
+  chown root:root /usr/local/bin/sp-internet-control
+  chmod 0755 /usr/local/bin/sp-internet-control
 fi
 
 # Housekeeping runs after boot, independently of API readiness.

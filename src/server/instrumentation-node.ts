@@ -483,6 +483,18 @@ export async function registerNodeInstrumentation(): Promise<void> {
     return
   }
 
+  // Re-apply the owner's saved internet access choice before the rule repair,
+  // so the repair checks the ruleset that will stay in place.
+  try {
+    const { restoreInternetAccess } = await import('@/src/hardware/internetAccess')
+    const restored = await restoreInternetAccess()
+    if (restored.action === 'reapplied') console.warn('[startup] Internet access was saved as blocked but the firewall was open; re-applied the block')
+    else if (restored.action === 'inferred') console.log(`[startup] Saved internet access as ${restored.choice} (inferred from the current firewall)`)
+  }
+  catch (e) {
+    console.warn('[startup] internet access restore failed:', e instanceof Error ? e.message : e)
+  }
+
   // Validate and auto-repair iptables rules (mDNS, LAN access, NTP)
   try {
     const { checkAndRepairIptables } = await import('@/src/hardware/iptablesCheck')

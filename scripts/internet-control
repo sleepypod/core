@@ -3,13 +3,14 @@ set -euo pipefail
 
 usage() {
   cat << EOF
-Usage: $(basename "$0") {block|unblock|hosts-block|hosts-unblock|dns-block|dns-unblock|status}
+Usage: $(basename "$0") {block|unblock|restore|hosts-block|hosts-unblock|dns-block|dns-unblock|status}
 
 Control internet access for SleepyPod device.
 
 Commands:
   block         - Block all internet access via iptables (keep local network only)
   unblock       - Restore full internet access via iptables
+  restore       - Re-apply the internet access choice saved by the app (boot)
   hosts-block   - Null-route Eight Sleep telemetry domains in /etc/hosts
   hosts-unblock - Remove Eight Sleep null routes from /etc/hosts
   dns-block     - Blackhole every *.8slp.net name with a local dnsmasq (127.0.0.1)
@@ -528,6 +529,90 @@ remove_dns_block() {
   wait_for_dns || true
 }
 
+# ---------------------------------------------------------------------------
+# IPv4 WAN block (block, and restore at boot)
+# ---------------------------------------------------------------------------
+
+# OUTPUT jumps to SLEEPYPOD-BLOCK, which allows loopback, established
+# connections, the LAN destinations given as arguments, mDNS and NTP, then
+# drops the rest. INPUT and other rules are left in place.
+block_ipv4_outbound() {
+  local dest
+  "$IPTABLES" -N SLEEPYPOD-BLOCK 2>/dev/null || "$IPTABLES" -F SLEEPYPOD-BLOCK
+  "$IPTABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
+  "$IPTABLES" -I OUTPUT -j SLEEPYPOD-BLOCK
+
+  # Allow loopback
+  "$IPTABLES" -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
+
+  # Allow established/related connections
+  "$IPTABLES" -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+  # Allow local network
+  for dest in "$@"; do
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -d "$dest" -j ACCEPT
+  done
+
+  # Allow mDNS for local discovery (queries and responses)
+  "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT
+  "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --sport 5353 -j ACCEPT
+
+  # Allow NTP so the clock stays right; the app's firewall check requires
+  # the same allows as install's block_wan and the app's blockWan
+  "$IPTABLES" -A SLEEPYPOD-BLOCK -p udp --dport 123 -j ACCEPT
+
+  # Block all other outbound traffic
+  "$IPTABLES" -A SLEEPYPOD-BLOCK -j DROP
+}
+
+# Same ordered evaluation as wan_is_effectively_blocked in
+# scripts/lib/iptables-helpers. This script is installed on its own as
+# /usr/local/bin/sp-internet-control, so it can't source that file.
+sleepypod_chain_is_effectively_blocked() {
+  local rules line
+  rules="$("$IPTABLES" -S SLEEPYPOD-BLOCK 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      '-A SLEEPYPOD-BLOCK -j ACCEPT') return 1 ;;
+      '-A SLEEPYPOD-BLOCK -j DROP') return 0 ;;
+    esac
+  done <<< "$rules"
+  return 1
+}
+
+wan_is_effectively_blocked() {
+  local rules line policy_drop=false
+  rules="$("$IPTABLES" -S OUTPUT 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      '-P OUTPUT DROP') policy_drop=true ;;
+      '-A OUTPUT -j ACCEPT') return 1 ;;
+      '-A OUTPUT -j DROP') return 0 ;;
+      '-A OUTPUT -j SLEEPYPOD-BLOCK') sleepypod_chain_is_effectively_blocked; return ;;
+    esac
+  done <<< "$rules"
+  [ "$policy_drop" = true ]
+}
+
+# The app (src/hardware/internetAccess.ts) saves the owner's Settings choice
+# as one word in $DATA_DIR/internet-access. The service user owns that
+# directory, so read at most a few bytes of a plain file and print only
+# "blocked" or "allowed", never the file's contents.
+saved_internet_access() {
+  local pointer="$ROOT/etc/sleepypod/data-dir" dir="" file
+  if [ -r "$pointer" ] && [ -s "$pointer" ]; then
+    dir="$(head -n 1 "$pointer")"
+  fi
+  file="$ROOT${dir:-/persistent/sleepypod-data}/internet-access"
+  if [ -L "$file" ] || [ ! -f "$file" ]; then
+    return 0
+  fi
+  case "$(head -c 16 "$file" 2>/dev/null | head -n 1)" in
+    blocked) echo blocked ;;
+    allowed) echo allowed ;;
+  esac
+}
+
 # Stock telemetry units that install/sp-update mask (scripts/lib/telemetry-helpers).
 stock_service_state() {
   local state
@@ -578,29 +663,7 @@ case "$COMMAND" in
     fi
 
     # Create custom chain for SleepyPod rules (IPv4)
-    "$IPTABLES" -N SLEEPYPOD-BLOCK 2>/dev/null || "$IPTABLES" -F SLEEPYPOD-BLOCK
-    "$IPTABLES" -D OUTPUT -j SLEEPYPOD-BLOCK 2>/dev/null || true
-    "$IPTABLES" -I OUTPUT -j SLEEPYPOD-BLOCK
-
-    # Allow loopback
-    "$IPTABLES" -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
-
-    # Allow established/related connections
-    "$IPTABLES" -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-    # Allow local network
-    "$IPTABLES" -A SLEEPYPOD-BLOCK -d "$LOCAL_SUBNET" -j ACCEPT
-
-    # Allow mDNS for local discovery (queries and responses)
-    "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT
-    "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --sport 5353 -j ACCEPT
-
-    # Allow NTP so the clock stays right; the app's firewall check requires
-    # the same allows as install's block_wan and the app's blockWan
-    "$IPTABLES" -A SLEEPYPOD-BLOCK -p udp --dport 123 -j ACCEPT
-
-    # Block all other outbound traffic
-    "$IPTABLES" -A SLEEPYPOD-BLOCK -j DROP
+    block_ipv4_outbound "$LOCAL_SUBNET"
 
     # Save IPv4 rules
     mkdir -p /etc/iptables
@@ -689,6 +752,37 @@ case "$COMMAND" in
     echo "✓ Internet access restored!"
     echo "  Both IPv4 and IPv6 are now unblocked"
     echo ""
+    ;;
+
+  restore)
+    # Run as root by sleepypod.service's ExecStartPre, before the app starts,
+    # so a block set in Settings holds from boot. Only a saved "blocked"
+    # changes anything: "allowed" or no saved choice leaves the rules alone.
+    # Root uses the default xtables lock: the unit's XTABLES_LOCKFILE is in the
+    # service user's runtime dir, and a root-owned lock there would lock the
+    # app out of iptables.
+    unset XTABLES_LOCKFILE
+    CHOICE="$(saved_internet_access)"
+    if [ "$CHOICE" != blocked ]; then
+      echo "Saved internet access: ${CHOICE:-none}; firewall left as is"
+      exit 0
+    fi
+    if [ -z "$IPTABLES" ]; then
+      echo "Error: iptables not found; can't re-apply the saved block" >&2
+      exit 1
+    fi
+    if wan_is_effectively_blocked; then
+      echo "Saved internet access: blocked; the firewall already blocks"
+      exit 0
+    fi
+    # At boot the LAN subnet may not be known yet, so allow all of RFC 1918,
+    # like the app's blockWan.
+    block_ipv4_outbound 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+    if ! wan_is_effectively_blocked; then
+      echo "Error: re-applied the saved block, but OUTPUT still isn't blocked" >&2
+      exit 1
+    fi
+    echo "Saved internet access: blocked; re-applied the block"
     ;;
 
   hosts-block)

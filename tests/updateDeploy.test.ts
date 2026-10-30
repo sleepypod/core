@@ -196,6 +196,14 @@ describe('sp-update staged deployment', () => {
     expect(log.split('\n').filter(line => line.startsWith('telemetry '))).toEqual(['telemetry old', 'telemetry new'])
   })
 
+  it('adds the root ExecStartPre that re-applies a block saved in Settings, before starting', () => {
+    const { result, dir, log } = updater({ archive: true })
+    expect(result.status, result.stderr).toBe(0)
+    const dropIn = readFileSync(join(dir, 'systemd/sleepypod.service.d/iptables-saved-choice.conf'), 'utf8')
+    expect(dropIn).toBe('[Service]\nExecStartPre=+/bin/sh -c \'PATH=/usr/sbin:/sbin:/usr/bin:/bin /usr/local/bin/sp-internet-control restore; true\'\n')
+    expect(log.indexOf('systemctl daemon-reload')).toBeLessThan(log.indexOf('systemctl start sleepypod.service'))
+  })
+
   it('rejects a release without an asset', () => {
     const { result, app } = updater({ noAsset: true, branch: 'dev' })
     expect(result.status).not.toBe(0)
