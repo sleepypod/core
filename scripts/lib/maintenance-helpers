@@ -27,6 +27,8 @@ reconcile_internet_choice_restore() {
 # Updaters from before scripts/lib/telemetry-helpers (v3.5.0 and older) source
 # this file from the new tree after every download but never call the
 # telemetry blocking, so without this a pod needed a second update to get it.
+# That includes masking the stock firmware updater, so one update from an
+# older release is enough to keep an Eight Sleep OTA off the pod.
 # Idempotent, so newer updaters that also call it directly are unaffected.
 # Runs in a subshell: nothing here may abort the caller's update.
 reconcile_stock_telemetry() {

@@ -149,5 +149,5 @@ by hand, use `/usr/local/bin/node` explicitly.
 
 ## Service / firmware reference
 
-Service units, null-routed firmware domains, and the frank/Capybara split are
+Service units, blackholed (NXDOMAIN) firmware domains, and the frank/Capybara split are
 documented in `docs/DEPLOYMENT.md`.

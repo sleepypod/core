@@ -1,36 +1,67 @@
 # shellcheck shell=bash
-# Stop the stock firmware from reaching Eight Sleep, whatever the iptables
-# state. Shared by install and sp-update, which run it on every install and
-# update before opening WAN. Idempotent and best-effort: nothing here fails
-# the caller.
+# Stop the stock firmware from reaching Eight Sleep or replacing the OS,
+# whatever the iptables state. Shared by install and sp-update, which run it
+# on every install and update before opening WAN. Idempotent and best-effort:
+# nothing here fails the caller.
 #
 # vector ships the whole journal (sleepypod's logs included) to a Kinesis
 # stream in us-east-1 and queues failed sends in up to 256 MB at
-# /persistent/vector; telegraf ships metrics. Neither is needed to run the
-# pod. Never touch frankenfirmware, dac, Capybara or swupdate here: frank
-# drives the hardware.
+# /persistent/vector; telegraf ships metrics. swupdate is the stock OTA
+# updater (/etc/swupdate.cfg points at update-api.8slp.net): an Eight Sleep
+# update can overwrite the OS, remove sleepypod and close root access.
+# defibrillator reboots the pod after about 5 minutes without internet, so a
+# blocked pod would reboot over and over. None is needed to run the pod.
+#
+# Never touch frankenfirmware, dac, Capybara, burrow or swupdate-usb@ (USB
+# recovery) here: frank drives the hardware. Never edit /etc/swupdate.cfg:
+# Eight's scripts manage it.
 STOCK_TELEMETRY_UNITS=(vector.service telegraf.service)
+# Unmasked again only by `internet-control firmware-updates allow`, which
+# keeps the same list. Socket first, so socket activation can't restart the
+# service once it is stopped.
+STOCK_FIRMWARE_UPDATE_UNITS=(swupdate.socket swupdate.service swupdate-progress.service defibrillator.service)
+STOCK_KERNEL_UNITS=(eight-kernel.service)
 VECTOR_DATA_DIR="${VECTOR_DATA_DIR:-/persistent/vector}"
+# The owner's choice, one word; only "allow" leaves the firmware updater
+# alone. SLEEPYPOD_ROOT prefixes the path for script tests.
+FIRMWARE_UPDATES_CHOICE="${SLEEPYPOD_ROOT:-}/etc/sleepypod/firmware-updates"
 
-disable_stock_telemetry() {
+firmware_updates_allowed() {
+  [ -f "$FIRMWARE_UPDATES_CHOICE" ] && [ "$(head -c 16 "$FIRMWARE_UPDATES_CHOICE" 2>/dev/null | head -n 1)" = allow ]
+}
+
+# Disable, stop and mask each unit that exists, in order; stop a masked one
+# that still runs (masked by hand without a stop: it runs until reboot).
+mask_stock_units() {
   local unit state
-  for unit in "${STOCK_TELEMETRY_UNITS[@]}"; do
+  for unit in "$@"; do
     state=$(systemctl is-enabled "$unit" 2>/dev/null || true)
     case "$state" in
       ''|not-found) ;;
       masked|masked-runtime)
-        # Masked by hand without a stop: it keeps running until reboot.
         if systemctl is-active --quiet "$unit" 2>/dev/null; then
           systemctl stop "$unit" 2>/dev/null || true
         fi
         ;;
       *)
-        echo "Disabling and masking stock telemetry service $unit..."
+        echo "Disabling and masking stock service $unit..."
         systemctl disable --now "$unit" 2>/dev/null || true
         systemctl mask "$unit" 2>/dev/null || echo "Warning: could not mask $unit" >&2
         ;;
     esac
   done
+  return 0
+}
+
+disable_stock_telemetry() {
+  local state
+  mask_stock_units "${STOCK_TELEMETRY_UNITS[@]}"
+  if firmware_updates_allowed; then
+    echo "Stock firmware updates allowed by the owner ($FIRMWARE_UPDATES_CHOICE); leaving swupdate and defibrillator unmasked"
+  else
+    mask_stock_units "${STOCK_FIRMWARE_UPDATE_UNITS[@]}"
+  fi
+  mask_stock_units "${STOCK_KERNEL_UNITS[@]}"
 
   # Drop vector's queued journal once it can no longer write there.
   state=$(systemctl is-enabled vector.service 2>/dev/null || true)
@@ -44,26 +75,32 @@ disable_stock_telemetry() {
   esac
 }
 
+# Removes the old /etc/hosts block: its 0.0.0.0 entries send frank to the pod
+# itself, where it retries every few ms and fills syslog. Names are blocked
+# only by the dnsmasq NXDOMAIN layer (apply_dns_blackhole).
 # $1: source tree root holding scripts/internet-control.
 apply_name_blocking() {
   local control="$1/scripts/internet-control"
   [ -f "$control" ] || return 0
-  bash "$control" hosts-block || echo "Warning: /etc/hosts telemetry block failed (continuing)" >&2
+  bash "$control" hosts-unblock || echo "Warning: could not remove the old /etc/hosts telemetry block (continuing)" >&2
 }
 
-# Runs before WAN opens: nothing here touches DNS resolution.
+# Runs before WAN opens, so frank can't reach Eight Sleep while it is open:
+# remove the hosts block, then turn on the dnsmasq NXDOMAIN layer.
 block_stock_telemetry() {
   disable_stock_telemetry
   apply_name_blocking "$1"
+  apply_dns_blackhole "$1"
 }
 
-# The dnsmasq wildcard swaps /etc/resolv.conf, so callers run it only after
-# every download has finished. Never fails: a DNS problem must not abort an
-# install or update, and dns-block rolls itself back.
+# The standalone dnsmasq never touches NetworkManager, so swapping
+# /etc/resolv.conf is safe before downloads; callers also run it after them so
+# a new tree's config is applied (a no-op when unchanged). Never fails: a DNS
+# problem must not abort an install or update, and dns-block rolls itself back.
 # $1: source tree root holding scripts/internet-control.
 apply_dns_blackhole() {
   local control="$1/scripts/internet-control"
   [ -f "$control" ] || return 0
-  bash "$control" dns-block || echo "Warning: dnsmasq wildcard block not applied; /etc/hosts fallback in use (continuing)" >&2
+  bash "$control" dns-block || echo "Warning: dnsmasq NXDOMAIN block not applied; no Eight Sleep name blocking (continuing)" >&2
   return 0
 }

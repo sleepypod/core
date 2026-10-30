@@ -24,12 +24,12 @@ apply_dns_blackhole() { echo "apply_dns_blackhole $1" >> "$ROOT/calls.log"; }
 }
 
 /** What a v3.5.0 sp-update does after the download: source the new tree's helper under set -e. */
-function runOldUpdaterStep() {
+function runOldUpdaterStep(extraEnv: Record<string, string> = {}) {
   return spawnSync('bash', ['-c', `set -euo pipefail
 source "${maintenanceHelpers}"
 install_maintenance_timer
 echo "update continued"`], {
-    env: { ...process.env, ROOT: root, INSTALL_DIR: installDir, PATH: `${join(root, 'bin')}:${process.env.PATH}` },
+    env: { ...process.env, ROOT: root, INSTALL_DIR: installDir, PATH: `${join(root, 'bin')}:${process.env.PATH}`, ...extraEnv },
     encoding: 'utf8',
   })
 }
@@ -86,6 +86,41 @@ describe('install_maintenance_timer telemetry reconcile', () => {
     expect(run.status).toBe(0)
     expect(run.stdout).toContain('update continued')
     expect(run.stderr).toContain('Eight Sleep telemetry blocking failed (continuing)')
+  })
+
+  it('removes an existing managed /etc/hosts block with the new tree\'s real helpers', () => {
+    mkdirSync(join(installDir, 'scripts/lib'), { recursive: true })
+    copyFileSync(resolve('scripts/lib/telemetry-helpers'), join(installDir, 'scripts/lib/telemetry-helpers'))
+    copyFileSync(resolve('scripts/internet-control'), join(installDir, 'scripts/internet-control'))
+    const hosts = join(root, 'etc/hosts')
+    mkdirSync(join(root, 'etc'), { recursive: true })
+    writeFileSync(hosts, '127.0.0.1 localhost\n\n# BEGIN sleepypod-telemetry-block\n0.0.0.0 raw-api-upload.8slp.net\n# END sleepypod-telemetry-block\n')
+    const run = runOldUpdaterStep({ INTERNET_CONTROL_ROOT: root, VECTOR_DATA_DIR: join(root, 'vector') })
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.stdout).toContain('update continued')
+    expect(readFileSync(hosts, 'utf8')).toBe('127.0.0.1 localhost\n')
+    expect(readFileSync(`${hosts}.bak.sleepypod`, 'utf8')).toContain('0.0.0.0 raw-api-upload.8slp.net')
+  })
+
+  it.each([['no saved choice', null], ['allow', 'allow\n']])('masks the stock updater from the new tree\'s real helpers unless the owner opted in (%s)', (_name, choice) => {
+    mkdirSync(join(installDir, 'scripts/lib'), { recursive: true })
+    copyFileSync(resolve('scripts/lib/telemetry-helpers'), join(installDir, 'scripts/lib/telemetry-helpers'))
+    stub(join(root, 'bin/systemctl'), `echo "systemctl $*" >> "$ROOT/calls.log"
+[ "$1" = is-enabled ] && echo enabled
+exit 0`)
+    if (choice !== null) {
+      mkdirSync(join(root, 'etc/sleepypod'), { recursive: true })
+      writeFileSync(join(root, 'etc/sleepypod/firmware-updates'), choice)
+    }
+    const run = runOldUpdaterStep({ SLEEPYPOD_ROOT: root, VECTOR_DATA_DIR: join(root, 'vector') })
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.stdout).toContain('update continued')
+    const log = calls()
+    expect(log).toContain('systemctl mask eight-kernel.service')
+    for (const unit of ['swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service']) {
+      expect(log.includes(`systemctl mask ${unit}`)).toBe(choice === null)
+    }
+    if (choice === null) expect(log.indexOf('systemctl mask swupdate.socket')).toBeLessThan(log.indexOf('systemctl mask swupdate.service'))
   })
 
   it('does nothing when the tree has no telemetry helpers', () => {
