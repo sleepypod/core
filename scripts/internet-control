@@ -414,8 +414,13 @@ case "$COMMAND" in
     # Allow local network
     "$IPTABLES" -A SLEEPYPOD-BLOCK -d "$LOCAL_SUBNET" -j ACCEPT
 
-    # Allow mDNS for local discovery
+    # Allow mDNS for local discovery (queries and responses)
     "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --sport 5353 -j ACCEPT
+
+    # Allow NTP so the clock stays right; the app's firewall check requires
+    # the same allows as install's block_wan and the app's blockWan
+    "$IPTABLES" -A SLEEPYPOD-BLOCK -p udp --dport 123 -j ACCEPT
 
     # Block all other outbound traffic
     "$IPTABLES" -A SLEEPYPOD-BLOCK -j DROP

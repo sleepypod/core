@@ -13,9 +13,18 @@ vi.mock('node:child_process', () => ({
 vi.mock('node:fs/promises', () => ({ access: mocks.access }))
 
 import { checkAndRepairIptables, checkIptablesCached, invalidateIptablesHealth } from '../iptablesCheck'
+import { APP_BLOCK_WAN, DROP_ONLY, FLUSHED, INSTALL_BLOCK_WAN, INTERNET_CONTROL_BLOCK, pick, type Ruleset } from './iptablesRulesets'
 
-const input = 'ACCEPT udp -- 0.0.0.0/0 0.0.0.0/0 udp dpt:5353\nACCEPT all -- 192.168.0.0/16 0.0.0.0/0'
-const output = 'ACCEPT udp -- 0.0.0.0/0 0.0.0.0/0 udp dpt:5353\nACCEPT udp -- 0.0.0.0/0 0.0.0.0/0 udp spt:5353\nACCEPT udp -- 0.0.0.0/0 0.0.0.0/0 udp dpt:123'
+const input = INSTALL_BLOCK_WAN.INPUT
+const output = INSTALL_BLOCK_WAN.OUTPUT
+function serve(ruleset: Ruleset) {
+  mocks.runFile.mockImplementation(async (file, args) => {
+    if (file === 'which') return { stdout: '/sbin/iptables\n' }
+    const listing = ruleset[args[1] ?? '']
+    if (listing === undefined) throw Object.assign(new Error('No chain/target/match by that name.'), { code: 1 })
+    return { stdout: listing }
+  })
+}
 let now = 0
 
 beforeEach(() => {
@@ -50,8 +59,8 @@ describe('asynchronous firewall health', () => {
     const results = await Promise.all(checks)
     expect(results.every(result => result.ok && result.rules.length === 5)).toBe(true)
     expect(mocks.runFile.mock.calls.slice(1).map(([file, args]) => [file, args])).toEqual([
-      ['/sbin/iptables', ['-L', 'INPUT', '-n']],
-      ['/sbin/iptables', ['-L', 'OUTPUT', '-n']],
+      ['/sbin/iptables', ['-S', 'INPUT']],
+      ['/sbin/iptables', ['-S', 'OUTPUT']],
     ])
     expect(mocks.execSync).not.toHaveBeenCalled()
   })
@@ -64,7 +73,7 @@ describe('asynchronous firewall health', () => {
     expect(await duplicate.checkIptablesCached()).toEqual(first)
     expect(mocks.runFile).toHaveBeenCalledTimes(3)
     now = 30_000
-    mocks.runFile.mockResolvedValue({ stdout: '' })
+    mocks.runFile.mockImplementation(async (_file, args) => ({ stdout: pick(DROP_ONLY, args[1]) }))
     const refreshed = await duplicate.checkIptablesCached()
     expect(refreshed.ok).toBe(false)
     expect(refreshed.rules.every(rule => !rule.present)).toBe(true)
@@ -72,11 +81,7 @@ describe('asynchronous firewall health', () => {
   })
 
   it('reports no missing rules while internet access is allowed (chains open)', async () => {
-    mocks.runFile.mockImplementation(async (file, args) => ({
-      stdout: file === 'which'
-        ? '/sbin/iptables\n'
-        : `Chain ${args[1]} (policy ACCEPT)\ntarget     prot opt source               destination\n`,
-    }))
+    serve(FLUSHED)
     const status = await checkIptablesCached()
     expect(status.ok).toBe(true)
     expect(status.rules.every(rule => rule.present)).toBe(true)
@@ -84,9 +89,35 @@ describe('asynchronous firewall health', () => {
     expect(status.state).toBe('open')
   })
 
-  it('reports a firewall with its allow rules in front of the drop as blocking', async () => {
+  it.each([
+    ['install block_wan', INSTALL_BLOCK_WAN],
+    ['the app\'s blockWan', APP_BLOCK_WAN],
+    ['internet-control block', INTERNET_CONTROL_BLOCK],
+  ])('reports %s as blocking with nothing missing', async (_name, ruleset) => {
+    serve(ruleset)
     const status = await checkIptablesCached()
     expect(status).toEqual(expect.objectContaining({ ok: true, state: 'blocking' }))
+    expect(status.rules.every(rule => rule.present)).toBe(true)
+  })
+
+  it('follows the jump to SLEEPYPOD-BLOCK with one extra listing', async () => {
+    serve(INTERNET_CONTROL_BLOCK)
+    await checkIptablesCached()
+    expect(mocks.runFile.mock.calls.map(([, args]) => args)).toEqual([['iptables'], ['-S', 'INPUT'], ['-S', 'OUTPUT'], ['-S', 'SLEEPYPOD-BLOCK']])
+  })
+
+  it.each([
+    ['a broad ACCEPT before the DROP', { ...INSTALL_BLOCK_WAN, OUTPUT: output.replace('-A OUTPUT -o lo -j ACCEPT\n', '-A OUTPUT -j ACCEPT\n') }, 'open'],
+    ['policy DROP with no DROP rule', { ...INSTALL_BLOCK_WAN, OUTPUT: output.replace('-A OUTPUT -j DROP\n', '') }, 'blocking'],
+    ['policy ACCEPT with a DROP for one destination', { INPUT: FLUSHED.INPUT, OUTPUT: '-P OUTPUT ACCEPT\n-A OUTPUT -d 203.0.113.7/32 -j DROP\n' }, 'open'],
+  ] as const)('evaluates rule order: %s', async (_name, ruleset, state) => {
+    serve(ruleset)
+    expect((await checkIptablesCached()).state).toBe(state)
+  })
+
+  it('reports an unparseable listing as unknown', async () => {
+    serve({ INPUT: FLUSHED.INPUT, OUTPUT: 'Chain OUTPUT (policy ACCEPT)\n' })
+    expect(await checkIptablesCached()).toEqual(expect.objectContaining({ ok: false, state: 'unknown' }))
   })
 
   it('does not let an in-flight pre-repair result overwrite a newer check', async () => {
@@ -97,7 +128,7 @@ describe('asynchronous firewall health', () => {
     const stale = checkIptablesCached()
     invalidateIptablesHealth()
     const current = checkIptablesCached()
-    mocks.runFile.mockResolvedValueOnce({ stdout: '' }).mockResolvedValueOnce({ stdout: '' })
+    mocks.runFile.mockResolvedValueOnce({ stdout: DROP_ONLY.INPUT }).mockResolvedValueOnce({ stdout: DROP_ONLY.OUTPUT })
     release({ stdout: '/sbin/iptables' })
 
     expect((await stale).ok).toBe(false)
@@ -150,8 +181,8 @@ describe('asynchronous firewall health', () => {
     mocks.runFile.mockResolvedValueOnce({ stdout: '/sbin/iptables' })
       .mockRejectedValueOnce(new Error('kernel module unavailable'))
     const first = await checkIptablesCached()
-    expect(first.ok).toBe(false)
-    expect(first.rules.filter(rule => !rule.present).map(rule => rule.chain)).toEqual(['INPUT', 'INPUT'])
+    expect(first).toEqual(expect.objectContaining({ ok: false, state: 'unknown' }))
+    expect(console.warn).toHaveBeenCalledWith('[iptables] Failed to check INPUT: kernel module unavailable')
     now = 30_000
     expect((await checkIptablesCached()).ok).toBe(true)
   })

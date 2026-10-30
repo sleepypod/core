@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { APP_BLOCK_WAN, chainOf, DROP_ONLY, FLUSHED, INSTALL_BLOCK_WAN, INTERNET_CONTROL_BLOCK, pick, type Ruleset } from './iptablesRulesets'
 
 /**
  * Tests for iptables rule validation.
@@ -37,6 +38,23 @@ function unavailableError(message: string, status?: number): Error {
   return err
 }
 
+/** Serve `iptables -S <chain>` from a ruleset; `which` resolves to /sbin/iptables. */
+function serve(ruleset: Ruleset, extra?: (cmd: string) => string | undefined): void {
+  setExecHandler(({ cmd }) => {
+    if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+    const fromExtra = extra?.(cmd)
+    if (fromExtra !== undefined) return fromExtra
+    if (/ -S /.test(cmd)) {
+      const listing = ruleset[chainOf(cmd) ?? '']
+      if (listing === undefined) throw unavailableError('iptables: No chain/target/match by that name.', 1)
+      return listing
+    }
+    return ''
+  })
+}
+
+const withRules = (chain: string, ...rules: string[]) => `-P ${chain} DROP\n${rules.map(r => `-A ${chain} ${r}`).join('\n')}\n-A ${chain} -j DROP\n`
+
 describe('iptablesCheck — module surface', () => {
   beforeEach(() => {
     execSyncMock.mockReset()
@@ -52,10 +70,11 @@ describe('iptablesCheck — module surface', () => {
     expect(typeof mod.checkAndRepairIptables).toBe('function')
   })
 
-  it('checkIptables returns ok=true when iptables is unavailable', async () => {
+  it('checkIptables returns ok=true, state unknown, when iptables is unavailable', async () => {
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
     expect(result.ok).toBe(true)
+    expect(result.state).toBe('unknown')
     expect(result.rules.length).toBe(5)
   })
 
@@ -96,8 +115,7 @@ describe('iptablesCheck — resolveIptablesPath', () => {
       if (cmd.includes('which iptables')) {
         throw new Error('which should not have been called')
       }
-      // Listing always finds the rule
-      return 'udp dpt:5353 udp spt:5353 192.168.0.0/16 udp dpt:123'
+      return pick(INSTALL_BLOCK_WAN, chainOf(cmd))
     })
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables('/custom/path/iptables')
@@ -105,7 +123,7 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     // No `which` call should have happened in this run
     const calls = execSyncMock.mock.calls.map(c => String(c[0]))
     expect(calls.some(c => c.includes('which iptables'))).toBe(false)
-    expect(calls.some(c => c.startsWith('/custom/path/iptables -L'))).toBe(true)
+    expect(calls.some(c => c.startsWith('/custom/path/iptables -S'))).toBe(true)
   })
 
   it('falls back to known POD_CAPS paths when which fails and a candidate is executable', async () => {
@@ -116,8 +134,7 @@ describe('iptablesCheck — resolveIptablesPath', () => {
         if (cmd.includes('/sbin/iptables')) return ''
         throw unavailableError('not found', 1)
       }
-      // Listing returns rule presence
-      return 'udp dpt:5353 udp spt:5353 192.168.0.0/16 udp dpt:123'
+      return pick(INSTALL_BLOCK_WAN, chainOf(cmd))
     })
 
     const { checkIptables } = await import('../iptablesCheck')
@@ -127,7 +144,7 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     const calls = execSyncMock.mock.calls.map(c => String(c[0]))
     expect(calls.some(c => c === 'which iptables 2>/dev/null')).toBe(true)
     expect(calls.some(c => c.startsWith('test -x /sbin/iptables'))).toBe(true)
-    expect(calls.some(c => c.startsWith('/sbin/iptables -L'))).toBe(true)
+    expect(calls.some(c => c.startsWith('/sbin/iptables -S'))).toBe(true)
     expect(execSyncMock).toHaveBeenCalledWith('test -x /sbin/iptables', { timeout: 2000 })
   })
 
@@ -135,19 +152,125 @@ describe('iptablesCheck — resolveIptablesPath', () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) throw unavailableError('which: not found', 127)
       if (cmd.startsWith('test -x ')) throw unavailableError('not found', 1)
-      // Listing — return empty so rules are seen as missing (not assumed-ok via unavailable)
-      return ''
+      return pick(DROP_ONLY, chainOf(cmd))
     })
 
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
 
     const calls = execSyncMock.mock.calls.map(c => String(c[0]))
-    expect(calls.some(c => c.startsWith('iptables -L INPUT'))).toBe(true)
-    expect(calls.some(c => c.startsWith('iptables -L OUTPUT'))).toBe(true)
+    expect(calls).toContain('iptables -S INPUT 2>/dev/null')
+    expect(calls).toContain('iptables -S OUTPUT 2>/dev/null')
     // All rules missing → ok=false
     expect(result.ok).toBe(false)
     expect(result.rules.every(r => r.present === false)).toBe(true)
+  })
+})
+
+describe('iptablesCheck — blocking rulesets', () => {
+  beforeEach(() => {
+    execSyncMock.mockReset()
+  })
+
+  it.each([
+    ['install block_wan', INSTALL_BLOCK_WAN],
+    ['the app\'s blockWan', APP_BLOCK_WAN],
+    ['internet-control block (allows inside SLEEPYPOD-BLOCK)', INTERNET_CONTROL_BLOCK],
+  ])('reports %s as blocking with nothing missing', async (_name, ruleset) => {
+    serve(ruleset)
+    const { checkIptables } = await import('../iptablesCheck')
+    const result = checkIptables()
+    expect(result.state).toBe('blocking')
+    expect(result.ok).toBe(true)
+    expect(result.rules.filter(r => !r.present)).toEqual([])
+  })
+
+  it('lists SLEEPYPOD-BLOCK only when a chain jumps to it', async () => {
+    serve(INSTALL_BLOCK_WAN)
+    const { checkIptables } = await import('../iptablesCheck')
+    checkIptables()
+    expect(execSyncMock.mock.calls.map(c => String(c[0])).some(c => c.includes('SLEEPYPOD-BLOCK'))).toBe(false)
+    execSyncMock.mockClear()
+    serve(INTERNET_CONTROL_BLOCK)
+    checkIptables()
+    expect(execSyncMock).toHaveBeenCalledWith('/sbin/iptables -S SLEEPYPOD-BLOCK 2>/dev/null', { encoding: 'utf-8', timeout: 5000 })
+  })
+
+  it('reports a SLEEPYPOD-BLOCK missing the NTP allow as missing, not in place', async () => {
+    const chain = INTERNET_CONTROL_BLOCK['SLEEPYPOD-BLOCK'].replace('-A SLEEPYPOD-BLOCK -p udp -m udp --dport 123 -j ACCEPT\n', '')
+    serve({ ...INTERNET_CONTROL_BLOCK, 'SLEEPYPOD-BLOCK': chain })
+    const { checkIptables } = await import('../iptablesCheck')
+    const result = checkIptables()
+    expect(result.state).toBe('missing')
+    expect(result.rules.filter(r => !r.present).map(r => r.name)).toEqual(['NTP outbound (UDP 123)'])
+  })
+
+  it('reports unknown when OUTPUT jumps to SLEEPYPOD-BLOCK but that chain cannot be listed', async () => {
+    serve({ INPUT: INTERNET_CONTROL_BLOCK.INPUT, OUTPUT: INTERNET_CONTROL_BLOCK.OUTPUT })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables()).toEqual(expect.objectContaining({ ok: false, state: 'unknown' }))
+    warn.mockRestore()
+  })
+
+  it('reports a broad ACCEPT before the DROP as open', async () => {
+    serve({ ...INSTALL_BLOCK_WAN, OUTPUT: INSTALL_BLOCK_WAN.OUTPUT.replace('-A OUTPUT -o lo -j ACCEPT\n', '-A OUTPUT -j ACCEPT\n') })
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables()).toEqual(expect.objectContaining({ ok: true, state: 'open' }))
+  })
+
+  it('reports policy DROP with no DROP rule as blocking', async () => {
+    serve({ ...INSTALL_BLOCK_WAN, OUTPUT: INSTALL_BLOCK_WAN.OUTPUT.replace('-A OUTPUT -j DROP\n', '') })
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().state).toBe('blocking')
+  })
+
+  it('reports policy ACCEPT with a DROP for one destination only as open', async () => {
+    serve({ INPUT: FLUSHED.INPUT, OUTPUT: '-P OUTPUT ACCEPT\n-A OUTPUT -d 203.0.113.7/32 -j DROP\n' })
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables()).toEqual(expect.objectContaining({ ok: true, state: 'open' }))
+  })
+
+  it('reports a broad ACCEPT inside SLEEPYPOD-BLOCK before its DROP as open', async () => {
+    serve({ ...INTERNET_CONTROL_BLOCK, 'SLEEPYPOD-BLOCK': INTERNET_CONTROL_BLOCK['SLEEPYPOD-BLOCK'].replace('-A SLEEPYPOD-BLOCK -o lo -j ACCEPT', '-A SLEEPYPOD-BLOCK -j ACCEPT') })
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().state).toBe('open')
+  })
+
+  it('reports unknown for an unconditional jump to a chain it does not read', async () => {
+    serve({ INPUT: FLUSHED.INPUT, OUTPUT: '-P OUTPUT ACCEPT\n-A OUTPUT -j STOCK-FILTER\n' })
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables()).toEqual(expect.objectContaining({ ok: true, state: 'unknown' }))
+  })
+
+  it('reports an unparseable listing as unknown', async () => {
+    serve({ INPUT: FLUSHED.INPUT, OUTPUT: 'Chain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination\n' })
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables()).toEqual(expect.objectContaining({ ok: false, state: 'unknown' }))
+  })
+})
+
+describe('iptablesCheck — parseChainSpec / chainVerdict', () => {
+  it('ignores comments and logs, and lets conditional rules not decide', async () => {
+    const { chainVerdict, parseChainSpec } = await import('../iptablesCheck')
+    const verdict = (listing: string) => {
+      const parsed = parseChainSpec(listing, 'OUTPUT')
+      if (!parsed) throw new Error(`unparseable: ${listing}`)
+      return chainVerdict(parsed)
+    }
+    expect(verdict('-P OUTPUT ACCEPT\n-A OUTPUT -m comment --comment "allow all" -j ACCEPT\n-A OUTPUT -j DROP\n')).toBe('open')
+    expect(verdict('-P OUTPUT ACCEPT\n-A OUTPUT -j LOG --log-prefix "out "\n-A OUTPUT -j REJECT --reject-with icmp-port-unreachable\n')).toBe('blocking')
+    expect(verdict('-P OUTPUT DROP\n-A OUTPUT -p tcp -j ACCEPT\n')).toBe('blocking')
+    expect(verdict('-P OUTPUT ACCEPT\n-A OUTPUT -j RETURN\n-A OUTPUT -j DROP\n')).toBe('open')
+  })
+
+  it('rejects listings that are empty or for another chain', async () => {
+    const { parseChainSpec } = await import('../iptablesCheck')
+    expect(parseChainSpec('', 'OUTPUT')).toBeNull()
+    expect(parseChainSpec('-P INPUT ACCEPT\n', 'OUTPUT')).toBeNull()
+    expect(parseChainSpec('-P OUTPUT ACCEPT\n-A OUTPUT -j DROP\n', 'OUTPUT')).toEqual({
+      policy: 'ACCEPT', rules: [{ target: 'DROP', conditional: false, args: ['-j', 'DROP'] }],
+    })
   })
 })
 
@@ -156,14 +279,8 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     execSyncMock.mockReset()
   })
 
-  it('marks each rule present when listing output contains its check token', async () => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return 'udp dpt:5353 192.168.0.0/16'
-      if (cmd.includes('-L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
-      return ''
-    })
-
+  it('marks each rule present when its allow is in the chain', async () => {
+    serve(INSTALL_BLOCK_WAN)
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
     expect(result.ok).toBe(true)
@@ -173,32 +290,25 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(result.rules.find(r => r.name === 'mDNS outbound source (UDP 5353)')?.present).toBe(true)
   })
 
-  it('marks rule absent when listing output omits the token (and is reachable)', async () => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return '' // no INPUT rules
-      if (cmd.includes('-L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
-      return ''
-    })
-
+  it('marks rule absent when the blocking chain lacks its allow', async () => {
+    serve({ ...INSTALL_BLOCK_WAN, INPUT: DROP_ONLY.INPUT })
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
     expect(result.ok).toBe(false)
-    const lan = result.rules.find(r => r.name === 'LAN access (192.168.0.0/16)')
-    const inboundMdns = result.rules.find(r => r.name === 'mDNS inbound (UDP 5353)')
-    expect(lan?.present).toBe(false)
-    expect(inboundMdns?.present).toBe(false)
+    expect(result.state).toBe('missing')
+    expect(result.rules.find(r => r.name === 'LAN access (192.168.0.0/16)')?.present).toBe(false)
+    expect(result.rules.find(r => r.name === 'mDNS inbound (UDP 5353)')?.present).toBe(false)
+  })
+
+  it('does not count a matching rule that is not an ACCEPT', async () => {
+    serve({ ...INSTALL_BLOCK_WAN, OUTPUT: withRules('OUTPUT', '-p udp -m udp --dport 123 -j LOG', '-p udp -m udp --dport 5353 -j ACCEPT', '-p udp -m udp --sport 5353 -j ACCEPT') })
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables().rules.find(r => r.name === 'NTP outbound (UDP 123)')?.present).toBe(false)
   })
 
   it('treats a chain that allows everything as satisfying its allow rules', async () => {
     // Internet access allowed: every rule flushed, policy ACCEPT, nothing dropped.
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return 'Chain INPUT (policy ACCEPT)\ntarget     prot opt source               destination\n'
-      if (cmd.includes('-L OUTPUT')) return 'Chain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination\n'
-      return ''
-    })
-
+    serve(FLUSHED)
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
     expect(result.ok).toBe(true)
@@ -206,40 +316,8 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(result.state).toBe('open')
   })
 
-  it('still requires the allow rules in front of a jump to a blocking custom chain', async () => {
-    // scripts/internet-control block: OUTPUT jumps to SLEEPYPOD-BLOCK, which ends in DROP.
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return 'Chain INPUT (policy ACCEPT)\ntarget     prot opt source               destination\nSLEEPYPOD-BLOCK  all  --  0.0.0.0/0   0.0.0.0/0\n'
-      if (cmd.includes('-L OUTPUT')) return 'Chain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination\nSLEEPYPOD-BLOCK  all  --  0.0.0.0/0   0.0.0.0/0\n'
-      return ''
-    })
-
-    const { checkIptables } = await import('../iptablesCheck')
-    const result = checkIptables()
-    expect(result.ok).toBe(false)
-    expect(result.rules.find(r => r.name === 'NTP outbound (UDP 123)')?.present).toBe(false)
-    expect(result.rules.find(r => r.name === 'mDNS outbound (UDP 5353)')?.present).toBe(false)
-    expect(result.rules.find(r => r.name === 'mDNS inbound (UDP 5353)')?.present).toBe(false)
-  })
-
-  it('treats a chain of only ACCEPT, LOG and RETURN rules as open', async () => {
-    const { chainAllowsAll } = await import('../iptablesCheck')
-    const header = 'Chain OUTPUT (policy ACCEPT)\ntarget     prot opt source               destination\n'
-    expect(chainAllowsAll(header + 'ACCEPT     all  --  0.0.0.0/0  0.0.0.0/0\nLOG        all  --  0.0.0.0/0  0.0.0.0/0  LOG flags 0 level 4\nRETURN     all  --  0.0.0.0/0  0.0.0.0/0\n')).toBe(true)
-    expect(chainAllowsAll(header + 'REJECT     all  --  0.0.0.0/0  0.0.0.0/0  reject-with icmp-port-unreachable\n')).toBe(false)
-    expect(chainAllowsAll('Chain OUTPUT (policy DROP)\ntarget     prot opt source               destination\n')).toBe(false)
-    expect(chainAllowsAll('')).toBe(false)
-  })
-
   it('still requires the allow rules in front of a drop', async () => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return 'Chain INPUT (policy ACCEPT)\nDROP       all  --  0.0.0.0/0            0.0.0.0/0\n'
-      if (cmd.includes('-L OUTPUT')) return 'Chain OUTPUT (policy DROP)\nACCEPT     udp  --  0.0.0.0/0  0.0.0.0/0  udp dpt:123\n'
-      return ''
-    })
-
+    serve({ INPUT: withRules('INPUT'), OUTPUT: withRules('OUTPUT', '-p udp -m udp --dport 123 -j ACCEPT') })
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
     expect(result.ok).toBe(false)
@@ -249,12 +327,9 @@ describe('iptablesCheck — checkIptables rule classification', () => {
   })
 
   it('reports Permission denied / Operation not permitted from listing as unknown, not in place', async () => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
-        throw unavailableError('iptables v1.8.7: Permission denied (you must be root)')
-      }
-      return ''
+    serve({}, (cmd) => {
+      if (cmd.startsWith('/sbin/iptables -S')) throw unavailableError('iptables v1.8.7: Permission denied (you must be root)')
+      return undefined
     })
 
     const { checkIptables } = await import('../iptablesCheck')
@@ -265,34 +340,26 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(result.rules.every(r => r.present)).toBe(true)
   })
 
-  it('treats unknown listing failures as rule-missing and warns', async () => {
+  it('reports unexpected listing failures as unknown and warns', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
-        // status=2 is "other error" in iptables: not in the assumed-ok list
-        throw unavailableError('iptables: kernel module xt_udp not loaded', 2)
-      }
-      return ''
+    serve({}, (cmd) => {
+      // status=2 is "other error" in iptables: not a recognised unavailable code
+      if (cmd.startsWith('/sbin/iptables -S')) throw unavailableError('iptables: kernel module xt_udp not loaded', 2)
+      return undefined
     })
 
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
-    expect(result.ok).toBe(false)
-    expect(result.rules.every(r => r.present === false)).toBe(true)
-    expect(warnSpy).toHaveBeenCalled()
+    expect(result).toEqual(expect.objectContaining({ ok: false, state: 'unknown' }))
     const msgs = warnSpy.mock.calls.map(c => String(c[0]))
-    expect(msgs.some(m => m.includes('Failed to check'))).toBe(true)
+    expect(msgs).toContain('[iptables] Failed to check INPUT: iptables: kernel module xt_udp not loaded')
     warnSpy.mockRestore()
   })
 
   it('reports exit code 3 (Pod 4 without ip_tables loaded) as unknown even when the message says not found', async () => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
-        throw unavailableError('modprobe: FATAL: Module ip_tables not found', 3)
-      }
-      return ''
+    serve({}, (cmd) => {
+      if (cmd.startsWith('/sbin/iptables -S')) throw unavailableError('modprobe: FATAL: Module ip_tables not found', 3)
+      return undefined
     })
 
     const { checkIptables } = await import('../iptablesCheck')
@@ -309,7 +376,7 @@ describe('iptablesCheck — checkIptables rule classification', () => {
   ])('assumes ok, but unknown, when the iptables binary is absent (dev/CI) %#', async (failure) => {
     setExecHandler(({ cmd, options }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) {
+      if (cmd.startsWith('/sbin/iptables -S')) {
         expect(options).toEqual({ encoding: 'utf-8', timeout: 5000 })
         throw failure
       }
@@ -331,10 +398,9 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     [unavailableError('exit 3', 3)],
     [unavailableError('exit 4', 4)],
   ])('reports a pod iptables that cannot be listed as unknown, not ok %#', async (failure) => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) throw failure
-      return ''
+    serve({}, (cmd) => {
+      if (cmd.startsWith('/sbin/iptables -S')) throw failure
+      return undefined
     })
 
     const { checkIptables } = await import('../iptablesCheck')
@@ -342,10 +408,9 @@ describe('iptablesCheck — checkIptables rule classification', () => {
   })
 
   it('does not try to repair rules it could not list', async () => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) throw unavailableError('exit 3', 3)
-      return ''
+    serve({}, (cmd) => {
+      if (cmd.startsWith('/sbin/iptables -S')) throw unavailableError('exit 3', 3)
+      return undefined
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
@@ -355,18 +420,16 @@ describe('iptablesCheck — checkIptables rule classification', () => {
 
   it.each([null, 'raw failure'])('handles non-Error listing failure %j without throwing', async (failure) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) throw failure
-      return ''
+    serve({}, (cmd) => {
+      if (cmd.startsWith('/sbin/iptables -S')) throw failure
+      return undefined
     })
 
     const { checkIptables } = await import('../iptablesCheck')
     const status = checkIptables()
 
-    expect(status.ok).toBe(false)
-    expect(status.rules.every(rule => !rule.present)).toBe(true)
-    expect(warn).toHaveBeenCalledWith('[iptables] Failed to check mDNS outbound (UDP 5353): ')
+    expect(status).toEqual(expect.objectContaining({ ok: false, state: 'unknown' }))
+    expect(warn).toHaveBeenCalledWith('[iptables] Failed to check INPUT: ')
     warn.mockRestore()
   })
 })
@@ -380,14 +443,10 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     vi.restoreAllMocks()
   })
 
-  it('returns repaired=[] when all rules are already present', async () => {
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.includes('-L INPUT')) return 'udp dpt:5353 192.168.0.0/16'
-      if (cmd.includes('-L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
-      return ''
-    })
+  const missingLan = { ...INSTALL_BLOCK_WAN, INPUT: withRules('INPUT', '-p udp -m udp --dport 5353 -j ACCEPT') }
 
+  it('returns repaired=[] when all rules are already present', async () => {
+    serve(INSTALL_BLOCK_WAN)
     const { checkAndRepairIptables } = await import('../iptablesCheck')
     const result = checkAndRepairIptables()
     expect(result.ok).toBe(true)
@@ -399,22 +458,16 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     const repaired: string[] = []
     let savedRules = false
 
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      // Missing: LAN access; rest present
-      if (cmd.startsWith('/sbin/iptables -L INPUT')) return 'udp dpt:5353' // omits 192.168.0.0/16
-      if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
-      // Repair invocation
+    serve(missingLan, (cmd) => {
       if (cmd.includes('-I INPUT 1 -s 192.168.0.0/16')) {
         repaired.push(cmd)
         return ''
       }
-      // Persist
       if (cmd.startsWith('/sbin/iptables-save')) {
         savedRules = true
         return ''
       }
-      return ''
+      return undefined
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
@@ -422,7 +475,6 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     expect(result.repaired).toEqual(['LAN access (192.168.0.0/16)'])
     expect(repaired.length).toBe(1)
     expect(savedRules).toBe(true)
-    expect(logSpy).toHaveBeenCalled()
     const messages = logSpy.mock.calls.map(c => String(c[0]))
     expect(messages.some(m => m.includes('Repaired missing rule'))).toBe(true)
     expect(messages.some(m => m.includes('Saved 1 repaired rules'))).toBe(true)
@@ -441,22 +493,15 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L INPUT')) return ''
-      if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return ''
+    serve(DROP_ONLY, (cmd) => {
       // Every repair fails
-      if (cmd.includes('-I OUTPUT') || cmd.includes('-I INPUT')) {
-        throw unavailableError('iptables: not permitted', 4)
-      }
-      // No persist call expected since repaired list is empty
-      return ''
+      if (cmd.includes('-I OUTPUT') || cmd.includes('-I INPUT')) throw unavailableError('iptables: not permitted', 4)
+      return undefined
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
     const result = checkAndRepairIptables()
     expect(result.repaired).toEqual([])
-    expect(errSpy).toHaveBeenCalled()
     const errMsgs = errSpy.mock.calls.map(c => String(c[0]))
     expect(errMsgs.some(m => m.includes('Failed to repair rule'))).toBe(true)
 
@@ -472,15 +517,10 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L INPUT')) return 'udp dpt:5353' // missing LAN
-      if (cmd.startsWith('/sbin/iptables -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
+    serve(missingLan, (cmd) => {
       if (cmd.includes('-I INPUT 1 -s 192.168.0.0/16')) return ''
-      if (cmd.startsWith('/sbin/iptables-save')) {
-        throw unavailableError('No such file or directory: /etc/iptables/rules.v4')
-      }
-      return ''
+      if (cmd.startsWith('/sbin/iptables-save')) throw unavailableError('No such file or directory: /etc/iptables/rules.v4')
+      return undefined
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
@@ -503,8 +543,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
         if (cmd.includes('/usr/sbin/iptables')) return ''
         throw unavailableError('not found', 1)
       }
-      if (cmd.startsWith('/usr/sbin/iptables -L INPUT')) return ''
-      if (cmd.startsWith('/usr/sbin/iptables -L OUTPUT')) return ''
+      if (cmd.startsWith('/usr/sbin/iptables -S')) return pick(DROP_ONLY, chainOf(cmd))
       // Repairs succeed
       if (cmd.includes('-I ')) return ''
       if (cmd.includes('iptables-save')) {
@@ -526,8 +565,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     const commands: string[] = []
     setExecHandler(({ cmd }) => {
       commands.push(cmd)
-      if (cmd.includes(' -L INPUT')) return 'udp dpt:5353'
-      if (cmd.includes(' -L OUTPUT')) return 'udp dpt:5353 udp spt:5353 udp dpt:123'
+      if (cmd.includes(' -S ')) return pick(missingLan, chainOf(cmd))
       return ''
     })
 
@@ -542,9 +580,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
   it('repairs every missing allow at rule 1 so empty chains and terminal drops are safe', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const repairs: string[] = []
-    setExecHandler(({ cmd }) => {
-      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
-      if (cmd.startsWith('/sbin/iptables -L')) return ''
+    serve(DROP_ONLY, (cmd) => {
       if (cmd.startsWith('/sbin/iptables -I')) {
         repairs.push(cmd)
         if (!/ -I (?:INPUT|OUTPUT) 1 /.test(cmd)) {
@@ -552,7 +588,7 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
         }
         return ''
       }
-      return ''
+      return undefined
     })
 
     const { checkAndRepairIptables } = await import('../iptablesCheck')
@@ -563,17 +599,4 @@ describe('iptablesCheck — checkAndRepairIptables', () => {
     expect(repairs.every(cmd => / -I (?:INPUT|OUTPUT) 1 /.test(cmd))).toBe(true)
     log.mockRestore()
   })
-})
-
-it.each(['target', 'Chain'])('retains a jump named %s when checking whether a chain is open', async (target) => {
-  const { chainAllowsAll, checkIptables } = await import('../iptablesCheck')
-  const listing = `Chain OUTPUT (policy ACCEPT)
-target     prot opt source               destination
-${target}     all  --  0.0.0.0/0            0.0.0.0/0
-`
-  expect(chainAllowsAll(listing)).toBe(false)
-  setExecHandler(() => listing)
-  const status = checkIptables('/sbin/iptables')
-  expect(status.rules.every(rule => !rule.present)).toBe(true)
-  expect(status.ok).toBe(false)
 })
