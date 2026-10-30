@@ -145,7 +145,7 @@ const summary = (over: Record<string, unknown> = {}) => ({
   version: { branch: 'dev', commitHash: 'da5b3c1aaaa' },
   wifi: { connected: true, ssid: 'home', signal: 80 },
   internetBlocked: true,
-  firewall: { ok: true, missing: [] },
+  firewall: { ok: true, missing: [], state: 'blocking' },
   diskPercent: 80.4,
   uptimeSeconds: 7200,
   ...over,
@@ -191,12 +191,23 @@ describe('DiagnosticsConsole dashboard', () => {
 
   it('shows the firewall status, naming a missing rule', () => {
     const { unmount } = render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
-    expect(within(screen.getByTestId('status-line')).getByText('In place')).toBeTruthy()
+    expect(within(screen.getByTestId('status-line')).getByText('Blocking')).toBeTruthy()
     unmount()
-    mocks.summary = summary({ firewall: { ok: false, missing: ['block-wan'] } })
+    mocks.summary = summary({ firewall: { ok: false, missing: ['block-wan'], state: 'missing' } })
     render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
     const fact = within(screen.getByTestId('status-line')).getByText('Missing block-wan')
     expect(fact.closest('[title]')?.getAttribute('title')).toBe('Missing firewall rules: block-wan')
+  })
+
+  it.each([
+    ['open', true, 'Not blocking'],
+    ['unknown', false, 'Can\'t check'],
+  ] as const)('labels a %s firewall truthfully instead of "in place"', (state, ok, label) => {
+    mocks.summary = summary({ firewall: { ok, missing: [], state } })
+    render(<DiagnosticsConsole section="dashboard" onJump={vi.fn()} />)
+    const line = within(screen.getByTestId('status-line'))
+    expect(line.getByText(label)).toBeTruthy()
+    expect(line.queryByText('Blocking')).toBeNull()
   })
 
   it('counts failing checks and names them', () => {

@@ -19,6 +19,9 @@ describe('footerStatus', () => {
     expect(s.summary).toBe('4 issues')
     expect(s.issues).toEqual(['Database degraded', 'Scheduler drifted', 'Firewall rules missing', 'Water level is low'])
   })
+  it('says the firewall could not be checked rather than that rules are missing', () => {
+    expect(footerStatus({ ...ok, status: 'degraded', iptables: { ok: false, state: 'unknown' } }, []).issues).toEqual(['Can\'t check firewall'])
+  })
   it('falls back to a generic line when degraded without a known cause', () => {
     expect(footerStatus({ ...ok, status: 'degraded' }, [])).toEqual({ tone: 'warn', summary: '1 issue', issues: ['System degraded'] })
   })

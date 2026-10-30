@@ -4,7 +4,7 @@ export interface SystemHealth {
   status: 'ok' | 'degraded'
   database: { status: 'ok' | 'degraded' }
   scheduler: { drift?: { drifted: boolean } }
-  iptables: { ok: boolean }
+  iptables: { ok: boolean, state?: 'blocking' | 'open' | 'missing' | 'unknown' }
 }
 
 export interface FooterStatus {
@@ -24,7 +24,7 @@ export function footerStatus(system: SystemHealth | undefined, attention: Attent
   const issues: string[] = []
   if (system.database.status !== 'ok') issues.push('Database degraded')
   if (system.scheduler.drift?.drifted) issues.push('Scheduler drifted')
-  if (!system.iptables.ok) issues.push('Firewall rules missing')
+  if (!system.iptables.ok) issues.push(system.iptables.state === 'unknown' ? 'Can\'t check firewall' : 'Firewall rules missing')
   if (system.status !== 'ok' && issues.length === 0) issues.push('System degraded')
   issues.push(...attention.map(a => a.title))
   if (issues.length === 0) return { tone: 'ok', summary: 'healthy', issues }

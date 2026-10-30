@@ -16,8 +16,21 @@ import { promisify } from 'node:util'
 
 import { POD_CAPS } from './pods'
 
+/**
+ * What the firewall is doing, for display:
+ * - blocking: required allow rules present in front of a drop
+ * - open: OUTPUT lets everything through (internet access allowed); the allow
+ *   rules are moot, so none are reported missing
+ * - missing: a listing succeeded and a critical allow rule is absent
+ * - unknown: iptables couldn't be listed. On a pod (permission denied, or exit
+ *   3/4 when the ip_tables module isn't loaded) this also clears `ok`; a
+ *   missing binary (dev/CI) keeps `ok` true.
+ */
+export type FirewallState = 'blocking' | 'open' | 'missing' | 'unknown'
+
 export interface IptablesStatus {
   ok: boolean
+  state: FirewallState
   rules: IptablesRule[]
   repaired: string[]
 }
@@ -48,6 +61,29 @@ function healthCache() {
   }
 }
 
+type ListingFailure = 'absent' | 'denied' | 'failed'
+
+/** absent: no iptables binary (dev/CI). denied: iptables exists but can't list
+ * (no permission, or exit 3/4 — e.g. Pod 4 before ip_tables is loaded). */
+function classifyListingFailure(error: unknown): ListingFailure {
+  const e = (error ?? {}) as { code?: string | number, status?: number, message?: string }
+  const code = e.status ?? e.code
+  const message = typeof e.message === 'string' ? e.message : ''
+  if (code === 'EACCES' || code === 'EPERM' || code === 3 || code === 4) return 'denied'
+  if (code === 'ENOENT' || code === 127) return 'absent'
+  if (/Permission denied|Operation not permitted/.test(message)) return 'denied'
+  if (/not found|ENOENT|No such file/.test(message)) return 'absent'
+  return 'failed'
+}
+
+function summarize(rules: IptablesRule[], outputOpen: boolean, failures: Set<ListingFailure>): Pick<IptablesStatus, 'ok' | 'state'> {
+  const rulesOk = rules.every(rule => !rule.critical || rule.present)
+  if (!rulesOk) return { ok: false, state: 'missing' }
+  if (failures.has('denied')) return { ok: false, state: 'unknown' }
+  if (failures.has('absent')) return { ok: true, state: 'unknown' }
+  return { ok: true, state: outputOpen ? 'open' : 'blocking' }
+}
+
 async function resolveIptablesPathAsync(): Promise<string> {
   try {
     const { stdout } = await runFile('which', ['iptables'], { timeout: 3_000 })
@@ -73,26 +109,28 @@ export function checkIptablesCached(): Promise<IptablesStatus> {
   const generation = state.generation
   const pending = (async () => {
     const iptables = await (state.path ??= resolveIptablesPathAsync())
+    const failures = new Set<ListingFailure>()
     const chains = await Promise.all((['INPUT', 'OUTPUT'] as const).map(async (chain) => {
       try {
         const { stdout } = await runFile(iptables, ['-L', chain, '-n'], { timeout: 5_000 })
         return [chain, stdout] as const
       }
       catch (error) {
-        const e = error as Error & { code?: string | number }
-        const unavailable = ['ENOENT', 'EACCES', 127, 3, 4].includes(e.code ?? '')
-          || /not found|No such file|Permission denied|Operation not permitted/.test(e.message)
-        if (!unavailable) console.warn(`[iptables] Failed to check ${chain}: ${e.message}`)
-        return [chain, unavailable ? null : ''] as const
+        const failure = classifyListingFailure(error)
+        failures.add(failure)
+        if (failure === 'failed') console.warn(`[iptables] Failed to check ${chain}: ${(error as Error).message}`)
+        return [chain, failure === 'failed' ? '' : null] as const
       }
     }))
     const outputs = Object.fromEntries(chains)
+    // An unlisted chain is unverified, not missing: no "missing" report and no repair.
     const rules = buildRequiredRules(iptables).map(rule => ({
       name: rule.name, chain: rule.chain, critical: rule.critical,
       present: outputs[rule.chain] === null || chainAllowsAll(outputs[rule.chain] ?? '')
         || !!outputs[rule.chain]?.includes(rule.check),
     }))
-    const value = { ok: rules.every(rule => !rule.critical || rule.present), rules, repaired: [] }
+    const outputOpen = typeof outputs.OUTPUT === 'string' && chainAllowsAll(outputs.OUTPUT)
+    const value: IptablesStatus = { ...summarize(rules, outputOpen, failures), rules, repaired: [] }
     if (state.generation === generation) {
       state.value = value
       state.expiresAt = performance.now() + 30_000
@@ -206,7 +244,8 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
   const iptables = resolveIptablesPath(iptablesPath)
   const requiredRules = buildRequiredRules(iptables)
   const rules: IptablesRule[] = []
-  let allOk = true
+  const failures = new Set<ListingFailure>()
+  let outputOpen = false
 
   for (const rule of requiredRules) {
     let present = false
@@ -215,24 +254,21 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
         encoding: 'utf-8',
         timeout: 5000,
       })
-      present = chainAllowsAll(output) || output.includes(rule.check)
+      const open = chainAllowsAll(output)
+      if (rule.chain === 'OUTPUT') outputOpen = open
+      present = open || output.includes(rule.check)
     }
     catch (e) {
-      const msg = e instanceof Error ? e.message : ''
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const exitCode = (e as any)?.status
-      const isUnavailable = msg.includes('not found') || msg.includes('ENOENT')
-        || msg.includes('No such file') || msg.includes('Permission denied')
-        || msg.includes('Operation not permitted')
-        || exitCode === 127 || exitCode === 3 || exitCode === 4
-      if (isUnavailable) {
-        // iptables not available or not permitted (dev/CI) — assume ok
-        present = true
+      const failure = classifyListingFailure(e)
+      failures.add(failure)
+      if (failure === 'failed') {
+        // Unexpected failure on a system where iptables should work
+        console.warn(`[iptables] Failed to check ${rule.name}: ${e instanceof Error ? e.message : ''}`)
       }
       else {
-        // Unexpected failure on a system where iptables should work
-        present = false
-        console.warn(`[iptables] Failed to check ${rule.name}: ${msg}`)
+        // Unverified, not missing: summarize() reports it as unknown, and
+        // repair isn't attempted against an iptables that can't list.
+        present = true
       }
     }
 
@@ -242,11 +278,9 @@ export function checkIptables(iptablesPath?: string): IptablesStatus {
       present,
       critical: rule.critical,
     })
-
-    if (!present && rule.critical) allOk = false
   }
 
-  return { ok: allOk, rules, repaired: [] }
+  return { ...summarize(rules, outputOpen, failures), rules, repaired: [] }
 }
 
 /**

@@ -282,6 +282,8 @@ export const healthRouter = router({
       iptables: z.object({
         ok: z.boolean(),
         missing: z.array(z.string()),
+        // blocking | open (internet allowed) | missing rules | unknown (can't list)
+        state: z.enum(['blocking', 'open', 'missing', 'unknown']),
       }),
     }))
     .query(async () => {
@@ -391,13 +393,14 @@ export const healthRouter = router({
       }
 
       // Iptables health — verify critical firewall rules
-      let iptables: { ok: boolean, missing: string[] } = { ok: true, missing: [] }
+      let iptables: { ok: boolean, missing: string[], state: 'blocking' | 'open' | 'missing' | 'unknown' } = { ok: true, missing: [], state: 'unknown' }
       try {
         const { checkIptablesCached } = await import('@/src/hardware/iptablesCheck')
         const result = await checkIptablesCached()
         iptables = {
           ok: result.ok,
           missing: result.rules.filter(r => !r.present && r.critical).map(r => r.name),
+          state: result.state,
         }
         if (!result.ok) overallStatus = 'degraded'
       }

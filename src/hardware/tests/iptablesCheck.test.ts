@@ -167,6 +167,7 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
     expect(result.ok).toBe(true)
+    expect(result.state).toBe('blocking')
     expect(result.rules.find(r => r.name === 'LAN access (192.168.0.0/16)')?.present).toBe(true)
     expect(result.rules.find(r => r.name === 'NTP outbound (UDP 123)')?.present).toBe(true)
     expect(result.rules.find(r => r.name === 'mDNS outbound source (UDP 5353)')?.present).toBe(true)
@@ -199,7 +200,10 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     })
 
     const { checkIptables } = await import('../iptablesCheck')
-    expect(checkIptables().ok).toBe(true)
+    const result = checkIptables()
+    expect(result.ok).toBe(true)
+    // Reported as allowed, not as a firewall that is in place.
+    expect(result.state).toBe('open')
   })
 
   it('still requires the allow rules in front of a jump to a blocking custom chain', async () => {
@@ -244,7 +248,7 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     expect(result.rules.find(r => r.name === 'LAN access (192.168.0.0/16)')?.present).toBe(false)
   })
 
-  it('treats Permission denied / Operation not permitted from listing as "assume ok"', async () => {
+  it('reports Permission denied / Operation not permitted from listing as unknown, not in place', async () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
       if (cmd.startsWith('/sbin/iptables -L')) {
@@ -255,7 +259,9 @@ describe('iptablesCheck — checkIptables rule classification', () => {
 
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(false)
+    expect(result.state).toBe('unknown')
+    // Unverified, not missing: nothing to report or repair.
     expect(result.rules.every(r => r.present)).toBe(true)
   })
 
@@ -280,30 +286,27 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     warnSpy.mockRestore()
   })
 
-  it('treats exit code 3 / 4 from listing as "assume ok"', async () => {
+  it('reports exit code 3 (Pod 4 without ip_tables loaded) as unknown even when the message says not found', async () => {
     setExecHandler(({ cmd }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
       if (cmd.startsWith('/sbin/iptables -L')) {
-        throw unavailableError('chain not found', 3)
+        throw unavailableError('modprobe: FATAL: Module ip_tables not found', 3)
       }
       return ''
     })
 
     const { checkIptables } = await import('../iptablesCheck')
     const result = checkIptables()
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(false)
+    expect(result.state).toBe('unknown')
   })
 
   it.each([
     [unavailableError('binary not found')],
     [unavailableError('spawn ENOENT')],
     [unavailableError('No such file')],
-    [unavailableError('Permission denied')],
-    [unavailableError('Operation not permitted')],
     [unavailableError('exit 127', 127)],
-    [unavailableError('exit 3', 3)],
-    [unavailableError('exit 4', 4)],
-  ])('independently recognises unavailable listing error %#', async (failure) => {
+  ])('assumes ok, but unknown, when the iptables binary is absent (dev/CI) %#', async (failure) => {
     setExecHandler(({ cmd, options }) => {
       if (cmd.includes('which iptables')) return '/sbin/iptables\n'
       if (cmd.startsWith('/sbin/iptables -L')) {
@@ -316,9 +319,38 @@ describe('iptablesCheck — checkIptables rule classification', () => {
     const { checkIptables } = await import('../iptablesCheck')
     expect(checkIptables()).toEqual(expect.objectContaining({
       ok: true,
+      state: 'unknown',
       repaired: [],
       rules: expect.arrayContaining([expect.objectContaining({ present: true })]),
     }))
+  })
+
+  it.each([
+    [unavailableError('Permission denied')],
+    [unavailableError('Operation not permitted')],
+    [unavailableError('exit 3', 3)],
+    [unavailableError('exit 4', 4)],
+  ])('reports a pod iptables that cannot be listed as unknown, not ok %#', async (failure) => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -L')) throw failure
+      return ''
+    })
+
+    const { checkIptables } = await import('../iptablesCheck')
+    expect(checkIptables()).toEqual(expect.objectContaining({ ok: false, state: 'unknown', repaired: [] }))
+  })
+
+  it('does not try to repair rules it could not list', async () => {
+    setExecHandler(({ cmd }) => {
+      if (cmd.includes('which iptables')) return '/sbin/iptables\n'
+      if (cmd.startsWith('/sbin/iptables -L')) throw unavailableError('exit 3', 3)
+      return ''
+    })
+
+    const { checkAndRepairIptables } = await import('../iptablesCheck')
+    expect(checkAndRepairIptables().repaired).toEqual([])
+    expect(execSyncMock.mock.calls.some(c => String(c[0]).includes(' -I '))).toBe(false)
   })
 
   it.each([null, 'raw failure'])('handles non-Error listing failure %j without throwing', async (failure) => {

@@ -83,7 +83,7 @@ const sharedClientMock = vi.hoisted(() => {
 })
 
 const iptablesMock = vi.hoisted(() => ({
-  checkIptablesCached: vi.fn(async () => ({ ok: true, rules: [] })),
+  checkIptablesCached: vi.fn(async () => ({ ok: true, state: 'blocking' as 'blocking' | 'open' | 'missing' | 'unknown', rules: [] })),
 }))
 
 const integrityMock = vi.hoisted(() => ({
@@ -126,7 +126,7 @@ beforeEach(() => {
   dbMock.db.select.mockClear()
   sharedClientMock.client.connect.mockReset().mockResolvedValue(undefined)
   sharedClientMock.getDacMonitorIfRunning.mockReset()
-  iptablesMock.checkIptablesCached.mockReset().mockResolvedValue({ ok: true, rules: [] })
+  iptablesMock.checkIptablesCached.mockReset().mockResolvedValue({ ok: true, state: 'blocking', rules: [] })
   integrityMock.getDatabaseIntegrity.mockReset().mockReturnValue({ status: 'pending', checkedAt: null, latencyMs: 0 })
   Object.values(sqlMock).forEach(mock => mock.mockClear())
 })
@@ -411,6 +411,7 @@ describe('health.system', () => {
   it('marks system degraded when iptables critical rules are missing', async () => {
     iptablesMock.checkIptablesCached.mockResolvedValueOnce({
       ok: false,
+      state: 'missing',
       rules: [
         { name: 'critical-rule', present: false, critical: true },
         { name: 'optional-rule', present: false, critical: false },
@@ -420,7 +421,14 @@ describe('health.system', () => {
     const result = await caller.system({})
     expect(result.iptables.ok).toBe(false)
     expect(result.iptables.missing).toEqual(['critical-rule'])
+    expect(result.iptables.state).toBe('missing')
     expect(result.status).toBe('degraded')
+  })
+
+  it('passes through an open firewall (internet allowed) without degrading', async () => {
+    iptablesMock.checkIptablesCached.mockResolvedValueOnce({ ok: true, state: 'open', rules: [] } as unknown as Awaited<ReturnType<typeof iptablesMock.checkIptablesCached>>)
+    const result = await caller.system({})
+    expect(result.iptables).toEqual({ ok: true, missing: [], state: 'open' })
   })
 
   it('marks system degraded when scheduler getJobManager rejects', async () => {
@@ -435,7 +443,7 @@ describe('health.system', () => {
     iptablesMock.checkIptablesCached.mockRejectedValueOnce(new Error('iptables unavailable'))
 
     const result = await caller.system({})
-    expect(result.iptables).toEqual({ ok: true, missing: [] })
+    expect(result.iptables).toEqual({ ok: true, missing: [], state: 'unknown' })
   })
 })
 

@@ -65,6 +65,13 @@ export function DashboardPanel({ thermal, onJump }: { thermal: ThermalData | und
 
 // ── Status line ─────────────────────────────────────────────────────────────
 
+// health.system's iptables.state, except 'missing', which names the rules.
+const FIREWALL_FACTS = {
+  blocking: { tone: 'ok', label: 'Blocking', title: undefined },
+  open: { tone: 'muted', label: 'Not blocking', title: 'Internet access is allowed: iptables lets all outbound traffic through' },
+  unknown: { tone: 'warn', label: 'Can\'t check', title: 'iptables could not be listed, so the firewall state is unknown' },
+} as const
+
 function StatusLine() {
   const s = useStatusSummary()
   // Newer thermal firmware only; older pods keep the line as it was.
@@ -121,10 +128,14 @@ function StatusLine() {
       label: 'Firewall',
       value: !s.firewall
         ? '—'
-        : s.firewall.ok
-          ? <StatusDot tone="ok" label="In place" className="text-[13px] text-fg" />
-          : <StatusDot tone="warn" label={`Missing ${s.firewall.missing.length === 1 ? s.firewall.missing[0] : `${s.firewall.missing.length} rules`}`} className="text-[13px]" />,
-      title: s.firewall && !s.firewall.ok ? `Missing firewall rules: ${s.firewall.missing.join(', ')}` : undefined,
+        : s.firewall.state === 'missing'
+          ? <StatusDot tone="warn" label={`Missing ${s.firewall.missing.length === 1 ? s.firewall.missing[0] : `${s.firewall.missing.length} rules`}`} className="text-[13px]" />
+          : <StatusDot tone={FIREWALL_FACTS[s.firewall.state].tone} label={FIREWALL_FACTS[s.firewall.state].label} className="text-[13px] text-fg" />,
+      title: !s.firewall
+        ? undefined
+        : s.firewall.state === 'missing'
+          ? `Missing firewall rules: ${s.firewall.missing.join(', ')}`
+          : FIREWALL_FACTS[s.firewall.state].title,
     },
     ...(tank ? [{ label: 'Water', value: <WaterTankGauge tank={tank} /> }] : []),
     {

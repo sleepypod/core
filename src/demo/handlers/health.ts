@@ -398,7 +398,7 @@ export const health: DemoHandlers<'health'> = {
       jobCount: JOBS.length,
       drift: { dbScheduleCount: 11, schedulerJobCount: 11, drifted: false },
     },
-    iptables: { ok: true, missing: [] },
+    iptables: { ok: true, missing: [], state: 'blocking' as const },
   }),
 
   dacMonitor: () => ({ status: 'polling', podVersion: 'J00', gesturesSupported: true }),

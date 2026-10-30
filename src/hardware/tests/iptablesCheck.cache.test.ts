@@ -80,6 +80,13 @@ describe('asynchronous firewall health', () => {
     const status = await checkIptablesCached()
     expect(status.ok).toBe(true)
     expect(status.rules.every(rule => rule.present)).toBe(true)
+    // Not blocking anything: must not read as a firewall in place.
+    expect(status.state).toBe('open')
+  })
+
+  it('reports a firewall with its allow rules in front of the drop as blocking', async () => {
+    const status = await checkIptablesCached()
+    expect(status).toEqual(expect.objectContaining({ ok: true, state: 'blocking' }))
   })
 
   it('does not let an in-flight pre-repair result overwrite a newer check', async () => {
@@ -121,12 +128,22 @@ describe('asynchronous firewall health', () => {
     expect(mocks.runFile.mock.calls[1]?.[0]).toBe('iptables')
   })
 
-  it.each(['ENOENT', 'EACCES', 127, 3, 4])('keeps the established development fallback for unavailable code %s', async (code) => {
+  it.each(['ENOENT', 127])('keeps the development fallback when the binary is absent (code %s)', async (code) => {
     mocks.runFile.mockImplementation(async (file) => {
       if (file === 'which') return { stdout: '/sbin/iptables' }
       throw Object.assign(new Error('unavailable'), { code })
     })
-    expect((await checkIptablesCached()).ok).toBe(true)
+    expect(await checkIptablesCached()).toEqual(expect.objectContaining({ ok: true, state: 'unknown' }))
+  })
+
+  it.each(['EACCES', 3, 4])('reports an iptables that exists but cannot be listed as unknown (code %s)', async (code) => {
+    mocks.runFile.mockImplementation(async (file) => {
+      if (file === 'which') return { stdout: '/sbin/iptables' }
+      throw Object.assign(new Error('unavailable'), { code })
+    })
+    const status = await checkIptablesCached()
+    expect(status).toEqual(expect.objectContaining({ ok: false, state: 'unknown' }))
+    expect(status.rules.every(rule => rule.present)).toBe(true)
   })
 
   it('reports unexpected chain failures as degraded and retries after expiry', async () => {
