@@ -47,6 +47,10 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   put(join(app, '.env'), 'POD_SECRET=keep')
   put(join(app, 'scripts/lib/iptables-helpers'), helper)
   put(join(bundle, 'scripts/lib/iptables-helpers'), helper)
+  // The real helper edits /etc/hosts, masks units and restarts NetworkManager
+  // through scripts/internet-control. These stubs only record which tree ran.
+  put(join(app, 'scripts/lib/telemetry-helpers'), 'block_stock_telemetry() { echo "telemetry old" >> "$TEST_LOG"; }\n')
+  put(join(bundle, 'scripts/lib/telemetry-helpers'), 'block_stock_telemetry() { echo "telemetry new" >> "$TEST_LOG"; }\n')
   put(join(bundle, 'package.json'), '{"packageManager":"pnpm@10.34.5"}')
   put(join(bundle, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
   put(join(bundle, '.next/required-server-files.json'), '{}')
@@ -67,13 +71,18 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
     ['/persistent/sleepypod-data', join(dir, 'data')],
     ['/etc/sleepypod/data-dir', join(dir, 'data-dir')],
     ['/etc/systemd/system', join(dir, 'systemd')],
-    ['/etc/hosts', join(dir, 'hosts')],
   ]
   for (const [from, to] of rewrites) {
     expect(script).toContain(from)
     script = script.replaceAll(from, to)
   }
-  put(join(dir, 'hosts'), '# BEGIN sleepypod-telemetry-block')
+  // Telemetry blocking reaches /etc/hosts and NetworkManager only through
+  // $INSTALL_DIR's scripts (rewritten above to the fixture tree, whose
+  // helpers are stubs); sp-update itself must name neither path.
+  for (const systemPath of ['/etc/hosts', '/etc/NetworkManager']) {
+    expect(script).not.toContain(systemPath)
+  }
+  expect(script).not.toMatch(/(?<!\$tree\/|\$INSTALL_DIR\/)scripts\/internet-control/)
   put(join(dir, 'update'), script)
   put(join(bin, 'systemctl'), '#!/bin/bash\necho "systemctl $*" >> "$TEST_LOG"\n')
   put(join(bin, 'df'), `#!/bin/bash
@@ -143,11 +152,29 @@ describe('sp-update staged deployment', () => {
     expect(result.stderr).toContain(status === '404' ? 'No accessible pre-built release' : `HTTP ${status}`)
     expect(readFileSync(join(app, 'old.txt'), 'utf8')).toBe('old code')
     expect(log).not.toContain('pnpm install')
-    for (const marker of ['systemctl stop', 'unblock', 'restore', 'systemctl start']) expect(log).toContain(marker)
+    for (const marker of ['telemetry old', 'systemctl stop', 'unblock', 'restore', 'systemctl start']) expect(log).toContain(marker)
+    expect(log.indexOf('telemetry old')).toBeLessThan(log.indexOf('unblock'))
     expect(log.indexOf('systemctl stop')).toBeLessThan(log.indexOf('unblock'))
     expect(log.indexOf('restore')).toBeLessThan(log.indexOf('systemctl start'))
     expect(log).not.toContain('archive/refs/heads')
   })
+  it('blocks telemetry from the installed tree before opening WAN, then again from the new code', () => {
+    const { result, log } = updater({ blocked: true, branch: 'dev' })
+    expect(result.status, result.stderr).toBe(0)
+    const lines = log.split('\n')
+    expect(lines.indexOf('telemetry old')).toBeGreaterThanOrEqual(0)
+    expect(lines.indexOf('telemetry old')).toBeLessThan(lines.indexOf('unblock'))
+    expect(lines.indexOf('telemetry new')).toBeGreaterThan(lines.indexOf('unblock'))
+    expect(lines.indexOf('telemetry new')).toBeLessThan(lines.findIndex(line => line.startsWith('pnpm install')))
+  })
+
+  it('blocks telemetry whatever the WAN state', () => {
+    const { result, log } = updater({ archive: true })
+    expect(result.status, result.stderr).toBe(0)
+    expect(log).not.toContain('unblock')
+    expect(log.split('\n').filter(line => line.startsWith('telemetry '))).toEqual(['telemetry old', 'telemetry new'])
+  })
+
   it('rejects a release without an asset', () => {
     const { result, app } = updater({ noAsset: true, branch: 'dev' })
     expect(result.status).not.toBe(0)
@@ -179,7 +206,8 @@ describe('sp-update staged deployment', () => {
     const { result, app, log } = updater({ archive: true, invalid: true, blocked: true })
     expect(result.stderr).toContain('missing .next/BUILD_ID')
     expect(existsSync(join(app, 'old.txt'))).toBe(true)
-    expect(log).toBe('')
+    // Only the installed tree's telemetry blocking ran: no stop, no WAN opening.
+    expect(log).toBe('telemetry old\n')
   })
   it('reports pnpm mismatch before replacing the app', () => {
     const { result, app, log } = updater({ archive: true, version: '11.0.0' })
