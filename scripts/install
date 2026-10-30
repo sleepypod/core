@@ -682,17 +682,30 @@ done
 # Pod can install. uv cache is cleaned later, after biometrics modules sync.
 reclaim_rootfs_caches
 
+# Name blocking and the stock log shipper don't depend on iptables: a pod
+# whose internet is open (by choice, or after free-sleep's `iptables -F`)
+# needs them most. Apply them from whatever copy is on disk before anything
+# opens WAN, and again from the new code once it's in place. Trees from
+# before scripts/lib/telemetry-helpers only have the hosts block.
+block_stock_telemetry_from() {
+  local tree="$1"
+  if [ -f "$tree/scripts/lib/telemetry-helpers" ]; then
+    source "$tree/scripts/lib/telemetry-helpers"
+    block_stock_telemetry "$tree"
+  elif [ -f "$tree/scripts/internet-control" ]; then
+    bash "$tree/scripts/internet-control" hosts-block 2>/dev/null || true
+  else
+    return 1
+  fi
+}
+echo "Blocking Eight Sleep telemetry..."
+block_stock_telemetry_from "$PWD" || block_stock_telemetry_from "$INSTALL_DIR" || true
+
 # Handle WAN connectivity — always needed (npm packages, node binary download)
 echo "Checking network connectivity..."
 if ! curl -sf --max-time 10 https://github.com > /dev/null 2>&1; then
   if wan_is_blocked; then
     echo "WAN is blocked by iptables. Temporarily unblocking for install..."
-    # Ensure /etc/hosts telemetry block is in place before opening WAN
-    # This prevents Eight Sleep processes from phoning home during the window
-    if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
-      echo "Installing /etc/hosts telemetry block before opening WAN..."
-      scripts/internet-control hosts-block 2>/dev/null || true
-    fi
     WAN_WAS_BLOCKED=true
     unblock_wan
     # Re-check after unblock
@@ -1254,6 +1267,9 @@ else
   cd "$INSTALL_DIR"
   echo "Source downloaded."
 fi
+
+# Re-apply from the new code: it may block names the old copy didn't.
+block_stock_telemetry_from "$INSTALL_DIR" || true
 
 # Discover DAC socket path (code is now on disk); hardware identity is separate.
 if [ -f "$INSTALL_DIR/scripts/pod/detect" ]; then

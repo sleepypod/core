@@ -264,6 +264,23 @@ for space_dir in "$INSTALL_DIR" "$TMPDIR"; do
   fi
 done
 
+# Name blocking and the stock log shipper don't depend on iptables: a pod
+# whose internet is open needs them most. Apply them from the installed copy
+# before anything opens WAN, and again from the new code once it's in place.
+# Trees from before scripts/lib/telemetry-helpers only have the hosts block.
+block_stock_telemetry_from() {
+  local tree="$1"
+  if [ -f "$tree/scripts/lib/telemetry-helpers" ]; then
+    source "$tree/scripts/lib/telemetry-helpers"
+    block_stock_telemetry "$tree"
+  elif [ -f "$tree/scripts/internet-control" ]; then
+    bash "$tree/scripts/internet-control" hosts-block 2>/dev/null || true
+  else
+    return 1
+  fi
+}
+block_stock_telemetry_from "$INSTALL_DIR" || true
+
 # Local archive validation happens before stopping services. GitHub downloads need
 # WAN access, so stop first only when the firewall needs to be opened: the
 # service's firewall self-heal otherwise races unblock_wan.
@@ -273,9 +290,6 @@ open_update_wan() {
     if [ "$SERVICE_STOPPED" = false ]; then
       systemctl stop sleepypod.service
       SERVICE_STOPPED=true
-    fi
-    if ! grep -q "# BEGIN sleepypod-telemetry-block" /etc/hosts 2>/dev/null; then
-      "$INSTALL_DIR/scripts/internet-control" hosts-block 2>/dev/null || true
     fi
     WAN_WAS_BLOCKED=true
     unblock_wan
@@ -442,6 +456,9 @@ rm -rf "$WORK_DIR"
 echo "Source updated."
 
 cd "$INSTALL_DIR"
+
+# Re-apply from the new code: it may block names the old copy didn't.
+block_stock_telemetry_from "$INSTALL_DIR" || true
 
 # Move node_modules off rootfs onto /persistent before pnpm runs.
 # Migrates existing rootfs node_modules on the first sp-update after

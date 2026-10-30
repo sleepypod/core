@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat << EOF
-Usage: $(basename "$0") {block|unblock|hosts-block|hosts-unblock|status}
+Usage: $(basename "$0") {block|unblock|hosts-block|hosts-unblock|dns-block|dns-unblock|status}
 
 Control internet access for SleepyPod device.
 
@@ -12,11 +12,15 @@ Commands:
   unblock       - Restore full internet access via iptables
   hosts-block   - Null-route Eight Sleep telemetry domains in /etc/hosts
   hosts-unblock - Remove Eight Sleep null routes from /etc/hosts
-  status        - Show current blocking status (iptables + hosts)
+  dns-block     - Blackhole every *.8slp.net name via NetworkManager's dnsmasq
+  dns-unblock   - Remove the dnsmasq blackhole
+  status        - Show current blocking status (iptables, names, services)
 
 The pod uses two layers of outbound blocking:
   1. iptables: DROP all non-LAN outbound traffic (primary)
-  2. /etc/hosts: null-route *.8slp.net domains (defense-in-depth)
+  2. Name blocking (defense-in-depth): a dnsmasq wildcard for every
+     *.8slp.net name where dnsmasq + NetworkManager exist, plus
+     /etc/hosts null routes for the known names everywhere
 
 Layer 2 prevents data exfiltration when iptables are temporarily
 opened for sp-update or other maintenance.
@@ -25,13 +29,19 @@ Examples:
   sudo $(basename "$0") block          # iptables block
   sudo $(basename "$0") hosts-block    # add /etc/hosts null routes
   sudo $(basename "$0") hosts-unblock  # remove /etc/hosts null routes
-  sudo $(basename "$0") status         # check both layers
+  sudo $(basename "$0") dns-block      # add the dnsmasq wildcard blackhole
+  sudo $(basename "$0") status         # check every layer
 EOF
   exit 1
 }
 
+# Script tests point this at a scratch directory; on the pod it is empty.
+ROOT="${INTERNET_CONTROL_ROOT:-}"
+HOSTS_FILE="$ROOT/etc/hosts"
+NM_DIR="$ROOT/etc/NetworkManager"
+
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then
+if [ "$EUID" -ne 0 ] && [ -z "$ROOT" ]; then
   echo "Error: This script must be run as root" >&2
   exit 1
 fi
@@ -75,52 +85,92 @@ HOSTS_MARKER_END="# END sleepypod-telemetry-block"
 EIGHTSLEEP_DOMAINS=(
   "raw-api-upload.8slp.net"   # frankenfirmware raw sensor data upload
   "device-api-ws.8slp.net"    # Capybara WebSocket device API hub
+  "update-api.8slp.net"       # swupdate OTA endpoint (/etc/swupdate.cfg)
+  "device-api.8slp.net"       # /home/dac/app/config/default.json
   "api.8slp.net"              # general API
   "app-api.8slp.net"          # mobile app API
   "client-api.8slp.net"       # client API
 )
 
+# Zones the dnsmasq layer answers with 0.0.0.0 / :: for the zone and every
+# subdomain. /etc/hosts cannot match wildcards, so this catches names the
+# list above has not found yet.
+DNS_BLOCK_ZONES=(
+  "8slp.net"                          # every Eight Sleep cloud name
+  "kinesis.us-east-1.amazonaws.com"   # stock vector journal shipper
+)
+
 hosts_is_blocked() {
   # Both markers must be present exactly once for a well-formed block
   local begin_count end_count
-  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null || true)
-  end_count=$(grep -Fc "$HOSTS_MARKER_END" /etc/hosts 2>/dev/null || true)
+  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" "$HOSTS_FILE" 2>/dev/null || true)
+  end_count=$(grep -Fc "$HOSTS_MARKER_END" "$HOSTS_FILE" 2>/dev/null || true)
   [ "$begin_count" -eq 1 ] && [ "$end_count" -eq 1 ]
 }
 
 hosts_markers_malformed() {
   local begin_count end_count
-  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" /etc/hosts 2>/dev/null || true)
-  end_count=$(grep -Fc "$HOSTS_MARKER_END" /etc/hosts 2>/dev/null || true)
+  begin_count=$(grep -Fc "$HOSTS_MARKER_BEGIN" "$HOSTS_FILE" 2>/dev/null || true)
+  end_count=$(grep -Fc "$HOSTS_MARKER_END" "$HOSTS_FILE" 2>/dev/null || true)
   [ "$begin_count" -ne "$end_count" ]
 }
 
+hosts_has_markers() {
+  grep -Fq "$HOSTS_MARKER_BEGIN" "$HOSTS_FILE" 2>/dev/null
+}
+
+hosts_block_content() {
+  echo "$HOSTS_MARKER_BEGIN"
+  echo "# Null-route Eight Sleep telemetry domains so the stock firmware"
+  echo "# (frankenfirmware + Capybara) cannot phone home, even when"
+  echo "# iptables are temporarily opened for sp-update."
+  echo "# Managed by: scripts/internet-control hosts-block|hosts-unblock"
+  for domain in "${EIGHTSLEEP_DOMAINS[@]}"; do
+    echo "0.0.0.0 $domain"
+  done
+  echo "$HOSTS_MARKER_END"
+}
+
 add_hosts_block() {
+  local block current tmp
+  block="$(hosts_block_content)"
+
   if hosts_is_blocked; then
-    echo "Eight Sleep hosts block already present"
-    return 0
+    current="$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" "$HOSTS_FILE")"
+    if [ "$current" = "$block" ]; then
+      echo "Eight Sleep hosts block already up to date"
+      return 0
+    fi
   fi
 
   if hosts_markers_malformed; then
     echo "Warning: malformed hosts markers found, cleaning up first" >&2
-    sed -i "/$HOSTS_MARKER_BEGIN/d;/$HOSTS_MARKER_END/d" /etc/hosts
+    sed -i "/$HOSTS_MARKER_BEGIN/d;/$HOSTS_MARKER_END/d" "$HOSTS_FILE"
   fi
 
   # Backup before modifying
-  cp /etc/hosts /etc/hosts.bak.sleepypod
+  cp "$HOSTS_FILE" "$HOSTS_FILE.bak.sleepypod"
+
+  if hosts_has_markers; then
+    # Rewrite the managed block in place so pods that already have one pick
+    # up domains added since. Duplicate blocks collapse into one. cat keeps
+    # the file's inode, owner and mode.
+    tmp=$(mktemp)
+    SP_HOSTS_BLOCK="$block" awk -v begin="$HOSTS_MARKER_BEGIN" -v end="$HOSTS_MARKER_END" '
+      index($0, begin) { if (!printed) print ENVIRON["SP_HOSTS_BLOCK"]; printed = 1; skip = 1; next }
+      skip && index($0, end) { skip = 0; next }
+      !skip { print }
+    ' "$HOSTS_FILE" > "$tmp"
+    cat "$tmp" > "$HOSTS_FILE"
+    rm -f "$tmp"
+    echo "Updated /etc/hosts null route to ${#EIGHTSLEEP_DOMAINS[@]} Eight Sleep domains"
+    return 0
+  fi
 
   {
     echo ""
-    echo "$HOSTS_MARKER_BEGIN"
-    echo "# Null-route Eight Sleep telemetry domains so the stock firmware"
-    echo "# (frankenfirmware + Capybara) cannot phone home, even when"
-    echo "# iptables are temporarily opened for sp-update."
-    echo "# Managed by: scripts/internet-control hosts-block|hosts-unblock"
-    for domain in "${EIGHTSLEEP_DOMAINS[@]}"; do
-      echo "0.0.0.0 $domain"
-    done
-    echo "$HOSTS_MARKER_END"
-  } >> /etc/hosts
+    printf '%s\n' "$block"
+  } >> "$HOSTS_FILE"
 
   echo "Added ${#EIGHTSLEEP_DOMAINS[@]} Eight Sleep domains to /etc/hosts null route"
 }
@@ -138,15 +188,176 @@ remove_hosts_block() {
   fi
 
   # Backup before modifying
-  cp /etc/hosts /etc/hosts.bak.sleepypod
+  cp "$HOSTS_FILE" "$HOSTS_FILE.bak.sleepypod"
 
   # Remove everything between (and including) the markers
-  sed -i "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/d" /etc/hosts
+  sed -i "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/d" "$HOSTS_FILE"
 
   # Clean up any trailing blank lines at end of file
-  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /etc/hosts
+  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$HOSTS_FILE"
 
   echo "Removed Eight Sleep domains from /etc/hosts"
+}
+
+# ---------------------------------------------------------------------------
+# dnsmasq wildcard blackhole (NetworkManager dns=dnsmasq)
+# ---------------------------------------------------------------------------
+# /etc/hosts only matches exact names. Where NetworkManager and dnsmasq are
+# installed (Pod 5), switch NetworkManager to its dnsmasq plugin and answer
+# every name under DNS_BLOCK_ZONES with 0.0.0.0 / ::. The change is verified
+# after the restart and rolled back if DNS stops working.
+
+NM_DNS_CONF="$NM_DIR/conf.d/sleepypod-dns.conf"
+NM_DNSMASQ_CONF="$NM_DIR/dnsmasq.d/sleepypod-block.conf"
+# A name under the first zone that is in no hosts file, so only dnsmasq
+# can answer it with 0.0.0.0.
+DNS_PROBE_NAME="sleepypod-probe.${DNS_BLOCK_ZONES[0]}"
+DNS_KNOWN_GOOD="github.com"
+DNS_VERIFY_ATTEMPTS=15
+
+# Root's PATH may omit sbin when run through sudo from the service.
+have_sbin_cmd() {
+  command -v "$1" >/dev/null 2>&1 || [ -x "$ROOT/usr/sbin/$1" ] || [ -x "$ROOT/sbin/$1" ]
+}
+
+dns_backend_available() {
+  have_sbin_cmd dnsmasq && have_sbin_cmd NetworkManager && [ -d "$NM_DIR" ]
+}
+
+nm_dns_conf_content() {
+  echo "# Managed by: scripts/internet-control dns-block|dns-unblock"
+  echo "[main]"
+  echo "dns=dnsmasq"
+}
+
+dnsmasq_block_content() {
+  local zone
+  echo "# Managed by: scripts/internet-control dns-block|dns-unblock"
+  for zone in "${DNS_BLOCK_ZONES[@]}"; do
+    echo "address=/$zone/0.0.0.0"
+    echo "address=/$zone/::"
+  done
+}
+
+dns_layer_configured() {
+  [ -f "$NM_DNS_CONF" ] && [ -f "$NM_DNSMASQ_CONF" ]
+}
+
+# Print the first address the system resolver returns for $1, or nothing.
+# busybox nslookup prints "Address 1: <ip> ..." (old) or "Address: <ip>"
+# (new), after a "Name:" line; the server's own address comes before it.
+resolve_name() {
+  local addr=""
+  if command -v nslookup >/dev/null 2>&1; then
+    addr=$(nslookup "$1" 2>/dev/null | awk '
+      /^Name:/ { found = 1; next }
+      found && /^Address/ { sub(/^Address[^:]*:[ \t]*/, ""); split($0, a, /[ \t]/); print a[1]; exit }
+    ' || true)
+  fi
+  if [ -z "$addr" ] && command -v ping >/dev/null 2>&1; then
+    # ping prints the resolved address before it sends, so this works even
+    # when iptables drops the echo request.
+    addr=$(ping -c 1 -W 2 "$1" 2>/dev/null | sed -n '1s/^PING [^(]*(\([^)]*\)).*/\1/p' || true)
+  fi
+  printf '%s' "$addr"
+}
+
+is_null_address() {
+  [ "$1" = "0.0.0.0" ] || [ "$1" = "::" ]
+}
+
+known_good_resolves() {
+  local addr
+  addr=$(resolve_name "$DNS_KNOWN_GOOD")
+  [ -n "$addr" ] && ! is_null_address "$addr"
+}
+
+# dnsmasq may take a few seconds to come up (and Wi-Fi to reassociate)
+# after NetworkManager restarts.
+dns_layer_verified() {
+  local i
+  for ((i = 0; i < DNS_VERIFY_ATTEMPTS; i++)); do
+    if is_null_address "$(resolve_name "$DNS_PROBE_NAME")" && known_good_resolves; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+restart_network_manager() {
+  systemctl restart NetworkManager.service
+}
+
+remove_dns_layer_files() {
+  rm -f "$NM_DNS_CONF" "$NM_DNSMASQ_CONF"
+}
+
+add_dns_block() {
+  local nm_content dnsmasq_content
+  if ! dns_backend_available; then
+    echo "dnsmasq or NetworkManager not found — /etc/hosts fallback in use"
+    return 0
+  fi
+
+  nm_content="$(nm_dns_conf_content)"
+  dnsmasq_content="$(dnsmasq_block_content)"
+  if [ "$(cat "$NM_DNS_CONF" 2>/dev/null || true)" = "$nm_content" ] \
+    && [ "$(cat "$NM_DNSMASQ_CONF" 2>/dev/null || true)" = "$dnsmasq_content" ]; then
+    echo "dnsmasq wildcard block already up to date"
+    return 0
+  fi
+
+  # Without a working baseline a failed check can't be told apart from a
+  # resolver that was already down, so change nothing.
+  if ! known_good_resolves; then
+    echo "Error: $DNS_KNOWN_GOOD does not resolve now, so the dnsmasq switch can't be verified." >&2
+    echo "  Left DNS unchanged; /etc/hosts fallback in use. Retry when DNS works." >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$NM_DNS_CONF")" "$(dirname "$NM_DNSMASQ_CONF")"
+  printf '%s\n' "$nm_content" > "$NM_DNS_CONF"
+  printf '%s\n' "$dnsmasq_content" > "$NM_DNSMASQ_CONF"
+  echo "Restarting NetworkManager with dns=dnsmasq..."
+  restart_network_manager || echo "Warning: NetworkManager restart failed" >&2
+
+  if dns_layer_verified; then
+    echo "Blackholed ${DNS_BLOCK_ZONES[*]} (and every subdomain) via dnsmasq"
+    return 0
+  fi
+
+  echo "Error: DNS check failed after switching to dnsmasq ($DNS_PROBE_NAME must be 0.0.0.0, $DNS_KNOWN_GOOD must resolve)." >&2
+  echo "  Rolling back to the previous DNS setup..." >&2
+  remove_dns_layer_files
+  restart_network_manager || echo "Warning: NetworkManager restart failed during rollback" >&2
+  if known_good_resolves; then
+    echo "  Rolled back; DNS works again. /etc/hosts fallback in use." >&2
+  else
+    echo "  Rolled back, but $DNS_KNOWN_GOOD still does not resolve — check 'systemctl status NetworkManager'." >&2
+  fi
+  return 1
+}
+
+remove_dns_block() {
+  if [ ! -e "$NM_DNS_CONF" ] && [ ! -e "$NM_DNSMASQ_CONF" ]; then
+    echo "No dnsmasq wildcard block found"
+    return 0
+  fi
+  remove_dns_layer_files
+  restart_network_manager || echo "Warning: NetworkManager restart failed" >&2
+  echo "Removed dnsmasq wildcard block"
+}
+
+# Stock telemetry units that install/sp-update mask (scripts/lib/telemetry-helpers).
+stock_service_state() {
+  local state
+  state=$(systemctl is-enabled "$1" 2>/dev/null || true)
+  case "$state" in
+    masked|masked-runtime) echo "masked" ;;
+    ''|not-found) echo "not installed" ;;
+    *) echo "NOT masked ($state)" ;;
+  esac
 }
 
 case "$COMMAND" in
@@ -323,6 +534,26 @@ case "$COMMAND" in
     echo ""
     ;;
 
+  dns-block)
+    echo "========================================"
+    echo "  Block Eight Sleep Telemetry (dnsmasq)"
+    echo "========================================"
+    echo ""
+    add_dns_block
+    echo ""
+    echo "To remove: sudo $(basename "$0") dns-unblock"
+    echo ""
+    ;;
+
+  dns-unblock)
+    echo "========================================"
+    echo "  Remove dnsmasq Telemetry Block"
+    echo "========================================"
+    echo ""
+    remove_dns_block
+    echo ""
+    ;;
+
   status)
     echo "========================================"
     echo "  Network Blocking Status"
@@ -340,13 +571,22 @@ case "$COMMAND" in
       echo "  Layer 1 (iptables):  INACTIVE — no DROP rule found"
     fi
 
-    # Layer 2: /etc/hosts
+    # Layer 2: name blocking — dnsmasq wildcard and/or /etc/hosts
+    DOMAIN_COUNT=0
     if hosts_is_blocked; then
-      DOMAIN_COUNT=$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" /etc/hosts | grep "^0.0.0.0" | wc -l)
-      echo "  Layer 2 (/etc/hosts): ACTIVE — $DOMAIN_COUNT domains null-routed"
-    else
-      echo "  Layer 2 (/etc/hosts): INACTIVE — no Eight Sleep null routes"
+      DOMAIN_COUNT=$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" "$HOSTS_FILE" | grep -c "^0.0.0.0" || true)
     fi
+    if dns_layer_configured && [ "$DOMAIN_COUNT" -gt 0 ]; then
+      echo "  Layer 2 (names):     ACTIVE — dnsmasq wildcard (${DNS_BLOCK_ZONES[*]}) + /etc/hosts ($DOMAIN_COUNT domains)"
+    elif dns_layer_configured; then
+      echo "  Layer 2 (names):     ACTIVE — dnsmasq wildcard (${DNS_BLOCK_ZONES[*]}); /etc/hosts block missing"
+    elif [ "$DOMAIN_COUNT" -gt 0 ]; then
+      echo "  Layer 2 (names):     ACTIVE — /etc/hosts only ($DOMAIN_COUNT domains null-routed)"
+    else
+      echo "  Layer 2 (names):     INACTIVE — no Eight Sleep name blocking"
+    fi
+
+    echo "  Stock telemetry:     vector $(stock_service_state vector.service), telegraf $(stock_service_state telegraf.service)"
 
     echo ""
 
