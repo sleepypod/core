@@ -39,6 +39,8 @@ case "$1" in
   enable) echo enabled > "$u/$2" ;;
   disable) rm -f "$u/$3.active"; echo disabled > "$u/$3" ;;
   mask) echo masked > "$u/$2" ;;
+  unmask) [ "$(cat "$u/$2" 2>/dev/null)" = masked ] && echo disabled > "$u/$2" ;;
+  start) : > "$u/$2.active" ;;
   stop) rm -f "$u/$2.active" ;;
   restart)
     [ "$2" = sleepypod-dns.service ] || exit 0
@@ -95,8 +97,8 @@ esac`
 
 const env = () => ({ ...process.env, INTERNET_CONTROL_ROOT: root, ROOT: root, PATH: `${bin}:/usr/bin:/bin` })
 
-function run(command: string) {
-  return spawnSync('/bin/bash', [controlScript, command], { encoding: 'utf8', env: env() })
+function run(...args: string[]) {
+  return spawnSync('/bin/bash', [controlScript, ...args], { encoding: 'utf8', env: env() })
 }
 
 const ORIGINAL_RESOLV = '/etc/resolv-conf.NetworkManager'
@@ -396,7 +398,8 @@ describe('internet-control status', () => {
     run('dns-block')
     const out = run('status').stdout
     expect(out).toMatch(/Layer 2 \(names\): +dnsmasq NXDOMAIN \(8slp\.net kinesis\.us-east-1\.amazonaws\.com/)
-    expect(out).toContain('vector masked, telegraf not installed')
+    expect(out).toMatch(/vector\.service +masked\n/)
+    expect(out).toMatch(/telegraf\.service +not installed\n/)
     expect(out).not.toContain('Warning')
     rmSync(join(root, 'units', 'sleepypod-dns.service.active'))
     const stopped = run('status').stdout
@@ -419,7 +422,7 @@ describe('stock telemetry services', () => {
     const script = `source ${helpers}; disable_stock_telemetry; echo --- >> "$ROOT/systemctl.log"; disable_stock_telemetry`
     return spawnSync('/bin/bash', ['-eu', '-o', 'pipefail', '-c', script], {
       encoding: 'utf8',
-      env: { ...process.env, ROOT: root, VECTOR_DATA_DIR: vectorDir, PATH: `${bin}:/usr/bin:/bin` },
+      env: { ...process.env, ROOT: root, SLEEPYPOD_ROOT: root, VECTOR_DATA_DIR: vectorDir, PATH: `${bin}:/usr/bin:/bin` },
     })
   }
 
@@ -439,7 +442,7 @@ describe('stock telemetry services', () => {
     expect(first).toContain('mask vector.service')
     expect(first).toContain('mask telegraf.service')
     expect(second).not.toMatch(/disable|mask|stop/)
-    expect(systemctlLog()).not.toMatch(/frankenfirmware|dac|capybara|swupdate/i)
+    expect(systemctlLog()).not.toMatch(/frankenfirmware|dac|capybara|burrow|swupdate-usb/i)
     expect(readFileSync(join(root, 'units', 'vector.service'), 'utf8').trim()).toBe('masked')
     expect(existsSync(join(root, 'units', 'vector.service.active'))).toBe(false)
     expect(existsSync(join(root, 'units', 'frankenfirmware.service.active'))).toBe(true)
@@ -458,6 +461,224 @@ describe('stock telemetry services', () => {
     const result = disableTwice(join(root, 'none'))
     expect(result.status, result.stderr).toBe(0)
     expect(systemctlLog()).not.toMatch(/disable|mask|stop/)
+  })
+})
+
+describe('stock firmware updater and watchdog', () => {
+  const FIRMWARE_UNITS = ['swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service']
+  const ALL_UNITS = ['vector.service', 'telegraf.service', ...FIRMWARE_UNITS, 'eight-kernel.service']
+  const NEVER_TOUCHED = ['swupdate-usb@sda1.service', 'frankenfirmware.service', 'capybara.service', 'dac.service', 'burrow.service']
+  const unitState = (unit: string) => readFileSync(join(root, 'units', unit), 'utf8').trim()
+  const running = (unit: string) => existsSync(join(root, 'units', `${unit}.active`))
+  const choice = () => join(root, 'etc', 'sleepypod', 'firmware-updates')
+  const lines = () => systemctlLog().split('\n')
+
+  function addUnit(unit: string, state: string, active = true) {
+    writeFileSync(join(root, 'units', unit), state)
+    if (active) writeFileSync(join(root, 'units', `${unit}.active`), '')
+  }
+
+  function disableStock(script = 'disable_stock_telemetry') {
+    return spawnSync('/bin/bash', ['-eu', '-o', 'pipefail', '-c', `source ${helpers}; ${script}`], {
+      encoding: 'utf8',
+      env: { ...process.env, ROOT: root, SLEEPYPOD_ROOT: root, VECTOR_DATA_DIR: join(root, 'none'), PATH: `${bin}:/usr/bin:/bin` },
+    })
+  }
+
+  it('masks the updater, watchdog and eight-kernel, socket before service, and stops them', () => {
+    addUnit('swupdate.socket', 'enabled')
+    addUnit('swupdate.service', 'static')
+    addUnit('swupdate-progress.service', 'disabled')
+    addUnit('defibrillator.service', 'enabled')
+    addUnit('eight-kernel.service', 'enabled')
+    for (const unit of NEVER_TOUCHED) addUnit(unit, 'enabled')
+
+    const result = disableStock()
+    expect(result.status, result.stderr).toBe(0)
+    for (const unit of [...FIRMWARE_UNITS, 'eight-kernel.service']) {
+      expect(lines()).toContain(`disable --now ${unit}`)
+      expect(unitState(unit)).toBe('masked')
+      expect(running(unit)).toBe(false)
+    }
+    const at = (line: string) => lines().indexOf(line)
+    expect(at('mask swupdate.socket')).toBeLessThan(at('disable --now swupdate.service'))
+    expect(at('mask swupdate.socket')).toBeLessThan(at('mask swupdate.service'))
+    for (const unit of NEVER_TOUCHED) {
+      expect(systemctlLog()).not.toContain(unit)
+      expect(running(unit)).toBe(true)
+    }
+    expect(systemctlLog()).not.toMatch(/frankenfirmware|capybara|dac\.service|burrow|swupdate-usb/)
+  })
+
+  it('is idempotent: a second pass only checks state', () => {
+    for (const unit of ALL_UNITS) addUnit(unit, 'enabled')
+    expect(disableStock().status).toBe(0)
+    writeFileSync(join(root, 'systemctl.log'), '')
+    expect(disableStock().status).toBe(0)
+    expect(systemctlLog()).not.toMatch(/disable|mask|stop/)
+    for (const unit of ALL_UNITS) expect(unitState(unit)).toBe('masked')
+  })
+
+  it('skips units the pod does not have', () => {
+    addUnit('defibrillator.service', 'enabled')
+    writeFileSync(join(root, 'units', 'eight-kernel.service'), 'not-found')
+    const result = disableStock()
+    expect(result.status, result.stderr).toBe(0)
+    expect(systemctlLog()).toContain('mask defibrillator.service')
+    expect(systemctlLog()).not.toMatch(/(disable --now|mask|stop) (swupdate|eight-kernel)/)
+    expect(existsSync(join(root, 'units', 'swupdate.service'))).toBe(false)
+  })
+
+  it('stops units that were masked by hand but still run, without re-masking', () => {
+    addUnit('swupdate.socket', 'masked')
+    addUnit('swupdate.service', 'masked')
+    addUnit('defibrillator.service', 'masked', false)
+    expect(disableStock().status).toBe(0)
+    expect(lines()).toContain('stop swupdate.socket')
+    expect(lines()).toContain('stop swupdate.service')
+    expect(lines()).not.toContain('stop defibrillator.service')
+    expect(systemctlLog()).not.toMatch(/^(disable|mask) /m)
+  })
+
+  it('never fails the caller, even when systemctl mask fails', () => {
+    addUnit('swupdate.service', 'enabled')
+    stub(join(bin, 'systemctl'), SYSTEMCTL.replace('  mask) echo masked > "$u/$2" ;;', '  mask) exit 1 ;;'))
+    const result = disableStock('disable_stock_telemetry; echo after')
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('after')
+    expect(result.stderr).toContain('could not mask swupdate.service')
+  })
+
+  it('leaves the updater and watchdog alone when the owner allowed firmware updates', () => {
+    for (const unit of ALL_UNITS) addUnit(unit, 'enabled')
+    mkdirSync(join(root, 'etc', 'sleepypod'), { recursive: true })
+    writeFileSync(choice(), 'allow\n')
+    const result = disableStock()
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Stock firmware updates allowed by the owner')
+    for (const unit of FIRMWARE_UNITS) {
+      expect(systemctlLog()).not.toContain(unit)
+      expect(unitState(unit)).toBe('enabled')
+      expect(running(unit)).toBe(true)
+    }
+    for (const unit of ['vector.service', 'telegraf.service', 'eight-kernel.service']) expect(unitState(unit)).toBe('masked')
+  })
+
+  it.each(['block\n', 'allowed\n', 'ALLOW\n', 'allow please\n', ' allow\n', ''])('masks the updater when the saved choice is %j', (content) => {
+    addUnit('swupdate.service', 'enabled')
+    mkdirSync(join(root, 'etc', 'sleepypod'), { recursive: true })
+    writeFileSync(choice(), content)
+    expect(disableStock().status).toBe(0)
+    expect(unitState('swupdate.service')).toBe('masked')
+  })
+
+  it('install and sp-update respect the opt-in through block_stock_telemetry_from', () => {
+    const blockFrom = installScript.match(/^block_stock_telemetry_from\(\) \{[\s\S]*?\n\}\n/m)?.[0] ?? ''
+    expect(blockFrom).not.toBe('')
+    expect(updateScript).toContain(blockFrom)
+    const blockFromTree = () => spawnSync('/bin/bash', ['-eu', '-o', 'pipefail', '-c', `${blockFrom}\nblock_stock_telemetry_from "$1"`, 'bash', resolve('.')], {
+      encoding: 'utf8',
+      env: { ...env(), SLEEPYPOD_ROOT: root, VECTOR_DATA_DIR: join(root, 'none') },
+    })
+    for (const unit of ['swupdate.socket', 'swupdate.service', 'eight-kernel.service']) addUnit(unit, 'enabled')
+    mkdirSync(join(root, 'etc', 'sleepypod'), { recursive: true })
+    writeFileSync(choice(), 'allow\n')
+    expect(blockFromTree().status).toBe(0)
+    expect(unitState('swupdate.service')).toBe('enabled')
+    expect(unitState('eight-kernel.service')).toBe('masked')
+    writeFileSync(choice(), 'block\n')
+    expect(blockFromTree().status).toBe(0)
+    expect(unitState('swupdate.socket')).toBe('masked')
+    expect(unitState('swupdate.service')).toBe('masked')
+  })
+
+  it('internet-control keeps the same unit lists and order as the helpers', () => {
+    const arrays = (source: string) => [...source.matchAll(/^(STOCK_[A-Z_]+_UNITS)=\((.*)\)$/gm)].map(m => `${m[1]}=${m[2]}`)
+    expect(arrays(readFileSync(controlScript, 'utf8'))).toEqual(arrays(readFileSync(helpers, 'utf8')))
+    expect(arrays(readFileSync(helpers, 'utf8'))).toHaveLength(3)
+  })
+
+  describe('internet-control firmware-updates', () => {
+    beforeEach(() => {
+      for (const unit of ALL_UNITS) addUnit(unit, 'masked', false)
+      addUnit('swupdate-usb@sda1.service', 'enabled')
+      mkdirSync(join(root, 'etc', 'sleepypod'), { recursive: true })
+      writeFileSync(sp('dnsmasq.conf'), 'keep\n')
+    })
+
+    it('allow unmasks, enables and starts the updater and watchdog with a prominent warning, and saves the choice', () => {
+      const result = run('firmware-updates', 'allow')
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toContain('WARNING: STOCK EIGHT SLEEP FIRMWARE UPDATES ARE NOW ALLOWED')
+      expect(result.stderr).toContain('REMOVE ROOT ACCESS and UNINSTALL SLEEPYPOD')
+      expect(readFileSync(choice(), 'utf8')).toBe('allow\n')
+      for (const unit of FIRMWARE_UNITS) {
+        expect(lines()).toContain(`unmask ${unit}`)
+        expect(lines()).toContain(`enable ${unit}`)
+        expect(unitState(unit)).toBe('enabled')
+        expect(running(unit)).toBe(true)
+      }
+      const at = (line: string) => lines().indexOf(line)
+      expect(at('start swupdate.service')).toBeLessThan(at('start swupdate.socket'))
+      for (const unit of ['vector.service', 'telegraf.service', 'eight-kernel.service']) expect(unitState(unit)).toBe('masked')
+      expect(systemctlLog()).not.toContain('swupdate-usb')
+      expect(readFileSync(sp('dnsmasq.conf'), 'utf8')).toBe('keep\n')
+    })
+
+    it('block masks them again, socket first, and keeps /etc/sleepypod', () => {
+      expect(run('firmware-updates', 'allow').status).toBe(0)
+      writeFileSync(join(root, 'systemctl.log'), '')
+      const result = run('firmware-updates', 'block')
+      expect(result.status, result.stderr).toBe(0)
+      expect(readFileSync(choice(), 'utf8')).toBe('block\n')
+      for (const unit of FIRMWARE_UNITS) {
+        expect(unitState(unit)).toBe('masked')
+        expect(running(unit)).toBe(false)
+      }
+      expect(lines().indexOf('mask swupdate.socket')).toBeLessThan(lines().indexOf('mask swupdate.service'))
+      expect(readFileSync(sp('dnsmasq.conf'), 'utf8')).toBe('keep\n')
+      expect(systemctlLog()).not.toContain('swupdate-usb')
+
+      writeFileSync(join(root, 'systemctl.log'), '')
+      expect(run('firmware-updates', 'block').status).toBe(0)
+      expect(systemctlLog()).not.toMatch(/^(disable|mask|stop) /m)
+    })
+
+    it('status prints the choice and each unit, and the helpers follow the round trip', () => {
+      expect(run('firmware-updates', 'status').stdout).toContain('Firmware updates: blocked')
+      run('firmware-updates', 'allow')
+      const out = run('firmware-updates', 'status').stdout
+      expect(out).toContain('Firmware updates: allowed')
+      expect(out).toMatch(/swupdate\.service +NOT masked \(enabled, running\)/)
+      expect(out).toMatch(/eight-kernel\.service +masked\n/)
+      expect(disableStock().stdout).toContain('Stock firmware updates allowed by the owner')
+      run('firmware-updates', 'block')
+      expect(run('firmware-updates', 'status').stdout).toContain('Firmware updates: blocked')
+    })
+
+    it('rejects a missing or unknown subcommand, and extra arguments for other commands', () => {
+      expect(run('firmware-updates').status).not.toBe(0)
+      expect(run('firmware-updates', 'maybe').status).not.toBe(0)
+      expect(run('status', 'extra').status).not.toBe(0)
+      expect(existsSync(choice())).toBe(false)
+    })
+  })
+
+  it('internet-control status lists every stock service and the firmware-updates choice', () => {
+    addUnit('swupdate.socket', 'masked')
+    addUnit('swupdate.service', 'enabled')
+    addUnit('defibrillator.service', 'masked', false)
+    const out = run('status').stdout
+    expect(out).toContain('Stock services (masked by install/sp-update):')
+    expect(out).toMatch(/swupdate\.socket +masked, running\n/)
+    expect(out).toMatch(/swupdate\.service +NOT masked \(enabled, running\)\n/)
+    expect(out).toMatch(/swupdate-progress\.service +not installed\n/)
+    expect(out).toMatch(/defibrillator\.service +masked\n/)
+    expect(out).toMatch(/eight-kernel\.service +not installed\n/)
+    expect(out).toMatch(/Firmware updates: +blocked/)
+    mkdirSync(join(root, 'etc', 'sleepypod'), { recursive: true })
+    writeFileSync(choice(), 'allow\n')
+    expect(run('status').stdout).toMatch(/Firmware updates: +allowed/)
   })
 })
 

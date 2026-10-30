@@ -33,11 +33,16 @@ reboot -f
 ```
 
 After reboot, login at the serial console as `root` with the password you
-just set, disable software-update services (`swupdate`, `defibrillator`,
-`eight-kernel`, `telegraf`, `vector`, `frankenfirmware`, `dac`,
-`swupdate.socket`) via `systemctl disable --now` + `systemctl mask`, then
-join wifi with `nmcli connection add type wifi …` so the pod is reachable
-over LAN.
+just set, disable `frankenfirmware` and `dac` via `systemctl disable --now` +
+`systemctl mask`, then join wifi with `nmcli connection add type wifi …` so
+the pod is reachable over LAN. The installer, `sp-update` and the
+maintenance hook mask the stock updater and watchdog (`swupdate.socket`,
+`swupdate.service`, `swupdate-progress.service`, `defibrillator.service`,
+`eight-kernel.service`) and telemetry (`vector`, `telegraf`) themselves; if
+you mask them by hand before installing, do the socket before the service.
+Stock firmware updates stay off until you opt in with
+`sudo sp-internet-control firmware-updates allow` (see
+[Firmware updates](#firmware-updates)).
 
 A few names that trip people up on first contact:
 
@@ -208,6 +213,28 @@ sudo scripts/internet-control unblock
 - Preserves local network access
 - Keeps mDNS for local discovery
 - Connection tracking for established connections
+
+### Firmware updates
+
+Install, `sp-update` and the maintenance hook mask Eight Sleep's OTA updater
+(`swupdate.socket`, `swupdate.service`, `swupdate-progress.service`) and the
+`defibrillator` connectivity watchdog, which reboots the pod after about 5
+minutes without internet. `swupdate-usb@` (USB recovery) is never touched.
+
+**Eight Sleep firmware may remove root access and uninstall sleepypod.** A
+pod that takes such an update can't get sleepypod back. Firmware updates are
+a manual opt-in:
+
+```bash
+sudo sp-internet-control firmware-updates status  # choice + state of each stock unit
+sudo sp-internet-control firmware-updates allow   # unmask + enable the updater and watchdog
+sudo sp-internet-control firmware-updates block   # mask them again (default)
+```
+
+`allow` saves `allow` in `/etc/sleepypod/firmware-updates`, so later
+installs, updates and maintenance runs leave the updater unmasked. Any other
+content, or no file, means blocked. `sp-internet-control status` also lists the
+stock services and the choice.
 
 ## Service Management
 

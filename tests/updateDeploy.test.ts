@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, dnsFail?: boolean, realTelemetry?: boolean, controlLog?: boolean } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, dnsFail?: boolean, realTelemetry?: boolean, controlLog?: boolean, stockUnits?: boolean, firmwareAllow?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -113,7 +113,9 @@ apply_dns_blackhole() { echo "dns ${label}" >> "$TEST_LOG"; [ "$TEST_DNS_FAIL" =
   }
   expect(script).not.toMatch(/(?<!\$tree\/|\$INSTALL_DIR\/)scripts\/internet-control/)
   put(join(dir, 'update'), script)
-  put(join(bin, 'systemctl'), '#!/bin/bash\necho "systemctl $*" >> "$TEST_LOG"\n')
+  // Logs only; with stockUnits every unit the helpers ask about reports enabled.
+  put(join(bin, 'systemctl'), '#!/bin/bash\necho "systemctl $*" >> "$TEST_LOG"\n[ "$1" = is-enabled ] && [ "$TEST_STOCK_UNITS" = 1 ] && echo enabled\nexit 0\n')
+  if (options.firmwareAllow) put(join(dir, 'root/etc/sleepypod/firmware-updates'), 'allow\n')
   put(join(bin, 'df'), `#!/bin/bash
 available=900
 if [ "$2" = "$TMPDIR" ]; then available=$TEST_TEMP_SPACE; fi
@@ -154,7 +156,7 @@ exec '${tar}' "$@"
       INTERNET_CONTROL_ROOT: join(dir, 'root'), VECTOR_DATA_DIR: join(dir, 'vector'),
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
-      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_DNS_FAIL: options.dnsFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
+      TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_STOCK_UNITS: options.stockUnits ? '1' : '0', TEST_DNS_FAIL: options.dnsFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
       TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
   })
   return { result, app, dir, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
@@ -259,6 +261,21 @@ describe('sp-update staged deployment', () => {
     expect(lastDns).toBeGreaterThan(lastDownload)
     expect(lastDns).toBeLessThan(at('restore'))
     expect(lastDns).toBeLessThan(at('systemctl start sleepypod.service'))
+  })
+
+  it.each([false, true])('masks the stock updater from the new tree in one update unless the owner opted in (allow: %s)', (firmwareAllow) => {
+    const { result, log } = updater({ archive: true, realTelemetry: true, stockUnits: true, firmwareAllow })
+    expect(result.status, result.stderr).toBe(0)
+    const lines = log.split('\n')
+    const start = lines.indexOf('systemctl start sleepypod.service')
+    const mask = (unit: string) => lines.indexOf(`systemctl mask ${unit}`)
+    expect(mask('eight-kernel.service')).toBeGreaterThanOrEqual(0)
+    expect(mask('eight-kernel.service')).toBeLessThan(start)
+    for (const unit of ['swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service']) {
+      expect(mask(unit) >= 0).toBe(!firmwareAllow)
+    }
+    if (!firmwareAllow) expect(mask('swupdate.socket')).toBeLessThan(mask('swupdate.service'))
+    expect(log).not.toMatch(/swupdate-usb|frankenfirmware|capybara|burrow/)
   })
 
   it('installs the root ExecStartPre that re-applies a block saved in Settings, before starting', () => {

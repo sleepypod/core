@@ -4,6 +4,7 @@ set -euo pipefail
 usage() {
   cat << EOF
 Usage: $(basename "$0") {block|unblock|restore|hosts-unblock|dns-block|dns-unblock|status}
+       $(basename "$0") firmware-updates {allow|block|status}
 
 Control internet access for SleepyPod device.
 
@@ -15,6 +16,10 @@ Commands:
   dns-block     - Make every *.8slp.net name NXDOMAIN with a local dnsmasq (127.0.0.1)
   dns-unblock   - Remove the dnsmasq blackhole and restore /etc/resolv.conf
   status        - Show current blocking status (iptables, names, services)
+  firmware-updates allow|block|status
+                - Opt in to (or back out of) stock Eight Sleep firmware
+                  updates. Blocked by default: an update may remove root
+                  access and uninstall sleepypod.
 
 The pod uses two layers of outbound blocking:
   1. iptables: DROP all non-LAN outbound traffic (primary)
@@ -44,11 +49,12 @@ if [ "$EUID" -ne 0 ] && [ -z "$ROOT" ]; then
 fi
 
 # Check for command
-if [ $# -ne 1 ]; then
+if [ $# -ne 1 ] && ! { [ $# -eq 2 ] && [ "$1" = firmware-updates ]; }; then
   usage
 fi
 
 COMMAND="$1"
+SUBCOMMAND="${2:-}"
 
 # ---------------------------------------------------------------------------
 # Pod OS / iptables detection
@@ -581,15 +587,110 @@ saved_internet_access() {
   esac
 }
 
-# Stock telemetry units that install/sp-update mask (scripts/lib/telemetry-helpers).
+# Stock units that install/sp-update mask, in the same order as
+# scripts/lib/telemetry-helpers. This script is installed on its own as
+# /usr/local/bin/sp-internet-control, so it can't source that file.
+STOCK_TELEMETRY_UNITS=(vector.service telegraf.service)
+STOCK_FIRMWARE_UPDATE_UNITS=(swupdate.socket swupdate.service swupdate-progress.service defibrillator.service)
+STOCK_KERNEL_UNITS=(eight-kernel.service)
+# One word; only "allow" keeps install, sp-update and maintenance from
+# masking the firmware updater. /etc/sleepypod holds other files too.
+FIRMWARE_UPDATES_CHOICE="/etc/sleepypod/firmware-updates"
+
 stock_service_state() {
-  local state
+  local state active=""
   state=$(systemctl is-enabled "$1" 2>/dev/null || true)
+  if systemctl is-active --quiet "$1" >/dev/null 2>&1; then
+    active=", running"
+  fi
   case "$state" in
-    masked|masked-runtime) echo "masked" ;;
+    masked|masked-runtime) echo "masked$active" ;;
     ''|not-found) echo "not installed" ;;
-    *) echo "NOT masked ($state)" ;;
+    *) echo "NOT masked ($state$active)" ;;
   esac
+}
+
+firmware_updates_choice() {
+  local file="$ROOT$FIRMWARE_UPDATES_CHOICE"
+  if [ -f "$file" ] && [ "$(head -c 16 "$file" 2>/dev/null | head -n 1)" = allow ]; then
+    echo allowed
+  else
+    echo blocked
+  fi
+}
+
+save_firmware_updates_choice() {
+  local file="$ROOT$FIRMWARE_UPDATES_CHOICE"
+  mkdir -p "$(dirname "$file")"
+  printf '%s\n' "$1" > "$file"
+}
+
+print_stock_services() {
+  local unit
+  for unit in "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_FIRMWARE_UPDATE_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"; do
+    printf '    %-28s %s\n' "$unit" "$(stock_service_state "$unit")"
+  done
+}
+
+# Same semantics as mask_stock_units in scripts/lib/telemetry-helpers.
+mask_firmware_update_units() {
+  local unit state
+  for unit in "${STOCK_FIRMWARE_UPDATE_UNITS[@]}"; do
+    state=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+    case "$state" in
+      ''|not-found) ;;
+      masked|masked-runtime)
+        if systemctl is-active --quiet "$unit" 2>/dev/null; then
+          systemctl stop "$unit" 2>/dev/null || true
+        fi
+        ;;
+      *)
+        echo "Disabling and masking $unit..."
+        systemctl disable --now "$unit" 2>/dev/null || true
+        systemctl mask "$unit" 2>/dev/null || echo "Warning: could not mask $unit" >&2
+        ;;
+    esac
+  done
+}
+
+# Reverse order: services before the socket that activates them.
+unmask_firmware_update_units() {
+  local i unit state
+  for ((i = ${#STOCK_FIRMWARE_UPDATE_UNITS[@]} - 1; i >= 0; i--)); do
+    unit="${STOCK_FIRMWARE_UPDATE_UNITS[$i]}"
+    state=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+    case "$state" in
+      ''|not-found) continue ;;
+      masked|masked-runtime)
+        echo "Unmasking $unit..."
+        systemctl unmask "$unit" 2>/dev/null || echo "Warning: could not unmask $unit" >&2
+        ;;
+    esac
+    case "$(systemctl is-enabled "$unit" 2>/dev/null || true)" in
+      ''|not-found|static|masked|masked-runtime) ;;
+      *) systemctl enable "$unit" 2>/dev/null || echo "Warning: could not enable $unit" >&2 ;;
+    esac
+    systemctl start "$unit" 2>/dev/null || echo "Warning: could not start $unit" >&2
+  done
+}
+
+firmware_updates_warning() {
+  cat >&2 << EOF
+****************************************************************
+  WARNING: STOCK EIGHT SLEEP FIRMWARE UPDATES ARE NOW ALLOWED
+****************************************************************
+  Eight Sleep's firmware updater (swupdate) can now install an
+  update whenever the pod reaches the internet. Eight Sleep
+  firmware may REMOVE ROOT ACCESS and UNINSTALL SLEEPYPOD, and
+  a pod without root access can't get sleepypod back.
+
+  defibrillator is running again too: it reboots the pod after
+  about 5 minutes without internet, so a pod with internet
+  blocked will keep rebooting.
+
+  To undo: sudo $(basename "$0") firmware-updates block
+****************************************************************
+EOF
 }
 
 case "$COMMAND" in
@@ -824,7 +925,9 @@ case "$COMMAND" in
       echo "  dnsmasq layer:       configured but not in use ($DNS_UNIT $(systemctl is-active "$DNS_UNIT" 2>/dev/null || true); $RESOLV_CONF -> $(readlink "$ROOT$RESOLV_CONF" 2>/dev/null || echo '?'))"
     fi
 
-    echo "  Stock telemetry:     vector $(stock_service_state vector.service), telegraf $(stock_service_state telegraf.service)"
+    echo "  Stock services (masked by install/sp-update):"
+    print_stock_services
+    echo "  Firmware updates:    $(firmware_updates_choice) (sudo $(basename "$0") firmware-updates allow|block)"
 
     echo ""
 
@@ -839,6 +942,29 @@ case "$COMMAND" in
       echo "  No Eight Sleep processes detected"
     fi
     echo ""
+    ;;
+
+  firmware-updates)
+    case "$SUBCOMMAND" in
+      allow)
+        save_firmware_updates_choice allow
+        unmask_firmware_update_units
+        firmware_updates_warning
+        echo "Firmware updates: allowed (saved in $FIRMWARE_UPDATES_CHOICE; install and sp-update leave the updater unmasked)"
+        ;;
+      block)
+        save_firmware_updates_choice block
+        mask_firmware_update_units
+        echo "Firmware updates: blocked (saved in $FIRMWARE_UPDATES_CHOICE)"
+        ;;
+      status)
+        echo "Firmware updates: $(firmware_updates_choice)"
+        print_stock_services
+        ;;
+      *)
+        usage
+        ;;
+    esac
     ;;
 
   *)
