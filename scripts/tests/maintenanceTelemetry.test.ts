@@ -102,6 +102,27 @@ describe('install_maintenance_timer telemetry reconcile', () => {
     expect(readFileSync(`${hosts}.bak.sleepypod`, 'utf8')).toContain('0.0.0.0 raw-api-upload.8slp.net')
   })
 
+  it.each([['no saved choice', null], ['allow', 'allow\n']])('masks the stock updater from the new tree\'s real helpers unless the owner opted in (%s)', (_name, choice) => {
+    mkdirSync(join(installDir, 'scripts/lib'), { recursive: true })
+    copyFileSync(resolve('scripts/lib/telemetry-helpers'), join(installDir, 'scripts/lib/telemetry-helpers'))
+    stub(join(root, 'bin/systemctl'), `echo "systemctl $*" >> "$ROOT/calls.log"
+[ "$1" = is-enabled ] && echo enabled
+exit 0`)
+    if (choice !== null) {
+      mkdirSync(join(root, 'etc/sleepypod'), { recursive: true })
+      writeFileSync(join(root, 'etc/sleepypod/firmware-updates'), choice)
+    }
+    const run = runOldUpdaterStep({ SLEEPYPOD_ROOT: root, VECTOR_DATA_DIR: join(root, 'vector') })
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.stdout).toContain('update continued')
+    const log = calls()
+    expect(log).toContain('systemctl mask eight-kernel.service')
+    for (const unit of ['swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service']) {
+      expect(log.includes(`systemctl mask ${unit}`)).toBe(choice === null)
+    }
+    if (choice === null) expect(log.indexOf('systemctl mask swupdate.socket')).toBeLessThan(log.indexOf('systemctl mask swupdate.service'))
+  })
+
   it('does nothing when the tree has no telemetry helpers', () => {
     const run = runOldUpdaterStep()
     expect(run.status).toBe(0)

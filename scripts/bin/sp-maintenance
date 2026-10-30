@@ -92,6 +92,113 @@ case "${1:-}" in
   *) echo "Usage: sp-maintenance [--startup|--housekeeping]" >&2; exit 2 ;;
 esac
 
+# Stock firmware guard. Updaters v2.0–v2.8 never call install_maintenance_timer
+# and run their own tree's `internet-control hosts-block`, which writes the
+# 0.0.0.0 block that sends frank into a retry storm against the pod itself.
+# Every version since v2.0 copies the new tree's scripts/bin/sp-* into
+# /usr/local/bin and runs this as root before every start, so these repairs
+# reach any pod on its first start after an update.
+# Self-contained on purpose: this runs as root, so it never sources anything
+# from $INSTALL_DIR (the service user can write there). DNS and dnsmasq stay
+# in the update paths. Best-effort and fast: a no-op when there is nothing to
+# do, and nothing here fails sp-maintenance or waits on a unit stopping.
+# SLEEPYPOD_ROOT prefixes every path for script tests; on a pod it is empty.
+STOCK_ROOT="${SLEEPYPOD_ROOT:-}"
+STOCK_HOSTS_FILE="$STOCK_ROOT/etc/hosts"
+STOCK_HOSTS_BEGIN="# BEGIN sleepypod-telemetry-block"
+STOCK_HOSTS_END="# END sleepypod-telemetry-block"
+# Keep in sync with scripts/lib/telemetry-helpers (a test checks).
+STOCK_TELEMETRY_UNITS=(vector.service telegraf.service)
+STOCK_FIRMWARE_UPDATE_UNITS=(swupdate.socket swupdate.service swupdate-progress.service defibrillator.service)
+STOCK_KERNEL_UNITS=(eight-kernel.service)
+FIRMWARE_UPDATES_CHOICE="$STOCK_ROOT/etc/sleepypod/firmware-updates"
+
+# Same result as internet-control's remove_hosts_block: backup, then drop the
+# managed block and its trailing blank lines; refuse on malformed markers.
+remove_stock_hosts_block() {
+  local begin_count end_count begin_line end_line tmp
+  grep -Fq "sleepypod-telemetry-block" "$STOCK_HOSTS_FILE" 2>/dev/null || return 0
+  begin_count=$(grep -Fc "$STOCK_HOSTS_BEGIN" "$STOCK_HOSTS_FILE" 2>/dev/null || true)
+  end_count=$(grep -Fc "$STOCK_HOSTS_END" "$STOCK_HOSTS_FILE" 2>/dev/null || true)
+  begin_line=$(grep -Fn "$STOCK_HOSTS_BEGIN" "$STOCK_HOSTS_FILE" 2>/dev/null | head -n 1 | cut -d: -f1 || true)
+  end_line=$(grep -Fn "$STOCK_HOSTS_END" "$STOCK_HOSTS_FILE" 2>/dev/null | head -n 1 | cut -d: -f1 || true)
+  if [ "$begin_count" != 1 ] || [ "$end_count" != 1 ] || [ "$begin_line" -ge "$end_line" ]; then
+    echo "WARNING: malformed sleepypod hosts markers in /etc/hosts; left unchanged" >&2
+    return 0
+  fi
+  cp "$STOCK_HOSTS_FILE" "$STOCK_HOSTS_FILE.bak.sleepypod" || return 0
+  tmp=$(mktemp) || return 0
+  if awk -v begin="$STOCK_HOSTS_BEGIN" -v end="$STOCK_HOSTS_END" '
+    index($0, begin) { skip = 1; next }
+    skip { if (index($0, end)) skip = 0; next }
+    /^$/ { blank = blank "\n"; next }
+    { printf "%s", blank; blank = ""; print }
+  ' "$STOCK_HOSTS_FILE" > "$tmp"; then
+    # cat keeps the file's inode, owner and mode.
+    cat "$tmp" > "$STOCK_HOSTS_FILE" && echo "Removed the old Eight Sleep 0.0.0.0 block from /etc/hosts."
+  fi
+  rm -f "$tmp"
+}
+
+stock_unit_masked() {
+  local d
+  for d in /etc/systemd/system /run/systemd/system; do
+    [ "$(readlink "$STOCK_ROOT$d/$1" 2>/dev/null || true)" = /dev/null ] && return 0
+  done
+  return 1
+}
+
+stock_unit_exists() {
+  local d
+  for d in /etc/systemd/system /run/systemd/system /lib/systemd/system /usr/lib/systemd/system; do
+    { [ -e "$STOCK_ROOT$d/$1" ] || [ -L "$STOCK_ROOT$d/$1" ]; } && return 0
+  done
+  return 1
+}
+
+# Same semantics as mask_stock_units in scripts/lib/telemetry-helpers, but
+# unit state comes from the unit directories, and the masked units' run state
+# from one systemctl call, so a pod with nothing to do pays at most one.
+mask_stock_units_fast() {
+  local unit state i=0 states
+  local masked=() pending=()
+  for unit in "$@"; do
+    if stock_unit_masked "$unit"; then
+      masked+=("$unit")
+    elif stock_unit_exists "$unit"; then
+      pending+=("$unit")
+    fi
+  done
+  for unit in ${pending[@]+"${pending[@]}"}; do
+    echo "Disabling and masking stock service $unit..."
+    systemctl disable --now --no-block "$unit" >/dev/null 2>&1 || true
+    systemctl mask "$unit" >/dev/null 2>&1 || echo "WARNING: could not mask $unit" >&2
+  done
+  [ "${#masked[@]}" -gt 0 ] || return 0
+  # is-active prints one state per unit, in order.
+  states=$(systemctl is-active "${masked[@]}" 2>/dev/null || true)
+  while IFS= read -r state; do
+    unit="${masked[$i]:-}"
+    i=$((i + 1))
+    case "$state" in
+      active|activating|reloading)
+        [ -n "$unit" ] && { systemctl stop --no-block "$unit" >/dev/null 2>&1 || true; }
+        ;;
+    esac
+  done <<< "$states"
+  return 0
+}
+
+guard_stock_firmware() {
+  remove_stock_hosts_block || true
+  if [ -f "$FIRMWARE_UPDATES_CHOICE" ] && [ "$(head -c 16 "$FIRMWARE_UPDATES_CHOICE" 2>/dev/null | head -n 1)" = allow ]; then
+    mask_stock_units_fast "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"
+  else
+    mask_stock_units_fast "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_FIRMWARE_UPDATE_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"
+  fi
+}
+( guard_stock_firmware ) || echo "WARNING: stock firmware guard failed (continuing)" >&2
+
 # 5. Self-heal /persistent/deviceinfo perms so next-server can unlink
 # stale dac.sock on startup. Older installs created the dir with mkdir's
 # default umask (root:root 0755), which denies write to the sleepypod user
