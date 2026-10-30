@@ -7,4 +7,20 @@ install_maintenance_timer() {
   done
   systemctl daemon-reload
   systemctl enable --now sleepypod-maintenance.timer
+  reconcile_stock_telemetry
+}
+
+# Updaters from before scripts/lib/telemetry-helpers (v3.5.0 and older) source
+# this file from the new tree after every download but never call the
+# telemetry blocking, so without this a pod needed a second update to get it.
+# Idempotent, so newer updaters that also call it directly are unaffected.
+# Runs in a subshell: nothing here may abort the caller's update.
+reconcile_stock_telemetry() {
+  [ -f "$INSTALL_DIR/scripts/lib/telemetry-helpers" ] || return 0
+  (
+    source "$INSTALL_DIR/scripts/lib/telemetry-helpers"
+    block_stock_telemetry "$INSTALL_DIR"
+    apply_dns_blackhole "$INSTALL_DIR"
+  ) || echo "Warning: Eight Sleep telemetry blocking failed (continuing)" >&2
+  return 0
 }
