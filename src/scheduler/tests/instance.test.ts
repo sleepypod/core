@@ -10,6 +10,8 @@
  * jobManager.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { beforeControlWrite, withinControlRequest } from '@/src/controls/context'
+import { testScope } from '@/src/controls/tests/fixtures'
 
 // Reset both the mocks and cross-bundle singleton between tests.
 const loadSchedulesMock = vi.fn(async () => {})
@@ -109,6 +111,22 @@ describe('scheduler/instance', () => {
     expect((m as any).timezone).toBe('America/Los_Angeles')
     expect(loadSchedulesMock).toHaveBeenCalledTimes(1)
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('does not attach scheduled jobs to the control request that initializes the manager', async () => {
+    const mod = await freshModule()
+    const gate = Promise.withResolvers<undefined>()
+    let scheduled!: Promise<void>
+    loadSchedulesMock.mockImplementationOnce(async () => {
+      scheduled = gate.promise.then(() => {
+        beforeControlWrite()
+      })
+    })
+    const scope = testScope()
+    await withinControlRequest(scope, () => mod.getJobManager())
+    gate.resolve(undefined)
+    await expect(scheduled).resolves.toBeUndefined()
+    expect(scope.beforeDispatch).not.toHaveBeenCalled()
   })
 
   it('uses the timezone stored in device_settings when present', async () => {

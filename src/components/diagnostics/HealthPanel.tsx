@@ -106,11 +106,15 @@ function FixAction({ fix, onJump }: { fix: Fix, onJump: (s: DiagSection) => void
   const lang = langFromPath(usePathname())
   const router = useRouter()
   const utils = trpc.useUtils()
+  const [restartNeedsReconnect, setRestartNeedsReconnect] = useState(false)
   const restart = trpc.health.restartService.useMutation({
-    onSuccess: () => {
+    retry: false,
+    onSuccess: (result) => {
+      setRestartNeedsReconnect(result.ok)
       // Give the module a moment to write before re-checking.
-      setTimeout(() => void utils.health.dataPath.invalidate(), 5000)
+      if (result.ok) setTimeout(() => void utils.health.dataPath.invalidate(), 5000)
     },
+    onError: () => setRestartNeedsReconnect(true),
   })
   const openLogs = (unit: string) => router.push(`/${lang}/system?tab=logs&unit=${encodeURIComponent(unit)}`)
 
@@ -132,13 +136,21 @@ function FixAction({ fix, onJump }: { fix: Fix, onJump: (s: DiagSection) => void
     <div className="flex flex-col items-end gap-1.5">
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" icon={ScrollText} onClick={() => openLogs(fix.unit)}>Logs</Button>
-        <Button variant="primary" icon={RotateCw} disabled={restart.isPending} onClick={() => restart.mutate({ unit: fix.unit })}>
-          {restart.isPending ? 'Restarting…' : fix.label}
+        <Button
+          variant="primary"
+          icon={RotateCw}
+          disabled={restart.isPending || restartNeedsReconnect}
+          onClick={() => {
+            if (!restart.isPending && !restartNeedsReconnect) restart.mutate({ unit: fix.unit })
+          }}
+        >
+          {restart.isPending ? 'Requesting restart…' : fix.label}
         </Button>
+        {restartNeedsReconnect && <Button onClick={() => window.location.reload()}>Reconnect</Button>}
       </div>
       {restart.data && (
         <span className={cn('max-w-[420px] text-right text-xs', restart.data.ok ? 'text-ok' : 'font-mono text-warn')}>
-          {restart.data.ok ? 'Restarted. Checking again in a few seconds…' : restart.data.message}
+          {restart.data.message}
         </span>
       )}
       {restart.error && <InlineError className="text-xs">{restart.error.message}</InlineError>}

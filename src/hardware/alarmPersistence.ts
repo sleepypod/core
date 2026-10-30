@@ -18,6 +18,12 @@ export interface AlarmConfig {
   vibrationPattern: 'double' | 'rise'
   /** Vibration length in seconds. */
   duration: number
+  /** Snooze length in seconds set on the alarm; callers fall back without it. */
+  snoozeDuration?: number
+  /** Snooze taper: percent each later snooze is shorter (0 = off). */
+  snoozeTaper?: number
+  /** Snoozes already taken for this alarm occurrence. */
+  snoozeCount?: number
 }
 
 export interface TimedAlarm {
@@ -46,7 +52,7 @@ function empty(): PersistedAlarmState {
 
 function isTimedAlarm(v: unknown): v is TimedAlarm {
   const t = v as TimedAlarm | null
-  return !!t && typeof t.until === 'number' && !!t.config
+  return !!t && typeof t.until === 'number' && Number.isFinite(t.until) && Math.abs(t.until) <= 8_640_000_000_000_000 && !!t.config
     && typeof t.config.vibrationIntensity === 'number'
     && (t.config.vibrationPattern === 'double' || t.config.vibrationPattern === 'rise')
     && typeof t.config.duration === 'number'

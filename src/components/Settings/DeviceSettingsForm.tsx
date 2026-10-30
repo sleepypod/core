@@ -128,7 +128,14 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
     if (savedTimer.current) clearTimeout(savedTimer.current)
   }, [])
 
-  const rebootMutation = trpc.system.triggerUpdate.useMutation()
+  const [restartNeedsReconnect, setRestartNeedsReconnect] = useState(false)
+  const restartMutation = trpc.health.restartService.useMutation({
+    retry: false,
+    onSuccess: (result) => {
+      if (result.ok) setRestartNeedsReconnect(true)
+    },
+    onError: () => setRestartNeedsReconnect(true),
+  })
 
   const isPending = mutation.isPending
 
@@ -298,8 +305,9 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
   }
 
   function handleRestart() {
+    if (restartMutation.isPending || restartNeedsReconnect) return
     if (confirm('Restart the sleepypod service? The pod will be briefly unavailable.')) {
-      rebootMutation.mutate({})
+      restartMutation.mutate({ unit: 'sleepypod.service' })
     }
   }
 
@@ -449,14 +457,15 @@ export function DeviceSettingsForm({ device }: { device: DeviceSettings }) {
         <Button icon={Wifi} onClick={() => window.location.reload()}>
           Reconnect
         </Button>
-        <Button variant="danger" icon={RotateCcw} onClick={handleRestart} disabled={rebootMutation.isPending}>
-          {rebootMutation.isPending ? 'Restarting…' : 'Restart service'}
+        <Button variant="danger" icon={RotateCcw} onClick={handleRestart} disabled={restartMutation.isPending || restartNeedsReconnect}>
+          {restartMutation.isPending ? 'Requesting restart…' : 'Restart service'}
         </Button>
       </div>
-      {rebootMutation.isSuccess && (
-        <p className="text-xs text-ok">Service restarting — reconnecting…</p>
+      {restartMutation.data?.ok && (
+        <p className="text-xs text-ok" role="status">{restartMutation.data.message}</p>
       )}
-      {rebootMutation.error && <InlineError>{rebootMutation.error.message}</InlineError>}
+      {restartMutation.data?.ok === false && <InlineError>{restartMutation.data.message}</InlineError>}
+      {restartMutation.error && <InlineError>Restart could not be confirmed. Reconnect to check the service before trying again.</InlineError>}
     </>
   )
 

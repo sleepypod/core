@@ -1,11 +1,10 @@
 import { buildTimeline } from '@/src/components/Schedule/CurveChart'
 import { nightSetPoints, type TempRow } from '@/src/components/Schedule/bothNight'
 import { tonightWindow } from '@/src/components/diagnostics/dashboardLogic'
-import { DAYS_OF_WEEK } from '@/src/lib/scheduleTime'
+import { DAYS_OF_WEEK, hhmmToMinutes } from '@/src/lib/scheduleTime'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
-const HALF_DAY_MIN = 12 * 60
 /** Gaps shorter than this between a schedule edge and presence aren't worth a label. */
 const MISMATCH_MIN_MS = 15 * MINUTE
 
@@ -22,7 +21,16 @@ export interface TimelineWindow {
 }
 
 export interface Interval { start: number, end: number }
-export interface CurvePoint { at: number, temperature: number }
+export interface CurvePoint { at: number, temperature: number, boundary?: true }
+export interface PowerCurveRow {
+  dayOfWeek: string
+  onTime: string
+  offTime: string
+  offDayOffset?: number
+  endAction?: string
+  onTemperature: number
+  enabled: boolean
+}
 
 /**
  * 6 PM the evening before last night → 9 AM after tonight. "Tonight" flips at
@@ -39,17 +47,44 @@ export function timelineWindow(now: Date): TimelineWindow {
   }
 }
 
-/**
- * A night's set points on absolute time. A curve saved entirely before noon
- * belongs to the morning after `midnight` (same rule as the Scheduler lanes).
- */
-export function nightCurve(temps: TempRow[] | undefined, midnight: Date): CurvePoint[] {
+/** Project actual calendar rows onto one displayed night without changing their weekdays. */
+export function nightCurve(temps: TempRow[] | undefined, midnight: Date, powers?: PowerCurveRow[]): CurvePoint[] {
   const tl = buildTimeline(nightSetPoints(temps, DAYS_OF_WEEK[midnight.getDay()]))
-  const shift = tl.length > 0 && tl[tl.length - 1].minutes < HALF_DAY_MIN ? 24 * 60 : 0
-  return tl.map(p => ({
-    at: new Date(midnight.getFullYear(), midnight.getMonth(), midnight.getDate(), 0, p.minutes + shift).getTime(),
-    temperature: p.temperature,
-  }))
+  const points = tl.flatMap((point) => {
+    const at = new Date(midnight.getFullYear(), midnight.getMonth(), midnight.getDate(), 0, point.minutes)
+    // Match cron's midnight-gap exception; ordinary spring gaps shift forward.
+    if (Math.floor(point.minutes / 60) % 24 === 0 && at.getHours() !== 0) return []
+    return [{ at: at.getTime(), temperature: point.temperature }]
+  })
+  // A bounded power routine supplies the initial target even with no later phases.
+  // Keep legacy calendar-only curves intact when no unambiguous window exists.
+  const starts = (powers ?? []).filter(row => row.enabled).flatMap((row) => {
+    const morning = hhmmToMinutes(row.onTime) < 12 * 60
+    const dayOffset = Number(morning)
+    const day = DAYS_OF_WEEK[(midnight.getDay() + dayOffset) % 7]
+    if (row.dayOfWeek !== day) return []
+    return [{ row, dayOffset }]
+  })
+  if (starts.length !== 1) return points
+  const { row, dayOffset } = starts[0]
+  if (row.endAction === 'maintain') return points
+  const localTime = (time: string, offset: number): number | null => {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null
+    const minutes = hhmmToMinutes(time)
+    const instant = new Date(midnight.getFullYear(), midnight.getMonth(), midnight.getDate() + offset, 0, minutes)
+    return minutes < 60 && instant.getHours() !== 0 ? null : instant.getTime()
+  }
+  const start = localTime(row.onTime, dayOffset)
+  const end = localTime(row.offTime, dayOffset + (row.offDayOffset ?? 0))
+  // Never turn a legacy calendar OFF into a guessed next-morning OFF.
+  if (start === null || end === null || end <= start || end - start > 26 * HOUR
+    || !Number.isFinite(row.onTemperature)) return points
+  const phases = points.filter(point => point.at > start && point.at < end)
+  return [
+    { at: start, temperature: row.onTemperature },
+    ...phases,
+    { at: end, temperature: phases.at(-1)?.temperature ?? row.onTemperature, boundary: true },
+  ]
 }
 
 export interface SleepRecordLike {
@@ -129,7 +164,7 @@ export function nightMismatch(curve: CurvePoint[], presence: Interval[]): NightM
 /** The set point held at `t` by whichever curve covers it, or null when none does. */
 export function targetAt(curves: CurvePoint[][], t: number): number | null {
   for (const c of curves) {
-    if (c.length === 0 || t < c[0].at || t > c[c.length - 1].at) continue
+    if (c.length === 0 || t < c[0].at || t > c[c.length - 1].at || (t === c[c.length - 1].at && c[c.length - 1].boundary)) continue
     let held = c[0].temperature
     for (const p of c) if (p.at <= t) held = p.temperature
     return held
@@ -140,7 +175,7 @@ export function targetAt(curves: CurvePoint[][], t: number): number | null {
 /** The first set point after `now` across the given curves. */
 export function nextPoint(curves: CurvePoint[][], now: number): CurvePoint | null {
   let best: CurvePoint | null = null
-  for (const c of curves) for (const p of c) if (p.at > now && (!best || p.at < best.at)) best = p
+  for (const c of curves) for (const p of c) if (!p.boundary && p.at > now && (!best || p.at < best.at)) best = p
   return best
 }
 

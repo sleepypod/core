@@ -7,6 +7,7 @@
 
 import type { DayOfWeek, Expr } from './types'
 import type { WindowStore } from './windows'
+import { finiteSignal } from './signalValidity'
 
 export interface EvalContext {
   /** Resolve a scalar signal key (e.g. `left.currentTemperature`) to a number. */
@@ -32,37 +33,39 @@ export function clamp(value: number, min: number | undefined, max: number | unde
 export function evaluateExpr(expr: Expr, ctx: EvalContext): number | undefined {
   switch (expr.kind) {
     case 'literal':
-      return expr.value
+      return finiteSignal(expr.value)
 
     case 'signal':
-      return ctx.signal(expr.signal)
+      return finiteSignal(ctx.signal(expr.signal))
 
     case 'window':
-      return ctx.windows.aggregate(expr.fn, expr.signal, expr.lastMin, ctx.nowMs)
+      // History cannot keep a dependent rule active after its source disappears.
+      if (finiteSignal(ctx.signal(expr.signal)) === undefined) return undefined
+      return finiteSignal(ctx.windows.aggregate(expr.fn, expr.signal, expr.lastMin, ctx.nowMs))
 
     case 'binary': {
-      const l = evaluateExpr(expr.left, ctx)
-      const r = evaluateExpr(expr.right, ctx)
-      if (l === undefined || r === undefined) return undefined
+      const left = evaluateExpr(expr.left, ctx)
+      const right = evaluateExpr(expr.right, ctx)
+      if (left === undefined || right === undefined) return undefined
       switch (expr.op) {
         case '+':
-          return l + r
+          return finiteSignal(left + right)
         case '-':
-          return l - r
+          return finiteSignal(left - right)
         case '*':
-          return l * r
+          return finiteSignal(left * right)
         case '/':
-          return r === 0 ? undefined : l / r
+          return right === 0 ? undefined : finiteSignal(left / right)
       }
       return undefined
     }
 
     case 'clamp': {
-      const v = evaluateExpr(expr.value, ctx)
-      if (v === undefined) return undefined
-      const lo = evaluateExpr(expr.min, ctx)
-      const hi = evaluateExpr(expr.max, ctx)
-      return clamp(v, lo, hi)
+      const value = evaluateExpr(expr.value, ctx)
+      const lower = evaluateExpr(expr.min, ctx)
+      const upper = evaluateExpr(expr.max, ctx)
+      if (value === undefined || lower === undefined || upper === undefined || lower > upper) return undefined
+      return clamp(value, lower, upper)
     }
   }
 }

@@ -106,11 +106,43 @@ describe('evaluateExpr', () => {
     expect(evaluateExpr(expr, c)).toBeUndefined()
   })
 
+  it.each(['avg', 'min', 'max', 'sum', 'count'] as const)('withholds historical %s when the current source disappears', (fn) => {
+    const windows = new WindowStore()
+    windows.record('room', 80, 0)
+    const expression: Expr = { kind: 'window', fn, signal: 'room', lastMin: 10 }
+    expect(evaluateExpr(expression, ctx({}, windows))).toBeUndefined()
+    expect(evaluateExpr(expression, ctx({ room: NaN }, windows))).toBeUndefined()
+    expect(evaluateExpr(expression, ctx({ room: 80 }, windows))).toBe(fn === 'count' ? 1 : 80)
+  })
+
+  it.each([NaN, Infinity, -Infinity])('treats non-finite literals and signals (%s) as missing', (value) => {
+    expect(evaluateExpr({ kind: 'literal', value }, ctx({}))).toBeUndefined()
+    expect(evaluateExpr({ kind: 'signal', signal: 'room' }, ctx({ room: value }))).toBeUndefined()
+  })
+
+  it('withholds overflowing arithmetic and a missing or inverted clamp bound', () => {
+    const overflow: Expr = { kind: 'binary', op: '*', left: { kind: 'literal', value: 1e308 }, right: { kind: 'literal', value: 2 } }
+    expect(evaluateExpr(overflow, ctx({}))).toBeUndefined()
+    const bounded: Expr = { kind: 'clamp', value: { kind: 'literal', value: 72 }, min: { kind: 'signal', signal: 'minimum' }, max: { kind: 'signal', signal: 'maximum' } }
+    expect(evaluateExpr(bounded, ctx({ minimum: 70 }))).toBeUndefined()
+    expect(evaluateExpr(bounded, ctx({ maximum: 90 }))).toBeUndefined()
+    expect(evaluateExpr(bounded, ctx({ minimum: 90, maximum: 70 }))).toBeUndefined()
+    expect(evaluateExpr(bounded, ctx({ minimum: 70, maximum: 90 }))).toBe(72)
+  })
+
+  it('invalid samples cannot poison later valid window aggregates', () => {
+    const windows = new WindowStore()
+    windows.record('room', Infinity, 0)
+    windows.record('room', 80, NaN)
+    windows.record('room', 70, 0)
+    expect(evaluateExpr({ kind: 'window', fn: 'avg', signal: 'room', lastMin: 10 }, ctx({ room: 70 }, windows))).toBe(70)
+  })
+
   it('reads windowed aggregates from the store', () => {
     const windows = new WindowStore()
     windows.record('left.movement', 300, 0)
     windows.record('left.movement', 100, 0)
-    const c = { ...ctx({}, windows), nowMs: 0 }
+    const c = { ...ctx({ 'left.movement': 100 }, windows), nowMs: 0 }
     expect(evaluateExpr({ kind: 'window', fn: 'avg', signal: 'left.movement', lastMin: 10 }, c)).toBe(200)
   })
 })

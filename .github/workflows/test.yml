@@ -29,7 +29,9 @@ jobs:
           - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${BASE_REF#refs/heads/}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs -d '\\n' pnpm eslint --; else echo 'No TS/TSX files changed'; fi" }
           - { name: "Typecheck", cmd: "pnpm tsc" }
           - { name: "Unit Tests", cmd: "pnpm test run --coverage --passWithNoTests" }
-          - { name: "Browser Tests", cmd: "NODE_ENV=production CI=1 pnpm build && pnpm test:browser" }
+          # Build workers must not open the same on-disk SQLite file. The browser
+          # runner creates and migrates its own isolated databases after the build.
+          - { name: "Browser Tests", cmd: "NODE_ENV=production CI=1 DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: pnpm build && pnpm test:browser" }
 
     steps:
       - name: Checkout
@@ -88,6 +90,22 @@ jobs:
           NODE_ENV: test
           # A PR carries base.ref; a merge-group run carries refs/heads/<base>.
           BASE_REF: ${{ github.event.pull_request.base.ref || github.event.merge_group.base_ref }}
+
+      - name: Verify offline Free Sleep migration
+        if: matrix.task.name == 'Unit Tests'
+        run: uv run --project scripts/migration --frozen python -m unittest discover -s scripts/migration -p 'test_*.py' -v
+
+      - name: Verify offline deployment packaging
+        if: matrix.task.name == 'Unit Tests'
+        run: |
+          python3 -m unittest discover -s scripts/deployment -p 'test_*.py' -v
+          python3 -m unittest discover -s scripts/bedroom -p 'test_*.py' -v
+          node --test scripts/bedroom/*.test.mjs
+
+      - name: Verify isolated IPv4 and IPv6 failure and recovery
+        if: matrix.task.name == 'Unit Tests'
+        timeout-minutes: 2
+        run: sudo env SLEEPYPOD_NETWORK_NAMESPACE_TEST=1 python3 -m unittest discover -s scripts/deployment -p 'test_network_trial_netns.py' -v
 
       - name: Upload coverage reports to Codecov
         if: github.repository == 'sleepypod/core' && matrix.task.name == 'Unit Tests' && !cancelled()

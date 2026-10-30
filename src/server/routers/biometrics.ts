@@ -1,10 +1,12 @@
 import { summaryProvenanceFields, summaryProvenanceSchema, summarizeVitalProvenance } from '@/src/biometrics/profiles/vital-summary-provenance'
 import { vitalProvenance, vitalProvenanceSchema } from '@/src/biometrics/profiles/vital-provenance'
 import { z } from 'zod'
+import { stageNight, stagedBySchema, type StagedBy } from '@/src/biometrics/stage-night'
+import { loadActiveStageModel } from '@/src/biometrics/stage-model-store'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
-import { sleepRecords, vitals, movement, referenceStages, referenceVitals, biometricProcessingRuns } from '@/src/db/biometrics-schema'
+import { sleepRecords, vitals, movement, referenceStages, referenceVitals, referenceSamples, biometricProcessingRuns } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
@@ -12,7 +14,6 @@ import { listRawFiles } from './raw'
 import { loadStageView, loadStageInputs } from './sleepStages'
 import { stageViewSchema, type StageView } from '@/src/biometrics/profiles/stage-view'
 import {
-  classifySleepStages,
   mergeIntoBlocks,
   calculateDistribution,
   calculateQualityScore,
@@ -76,6 +77,9 @@ function batchOverlaps(segments: StageSegment[]): string[] {
   }
   return conflicts
 }
+
+/** Plausible Apple Watch values per reference_samples metric, in breaths/min and ms. */
+export const REFERENCE_SAMPLE_RANGE = { breathing_rate: [4, 60], hrv_sdnn: [1, 500] } as const
 
 /**
  * Biometrics router - query sleep and health data collected by Pod sensors.
@@ -1160,11 +1164,82 @@ export const biometricsRouter = router({
     }),
 
   /**
+   * Import externally measured breathing rate (breaths/min) or HRV SDNN (ms)
+   * samples, one metric per call (Apple Watch via a Health export). Stored in
+   * `reference_samples`, never in `vitals`, under the same first-write-wins
+   * rule as importReferenceVitals (unique on side, metric, timestamp, source).
+   */
+  importReferenceSamples: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/biometrics/reference-samples', protect: false, tags: ['Biometrics'] } })
+    .input(
+      z.object({
+        side: sideSchema,
+        source: z.enum(['apple_watch']),
+        metric: z.enum(['breathing_rate', 'hrv_sdnn']),
+        samples: z.array(
+          z.object({
+            // Unix seconds in 2001..2100, as importReferenceVitals.
+            timestamp: z.number().int().min(1_000_000_000).max(4_102_444_800),
+            value: z.number().finite(),
+          }).strict()
+        ).min(1).max(2000),
+      }).strict().superRefine((input, ctx) => {
+        const [lo, hi] = REFERENCE_SAMPLE_RANGE[input.metric]
+        const index = input.samples.findIndex(s => s.value < lo || s.value > hi)
+        if (index >= 0) ctx.addIssue({ code: 'custom', path: ['samples', index, 'value'], message: `${input.metric} must be within ${lo}..${hi}` })
+      })
+    )
+    .output(z.object({ written: z.number() }))
+    .mutation(async ({ input }) => {
+      try {
+        const rows = input.samples.map(s => ({
+          side: input.side,
+          source: input.source,
+          metric: input.metric,
+          timestamp: new Date(s.timestamp * 1000),
+          value: s.value,
+        }))
+        const inserted = biometricsDb.transaction((tx) => {
+          const accepted = tx.insert(referenceSamples).values(rows).onConflictDoNothing().returning().all()
+          recordLegacyReferenceImport(biometricsDb, 'samples', accepted)
+          return accepted
+        })
+        return { written: inserted.length }
+      }
+      catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to import reference samples: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+
+  /**
    * Reference heart-rate samples for a side in [startDate, endDate]
    * (inclusive), oldest first. When the window holds more than `limit`
    * samples the newest survive (like getVitals), so the latest night is
    * never the one that goes missing.
    */
+  getReferenceSamples: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/reference-samples', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({ side: sideSchema, startDate: z.date(), endDate: z.date(),
+      metric: z.enum(['breathing_rate', 'hrv_sdnn']),
+      limit: z.number().int().min(1).max(20000).default(5000),
+    }).strict())
+    .output(z.array(z.object({ timestamp: z.date(), value: z.number() })))
+    .query(async ({ input }) => {
+      if (!validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+      }
+      const rows = await biometricsDb.select({ timestamp: referenceSamples.timestamp, value: referenceSamples.value })
+        .from(referenceSamples)
+        .where(and(eq(referenceSamples.side, input.side), eq(referenceSamples.metric, input.metric),
+          gte(referenceSamples.timestamp, input.startDate), lte(referenceSamples.timestamp, input.endDate)))
+        .orderBy(desc(referenceSamples.timestamp)).limit(input.limit)
+      return rows.reverse()
+    }),
+
   getReferenceVitals: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/reference-vitals', protect: false, tags: ['Biometrics'] } })
     .output(z.array(z.object({
@@ -1394,11 +1469,12 @@ export const biometricsRouter = router({
       qualityScore: z.number(),
       totalSleepMs: z.number(),
       stageView: stageViewSchema.optional(),
+      stagedBy: stagedBySchema.optional(),
       sleepRecordId: z.number().nullable(),
       enteredBedAt: z.number().nullable(),
       leftBedAt: z.number().nullable(),
     }))
-    .query(async ({ input }): Promise<SleepStagesResult & { stageView?: StageView }> => {
+    .query(async ({ input }): Promise<SleepStagesResult & { stageView?: StageView, stagedBy?: StagedBy }> => {
       try {
         // Reject ambiguous requests: if sleepRecordId is provided alongside date range, error out
         if (input.sleepRecordId && (input.startDate || input.endDate)) {
@@ -1537,12 +1613,14 @@ export const biometricsRouter = router({
         const stageView = loadStageView(input.side)
         const classifier = stageView.classifier
 
-        // Classify stages
-        const epochs = classifySleepStages(vitalsData, movementData, calibrationQuality, classifier.ruleset)
+        // Model features and fallback rules use only the profile delivered to the consumer.
+        const { epochs, stagedBy } = stageNight(vitalsData, movementData, calibrationQuality, classifier.ruleset,
+          loadActiveStageModel(input.side), { start: windowStart, end: windowEnd })
 
         if (epochs.length === 0) {
           return {
             stageView,
+            stagedBy,
             epochs: [],
             blocks: [],
             distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
@@ -1561,6 +1639,7 @@ export const biometricsRouter = router({
 
         return {
           stageView,
+          stagedBy,
           epochs,
           blocks,
           distribution,

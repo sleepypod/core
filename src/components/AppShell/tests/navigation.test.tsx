@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppShell } from '../AppShell'
 import { Sidebar } from '../Sidebar'
 import { TabBar } from '../TabBar'
+import { MobileToolbar } from '../MobileToolbar'
 import { activeNavId, langFromPath, pathWithoutLang } from '../navItems'
 
 const state = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ vi.mock('next/navigation', () => ({ usePathname: () => state.path, useSearchPara
 vi.mock('@/src/hooks/useScheduleActive', () => ({ useScheduleActive: () => ({ isActive: state.active }) }))
 vi.mock('@/src/hooks/useSwipeNavigation', () => ({ useSwipeNavigation: () => ({ onTouchStart: state.start, onTouchEnd: state.end }) }))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => 29000000 }))
+vi.mock('../NotificationInbox', () => ({ NotificationInbox: () => <button>Alerts</button> }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   base: { getAvailability: { useQuery: () => ({ data: state.base }) } },
   device: { getStatus: { useQuery: () => ({ data: state.status }) } },
@@ -51,22 +53,23 @@ describe('responsive navigation', () => {
     expect(link.getAttribute('aria-current')).toBe('page')
     expect(screen.getByRole('link', { name: 'Docs' }).getAttribute('rel')).toBe('noopener noreferrer')
   })
-  it.each([Sidebar, TabBar])('only includes Base after a configured base is detected', (Navigation) => {
-    state.path = '/fr/base'
-    const { rerender } = render(<Navigation />)
-    expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
-    expect(screen.getByRole('link', { name: /^temp$/i }).getAttribute('aria-current')).toBeNull()
-    state.base = { configured: false }
-    rerender(<Navigation />)
-    expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
+  it('keeps the three phone destinations stable as base availability changes', () => {
+    state.path = '/fr/schedule'
+    const { rerender } = render(<TabBar />)
+    for (const name of ['Temp', 'Schedule', 'Sleep']) expect(screen.getByRole('link', { name })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Schedule' }).getAttribute('aria-current')).toBe('page')
     state.base = { configured: true }
-    rerender(<Navigation />)
-    const link = screen.getByRole('link', { name: /^base$/i })
-    expect(link.getAttribute('href')).toBe('/fr/base')
-    expect(link.getAttribute('aria-current')).toBe('page')
-    state.base = { configured: false }
-    rerender(<Navigation />)
-    expect(screen.queryByRole('link', { name: /^base$/i })).toBeNull()
+    rerender(<TabBar />)
+    expect(screen.getAllByRole('link')).toHaveLength(3)
+  })
+  it('makes desktop secondary routes direct and only shows a configured base', () => {
+    state.path = '/en/base'
+    const { rerender } = render(<Sidebar />)
+    expect(screen.queryByRole('link', { name: 'Base' })).toBeNull()
+    state.base = { configured: true }
+    rerender(<Sidebar />)
+    expect(screen.getByRole('link', { name: 'Base' }).getAttribute('aria-current')).toBe('page')
+    for (const name of ['Schedule', 'Autopilot', 'Home', 'System', 'Settings']) expect(screen.getByRole('link', { name })).toBeTruthy()
   })
   it('shows pod model and every issue in full, with build info behind the DEV chip', () => {
     Object.assign(state, { path: '/en/system', status: { podVersion: 'J00' }, water: { level: 'low' }, version: { commitHash: 'abcdef1234', branch: 'feat/ui-redesign' } })
@@ -104,23 +107,22 @@ describe('responsive navigation', () => {
   it('links phone tabs in the current language and highlights legacy routes', () => {
     state.path = '/fr/data'
     const { rerender } = render(<TabBar />)
-    expect(screen.getByRole('link', { name: 'SLEEP' }).getAttribute('aria-current')).toBe('page')
-    expect(screen.getByRole('link', { name: 'TEMP' }).getAttribute('href')).toBe('/fr')
+    expect(screen.getByRole('link', { name: 'Sleep' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Temp' }).getAttribute('href')).toBe('/fr')
     state.active = false
     rerender(<TabBar />)
-    expect(screen.getAllByRole('link')).toHaveLength(6)
+    expect(screen.getAllByRole('link')).toHaveLength(3)
   })
-  it('puts the pod health dot on the phone System tab', () => {
-    const { rerender } = render(<TabBar />)
-    // No dot until the first health read.
+  it('keeps phone settings reachable and announces a health warning', () => {
+    state.path = '/fr/schedule'
+    const { rerender } = render(<MobileToolbar />)
+    expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/fr/settings')
     expect(screen.queryByTestId('system-health-dot')).toBeNull()
     state.health = { status: 'ok', database: { status: 'ok' }, scheduler: {}, iptables: { ok: true } }
-    rerender(<TabBar />)
-    expect(screen.getByTestId('system-health-dot').getAttribute('data-tone')).toBe('ok')
     state.water = { level: 'low' }
-    rerender(<TabBar />)
-    expect(screen.getByTestId('system-health-dot').getAttribute('data-tone')).toBe('warn')
-    expect(screen.getByRole('link', { name: /SYSTEM, 1 issue/ })).toBeTruthy()
+    rerender(<MobileToolbar />)
+    expect(screen.getByTestId('system-health-dot')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Settings, 1 issue' })).toBeTruthy()
   })
   it('renders page content and forwards swipe gestures', () => {
     render(<AppShell><h1>Temperature</h1></AppShell>)

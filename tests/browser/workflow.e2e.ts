@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './ownerTest'
 import Database from 'better-sqlite3'
 
 const fixture = async (action: 'replay' | 'adopt') => {

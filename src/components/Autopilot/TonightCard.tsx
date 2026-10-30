@@ -75,8 +75,8 @@ export function TonightCard({ rules, tonight, fires, unit }: {
   const pct = (t: number) => ((Math.min(Math.max(t, start), end) - start) / (end - start)) * 100
   const fmt = (f: number) => formatSetpointF(f, unit, { includeUnit: false })
   const curves: Record<Side, CurvePoint[]> = {
-    left: nightCurve(left.data?.temperature, win.midnight),
-    right: nightCurve(right.data?.temperature, win.midnight),
+    left: nightCurve(left.data?.temperature, win.midnight, left.data?.power),
+    right: nightCurve(right.data?.temperature, win.midnight, right.data?.power),
   }
   const ticks: number[] = []
   for (let t = start; t <= end; t += 3 * HOUR) ticks.push(t)
@@ -119,6 +119,7 @@ export function TonightCard({ rules, tonight, fires, unit }: {
         </div>
       </div>
 
+      <p className="text-xs text-fg-2">SCHED shows the base temperature plan. Wake warming and active overrides can take priority; these are targets, not measured temperatures.</p>
       <div className={cn('grid gap-2.5', shown.length > 1 && '@min-[640px]:grid-cols-2')}>
         {shown.map((side) => {
           const o = ownerView(tonight?.sides[side], curves[side], now, fmt, timeFormat)

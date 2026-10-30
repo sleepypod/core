@@ -11,17 +11,18 @@ import { appRouter } from './routers/app'
 const API_VERSION = process.env.npm_package_version ?? '0.0.0-dev'
 
 export function getOpenApiDocument(baseUrl: string) {
-  return generateOpenApiDocument(appRouter, {
+  const document = generateOpenApiDocument(appRouter, {
     title: 'Sleepypod Core API',
     version: API_VERSION,
     baseUrl,
     description:
       'REST-style API for the Sleepypod Pod controller. '
       + 'All endpoints are also available via tRPC at /api/trpc. '
-      + 'There is no authentication: the API trusts the local network '
-      + '(the pod firewalls WAN exposure via iptables — see /health/system). '
-      + 'Do not port-forward or reverse-proxy this API to the internet.',
+      + 'Owner authentication is required: a Bearer connection key or an expiring browser session. '
+      + 'Use LAN or private Tailscale access; do not expose the controller publicly.',
     tags: ['Health', 'Device', 'Settings', 'Schedules', 'Biometrics', 'Biometric tuning', 'System', 'Environment', 'Raw', 'Calibration', 'Water Level'],
-    securitySchemes: {},
+    securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } },
   })
+  document.security = [{ bearerAuth: [] }]
+  return document
 }

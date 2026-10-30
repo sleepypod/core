@@ -1,0 +1,82 @@
+# Disabled at startup; review inputs and qualify devices before enabling.
+blueprint:
+  name: SleepyPod — Morning bed-exit scene
+  description: Activate a selected morning scene after you leave the bed in the morning window. This responds
+    to bed exit; it is not synchronized to the wake alarm and cannot replace it. It does not wake you
+    or move the base. Starts disabled; missing occupancy never counts as empty.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Allow this automation
+      selector:
+        boolean: {}
+      default: false
+      description: Leave off until you review the selected devices and qualify the sensors. It is checked
+        inside actions too; Run actions cannot bypass it. The automation also starts disabled after every
+        reload/restart.
+    occupancy:
+      name: Qualified SleepyPod occupancy
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
+            device_class: occupancy
+      description: Use the calibrated, expiring occupancy entity published by this Core fork after MQTT
+        and actual occupancy have been qualified. Occupancy is not sleep. Unknown/unavailable transitions
+        do not trigger actions.
+    scene:
+      name: Scene
+      selector:
+        entity:
+          filter:
+            domain: scene
+      description: Select a locally tested Home Assistant scene containing only the intended lights, shades,
+        or supported audio. No scene or device is selected automatically. This never commands the Pod.
+    window_start:
+      name: Window starts (Home Assistant timezone)
+      selector:
+        time: {}
+      default: 05:00:00
+    window_end:
+      name: Window ends (Home Assistant timezone)
+      selector:
+        time: {}
+      default: '12:00:00'
+initial_state: false
+mode: single
+max_exceeded: silent
+variables:
+  allow_actions: !input 'allow_actions'
+  occupancy: !input 'occupancy'
+triggers:
+- trigger: state
+  entity_id: !input 'occupancy'
+  from: 'on'
+  to: 'off'
+  for:
+    seconds: 30
+conditions:
+- condition: template
+  value_template: |-
+    {{ allow_actions is sameas true and trigger is defined and trigger.platform == 'state'
+       and trigger.from_state is not none and trigger.from_state.state == 'on'
+       and trigger.to_state is not none and trigger.to_state.state == 'off'
+       and is_state(occupancy, 'off') }}
+- condition: time
+  after: !input 'window_start'
+  before: !input 'window_end'
+actions:
+- condition: template
+  value_template: |-
+    {{ allow_actions is sameas true and trigger is defined and trigger.platform == 'state'
+       and trigger.from_state is not none and trigger.from_state.state == 'on'
+       and trigger.to_state is not none and trigger.to_state.state == 'off'
+       and is_state(occupancy, 'off') }}
+- condition: time
+  after: !input 'window_start'
+  before: !input 'window_end'
+- action: scene.turn_on
+  target:
+    entity_id: !input 'scene'

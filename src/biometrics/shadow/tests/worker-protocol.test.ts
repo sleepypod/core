@@ -14,13 +14,13 @@ const expected = { runId: randomUUID(), attemptId: randomUUID(), side: 'left', s
 function fixture() {
   const protocol = new ShadowWorkerProtocol(expected)
   const ready = { type: 'ready', runId: expected.runId, attemptId: expected.attemptId, configHashes: expected.configHashes }
-  const output = { sequence: 0, inputHash: hash, side: 'left', sourceSide: 'right', timestampMs: start, configHash: hash,
+  const output = { sequence: 0, inputHash: hash, side: 'left', sourceSide: 'right', timestampBasis: 'firmware_event_time_v1', timestampMs: start, configHash: hash,
     readings: [{ metric: 'heart_rate', unit: 'bpm', windowMs: null, value: 60, quality: 1 },
       { metric: 'breathing_rate', unit: 'breaths/min', windowMs: null, value: null, quality: 0 },
       { metric: 'window_ibi_variability_v1', unit: 'ms', windowMs: 300000, value: null, quality: 0 }], flags: null, limitations: ['cold_start_without_serialized_state'] }
   const frame = { type: 'frame_result', runId: expected.runId, attemptId: expected.attemptId, sequence: 0, outputs: [output],
-    health: { state: 'running', reason: null, records: 1, outputs: 1, cpu_ms: 1, input_hash: hash, limitations: [],
-      counts: { records: 1, accepted_frames: 1, empty_channel_frames: 0, pump_gated_frames: 0, preroll_outputs: 0, scored_outputs: 1 } } }
+    health: { timestampBasis: 'firmware_event_time_v1', state: 'running', reason: null, records: 1, outputs: 1, cpu_ms: 1, input_hash: hash, limitations: [],
+      counts: { mechanical_gated_frames: 0, timestamp_rejected_frames: 0, records: 1, accepted_frames: 1, empty_channel_frames: 0, pump_gated_frames: 0, preroll_outputs: 0, scored_outputs: 1 } } }
   return { protocol, ready, frame }
 }
 describe('shadow worker response validation', () => {
@@ -35,10 +35,13 @@ describe('shadow worker response validation', () => {
     const { protocol, ready, frame } = fixture()
     protocol.accept(ready, 'ready')
     for (const changed of [{ ...frame, attemptId: randomUUID() }, { ...frame, sequence: 1 },
+      { ...frame, health: { ...frame.health, timestampBasis: undefined } },
+      { ...frame, health: { ...frame.health, counts: { ...frame.health.counts, timestamp_rejected_frames: undefined } } },
+      { ...frame, health: { ...frame.health, counts: { ...frame.health.counts, timestamp_rejected_frames: 1 } } },
       { ...frame, health: { ...frame.health, outputs: 2 } }, { ...frame, health: { ...frame.health, cpu_ms: 30001 } }]) {
       expect(() => protocol.accept(changed, 'frame_result')).toThrow()
     }
-    for (const changes of [{ side: 'right' }, { configHash: 'b'.repeat(64) }, { timestampMs: start - 1 }, { timestampMs: expected.endMs },
+    for (const changes of [{ timestampBasis: 'processing_clock' }, { timestampBasis: undefined }, { side: 'right' }, { configHash: 'b'.repeat(64) }, { timestampMs: start - 1 }, { timestampMs: expected.endMs },
       { readings: frame.outputs[0].readings.map(row => row.metric === 'window_ibi_variability_v1' ? { ...row, metric: 'hrv_rmssd' } : row) }]) {
       expect(() => protocol.accept({ ...frame, outputs: [{ ...frame.outputs[0], ...changes }] }, 'frame_result')).toThrow()
     }
@@ -65,8 +68,9 @@ it.skipIf(!existsSync(python))('validates actual locked-Python worker output acr
     const left = Buffer.alloc(2000)
     for (let index = 0; index < 500; index++) left.writeInt32LE(Math.trunc(Math.sin((second * 500 + index) / 500 * 2 * Math.PI * 1.2) * 1000000), index * 4)
     messages.push({ type: 'frame', sequence: second, observedAtMs: start + second * 1000,
-      record: { type: 'piezo-dual', left1: left.toString('base64'), right1: Buffer.alloc(2000).toString('base64') },
-      context: { activeSides: ['left'], leftOccupied: true, rightOccupied: false, pumpContextKnown: true } })
+      record: { type: 'piezo-dual', ts: start / 1000 + second, left1: left.toString('base64'), right1: Buffer.alloc(2000).toString('base64') },
+      context: { activeSides: ['left'], leftOccupied: true, rightOccupied: false, pumpContextKnown: true,
+        mechanical: quietMechanicalSnapshot(start + second * 1000) } })
   }
   messages.push({ type: 'finish' })
   const result = spawnSync(python, ['-m', 'common.biometrics.shadow_worker'], { env: { ...process.env, PYTHONPATH: resolve('modules') },
@@ -82,3 +86,4 @@ it.skipIf(!existsSync(python))('validates actual locked-Python worker output acr
   expect(replies).toHaveLength(152)
   expect(outputs).toBeGreaterThan(0)
 }, 30000)
+import { quietMechanicalSnapshot } from '../../mechanical/tests/fixtures'

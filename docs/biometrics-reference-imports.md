@@ -2,7 +2,7 @@
 
 Reference imports are comparison data. They never write the pod's `vitals`,
 change a profile, or control hardware. Agreement with a named reference source
-is not clinical accuracy. APIs use the existing LAN trust model.
+is not clinical accuracy. This fork requires owner authentication on these APIs.
 
 ## Preview and commit
 
@@ -138,8 +138,46 @@ This alignment primitive does not by itself establish validated improvement.
 The existing `biometrics.importReferenceStages` and `importReferenceVitals`
 contracts still accept Unix seconds and return `{ written }`. They retain
 first-write-wins heart-rate behavior and whole-request stage-overlap rejection.
+`biometrics.importReferenceSamples` (`POST /api/biometrics/reference-samples`)
+follows the same contract for one `metric` per request, `breathing_rate`
+(breaths/min, 4–60) or `hrv_sdnn` (ms, 1–500), as `{ timestamp, value }`
+samples stored in `reference_samples` and first-write-wins on side, metric,
+time and source. The **Upload Apple Watch data** dialog
+(`POST /api/biometrics/watch-upload`) feeds all three from a Health export,
+using records whose source name matches `Watch`. Known SleepyPod and Free Sleep
+source names are excluded even if a CLI caller supplies a broader source filter.
+Source names are export metadata, not proof that a physical Watch measured a row.
 Newly accepted rows and normalized provenance commit atomically; if provenance
 cannot be saved, the legacy insert rolls back too.
+
+`GET /api/biometrics/reference-samples` accepts `side`, `metric`, ISO `startDate`
+and `endDate`, plus optional `limit` (1–20000, default 5000). It returns
+`[{ timestamp, value }]`, retaining the newest samples within the inclusive
+window and ordering them oldest first. Clients reaching the cap must split the
+window and deduplicate boundary timestamps instead of treating a capped result
+as a complete history. Watch SDNN is not the Pod's IBI variability index or RMSSD.
+Missing samples remain gaps. Numeric bounds above are import filters, not
+clinical normal ranges or triggers for bed controls.
+
+The upload response adds `breathing`, `hrv`, `matchedBreathing` and `matchedHrv`
+alongside its existing heart-rate and stage counts. Uploads commit in bounded
+batches; interruption can leave earlier batches saved. Retrying the same export
+is idempotent for accepted rows. No cloud provider receives this local import.
+
+This integration reviews upstream `02b12876eea29d608c20fbe10996f8500539c66b`
+and the GET contract from `e2515567f7cf8e0a9a65bcaa9d1a946bb1818654`.
+It does not enable upstream's personal-model execution. Generated biometrics
+migration 0031 adds `reference_samples`; no existing Pod vitals are rewritten.
+
+On 2026-10-25, a private offline upgrade of the library rehearsal passed SQLite
+integrity checks and preserved every existing configuration and biometric row.
+The new reference table was empty and both source database hashes were unchanged.
+The aggregate record is
+`~/Downloads/SleepyPod-Watch-Rehearsal-2026-10-25/watch-verification.json`.
+No controller was started and no hardware commands were sent. Production browser
+tests upload synthetic XML into isolated databases, verify source exclusion and
+unit conversion, repeat the upload, read both metrics, and compare unchanged Pod
+vitals. They do not verify the owner's Apple Watch history or sleep outcomes.
 
 Old clients provide no subject identity or source timezone. Such imports are
 visibly mapped to `legacy_unknown:left` or `legacy_unknown:right`, with that

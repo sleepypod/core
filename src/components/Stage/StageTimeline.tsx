@@ -60,6 +60,10 @@ export function StageTimeline({ win, now, curves, activity, names, unit, display
   const pct = (t: number) => `${(fractionOf(win, t) * 100).toFixed(2)}%`
   const width = (iv: Interval) => `${((fractionOf(win, iv.end) - fractionOf(win, iv.start)) * 100).toFixed(2)}%`
   const X = (t: number) => fractionOf(win, t) * VB_W
+  // Move each label by its own width as it approaches the edge of the plot.
+  const markerLabelPosition = (timestamp: number) => ({
+    left: pct(timestamp), transform: `translateX(-${fractionOf(win, timestamp) * 100}%)`,
+  })
   const temps = [...curves.left, ...curves.right].map(p => p.temperature)
   const hi = temps.length ? Math.max(...temps) : null
   const lo = temps.length ? Math.min(...temps) : null
@@ -203,15 +207,15 @@ export function StageTimeline({ win, now, curves, activity, names, unit, display
               ))}
             </div>
           ))}
-          <div aria-hidden data-testid="stage-now" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(now), background: STAGE.text2 }}>
-            <span className="absolute -top-0.5 left-1.5 whitespace-nowrap font-mono text-[10px] leading-none" style={{ color: STAGE.text2 }}>{`now ${clock(now, timeFormat)}`}</span>
-          </div>
+          <div aria-hidden data-testid="stage-now" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(now), background: STAGE.text2 }} />
+          <span aria-hidden data-testid="stage-now-label" className="pointer-events-none absolute -top-0.5 w-max max-w-full whitespace-normal break-words font-mono text-[10px] leading-none" style={{ ...markerLabelPosition(now), color: STAGE.text2 }}>{`now ${clock(now, timeFormat)}`}</span>
           {previewAt != null && (
-            <div aria-hidden data-testid="stage-preview-marker" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(previewAt), background: STAGE.preview }}>
-              <span className="absolute -top-0.5 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-0.5 font-mono text-[10px] font-medium leading-none text-[#0b0b0c]" style={{ background: STAGE.preview }}>
+            <>
+              <div aria-hidden data-testid="stage-preview-marker" className="pointer-events-none absolute inset-y-0 w-px" style={{ left: pct(previewAt), background: STAGE.preview }} />
+              <span aria-hidden data-testid="stage-preview-label" className="pointer-events-none absolute -top-0.5 w-max max-w-full whitespace-normal break-words rounded-full px-2 py-0.5 font-mono text-[10px] font-medium leading-none text-[#0b0b0c]" style={{ ...markerLabelPosition(previewAt), background: STAGE.preview }}>
                 {clock(previewAt, timeFormat)}
               </span>
-            </div>
+            </>
           )}
         </div>
       </div>

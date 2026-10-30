@@ -1,3 +1,5 @@
+import type DatabaseConstructor from 'better-sqlite3'
+import { ownerRequest, TEST_OWNER_TOKEN } from '@/src/auth/tests/support'
 /**
  * Tests for the GET handler in app/api/export/archive/route.ts. Covers the
  * inflight guard, the staging-dir setup, conditional db backup, raw symlink
@@ -46,8 +48,10 @@ const sqliteMock = vi.hoisted(() => ({
   ctor: vi.fn(),
 }))
 
-vi.mock('better-sqlite3', () => {
+vi.mock('better-sqlite3', async () => {
+  const { default: ActualDatabase } = await vi.importActual<{ default: typeof DatabaseConstructor }>('better-sqlite3')
   const Database = vi.fn(function (this: Record<string, unknown>, ...args: unknown[]) {
+    if ((args[1] as { fileMustExist?: boolean } | undefined)?.fileMustExist && args[0] === process.env.DATABASE_URL) return new ActualDatabase(args[0] as string, args[1] as object)
     sqliteMock.ctor(...args)
     this.backup = sqliteMock.backup
     this.close = sqliteMock.close
@@ -89,10 +93,39 @@ async function loadRoute() {
 }
 
 describe('GET /api/export/archive', () => {
+  it('does not release a newer export when a canceled producer exits late', async () => {
+    const { GET } = await loadRoute()
+    const first = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
+    const earlierChild = spawnMock.lastChild
+    if (!first.body || !earlierChild) throw new Error('Expected archive process')
+    await first.body.cancel()
+    const next = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
+    expect(next.status).toBe(200)
+    earlierChild.emit('close', 1)
+    expect((await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))).status).toBe(429)
+    await next.body?.cancel()
+  })
+
+  it('cancels the archive process and staging if access changes before bytes are read', async () => {
+    const { GET } = await loadRoute()
+    const request = ownerRequest('http://localhost/api/export/archive?include=raw')
+    const response = await GET(request)
+    const child = spawnMock.lastChild
+    if (!child) throw new Error('Expected archive process')
+    vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', TEST_OWNER_TOKEN + '-rotated')
+    await expect(response.arrayBuffer()).rejects.toThrow('access changed')
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(fsMock.rm).toHaveBeenCalledWith(expect.stringContaining('sp-export-'), { recursive: true, force: true })
+    const following = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
+    expect(following.status).toBe(200)
+    if (!following.body) throw new Error('Expected archive stream')
+    await following.body.cancel()
+  })
+
   it('returns a gzip stream response with default params (raw + db)', async () => {
     process.env.BIOMETRICS_DATABASE_URL = 'file:/tmp/biometrics.db'
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive')
+    const req = ownerRequest('http://localhost/api/export/archive')
     const res = await GET(req)
 
     expect(res.status).toBe(200)
@@ -115,10 +148,10 @@ describe('GET /api/export/archive', () => {
   it('responds 429 when another export is already inflight', async () => {
     const { GET } = await loadRoute()
     // First call leaves `inflight = true` until tar closes; don't fire close.
-    const req1 = new Request('http://localhost/api/export/archive')
+    const req1 = ownerRequest('http://localhost/api/export/archive')
     await GET(req1)
 
-    const req2 = new Request('http://localhost/api/export/archive')
+    const req2 = ownerRequest('http://localhost/api/export/archive')
     const res = await GET(req2)
     expect(res.status).toBe(429)
     expect(res.headers.get('Retry-After')).toBe('60')
@@ -129,7 +162,7 @@ describe('GET /api/export/archive', () => {
   it('skips db backup when include omits db', async () => {
     process.env.BIOMETRICS_DATABASE_URL = 'file:/tmp/biometrics.db'
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=raw&startTs=0&endTs=10')
+    const req = ownerRequest('http://localhost/api/export/archive?include=raw&startTs=0&endTs=10')
     const res = await GET(req)
     expect(res.status).toBe(200)
     expect(sqliteMock.backup).not.toHaveBeenCalled()
@@ -139,7 +172,7 @@ describe('GET /api/export/archive', () => {
   it('skips db backup when BIOMETRICS_DATABASE_URL is empty even if include=db', async () => {
     delete process.env.BIOMETRICS_DATABASE_URL
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=db')
+    const req = ownerRequest('http://localhost/api/export/archive?include=db')
     const res = await GET(req)
     expect(res.status).toBe(200)
     expect(sqliteMock.backup).not.toHaveBeenCalled()
@@ -148,7 +181,7 @@ describe('GET /api/export/archive', () => {
   it('skips raw staging when include omits raw', async () => {
     process.env.BIOMETRICS_DATABASE_URL = 'file:/tmp/biometrics.db'
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=db')
+    const req = ownerRequest('http://localhost/api/export/archive?include=db')
     const res = await GET(req)
     expect(res.status).toBe(200)
     // mkdir for staging root is called, but the raw subdir mkdir is not
@@ -166,7 +199,7 @@ describe('GET /api/export/archive', () => {
     fsMock.stat.mockImplementation(async () => ({ mtime: new Date(5000 * 1000) }))
 
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=raw&startTs=0&endTs=10000')
+    const req = ownerRequest('http://localhost/api/export/archive?include=raw&startTs=0&endTs=10000')
     const res = await GET(req)
     expect(res.status).toBe(200)
     expect(fsMock.symlink).toHaveBeenCalledTimes(1)
@@ -181,7 +214,7 @@ describe('GET /api/export/archive', () => {
     fsMock.symlink.mockRejectedValueOnce(new Error('EEXIST'))
 
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=raw&startTs=0&endTs=10000')
+    const req = ownerRequest('http://localhost/api/export/archive?include=raw&startTs=0&endTs=10000')
     const res = await GET(req)
     expect(res.status).toBe(200) // failure is swallowed
   })
@@ -190,14 +223,14 @@ describe('GET /api/export/archive', () => {
     fsMock.mkdir.mockRejectedValueOnce(new Error('disk full'))
 
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive')
+    const req = ownerRequest('http://localhost/api/export/archive')
     const res = await GET(req)
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body).toEqual({ error: 'disk full' })
 
     // After failure, inflight is reset so a follow-up call doesn't 429.
-    const res2 = await GET(new Request('http://localhost/api/export/archive'))
+    const res2 = await GET(ownerRequest('http://localhost/api/export/archive'))
     expect(res2.status).not.toBe(429)
   })
 
@@ -207,7 +240,7 @@ describe('GET /api/export/archive', () => {
     })
 
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive')
+    const req = ownerRequest('http://localhost/api/export/archive')
     const res = await GET(req)
     expect(res.status).toBe(500)
     const body = await res.json()
@@ -222,7 +255,7 @@ describe('GET /api/export/archive', () => {
       .mockImplementationOnce(async () => { throw new Error('boom') }) // raw subdir
 
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=raw')
+    const req = ownerRequest('http://localhost/api/export/archive?include=raw')
     const res = await GET(req)
     expect(res.status).toBe(500)
     expect(fsMock.rm).toHaveBeenCalledWith(
@@ -234,7 +267,7 @@ describe('GET /api/export/archive', () => {
   it('logs tar stderr and clears inflight when tar exits non-zero', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=raw')
+    const req = ownerRequest('http://localhost/api/export/archive?include=raw')
     const res = await GET(req)
     expect(res.status).toBe(200)
 
@@ -245,14 +278,14 @@ describe('GET /api/export/archive', () => {
 
     expect(errSpy).toHaveBeenCalledWith('tar:', expect.stringContaining('tar: bad file'))
     // Now inflight should be cleared — follow-up call must not 429.
-    const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+    const res2 = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
     expect(res2.status).not.toBe(429)
     errSpy.mockRestore()
   })
 
   it('clears inflight on tar spawn error event', async () => {
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?include=raw')
+    const req = ownerRequest('http://localhost/api/export/archive?include=raw')
     const res = await GET(req)
     expect(res.status).toBe(200)
 
@@ -260,27 +293,27 @@ describe('GET /api/export/archive', () => {
     if (!child) throw new Error('expected spawn to have been called')
     child.emit('error', new Error('ENOENT: tar not found'))
 
-    const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+    const res2 = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
     expect(res2.status).not.toBe(429)
   })
 
   it('rejects non-numeric startTs/endTs with 400 without latching inflight', async () => {
     const { GET } = await loadRoute()
-    const res = await GET(new Request('http://localhost/api/export/archive?startTs=garbage'))
+    const res = await GET(ownerRequest('http://localhost/api/export/archive?startTs=garbage'))
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body).toEqual({ error: 'startTs and endTs must be numeric epoch seconds' })
     expect(spawnMock.spawn).not.toHaveBeenCalled()
 
     // inflight must not have been taken by the rejected request.
-    const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+    const res2 = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
     expect(res2.status).toBe(200)
   })
 
   it('kills tar, clears inflight, and removes staging when the client disconnects', async () => {
     const { GET } = await loadRoute()
     const controller = new AbortController()
-    const req = new Request('http://localhost/api/export/archive?include=raw', {
+    const req = ownerRequest('http://localhost/api/export/archive?include=raw', {
       signal: controller.signal,
     })
     const res = await GET(req)
@@ -297,7 +330,7 @@ describe('GET /api/export/archive', () => {
       { recursive: true, force: true },
     )
     // inflight cleared — a follow-up export is allowed.
-    const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+    const res2 = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
     expect(res2.status).not.toBe(429)
   })
 
@@ -305,7 +338,7 @@ describe('GET /api/export/archive', () => {
     process.env.EXPORT_WATCHDOG_MS = '30'
     try {
       const { GET } = await loadRoute()
-      const res = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+      const res = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
       expect(res.status).toBe(200)
 
       const child = spawnMock.lastChild
@@ -315,7 +348,7 @@ describe('GET /api/export/archive', () => {
       await new Promise(r => setTimeout(r, 80))
       expect(child.kill).toHaveBeenCalledWith('SIGKILL')
 
-      const res2 = await GET(new Request('http://localhost/api/export/archive?include=raw'))
+      const res2 = await GET(ownerRequest('http://localhost/api/export/archive?include=raw'))
       expect(res2.status).not.toBe(429)
     }
     finally {
@@ -325,7 +358,7 @@ describe('GET /api/export/archive', () => {
 
   it('uses the provided startTs and endTs in the filename', async () => {
     const { GET } = await loadRoute()
-    const req = new Request('http://localhost/api/export/archive?startTs=100&endTs=200&include=raw')
+    const req = ownerRequest('http://localhost/api/export/archive?startTs=100&endTs=200&include=raw')
     const res = await GET(req)
     expect(res.headers.get('Content-Disposition')).toBe(
       'attachment; filename="sleepypod-export-100-200.tar.gz"',

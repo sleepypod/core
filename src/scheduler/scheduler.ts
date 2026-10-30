@@ -55,7 +55,7 @@ export class Scheduler extends EventEmitter {
     id: string,
     type: JobType,
     cronExpression: string,
-    handler: () => Promise<void>,
+    handler: (fireDate: Date) => Promise<void>,
     metadata?: Record<string, unknown>
   ): ScheduledJob {
     // Cancel existing job with same ID
@@ -70,7 +70,7 @@ export class Scheduler extends EventEmitter {
       async (fireDate) => {
         // Never catch up physical adjustments after an event-loop stall or suspend.
         if (type === JobType.BASE && fireDate && Date.now() - fireDate.getTime() > 60_000) return
-        const result = await this.executeJob(id, type, handler)
+        const result = await this.executeJob(id, type, () => handler(fireDate))
         this.emit('jobExecuted', id, result)
       }
     )
@@ -109,7 +109,7 @@ export class Scheduler extends EventEmitter {
     const job = schedule.scheduleJob(fireDate, async () => {
       const result = await this.executeJob(id, type, handler)
       this.emit('jobExecuted', id, result)
-      this.jobs.delete(id)
+      if (this.jobs.get(id)?.job === job) this.jobs.delete(id)
     })
 
     if (!job) {

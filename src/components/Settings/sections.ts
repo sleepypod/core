@@ -1,9 +1,10 @@
-import { Activity, Cog, Download, Globe, Hand, HardDriveUpload, House, Moon, Palette, RadioTower, User, type LucideIcon } from 'lucide-react'
+import { Activity, Cog, Download, Globe, Hand, HardDriveUpload, House, KeyRound, Moon, Palette, RadioTower, User, type LucideIcon } from 'lucide-react'
 
 export const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette, description: 'How this device shows the app' },
   { id: 'backup', label: 'Backup', icon: HardDriveUpload, description: 'Nightly archive to your own storage' },
   { id: 'biometric-calibration', label: 'Biometric calibration', icon: Activity, description: 'Profiles, processing state and evaluation history' },
+  { id: 'connection', label: 'Browser connection', icon: KeyRound, description: 'Owner session and controller source' },
   { id: 'device', label: 'Device', icon: Cog, description: 'Pod-wide hardware and maintenance' },
   { id: 'gestures', label: 'Gestures', icon: Hand, description: 'What taps on the cover do' },
   { id: 'homekit', label: 'HomeKit', icon: House, description: 'Apple Home bridge' },

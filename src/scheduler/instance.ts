@@ -9,6 +9,7 @@ import { waitForValidSystemDate } from './startupClock'
 import { JobManager } from './jobManager'
 import { db } from '@/src/db'
 import { deviceSettings } from '@/src/db/schema'
+import { outsideControlRequest } from '@/src/controls/context'
 
 const DEFAULT_TIMEZONE = 'America/Los_Angeles'
 
@@ -71,7 +72,7 @@ export async function getJobManager(): Promise<JobManager> {
   // Start initialization
   const controller = new AbortController()
   state().abort = controller
-  const pending = (async () => {
+  const pending = outsideControlRequest(async () => {
     try {
       await waitForValidSystemDate(24, 5_000, controller.signal)
       const timezone = await loadTimezone()
@@ -110,7 +111,7 @@ export async function getJobManager(): Promise<JobManager> {
         state().abort = null
       }
     }
-  })()
+  })
 
   s.pending = pending
   return pending

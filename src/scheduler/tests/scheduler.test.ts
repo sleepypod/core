@@ -440,3 +440,25 @@ describe('Scheduler', () => {
     })
   })
 })
+
+describe('one-time callback replacement', () => {
+  it('does not remove the replacement timer when its old callback finishes', async () => {
+    vi.useFakeTimers()
+    const scheduler = new Scheduler({ timezone: 'UTC', enabled: true })
+    const second = vi.fn(async () => {})
+    try {
+      scheduler.scheduleOneTimeJob('held-off', JobType.POWER_OFF, new Date(Date.now() + 1000), async () => {
+        scheduler.scheduleOneTimeJob('held-off', JobType.POWER_OFF, new Date(Date.now() + 2000), second)
+      })
+      await vi.advanceTimersByTimeAsync(1001)
+      expect(scheduler.getJob('held-off')).toBeDefined()
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(second).toHaveBeenCalledTimes(1)
+      expect(scheduler.getJob('held-off')).toBeUndefined()
+    }
+    finally {
+      await scheduler.shutdown()
+      vi.useRealTimers()
+    }
+  })
+})

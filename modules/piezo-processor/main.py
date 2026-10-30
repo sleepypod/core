@@ -48,11 +48,15 @@ from common.side_mode import SingleSleeperMode
 from common.bed_presence import BedPresence
 import numpy as np
 from runtime_adapter import RuntimeCoordinator, RunContext
+from common.biometrics.live_input import (
+    LiveFrameClock, FIRMWARE_TIMESTAMP_BASIS, prepare_live_frame, reset_live_buffers,
+)
 from common.biometrics.frames import decode_int32_samples as _int32_samples, LOST_SAMPLE
 from common.biometrics.processing import (
     StatefulSideProcessor, HR_WINDOW_S, BREATHING_WINDOW_S, HRV_WINDOW_S,
 )
 from common.biometrics.routing import SingleSleeperRouter, VITALS_INTERVAL_S
+from common.biometrics.mechanical import MechanicalGate, MechanicalWriter, read_snapshot, VERSION as MECHANICAL_VERSION
 from common.biometrics.gates import (
     FrzHealthPumpState as _FrzHealthPumpState, PumpGate as _PumpGate,
     PresenceDetector, PUMP_ENERGY_MULTIPLIER, PUMP_CORRELATION_MIN,
@@ -241,9 +245,9 @@ class VitalsCandidate:
 class SingleSleeperVitals(SingleSleeperRouter[VitalsCandidate]):
     """Bind shared arbitration to the live database/provenance writer."""
     def __init__(self, holder: "DBHolder", mode: SingleSleeperMode,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, writer=None):
         self._holder = holder
-        super().__init__(mode, lambda candidate, side: candidate.write(holder, side=side),
+        super().__init__(mode, writer or (lambda candidate, side: candidate.write(holder, side=side)),
                          clock=clock)
 
 
@@ -288,16 +292,18 @@ class PumpGate(_PumpGate):
 # ---------------------------------------------------------------------------
 
 class SideProcessor(StatefulSideProcessor):
-    """Live adapter binds shared state to wall time and canonical DB writes."""
+    """Bind shared state to the supplied clock and canonical DB writes."""
     def __init__(self, side: str, db_holder: DBHolder,
                  pump_state: Optional[FrzHealthPumpState] = None,
-                 parameters: ProcessingParameters = DEFAULT_PARAMETERS):
+                 parameters: ProcessingParameters = DEFAULT_PARAMETERS,
+                 clock: Optional[Callable[[], float]] = None):
         self.db_holder = db_holder
-        super().__init__(side, clock=lambda: time.time(),
+        super().__init__(side, clock=clock if clock is not None else lambda: time.time(),
                          writer=lambda candidate: candidate.write(db_holder),
                          candidate_factory=VitalsCandidate, pump_state=pump_state,
                          parameters=parameters,
                          autocorr_quality=lambda samples: _autocorr_quality(samples))
+
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -319,14 +325,17 @@ def main() -> None:
     db_holder = DBHolder(open_biometrics_db())
     pump_gate = PumpGate()
     pump_state = FrzHealthPumpState()
-    left = SideProcessor("left", db_holder, pump_state=pump_state)
-    right = SideProcessor("right", db_holder, pump_state=pump_state)
+    frame_clock = LiveFrameClock(wall=lambda: time.time(), monotonic=lambda: time.monotonic())
+    left = SideProcessor("left", db_holder, pump_state=pump_state, clock=frame_clock)
+    right = SideProcessor("right", db_holder, pump_state=pump_state, clock=frame_clock)
     left._other = right
     right._other = left
     # One side in away mode: a single sleeper — the away side's readings
     # (rolled over, leg across) are merged into the home side's series.
     bed_mode = SingleSleeperMode(SLEEPYPOD_DB)
-    vitals_router = SingleSleeperVitals(db_holder, bed_mode)
+    mechanical = MechanicalGate()
+    guarded_writer = MechanicalWriter(mechanical, lambda candidate, side: candidate.write(db_holder, side=side))
+    vitals_router = SingleSleeperVitals(db_holder, bed_mode, writer=guarded_writer.submit)
     left.sink = right.sink = vitals_router.submit
     # Vitals only while the bed reads occupied — on the side they're stored
     # under, which is the home side with one side away.
@@ -334,16 +343,32 @@ def main() -> None:
     left.bed_occupied = lambda: bed.occupied(bed_mode.home_side() or "left")
     right.bed_occupied = lambda: bed.occupied(bed_mode.home_side() or "right")
     left.home_side = right.home_side = bed_mode.home_side
-    runtime = RuntimeCoordinator(db_holder, {"left": left, "right": right})
+    runtime = RuntimeCoordinator(db_holder, {"left": left, "right": right},
+                                 timestamp_basis=FIRMWARE_TIMESTAMP_BASIS, mechanical_context=MECHANICAL_VERSION)
     runtime_problem = None
+    input_problem = None
     # Source selected once at startup: NatsFollower on new-firmware pods (NATS
     # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
     follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.01)
 
     report_health("healthy", "piezo-processor v2 started")
 
+    last_snapshot_at, snapshot = None, None
+
+    def poll():
+        nonlocal last_snapshot_at, snapshot
+        now = int(time.time() * 1000)
+        # Idle follower callbacks can run at 100 Hz; bound shared SQLite reads.
+        if last_snapshot_at is None or now < last_snapshot_at or now - last_snapshot_at >= 250:
+            snapshot = read_snapshot(db_holder.conn, now)
+            last_snapshot_at = now
+        mechanical.update(snapshot, now)
+        vitals_router.tick()
+        guarded_writer.tick()
+
     try:
-        for record in follower.read_records(on_poll=vitals_router.tick):
+        for record in follower.read_records(on_poll=poll):
+            poll()
             rtype = record.get("type")
 
             # Surface genuinely-new firmware types once (blanketReadings, log,
@@ -363,24 +388,27 @@ def main() -> None:
             if rtype != "piezo-dual":
                 continue
 
-            # Each record contains ~500 int32 samples per channel
-            l_samples = _int32_samples(record.get("left1", b""))
-            r_samples = _int32_samples(record.get("right1", b""))
-
-            if l_samples.size == 0 or r_samples.size == 0:
+            frame = prepare_live_frame(record, frame_clock, (left, right), pump_gate, mechanical)
+            if frame.status == "timestamp_rejected_frames":
+                if frame_clock.problem != input_problem:
+                    input_problem = frame_clock.problem
+                    report_health("degraded", input_problem)
+            elif frame.status == 'mechanical_gated_frames':
+                if mechanical.problem != input_problem:
+                    input_problem = mechanical.problem
+                    report_health('degraded', input_problem)
+            if frame.samples is None:
                 continue
+            l_samples, r_samples = frame.samples
 
-            # Pump gating — drop entire record if pump detected or guard active
-            if pump_gate.check(l_samples, r_samples):
-                continue
-
-            frame_time_ms = int(time.time() * 1000)
+            frame_time_ms = int(frame_clock() * 1000)
             runtime.before_frame(bed_mode.home_side(), bed.occupied, frame_time_ms)
             left.ingest(l_samples)
             right.ingest(r_samples)
             runtime.after_frame(frame_time_ms)
-            if runtime.problem != runtime_problem:
+            if runtime.problem != runtime_problem or input_problem is not None:
                 runtime_problem = runtime.problem
+                input_problem = None
                 report_health("degraded" if runtime_problem else "healthy",
                               "Biometric configuration fallback: " + runtime_problem if runtime_problem
                               else "Biometric runtime configuration available")
@@ -391,6 +419,10 @@ def main() -> None:
         sys.exit(1)
     finally:
         vitals_router.flush()
+        guarded_writer.tick()
+        if guarded_writer.pending or guarded_writer.excluded:
+            log.warning('Mechanical context: %d unqualified candidates excluded; %d pending candidates discarded on shutdown',
+                        guarded_writer.excluded, len(guarded_writer.pending))
         db_holder.conn.close()
         log.info("Shutdown complete")
 

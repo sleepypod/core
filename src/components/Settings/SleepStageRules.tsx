@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PersonalModelCard } from './PersonalModelCard'
 import { RotateCcw } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
 import { Button, Card, CardHeader, InlineError, SegmentedControl, SelectValue, Skeleton, Slider, Toggle } from '@/src/components/ds'
@@ -136,6 +137,8 @@ export function SleepStageRules({ side, onSideChange }: { side: Side, onSideChan
           </Button>
         </span>
       </div>
+
+      <PersonalModelCard key={side} side={side} />
 
       <div className="grid items-start gap-3.5 @min-[800px]:grid-cols-[minmax(0,1fr)_300px]">
         {/* Freeze the editor while a save is in flight: the refetch it triggers

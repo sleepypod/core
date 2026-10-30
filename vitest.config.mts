@@ -52,6 +52,7 @@ export default defineConfig({
     env: {
       ALARM_STATE_PATH: join(tmpdir(), 'sleepypod-vitest', 'alarm-state.json'),
     },
-    exclude: ['.claude/worktrees/**', '.codex/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**'],
+    // The bedroom publisher's .mjs suites use node:test and run separately.
+    exclude: ['.claude/worktrees/**', '.codex/**', '.ygg/worktrees/**', 'node_modules/**', '.next/**', 'scripts/bedroom/*.test.mjs'],
   },
 })

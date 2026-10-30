@@ -70,10 +70,10 @@ describe('nextSetPoint', () => {
 
 describe('tonightPlan', () => {
   const temps: TempPointRow[] = [
-    { dayOfWeek: 'wednesday', time: '06:30', temperature: 80, enabled: true },
+    { dayOfWeek: 'thursday', time: '06:30', temperature: 80, enabled: true },
     { dayOfWeek: 'wednesday', time: '22:00', temperature: 75, enabled: true },
-    { dayOfWeek: 'wednesday', time: '02:00', temperature: 70, enabled: true },
-    { dayOfWeek: 'wednesday', time: '03:00', temperature: 99, enabled: false },
+    { dayOfWeek: 'thursday', time: '02:00', temperature: 70, enabled: true },
+    { dayOfWeek: 'thursday', time: '03:00', temperature: 99, enabled: false },
     { dayOfWeek: 'tuesday', time: '22:00', temperature: 60, enabled: true },
   ]
 

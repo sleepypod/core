@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google'
 import dynamic from 'next/dynamic'
 import Script from 'next/script'
+import { ConnectionGate } from '@/src/components/AppShell/ConnectionGate'
 import { AppShell } from '@/src/components/AppShell/AppShell'
 import { allMessages, getI18nInstance } from '@/src/lib/i18n/appRouterI18n'
 import { LinguiClientProvider } from '@/src/providers/LinguiClientProvider'
@@ -62,7 +63,7 @@ export default async function LangLayout({
   return (
     <html lang={lang} className={`dark ${plexSans.variable} ${plexMono.variable}`} data-theme="dark" suppressHydrationWarning>
       <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <meta name="theme-color" content="#0b0b0c" />
         <meta name="color-scheme" content="dark light" />
         <link rel="icon" type="image/png" href="/icon.png" />
@@ -70,19 +71,21 @@ export default async function LangLayout({
         <Script id="sp-theme-init" strategy="beforeInteractive">{THEME_INIT_SCRIPT}</Script>
       </head>
       <body>
-        <TRPCProvider>
-          <LinguiClientProvider initialLocale={lang} initialMessages={allMessages[lang]}>
-            <PrefsProvider>
-              <TimeFormatProvider>
-                <SideProvider>
-                  <WeekNavigatorProvider>
-                    <AppShell>{children}</AppShell>
-                  </WeekNavigatorProvider>
-                </SideProvider>
-              </TimeFormatProvider>
-            </PrefsProvider>
-          </LinguiClientProvider>
-        </TRPCProvider>
+        <ConnectionGate>
+          <TRPCProvider>
+            <LinguiClientProvider initialLocale={lang} initialMessages={allMessages[lang]}>
+              <PrefsProvider>
+                <TimeFormatProvider>
+                  <SideProvider>
+                    <WeekNavigatorProvider>
+                      <AppShell>{children}</AppShell>
+                    </WeekNavigatorProvider>
+                  </SideProvider>
+                </TimeFormatProvider>
+              </PrefsProvider>
+            </LinguiClientProvider>
+          </TRPCProvider>
+        </ConnectionGate>
         <DemoAnalytics />
       </body>
     </html>

@@ -85,7 +85,7 @@ export class ShadowStreamJoin {
         ...(active?.provenance ? { activeProvenance: active.provenance } : {}),
         pairing: { policy: 'exact_timestamp_union_v1', candidatePresent: Boolean(candidate), activePresent: Boolean(active) }, readings,
         ...(candidate
-          ? { candidateProvenance: { sourceSide: candidate.sourceSide, outputSequence: candidate.sequence, flags: candidate.flags,
+          ? { candidateProvenance: { timestampBasis: candidate.timestampBasis, sourceSide: candidate.sourceSide, outputSequence: candidate.sequence, flags: candidate.flags,
               limitations: active ? candidate.limitations : [...candidate.limitations, 'missing_contemporaneous_active_reading'] } }
           : {}) })
       if (result.state === 'quota_reached') {

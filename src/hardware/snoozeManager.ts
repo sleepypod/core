@@ -14,7 +14,10 @@
 import { getSharedHardwareClient } from './dacMonitor.instance'
 import { loadAlarmState, updateAlarmState, type AlarmConfig } from './alarmPersistence'
 import { markAlarmStarted } from './alarmState'
+export { MIN_SNOOZE_SECONDS, nextSnoozeSeconds } from './snoozeLength'
 import type { Side } from './types'
+import { withSideLock } from './sideLock'
+import { outsideControlRequest } from '@/src/controls/context'
 
 /** A snooze whose restart was missed by at most this much (the server was
  * down) still fires on startup; a later one is dropped. */
@@ -44,21 +47,30 @@ function getActiveSnoozes(): Map<Side, SnoozeState> {
 const MAX_DELAY_MS = 2 ** 31 - 1
 
 function schedule(side: Side, snoozeUntil: Date, config: AlarmConfig, now: number): void {
-  const timeoutId = setTimeout(async () => {
-    getActiveSnoozes().delete(side)
-    updateAlarmState((s) => {
-      s.snoozes[side] = undefined
-    })
-    try {
-      const client = getSharedHardwareClient()
-      await client.setAlarm(side, config)
-      await markAlarmStarted(side, config)
-    }
-    catch (err) {
-      console.error(`[Snooze] Failed to restart alarm for ${side}:`, err)
-    }
-  }, Math.min(Math.max(0, snoozeUntil.getTime() - now), MAX_DELAY_MS))
-  getActiveSnoozes().set(side, { timeoutId, snoozeUntil, config })
+  const state: SnoozeState = {
+    snoozeUntil, config,
+    timeoutId: outsideControlRequest(() => setTimeout(async () => {
+      try {
+        await withSideLock(side, async () => {
+          // Cancellation/replacement can happen after the timer fires while its
+          // write waits for another side operation. Only the current alarm runs.
+          if (getActiveSnoozes().get(side) !== state) return
+          getActiveSnoozes().delete(side)
+          updateAlarmState((persisted) => {
+            persisted.snoozes[side] = undefined
+          })
+          if (Date.now() - snoozeUntil.getTime() > SNOOZE_LATE_GRACE_MS) return
+          const client = getSharedHardwareClient()
+          await client.setAlarm(side, config)
+          await markAlarmStarted(side, config)
+        })
+      }
+      catch (error) {
+        console.error(`[Snooze] Failed to restart alarm for ${side}:`, error)
+      }
+    }, Math.min(Math.max(0, snoozeUntil.getTime() - now), MAX_DELAY_MS))),
+  }
+  getActiveSnoozes().set(side, state)
 }
 
 export function snoozeAlarm(
@@ -66,15 +78,19 @@ export function snoozeAlarm(
   durationSeconds: number,
   config: AlarmConfig,
 ): Date {
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 0) throw new Error('Invalid snooze duration')
   // Cancel any existing snooze for this side
   cancelSnooze(side)
 
   durationSeconds = Math.min(durationSeconds, Math.floor(MAX_DELAY_MS / 1000))
   const now = Date.now()
   const snoozeUntil = new Date(now + durationSeconds * 1000)
-  schedule(side, snoozeUntil, config, now)
+  // The alarm comes back counting this snooze, so a tapered next one is shorter.
+  const count = Number.isSafeInteger(config.snoozeCount) && (config.snoozeCount ?? 0) >= 0 ? config.snoozeCount ?? 0 : 0
+  const restart = { ...config, snoozeCount: Math.min(count + 1, Number.MAX_SAFE_INTEGER) }
+  schedule(side, snoozeUntil, restart, now)
   updateAlarmState((s) => {
-    s.snoozes[side] = { until: snoozeUntil.getTime(), config }
+    s.snoozes[side] = { until: snoozeUntil.getTime(), config: restart }
   })
   return snoozeUntil
 }

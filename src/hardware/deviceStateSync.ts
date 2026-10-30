@@ -6,7 +6,7 @@ import { onFrame as pumpStallOnFrame } from './pumpStallGuard'
 import { DEFAULT_HEATING_DURATION } from './types'
 import { isPrimingRequested } from './primeNotification'
 import type { DeviceStatus, Side } from './types'
-import { confirmPumpRun, hasConfirmedPumpRun, getLastSideMutationAt, markFirmwareSynced } from './sideMutations'
+import { confirmPumpRun, hasConfirmedPumpRun, getLastSideMutationAt, markFirmwareSynced, recordHeatingSession } from './sideMutations'
 
 export { markSideMutated, _resetMutationStamps, hasFirmwareSynced, _resetFirmwareSynced } from './sideMutations'
 
@@ -228,6 +228,13 @@ export class DeviceStateSync {
     const isNowPowered = !durationExpired
 
     const skipPoweredFields = isSideRecentlyMutated(side)
+    // Startup targets can remain set after Free Sleep stopped the countdown.
+    // A fresh status alone must not authorize an eight-hour passive restart.
+    // Ignore stale polls inside a command's existing freshness window.
+    if (!skipPoweredFields) {
+      if (durationExpired) recordHeatingSession(side, false)
+      else if (sideStatus.heatingDuration > 0) recordHeatingSession(side, true)
+    }
     // When duration has expired, clear the target temperature so the UI
     // doesn't show a stale "warming to X°F" when the pod is actually neutral.
     const targetTemp = durationExpired ? null : sideStatus.targetTemperature

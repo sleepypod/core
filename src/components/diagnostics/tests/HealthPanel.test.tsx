@@ -10,7 +10,9 @@ const mocks = vi.hoisted(() => ({
   history: undefined as unknown,
   restart: vi.fn(),
   recalibrate: vi.fn(),
-  restartAsync: vi.fn(async () => ({ ok: true, message: 'ok' })),
+  restartAsync: vi.fn<(input: unknown) => Promise<{ ok: boolean, message: string }>>().mockResolvedValue({ ok: true, message: 'ok' }),
+  restartResult: undefined as { ok: boolean, message: string } | undefined,
+  restartError: null as Error | null,
   push: vi.fn(),
   replace: vi.fn(),
   params: new URLSearchParams('tab=health'),
@@ -29,7 +31,26 @@ vi.mock('@/src/utils/trpc', () => {
       if (key === 'health.history') return { data: mocks.history, error: null, isLoading: false }
       return { data: undefined, error: null, isLoading: false }
     },
-    useMutation: () => ({ mutate: key === 'health.restartService' ? mocks.restart : vi.fn(), mutateAsync: key === 'calibration.triggerCalibration' ? mocks.recalibrate : key === 'health.restartService' ? mocks.restartAsync : vi.fn(), isPending: false, error: null, data: undefined }),
+    useMutation: (options?: { onSuccess?: (result: { ok: boolean, message: string }) => void, onError?: () => void }) => ({
+      mutate: key === 'health.restartService'
+        ? (input: unknown) => {
+            mocks.restart(input)
+            if (mocks.restartError) options?.onError?.()
+            else if (mocks.restartResult) options?.onSuccess?.(mocks.restartResult)
+          }
+        : vi.fn(),
+      mutateAsync: key === 'calibration.triggerCalibration'
+        ? mocks.recalibrate
+        : key === 'health.restartService'
+          ? async (input: unknown) => {
+            const result = await mocks.restartAsync(input)
+            options?.onSuccess?.(mocks.restartResult ?? result)
+            return mocks.restartResult ?? result
+          }
+          : vi.fn(),
+      isPending: false, error: key === 'health.restartService' ? mocks.restartError : null,
+      data: key === 'health.restartService' ? mocks.restartResult : undefined,
+    }),
   })
   const router = (prefix: string): unknown => new Proxy({}, {
     get: (_t, k: string) => (k === 'useQuery' || k === 'useMutation' ? query(prefix)[k] : router(prefix ? `${prefix}.${k}` : k)),
@@ -63,6 +84,8 @@ function inputs(over: Partial<DataPathInputs> = {}): DataPathInputs {
 }
 
 beforeEach(() => {
+  mocks.restartResult = undefined
+  mocks.restartError = null
   globalThis.ResizeObserver = class {
     cb: ResizeObserverCallback
     constructor(cb: ResizeObserverCallback) {
@@ -107,6 +130,22 @@ describe('HealthPanel', () => {
     expect(mocks.restart).toHaveBeenCalledWith({ unit: 'sleepypod-piezo-processor.service' })
     fireEvent.click(within(verdict).getByRole('button', { name: 'Logs' }))
     expect(mocks.push).toHaveBeenCalledWith('/en/system?tab=logs&unit=sleepypod-piezo-processor.service')
+  })
+
+  it.each(['accepted', 'unknown', 'rejected'])('shows %s maintenance without claiming completed recovery', (outcome) => {
+    if (outcome === 'unknown') mocks.restartError = new Error('Restart could not be confirmed')
+    else mocks.restartResult = { ok: outcome === 'accepted', message: outcome === 'accepted' ? 'Restart requested. Reconnect to check its status.' : 'Controller ownership changed.' }
+    render(<HealthPanel onJump={vi.fn()} />)
+    const verdict = screen.getByTestId('health-verdict')
+    const action = within(verdict).getByRole('button', { name: /Restart piezo processor/ })
+    fireEvent.click(action)
+    expect((action as HTMLButtonElement).disabled).toBe(outcome !== 'rejected')
+    expect(within(verdict).queryByRole('button', { name: 'Reconnect' }) !== null).toBe(outcome !== 'rejected')
+    expect(verdict.textContent).not.toContain('Restarted.')
+    if (outcome !== 'rejected') {
+      fireEvent.click(action)
+      expect(mocks.restart).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('draws the map with the stalled edge still and the upstream edge moving', () => {

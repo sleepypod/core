@@ -89,7 +89,7 @@ export function HoldDurationRow({ holdMinutes, onDurationChange }: {
   onDurationChange: (minutes: number) => void
 }) {
   return (
-    <div className="mt-auto flex items-center gap-3 border-t border-line pt-3 text-sm text-fg-2 min-[900px]:text-[13px]">
+    <div className="mt-auto flex flex-wrap items-center gap-3 border-t border-line pt-3 text-sm text-fg-2 min-[900px]:text-[13px]">
       Hold after adjustment
       <SelectValue
         className="ml-auto"

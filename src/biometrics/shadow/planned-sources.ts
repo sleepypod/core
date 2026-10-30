@@ -3,6 +3,7 @@ import { shadowPlanSchema } from './store'
 import { openShadowActiveDatabase } from './active-database'
 import { ShadowContextReader } from './context'
 import { openShadowLiveSources } from './live-sources'
+import { readMechanicalSnapshot } from '../mechanical/snapshot'
 import type { ShadowAttemptHost, ShadowSources } from './attempt'
 
 /** Trusted installation paths only. This factory owns its read-only connections
@@ -50,7 +51,7 @@ export function plannedShadowSourceFactory(rawPlan: unknown, locations: {
       live = openShadowLiveSources({ db: bio.db, side: plan.side, startMs: plan.startMs, endMs: plan.endMs,
         activeConfigHash: plan.activeConfigHash, maximumActiveRows: execution.sources.maximumActiveRows,
         maximumLatenessMs: joining.maximumLatenessMs, pollMs: execution.sources.pollMs,
-        frameBudgets: execution.sources.frames, context: (frame, at) => context.snapshot(frame, at),
+        frameBudgets: execution.sources.frames, context: (frame, at) => ({ ...context.snapshot(frame, at), mechanical: readMechanicalSnapshot(bio.db, at) }),
         assertDatabaseCurrent: assertCurrent, signal: input.signal, active: input.active,
         fail: () => {
           try {

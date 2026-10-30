@@ -36,6 +36,19 @@ const wsMock = vi.hoisted(() => {
       return this
     }
 
+    once(eventName: string, listener: Handler): this {
+      let fired = false
+      return this.on(eventName, (...args) => {
+        if (fired) return
+        fired = true
+        listener(...args)
+      })
+    }
+
+    close(): void {
+      this.terminate()
+    }
+
     send(payload: string): void {
       this.sent.push(payload)
     }
@@ -53,7 +66,7 @@ const wsMock = vi.hoisted(() => {
   }
 
   const state = {
-    connectionHandler: null as ((client: FakeClient) => void) | null,
+    connectionHandler: null as ((client: FakeClient, request: { headers: Record<string, string> }) => void) | null,
     options: [] as Array<Record<string, unknown>>,
     servers: [] as FakeWebSocketServer[],
   }
@@ -68,14 +81,16 @@ const wsMock = vi.hoisted(() => {
 
     on(eventName: string, listener: Handler): this {
       if (eventName === 'connection') {
-        state.connectionHandler = listener as (client: FakeClient) => void
+        state.connectionHandler = listener as NonNullable<typeof state.connectionHandler>
       }
       return this
     }
 
     connect(client = new FakeClient()): FakeClient {
       this.clients.add(client)
-      state.connectionHandler?.(client)
+      state.connectionHandler?.(client, { headers: {
+        host: 'localhost', authorization: `Bearer ${process.env.SLEEPYPOD_AUTH_TOKEN}`,
+      } })
       return client
     }
 
@@ -192,6 +207,7 @@ function connectFakeClient() {
 }
 
 beforeEach(() => {
+  vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', 'synthetic-stream-initialization-key-only')
   delete (globalThis as Record<string, unknown>).__sleepypodSensorStream
   loadedModule = null
   fsMock.readdirSync.mockReset().mockReturnValue([])
@@ -213,6 +229,7 @@ afterEach(async () => {
   if (originalNatsDisabled === undefined) delete process.env.PIEZO_NATS_DISABLED
   else process.env.PIEZO_NATS_DISABLED = originalNatsDisabled
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 describe('piezoStream module initialization contracts', () => {

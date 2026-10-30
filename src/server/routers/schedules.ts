@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
+import { assertCalendarScheduleWrite } from '@/src/server/bedtimeRoutineStore'
 import {
   temperatureSchedules,
   powerSchedules,
@@ -19,6 +20,8 @@ import {
   vibrationPatternSchema,
   alarmDurationSchema,
   wakeWindowSchema,
+  snoozeDurationSchema,
+  snoozeTaperSchema,
 } from '@/src/server/validation-schemas'
 
 const temperatureScheduleOutput = z.object({
@@ -38,6 +41,7 @@ const powerScheduleOutput = z.object({
   dayOfWeek: dayOfWeekSchema,
   onTime: z.string(),
   offTime: z.string(),
+  offDayOffset: z.number().int().min(0).max(1).default(0),
   endAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
   onTemperature: z.number(),
   enabled: z.boolean(),
@@ -55,6 +59,8 @@ const alarmScheduleOutput = z.object({
   duration: z.number(),
   alarmTemperature: z.number(),
   wakeWindow: z.number(),
+  snoozeDuration: z.number(),
+  snoozeTaper: z.number(),
   enabled: z.boolean(),
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -65,7 +71,7 @@ const schedulesCollectionOutput = z.object({
   power: z.array(powerScheduleOutput),
   alarm: z.array(alarmScheduleOutput),
 })
-import { getJobManager } from '@/src/scheduler'
+import { applyScheduler, releaseDays } from '@/src/server/scheduleLibrary'
 import { toC } from '@/src/lib/tempUtils'
 import { CURVE_NOTES_MAX } from '@/src/lib/sleepCurve/savePlan'
 
@@ -73,20 +79,9 @@ type TemperatureRow = typeof temperatureSchedules.$inferSelect
 type PowerRow = typeof powerSchedules.$inferSelect
 type AlarmRow = typeof alarmSchedules.$inferSelect
 
-/**
- * Apply an incremental scheduler mutation. The helper resolves the job
- * manager and invokes `fn`; failures are logged but never thrown out of the
- * route handler — schedule writes already committed, and the heartbeat
- * liveness loop will recover any drift.
- */
-async function applyScheduler(fn: (jm: Awaited<ReturnType<typeof getJobManager>>) => void | Promise<void>): Promise<void> {
-  try {
-    const jobManager = await getJobManager()
-    await fn(jobManager)
-  }
-  catch (e) {
-    console.error('Scheduler update failed:', e)
-  }
+/** True when a row update changes more than its enabled flag (pausing keeps the row's curve). */
+function editsRow(updates: Record<string, unknown>): boolean {
+  return Object.entries(updates).some(([key, value]) => key !== 'enabled' && value !== undefined)
 }
 
 const unitSchema = z.enum(['F', 'C']).default('F')
@@ -172,9 +167,10 @@ export const schedulesRouter = router({
         .strict()
     )
     .output(temperatureScheduleOutput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         const created = db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [result] = tx.insert(temperatureSchedules).values(input).returning().all()
           if (!result) {
             throw new TRPCError({
@@ -183,6 +179,7 @@ export const schedulesRouter = router({
             })
           }
 
+          releaseDays(tx, [result])
           return result
         })
 
@@ -217,11 +214,12 @@ export const schedulesRouter = router({
         .strict()
     )
     .output(temperatureScheduleOutput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         const { id, ...updates } = input
 
         const updated = db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [result] = tx
             .update(temperatureSchedules)
             .set({ ...updates, updatedAt: new Date() })
@@ -235,6 +233,7 @@ export const schedulesRouter = router({
             })
           }
 
+          if (editsRow(updates)) releaseDays(tx, [result])
           return result
         })
 
@@ -266,9 +265,10 @@ export const schedulesRouter = router({
         .strict()
     )
     .output(z.object({ success: z.boolean() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         void db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [deleted] = tx
             .delete(temperatureSchedules)
             .where(eq(temperatureSchedules.id, input.id))
@@ -280,6 +280,7 @@ export const schedulesRouter = router({
               message: `Temperature schedule with ID ${input.id} not found`,
             })
           }
+          releaseDays(tx, [deleted])
         })
 
         await applyScheduler(jm => jm.cancelTemperatureJob(input.id))
@@ -309,6 +310,7 @@ export const schedulesRouter = router({
           dayOfWeek: dayOfWeekSchema,
           onTime: timeStringSchema,
           offTime: timeStringSchema,
+          offDayOffset: z.number().int().min(0).max(1).default(0),
           endAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
           onTemperature: temperatureSchema,
           enabled: z.boolean().default(true),
@@ -316,9 +318,10 @@ export const schedulesRouter = router({
         .strict()
     )
     .output(powerScheduleOutput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         const created = db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [result] = tx.insert(powerSchedules).values(input).returning().all()
           if (!result) {
             throw new TRPCError({
@@ -327,6 +330,7 @@ export const schedulesRouter = router({
             })
           }
 
+          releaseDays(tx, [result])
           return result
         })
 
@@ -356,6 +360,7 @@ export const schedulesRouter = router({
           id: idSchema,
           onTime: timeStringSchema.optional(),
           offTime: timeStringSchema.optional(),
+          offDayOffset: z.number().int().min(0).max(1).optional(),
           endAction: z.enum(['turn_off', 'maintain']).optional(),
           onTemperature: temperatureSchema.optional(),
           enabled: z.boolean().optional(),
@@ -363,11 +368,12 @@ export const schedulesRouter = router({
         .strict()
     )
     .output(powerScheduleOutput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         const { id, ...updates } = input
 
         const updated = db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [result] = tx
             .update(powerSchedules)
             .set({ ...updates, updatedAt: new Date() })
@@ -381,6 +387,7 @@ export const schedulesRouter = router({
             })
           }
 
+          if (editsRow(updates)) releaseDays(tx, [result])
           return result
         })
 
@@ -412,9 +419,10 @@ export const schedulesRouter = router({
         .strict()
     )
     .output(z.object({ success: z.boolean() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         void db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [deleted] = tx
             .delete(powerSchedules)
             .where(eq(powerSchedules.id, input.id))
@@ -426,6 +434,7 @@ export const schedulesRouter = router({
               message: `Power schedule with ID ${input.id} not found`,
             })
           }
+          releaseDays(tx, [deleted])
         })
 
         await applyScheduler(jm => jm.cancelPowerJob(input.id))
@@ -459,14 +468,17 @@ export const schedulesRouter = router({
           duration: alarmDurationSchema,
           alarmTemperature: temperatureSchema,
           wakeWindow: wakeWindowSchema.default(0),
+          snoozeDuration: snoozeDurationSchema.default(300),
+          snoozeTaper: snoozeTaperSchema.default(0),
           enabled: z.boolean().default(true),
         })
         .strict()
     )
     .output(alarmScheduleOutput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         const created = db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [result] = tx.insert(alarmSchedules).values(input).returning().all()
           if (!result) {
             throw new TRPCError({
@@ -508,16 +520,19 @@ export const schedulesRouter = router({
           duration: alarmDurationSchema.optional(),
           alarmTemperature: temperatureSchema.optional(),
           wakeWindow: wakeWindowSchema.optional(),
+          snoozeDuration: snoozeDurationSchema.optional(),
+          snoozeTaper: snoozeTaperSchema.optional(),
           enabled: z.boolean().optional(),
         })
         .strict()
     )
     .output(alarmScheduleOutput)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         const { id, ...updates } = input
 
         const updated = db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [result] = tx
             .update(alarmSchedules)
             .set({ ...updates, updatedAt: new Date() })
@@ -562,9 +577,10 @@ export const schedulesRouter = router({
         .strict()
     )
     .output(z.object({ success: z.boolean() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         void db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
           const [deleted] = tx
             .delete(alarmSchedules)
             .where(eq(alarmSchedules.id, input.id))
@@ -642,6 +658,7 @@ export const schedulesRouter = router({
             dayOfWeek: dayOfWeekSchema,
             onTime: timeStringSchema,
             offTime: timeStringSchema,
+            offDayOffset: z.number().int().min(0).max(1).default(0),
             endAction: z.enum(['turn_off', 'maintain']).default('turn_off'),
             onTemperature: temperatureSchema,
             enabled: z.boolean().default(true),
@@ -655,6 +672,8 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema,
             alarmTemperature: temperatureSchema,
             wakeWindow: wakeWindowSchema.default(0),
+            snoozeDuration: snoozeDurationSchema.default(300),
+            snoozeTaper: snoozeTaperSchema.default(0),
             enabled: z.boolean().default(true),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
@@ -669,6 +688,7 @@ export const schedulesRouter = router({
             id: idSchema,
             onTime: timeStringSchema.optional(),
             offTime: timeStringSchema.optional(),
+            offDayOffset: z.number().int().min(0).max(1).optional(),
             endAction: z.enum(['turn_off', 'maintain']).optional(),
             onTemperature: temperatureSchema.optional(),
             enabled: z.boolean().optional(),
@@ -681,6 +701,8 @@ export const schedulesRouter = router({
             duration: alarmDurationSchema.optional(),
             alarmTemperature: temperatureSchema.optional(),
             wakeWindow: wakeWindowSchema.optional(),
+            snoozeDuration: snoozeDurationSchema.optional(),
+            snoozeTaper: snoozeTaperSchema.optional(),
             enabled: z.boolean().optional(),
           })).max(1000).default([]),
         }).default({ temperature: [], power: [], alarm: [] }),
@@ -693,21 +715,26 @@ export const schedulesRouter = router({
       })
     )
     .output(z.object({ success: z.boolean() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, path }) => {
       try {
         const upsertTemp: TemperatureRow[] = []
         const upsertPower: PowerRow[] = []
         const upsertAlarm: AlarmRow[] = []
 
         db.transaction((tx) => {
+          assertCalendarScheduleWrite(tx, input, path)
+          // Sides and days whose temperature or power rows change outside the library.
+          const edited: Array<{ side: TemperatureRow['side'], dayOfWeek: TemperatureRow['dayOfWeek'] }> = []
           // Deletes first
           for (const id of input.deletes.temperature) {
             const [deleted] = tx.delete(temperatureSchedules).where(eq(temperatureSchedules.id, id)).returning().all()
             if (!deleted) throw new TRPCError({ code: 'NOT_FOUND', message: `Temperature schedule with ID ${id} not found` })
+            edited.push(deleted)
           }
           for (const id of input.deletes.power) {
             const [deleted] = tx.delete(powerSchedules).where(eq(powerSchedules.id, id)).returning().all()
             if (!deleted) throw new TRPCError({ code: 'NOT_FOUND', message: `Power schedule with ID ${id} not found` })
+            edited.push(deleted)
           }
           for (const id of input.deletes.alarm) {
             const [deleted] = tx.delete(alarmSchedules).where(eq(alarmSchedules.id, id)).returning().all()
@@ -720,11 +747,13 @@ export const schedulesRouter = router({
             const [row] = tx.insert(temperatureSchedules).values(entry).returning().all()
             if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create temperature schedule - no record returned' })
             upsertTemp.push(row)
+            edited.push(row)
           }
           for (const entry of input.creates.power) {
             const [row] = tx.insert(powerSchedules).values(entry).returning().all()
             if (!row) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create power schedule - no record returned' })
             upsertPower.push(row)
+            edited.push(row)
           }
           for (const entry of input.creates.alarm) {
             const [row] = tx.insert(alarmSchedules).values(entry).returning().all()
@@ -737,11 +766,13 @@ export const schedulesRouter = router({
             const [updated] = tx.update(temperatureSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(temperatureSchedules.id, id)).returning().all()
             if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Temperature schedule with ID ${id} not found` })
             upsertTemp.push(updated)
+            if (editsRow(updates)) edited.push(updated)
           }
           for (const { id, ...updates } of input.updates.power) {
             const [updated] = tx.update(powerSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(powerSchedules.id, id)).returning().all()
             if (!updated) throw new TRPCError({ code: 'NOT_FOUND', message: `Power schedule with ID ${id} not found` })
             upsertPower.push(updated)
+            if (editsRow(updates)) edited.push(updated)
           }
           for (const { id, ...updates } of input.updates.alarm) {
             const [updated] = tx.update(alarmSchedules).set({ ...updates, updatedAt: new Date() }).where(eq(alarmSchedules.id, id)).returning().all()
@@ -760,6 +791,7 @@ export const schedulesRouter = router({
               tx.delete(scheduleNotes).where(and(eq(scheduleNotes.side, side), eq(scheduleNotes.dayOfWeek, dayOfWeek))).run()
             }
           }
+          releaseDays(tx, edited)
         })
 
         await applyScheduler((jm) => {

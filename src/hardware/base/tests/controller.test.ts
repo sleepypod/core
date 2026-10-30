@@ -3,6 +3,7 @@ import { withSideLock } from '../../sideLock'
 import { BaseController } from '../controller'
 import type { BaseTransport } from '../types'
 import { telemetry } from './fixtures'
+import { installMechanicalObserver } from '@/src/biometrics/mechanical/dispatch'
 
 let onData: (data: Uint8Array) => void
 let onDisconnect: (error: Error) => void
@@ -37,6 +38,26 @@ async function ready() {
 }
 
 describe('whole-bed controller', () => {
+  it('blocks movement when its interference record fails while preserving Stop', async () => {
+    await ready()
+    const command = vi.fn(() => {
+      throw new Error('journal unavailable')
+    })
+    const uninstall = installMechanicalObserver({ command })
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(controller.setPosition(target)).rejects.toThrow('journal unavailable')
+      expect(transport.write).not.toHaveBeenCalled()
+      await controller.stop()
+      expect(transport.write).toHaveBeenCalledTimes(1)
+      expect(command).toHaveBeenCalledTimes(2)
+      expect(controller.status().busy).toBe(false)
+    }
+    finally {
+      uninstall()
+      warning.mockRestore()
+    }
+  })
   it('keeps missing configuration and unknown telemetry distinct from flat', async () => {
     const missing = new BaseController(transport, async () => {
       throw new Error('ENOENT')

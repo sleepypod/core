@@ -1,0 +1,1 @@
+ALTER TABLE `power_schedules` ADD `off_day_offset` integer DEFAULT 0 NOT NULL;

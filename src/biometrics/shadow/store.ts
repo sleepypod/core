@@ -4,6 +4,7 @@ export { shadowPlanSchema, shadowMonitoringSchema, shadowExpectedBindingsSchema 
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
+import { firmwareTimestampBasis } from './worker-protocol'
 import { canonicalJson, dataHash } from '../algorithms/canonical'
 
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
@@ -12,14 +13,14 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/)
 const metric = z.enum(['heart_rate', 'breathing_rate', 'window_ibi_variability_v1'])
 const reading = z.object({ value: z.number().finite().nullable(), quality: z.number().min(0).max(1) }).strict()
 export const shadowActiveProvenanceSchema = z.object({ processingRunId: z.string().uuid(), sourceSide: z.enum(['left', 'right']),
-  generation: integer, manifestHash: hash }).strict()
+  generation: integer, manifestHash: hash, timestampBasis: z.literal(firmwareTimestampBasis).optional() }).strict()
 export const shadowSampleSchema = z.object({ sequence: integer, side: z.enum(['left', 'right']), timestampMs: integer, inputHash: hash.nullable(),
   candidateConfigHash: hash, activeConfigHash: hash,
   readings: z.array(z.object({ metric, candidate: reading, active: reading }).strict()).min(1).max(3),
   pairing: z.object({ policy: z.literal('exact_timestamp_union_v1'), candidatePresent: z.boolean(), activePresent: z.boolean() }).strict().optional(),
   inputIdentityKind: z.enum(['candidate_prefix', 'active_provenance', 'unavailable']).optional(),
   activeProvenance: shadowActiveProvenanceSchema.optional(),
-  candidateProvenance: z.object({ sourceSide: z.enum(['left', 'right']), outputSequence: integer,
+  candidateProvenance: z.object({ timestampBasis: z.literal(firmwareTimestampBasis).optional(), sourceSide: z.enum(['left', 'right']), outputSequence: integer,
     flags: z.array(z.string().max(200)).max(32).nullable(), limitations: z.array(z.string().max(200)).max(33) }).strict().optional(),
 }).strict()
 export const shadowStoragePolicySchema = z.object({ maximumRuns: positive, maximumPoints: positive, maximumBytes: positive }).strict()

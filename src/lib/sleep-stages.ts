@@ -1,3 +1,4 @@
+import { stagesWithinWindow } from './stage-coverage'
 /**
  * Sleep stage classification — server-side port of iOS SleepAnalyzer.
  *
@@ -446,8 +447,8 @@ export function mergeIntoBlocks(epochs: SleepEpoch[]): SleepStageBlock[] {
   }
 
   for (let i = 1; i < epochs.length; i++) {
-    if (epochs[i].stage === currentBlock.stage) {
-      currentBlock.end = epochs[i].start + epochs[i].duration
+    if (epochs[i].stage === currentBlock.stage && epochs[i].start <= currentBlock.end) {
+      currentBlock.end = Math.max(currentBlock.end, epochs[i].start + epochs[i].duration)
     }
     else {
       blocks.push(currentBlock)
@@ -652,6 +653,7 @@ export function summarizeRuns(runs: StageRunStats[]): StageRunSummary {
 
 /** Inputs of one night for classifyNights. */
 export interface NightInputs {
+  window?: { start: Date, end: Date }
   vitalsData: VitalsRow[]
   movementData: MovementRow[]
   calibrationQuality: number
@@ -682,7 +684,10 @@ export function classifyNights(
   nights: NightInputs[],
   ruleset: StageRuleset,
 ): { summary: NightsSummary, latestEpochs: SleepEpoch[] } | null {
-  const allRuns = nights.map(n => ({ ...runStageClassifier(n.vitalsData, n.movementData, n.calibrationQuality, ruleset), night: n }))
+  const allRuns = nights.map((night) => {
+    const run = runStageClassifier(night.vitalsData, night.movementData, night.calibrationQuality, ruleset)
+    return { ...run, epochs: night.window ? stagesWithinWindow(run.epochs, night.window) : run.epochs, night }
+  })
   // Aggregates skip nights without vitals, but the latest night stays the
   // latest night: a preview must not describe an older night as "last night".
   const runs = allRuns.filter(r => r.epochs.length > 0)

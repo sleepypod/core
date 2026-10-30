@@ -16,6 +16,14 @@ const OVERNIGHT = [
 ]
 
 describe('buildTimeline', () => {
+  it('keeps explicit calendar offsets even without a large gap or an evening point', () => {
+    const points = [
+      { time: '04:00', temperature: 72, dayOffset: 1 as const },
+      { time: '14:00', temperature: 80, dayOffset: 0 as const },
+    ]
+    expect(buildTimeline(points).map(point => point.minutes)).toEqual([14 * 60, 28 * 60])
+    expect(buildTimeline([points[0]])[0].minutes).toBe(28 * 60)
+  })
   it('shifts after-midnight points by 24h for overnight schedules and sorts them', () => {
     const tl = buildTimeline(OVERNIGHT)
     expect(tl.map(p => p.item.time)).toEqual(['23:15', '00:30', '03:00', '07:00'])

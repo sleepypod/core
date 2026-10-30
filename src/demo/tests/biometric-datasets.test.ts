@@ -72,9 +72,25 @@ it('rejects duplicate, mismatched and oversized selections and pages dataset des
   const created = await required(handlers.createDataset)(request)
   expect(await required(handlers.createDataset)(request)).toEqual(created)
   expect(await required(handlers.getDataset)({ id: created.id })).toEqual(created)
-  const raced = await Promise.allSettled([required(handlers.createDataset)({ ...request, idempotencyKey: 'raced' }), required(handlers.createDataset)({ ...request, idempotencyKey: 'raced', subjectId: 'raced-sleeper' })])
-  expect(raced.map(row => row.status)).toEqual(['fulfilled', 'rejected'])
+  const beforeRace = await required(handlers.listDatasets)({ side: 'left' })
+  const raceRequests = [{ ...request, idempotencyKey: 'raced' }, { ...request, idempotencyKey: 'raced', subjectId: 'raced-sleeper' }]
+  const raced = await Promise.allSettled(raceRequests.map(input => required(handlers.createDataset)(input)))
+  // WebCrypto may finish either request first; the stored winner must be unique.
+  expect(raced.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+  expect(raced.filter(result => result.status === 'rejected')).toHaveLength(1)
+  for (const [index, result] of raced.entries()) {
+    if (result.status === 'fulfilled') {
+      expect(result.value.subjectId).toBe(raceRequests[index].subjectId)
+      expect(await required(handlers.createDataset)(raceRequests[index])).toEqual(result.value)
+      expect(await required(handlers.getDataset)({ id: result.value.id })).toEqual(result.value)
+    }
+    else {
+      expect(result.reason).toMatchObject({ message: expect.stringContaining('REVISION_CONFLICT') })
+      await expect(required(handlers.createDataset)(raceRequests[index])).rejects.toThrow('REVISION_CONFLICT')
+    }
+  }
   const page = await required(handlers.listDatasets)({ side: 'left' })
+  expect(page.items).toHaveLength(beforeRace.items.length + 1)
   expect(page.items.map(row => row.id)).toContain(created.id)
   expect(page.nextCursor).toBeNull()
   const newest = page.items[0]

@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { NextRequest } from 'next/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { TEST_OWNER_TOKEN } from '@/src/auth/tests/support'
 import { config, proxy } from '../proxy'
 
 const request = (path: string, host?: string) => {
-  const headers = new Headers({ 'accept-language': 'en' })
+  vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', TEST_OWNER_TOKEN)
+  const headers = new Headers({ 'accept-language': 'en', 'authorization': `Bearer ${TEST_OWNER_TOKEN}` })
   if (host !== undefined) headers.set('host', host)
   return new NextRequest(`http://192.168.1.88:3000${path}`, { headers })
 }
@@ -35,6 +37,12 @@ describe('proxy host check', () => {
     'eight-pod.local:3000',
   ])('passes API requests through for %s', (host) => {
     expect(proxy(request('/api/trpc/device.getStatus', host))).toBeUndefined()
+  })
+
+  it('requires API credentials even on the LAN', () => {
+    const unauthenticated = request('/api/trpc/device.getStatus', '192.168.1.88:3000')
+    unauthenticated.headers.delete('authorization')
+    expect(proxy(unauthenticated)?.status).toBe(401)
   })
 
   it('still redirects allowed page requests to a locale', () => {

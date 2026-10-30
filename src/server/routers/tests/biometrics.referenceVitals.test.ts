@@ -10,7 +10,8 @@ import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as schema from '@/src/db/biometrics-schema'
-import { referenceVitals, vitals } from '@/src/db/biometrics-schema'
+import { referenceSamples, referenceVitals, vitals } from '@/src/db/biometrics-schema'
+import { ReferenceStore } from '@/src/biometrics/references/store'
 
 type Db = ReturnType<typeof drizzle<typeof schema>>
 
@@ -113,6 +114,94 @@ describe('biometrics reference vitals', () => {
       raw.exec('DROP TABLE reference_vitals')
       await expect(caller.importReferenceVitals({ side: 'left', source: 'apple_watch', samples }))
         .rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR', message: /Failed to import reference vitals/ })
+    })
+  })
+
+  describe('importReferenceSamples', () => {
+    const breathing = [{ timestamp: T0, value: 14.5 }, { timestamp: T0 + 5 * MIN, value: 15 }]
+
+    it('rolls back samples when their normalized provenance cannot be committed', async () => {
+      raw.exec('CREATE TRIGGER fail_reference BEFORE INSERT ON reference_measurements BEGIN SELECT RAISE(ABORT, \'disk full\'); END')
+      await expect(caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: breathing })).rejects.toThrow()
+      expect(raw.prepare('SELECT count(*) AS total FROM reference_samples').get()).toEqual({ total: 0 })
+      expect(raw.prepare('SELECT count(*) AS total FROM reference_imports').get()).toEqual({ total: 0 })
+    })
+
+    it('stores breathing rate and HRV per metric with normalized provenance', async () => {
+      expect(await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: breathing })).toEqual({ written: 2 })
+      // Same second as a breathing sample: each metric keeps its own row.
+      expect(await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_sdnn', samples: [{ timestamp: T0, value: 48 }] })).toEqual({ written: 1 })
+      expect(raw.prepare('SELECT metric, timestamp, value FROM reference_samples ORDER BY metric, timestamp').all()).toEqual([
+        { metric: 'breathing_rate', timestamp: T0, value: 14.5 },
+        { metric: 'breathing_rate', timestamp: T0 + 5 * MIN, value: 15 },
+        { metric: 'hrv_sdnn', timestamp: T0, value: 48 },
+      ])
+      expect(raw.prepare('SELECT metric, unit, value FROM reference_measurements ORDER BY metric, start_ms').all()).toEqual([
+        { metric: 'breathing_rate', unit: 'breaths/min', value: 14.5 },
+        { metric: 'breathing_rate', unit: 'breaths/min', value: 15 },
+        { metric: 'hrv_sdnn', unit: 'ms', value: 48 },
+      ])
+      expect(raw.prepare('SELECT count(*) AS total FROM reference_samples WHERE import_id IS NULL').get()).toEqual({ total: 0 })
+      expect(db.select().from(vitals).all()).toHaveLength(0)
+    })
+
+    it('is a no-op on repost and writes only new samples when a repost extends the night', async () => {
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: breathing })
+      expect(await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: breathing })).toEqual({ written: 0 })
+      expect(await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate',
+        samples: [...breathing, { timestamp: T0 + 10 * MIN, value: 16 }] })).toEqual({ written: 1 })
+      expect(await caller.importReferenceSamples({ side: 'right', source: 'apple_watch', metric: 'breathing_rate', samples: breathing })).toEqual({ written: 2 })
+      expect(db.select().from(referenceSamples).all()).toHaveLength(5)
+      expect(raw.prepare('SELECT count(*) AS total FROM reference_imports').get()).toEqual({ total: 3 })
+    })
+
+    it('rejects implausible values per metric, unknown metrics and millisecond timestamps', async () => {
+      const post = (metric: 'breathing_rate' | 'hrv_sdnn', timestamp: number, value: number) =>
+        caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric, samples: [{ timestamp, value }] })
+      await expect(post('breathing_rate', T0, 2)).rejects.toThrow()
+      await expect(post('breathing_rate', T0, 80)).rejects.toThrow()
+      await expect(post('hrv_sdnn', T0, 0)).rejects.toThrow()
+      await expect(post('hrv_sdnn', T0, 600)).rejects.toThrow()
+      await expect(post('hrv_sdnn', T0 * 1000, 40)).rejects.toThrow()
+      await expect(post('heart_rate' as never, T0, 60)).rejects.toThrow()
+      expect(await post('hrv_sdnn', T0, 250)).toEqual({ written: 1 })
+    })
+
+    it('deletes the samples with their reference import', async () => {
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_sdnn', samples: [{ timestamp: T0, value: 48 }] })
+      const importId = db.select().from(referenceSamples).get()?.importId
+      expect(importId).toBeTruthy()
+      new ReferenceStore(db).delete(importId as string)
+      expect(db.select().from(referenceSamples).all()).toHaveLength(0)
+    })
+
+    it('surfaces a database failure as INTERNAL_SERVER_ERROR', async () => {
+      raw.exec('DROP TABLE reference_samples')
+      await expect(caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: breathing }))
+        .rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR', message: /Failed to import reference samples/ })
+    })
+  })
+
+  describe('getReferenceSamples', () => {
+    it('keeps the newest samples within the limit in chronological order', async () => {
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_sdnn', samples: [
+        { timestamp: T0 + 2 * MIN, value: 52 }, { timestamp: T0, value: 48 }, { timestamp: T0 + MIN, value: 50 },
+      ] })
+      const rows = await caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + 3 * MIN) * 1000), limit: 2 })
+      expect(rows.map(r => r.value)).toEqual([50, 52])
+    })
+    it('isolates side, metric and time window, returning chronological samples', async () => {
+      for (const side of ['left', 'right'] as const) {
+        await caller.importReferenceSamples({ side, source: 'apple_watch', metric: 'hrv_sdnn', samples: [
+          { timestamp: T0 + 2 * MIN, value: 52 }, { timestamp: T0, value: 48 },
+        ] })
+      }
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: [{ timestamp: T0, value: 15 }] })
+      expect(await caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([{ timestamp: new Date(T0 * 1000), value: 48 }])
+      expect((await caller.getReferenceSamples({ side: 'right', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + 3 * MIN) * 1000) })).map(r => r.value)).toEqual([48, 52])
+    })
+    it('rejects reversed ranges', async () => {
+      await expect(caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(2000), endDate: new Date(1000) })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     })
   })
 

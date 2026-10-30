@@ -160,6 +160,15 @@ function describeSchema(module: Record<string, unknown>) {
 }
 
 const expectedTables: Record<string, TableSpec> = {
+  householdPrivacyBoundary: {
+    name: 'household_privacy_boundary',
+    columns: [
+      { name: 'id', notNull: true, default: 'fn' },
+      { name: 'required_at', notNull: true, default: undefined },
+      { name: 'reason', notNull: true, default: undefined },
+    ],
+    indexes: [],
+  },
   baseSchedules: {
     name: 'base_schedules',
     columns: [
@@ -220,7 +229,7 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'pump_stall_auto_recovery_enabled', notNull: true, default: false },
       { name: 'pump_stall_recovery_rpm', notNull: true, default: 1500 },
       { name: 'pump_stall_recovery_samples', notNull: true, default: 3 },
-      { name: 'autopilot_enabled', notNull: true, default: true },
+      { name: 'autopilot_enabled', notNull: true, default: false },
       { name: 'created_at', notNull: true, default: 'sql' },
       { name: 'updated_at', notNull: true, default: 'sql' },
     ],
@@ -319,6 +328,7 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'day_of_week', notNull: true, default: undefined },
       { name: 'on_time', notNull: true, default: undefined },
       { name: 'off_time', notNull: true, default: undefined },
+      { name: 'off_day_offset', notNull: true, default: 0 },
       { name: 'end_action', notNull: true, default: 'turn_off' },
       { name: 'on_temperature', notNull: true, default: undefined },
       { name: 'enabled', notNull: true, default: true },
@@ -341,6 +351,8 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'duration', notNull: true, default: undefined },
       { name: 'alarm_temperature', notNull: true, default: undefined },
       { name: 'wake_window', notNull: true, default: 0 },
+      { name: 'snooze_duration', notNull: true, default: 300 },
+      { name: 'snooze_taper', notNull: true, default: 0 },
       { name: 'enabled', notNull: true, default: true },
       { name: 'created_at', notNull: true, default: 'sql' },
       { name: 'updated_at', notNull: true, default: 'sql' },
@@ -384,6 +396,10 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'wake', notNull: true, default: undefined },
       { name: 'points', notNull: true, default: undefined },
       { name: 'reasoning', notNull: true, default: '' },
+      { name: 'end_action', notNull: true, default: 'turn_off' },
+      { name: 'left_days', notNull: true, default: 'sql' },
+      { name: 'right_days', notNull: true, default: 'sql' },
+      { name: 'active', notNull: true, default: false },
       { name: 'created_at', notNull: true, default: 'sql' },
       { name: 'updated_at', notNull: true, default: 'sql' },
     ],
@@ -464,11 +480,18 @@ describe('db schema definitions', () => {
       })
       .map(([k]) => k)
       .sort()
-    // New biometric tables are pinned by the exhaustive snapshot below and
-    // exercised against real migrations by the profile repository tests.
+    // Biometric, comfort and bedtime tables are pinned by the exhaustive snapshot below
+    // and exercised against real migrations by their repository tests.
     expect(actualTableExports).toEqual([...Object.keys(expectedTables),
-      'biometricProfileRevisions', 'biometricProfileBindings',
+      'alarmOverrides', 'alarmOccurrences', 'journalEntries', 'bedtimeRoutines', 'controlReceipts', 'biometricProfileRevisions', 'biometricProfileBindings', 'sideStageModels', 'stageModelLibrary',
       'biometricActivationEvents', 'biometricConfigOutbox',
+      'comfortEvents', 'comfortFeedback', 'comfortStates', 'comfortReviews',
+      'comfortActivations', 'comfortOwnerReviews', 'comfortQualifications', 'comfortResolutions',
+      'notificationInbox', 'temperatureApplications',
+      'roomContextSettings', 'roomContextLatest', 'roomContextHistory',
+      'bedroomSettings', 'bedroomLatest', 'bedroomHistory',
+      'households', 'householdAccounts', 'householdBrowserScopes', 'householdDevices', 'householdInvitations', 'householdPersonalSettings', 'householdMutationReceipts', 'householdArrangementReviews', 'householdArrangementApprovals',
+      'householdHistoryState', 'householdAttributionEpochs', 'householdPersonRecords', 'householdControlReceipts',
     ].sort())
   })
 })

@@ -211,11 +211,14 @@ export const TempScreen = () => {
     return (
       <>
         {header}
+        <SideSelector className="mb-3" />
         <div className={GRID}>
-          <Skeleton className="h-[520px]" />
+          <Skeleton className="h-[200px] min-[900px]:h-[520px]" />
           <Skeleton className="h-[520px] max-[899px]:hidden" />
-          <div className={CONTEXT}>
+          <div className={`${CONTEXT} max-[899px]:order-first`}>
             <span className="sp-label" role="status">Connecting…</span>
+            <p className="text-xs text-fg-2">Saved alarms remain available while hardware status reconnects.</p>
+            <AlarmCard side={contextSide} />
           </div>
         </div>
       </>

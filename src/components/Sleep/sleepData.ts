@@ -38,7 +38,7 @@ export interface MovementRow {
 }
 
 /** Sessions that start before this hour belong to the previous evening's night. */
-export const NIGHT_ROLLOVER_HOUR = 6
+export const NIGHT_ROLLOVER_HOUR = 12
 const HOUR_MS = 3_600_000
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -49,7 +49,7 @@ export function dayKey(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-/** The night a session belongs to: its local start day, minus one before 6 AM. */
+/** Keep morning fragments with the preceding evening, up to local noon. */
 export function nightKey(enteredBedAt: Date): string {
   const d = new Date(enteredBedAt)
   if (d.getHours() < NIGHT_ROLLOVER_HOUR) d.setDate(d.getDate() - 1)
@@ -90,6 +90,26 @@ export function groupByNight<T extends SleepRecordRow>(records: T[]): Map<string
 export function mainRecord<T extends SleepRecordRow>(records: T[] | undefined): T | undefined {
   if (!records?.length) return undefined
   return records.reduce((a, b) => (b.sleepDurationSeconds > a.sleepDurationSeconds ? b : a))
+}
+
+/** Merge recorded windows without inventing sleep in gaps or counting overlaps twice. */
+export function recordingSummary(records: SleepRecordRow[]) {
+  const windows = records.map((record) => {
+    const start = new Date(record.enteredBedAt).getTime()
+    const end = record.leftBedAt ? new Date(record.leftBedAt).getTime() : start + Math.max(0, record.sleepDurationSeconds) * 1000
+    return { start, end }
+  }).filter(window => Number.isFinite(window.start) && Number.isFinite(window.end) && window.start > 0 && window.end > window.start)
+    .sort((first, second) => first.start - second.start)
+  const intervals: Array<{ start: number, end: number }> = []
+  for (const window of windows) {
+    const previous = intervals.at(-1)
+    if (previous && window.start <= previous.end) previous.end = Math.max(previous.end, window.end)
+    else intervals.push({ ...window })
+  }
+  const start = intervals[0]?.start ?? null
+  const end = intervals.at(-1)?.end ?? null
+  const seconds = intervals.reduce((total, interval) => total + (interval.end - interval.start) / 1000, 0)
+  return { start, end, seconds, gaps: start != null && end != null ? Math.max(0, (end - start) / 1000 - seconds) : 0, count: new Set(records.map(record => record.id)).size }
 }
 
 /* ─── Formatting ─────────────────────────────────────────────────────── */
@@ -195,7 +215,7 @@ export interface NightSummary {
   key: string
   date: Date
   record?: SleepRecordRow
-  /** Hours asleep across all sessions of the night. */
+  /** Recorded bed hours across all sessions; not proof of sleep. */
   hours: number
   exits: number
   bedtime: Date | null
@@ -265,7 +285,7 @@ export function buildNights(
       key,
       date: keyToDate(key),
       record: main,
-      hours: recs.reduce((sum, r) => sum + r.sleepDurationSeconds, 0) / 3600,
+      hours: recordingSummary(recs).seconds / 3600,
       exits: recs.reduce((sum, r) => sum + r.timesExitedBed, 0),
       bedtime: main ? new Date(main.enteredBedAt) : null,
       wake: main?.leftBedAt ? new Date(main.leftBedAt) : null,

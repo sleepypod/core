@@ -11,10 +11,8 @@ afterEach(() => {
 })
 
 describe('loadThree', () => {
-  it('tries the pinned CDNs before the vendored copy', () => {
+  it('uses only the bundled renderer', () => {
     expect(THREE_SOURCES).toEqual([
-      'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js',
-      'https://unpkg.com/three@0.170.0/build/three.module.min.js',
       '/vendor/three.module.min.js',
     ])
   })
@@ -24,14 +22,15 @@ describe('loadThree', () => {
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce({ default: 'not three' })
       .mockResolvedValueOnce(three)
-    await expect(importThree(load)).resolves.toBe(three)
-    expect(load.mock.calls.map(([url]) => url)).toEqual([...THREE_SOURCES])
+    const sources = ['/missing.js', '/invalid.js', '/renderer.js']
+    await expect(importThree(load, sources)).resolves.toBe(three)
+    expect(load.mock.calls.map(([url]) => url)).toEqual(sources)
   })
 
   it('gives each source 4 s before moving on, and resolves null when all fail', async () => {
     vi.useFakeTimers()
     const load = vi.fn((url: string) => url.startsWith('/') ? Promise.reject(new Error('404')) : new Promise(() => {}))
-    const result = importThree(load)
+    const result = importThree(load, ['slow1.js', 'slow2.js', '/missing.js'])
     await vi.advanceTimersByTimeAsync(THREE_TIMEOUT_MS - 1)
     expect(load).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(THREE_TIMEOUT_MS * 2)

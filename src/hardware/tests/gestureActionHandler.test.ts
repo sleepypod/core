@@ -258,18 +258,28 @@ describe('GestureActionHandler', () => {
     })
 
     test('a snoozed alarm comes back with its own settings', async () => {
-      const scheduled: AlarmConfig = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120 }
+      const scheduled: AlarmConfig = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, snoozeDuration: 540, snoozeTaper: 30 }
       const alarm = makeAlarmHooks(scheduled)
       // ended() forgets the active alarm, so its settings must be read first.
       alarm.ended.mockImplementation(async () => {
         alarm.activeConfig.mockReturnValue(null)
       })
-      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 540 }
+      const gesture = { actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 300 }
       const { deps } = makeDeps(gesture, { isAlarmVibrating: true }, makeMockClient(), alarm)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'doubleTap'))
 
       expect(alarm.snooze).toHaveBeenCalledWith('right', 540, scheduled)
+    })
+
+    test('repeated taps use the ringing alarm taper instead of the legacy tap duration', async () => {
+      const scheduled: AlarmConfig = { vibrationIntensity: 50, vibrationPattern: 'rise', duration: 60, snoozeDuration: 600, snoozeTaper: 50, snoozeCount: 2 }
+      const alarm = makeAlarmHooks(scheduled)
+      const { deps } = makeDeps({ actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 900 }, { isAlarmVibrating: true }, makeMockClient(), alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'tripleTap'))
+
+      expect(alarm.snooze).toHaveBeenCalledWith('right', 150, scheduled)
     })
 
     test.each([

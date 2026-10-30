@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { stagesWithinWindow } from '@/src/lib/stage-coverage'
+import { activateStageModel, getLibraryStageModel, getStoredStageModel, listStageModels, selectStageModel, setStageModel, uploadStageModel, validateModel } from '@/src/biometrics/stage-model-store'
+import { classifyWithStageModel, stageModelBlocks, stageModelSchema, type StageModel } from '@/src/lib/personal-stage-model'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { biometricsDb, db } from '@/src/db'
@@ -13,6 +16,8 @@ import { and, asc, desc, eq, gt, gte, lte } from 'drizzle-orm'
 import { sideSchema } from '@/src/server/validation-schemas'
 import {
   changedSegments,
+  classifySleepStages,
+  scoreAgainstReference,
   classifyNights,
   piezoCalibrationQuality,
   type NightInputs,
@@ -157,7 +162,7 @@ const changeSchema = z.object({
   agreementAfter: z.number().nullable(),
 })
 
-type LoadedNight = NightInputs & { record: typeof sleepRecords.$inferSelect }
+type LoadedNight = NightInputs & { window: { start: Date, end: Date }, record: typeof sleepRecords.$inferSelect }
 
 async function loadNights(side: Side, sleepRecordId: number | undefined, nights: number): Promise<LoadedNight[]> {
   const records = await biometricsDb
@@ -178,6 +183,7 @@ async function loadNights(side: Side, sleepRecordId: number | undefined, nights:
 
   return Promise.all(records.map(async record => ({
     record,
+    window: { start: record.enteredBedAt, end: record.leftBedAt },
     ...await loadStageInputs(side, record.enteredBedAt, record.leftBedAt),
     reference: await loadReference(side, record.enteredBedAt, record.leftBedAt),
   })))
@@ -368,6 +374,106 @@ export const sleepStagesRouter = router({
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to preview stage classifier: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          cause: error,
+        })
+      }
+    }),
+  listModels: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/sleep-stages/models', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.array(z.object({ id: z.number(), version: z.string(), kind: z.string(), uploadedAt: z.number(),
+      modelHash: z.string(), metrics: z.record(z.string(), z.unknown()).optional(), selected: z.boolean(), active: z.boolean() })))
+    .query(({ input }) => listStageModels(input.side)),
+
+  uploadModel: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/sleep-stages/models', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema, model: stageModelSchema }).strict())
+    .output(z.object({ id: z.number(), version: z.string() }))
+    .mutation(({ input }) => uploadStageModel(input.side, input.model)),
+
+  selectModel: publicProcedure
+    .meta({ openapi: { method: 'PUT', path: '/sleep-stages/models/selected', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema, id: z.number().int().positive(), active: z.boolean() }).strict())
+    .output(z.object({ version: z.string(), active: z.boolean() }))
+    .mutation(({ input }) => selectStageModel(input.side, input.id, input.active)),
+
+  getModel: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/sleep-stages/model', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema }).strict())
+    .output(z.object({ model: stageModelSchema.nullable(), uploadedAt: z.number().nullable(), active: z.boolean(), modelHash: z.string().nullable() }))
+    .query(({ input }) => getStoredStageModel(input.side)),
+
+  setModelActive: publicProcedure
+    .meta({ openapi: { method: 'PUT', path: '/sleep-stages/model/active', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema, active: z.boolean() }).strict())
+    .output(z.object({ active: z.boolean(), version: z.string().nullable() }))
+    .mutation(({ input }) => activateStageModel(input.side, input.active)),
+
+  setModel: publicProcedure
+    .meta({ openapi: { method: 'PUT', path: '/sleep-stages/model', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({ side: sideSchema, model: stageModelSchema.nullable() }).strict())
+    .output(z.object({ stored: z.boolean(), version: z.string().nullable() }))
+    .mutation(({ input }) => setStageModel(input.side, input.model)),
+
+  /** Compare a candidate against the same Watch windows without saving or activating it. */
+  previewModel: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/sleep-stages/model/preview', protect: false, tags: ['Sleep stages'] } })
+    .input(z.object({
+      side: sideSchema,
+      sleepRecordId: z.number().int().optional(),
+      nights: z.number().int().min(1).max(30).optional(),
+      model: stageModelSchema.optional(),
+      modelId: z.number().int().positive().optional(),
+    }).strict().refine(input => !(input.model && input.modelId), { message: 'Choose model or modelId, not both' }))
+    .output(z.object({
+      version: z.string().nullable(),
+      nights: z.array(z.object({
+        sleepRecordId: z.number(),
+        enteredBedAt: z.number(),
+        leftBedAt: z.number(),
+        blocks: z.array(z.object({ start: z.number(), end: z.number(), stage: stageEnum })),
+        agreement: agreementSchema,
+        rulesAgreement: agreementSchema,
+      })),
+      pooled: agreementSchema,
+      rulesPooled: agreementSchema,
+    }))
+    .mutation(async ({ input }) => {
+      let model: StageModel | null = input.model ?? (input.modelId ? getLibraryStageModel(input.side, input.modelId) : null)
+      if (!model) {
+        const stored = getStoredStageModel(input.side)
+        if (!stored.model) throw new TRPCError({ code: 'NOT_FOUND', message: `No valid personal stage model stored for ${input.side}` })
+        model = stored.model
+      }
+      validateModel(model)
+      try {
+        const loaded = await loadNights(input.side, input.sleepRecordId, input.nights ?? 1)
+        const ruleset = (await loadStageClassifier(input.side)).ruleset
+        const staged = loaded.map(night => ({
+          night,
+          epochs: stagesWithinWindow(classifyWithStageModel(model, night.record.enteredBedAt, night.record.leftBedAt, night.vitalsData, night.movementData, ruleset), night.window),
+          rules: stagesWithinWindow(classifySleepStages(night.vitalsData, night.movementData, night.calibrationQuality, ruleset), night.window),
+        }))
+        const allReference = staged.flatMap(s => s.night.reference)
+        return {
+          version: model.version,
+          nights: staged.map(s => ({
+            sleepRecordId: s.night.record.id,
+            enteredBedAt: s.night.record.enteredBedAt.getTime(),
+            leftBedAt: s.night.record.leftBedAt.getTime(),
+            blocks: stageModelBlocks(s.epochs),
+            agreement: scoreAgainstReference(s.epochs, s.night.reference),
+            rulesAgreement: scoreAgainstReference(s.rules, s.night.reference),
+          })),
+          pooled: scoreAgainstReference(staged.flatMap(s => s.epochs), allReference),
+          rulesPooled: scoreAgainstReference(staged.flatMap(s => s.rules), allReference),
+        }
+      }
+      catch (error) {
+        if (error instanceof TRPCError) throw error
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to preview stage model: ${error instanceof Error ? error.message : 'Unknown error'}`,
           cause: error,
         })
       }

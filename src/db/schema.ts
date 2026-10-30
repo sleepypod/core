@@ -1,5 +1,99 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import type { DayOfWeek } from '@/src/lib/scheduleTime'
+
+// Source snapshots are server-created. Owner confirmation is distinct from sensor/command evidence.
+export const comfortOwnerReviews = sqliteTable('comfort_owner_reviews', {
+  id: text('id').primaryKey(), side: text('side').notNull(), createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(), review: text('review').notNull(), consumedAt: integer('consumed_at'),
+}, table => [index('comfort_owner_reviews_expiry').on(table.expiresAt)])
+export const comfortQualifications = sqliteTable('comfort_qualifications', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }), id: text('id').notNull().unique(),
+  side: text('side').notNull(), kind: text('kind').notNull(), record: text('record').notNull(),
+}, table => [index('comfort_qualifications_side_kind').on(table.side, table.kind, table.sequence)])
+export const comfortActivations = sqliteTable('comfort_activations', {
+  id: text('id').primaryKey(), side: text('side').notNull(), createdAt: integer('created_at').notNull(),
+  snapshot: text('snapshot').notNull(), revokedAt: integer('revoked_at'), reason: text('reason'),
+}, table => [index('comfort_activations_side').on(table.side, table.createdAt)])
+export const comfortResolutions = sqliteTable('comfort_resolutions', {
+  id: text('id').primaryKey(), side: text('side').notNull(), createdAt: integer('created_at').notNull(),
+  snapshot: text('snapshot').notNull(), note: text('note').notNull(),
+})
+
+// Attempted commands are separate from proposals and firmware-reported sensor state.
+export const temperatureApplications = sqliteTable('temperature_applications', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  attemptId: text('attempt_id').notNull(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  attemptedAt: integer('attempted_at').notNull(),
+  finishedAt: integer('finished_at'),
+  outcome: text('outcome', { enum: ['attempting', 'acknowledged', 'unknown'] }).notNull(),
+  request: text('request').notNull(),
+}, table => [
+  uniqueIndex('temperature_applications_attempt').on(table.attemptId),
+  index('temperature_applications_side_id').on(table.side, table.id),
+  index('temperature_applications_retention').on(table.attemptedAt),
+])
+
+export const roomContextSettings = sqliteTable('room_context_settings', {
+  id: integer('id').primaryKey(), revision: integer('revision').notNull(), config: text('config').notNull(),
+})
+
+// Bedroom sources retain physical-device identity; separate integrations cannot cast duplicate votes.
+export const bedroomSettings = sqliteTable('bedroom_settings', {
+  id: integer('id').primaryKey(), revision: integer('revision').notNull(), config: text('config').notNull(),
+})
+export const bedroomLatest = sqliteTable('bedroom_latest', {
+  sourceId: text('source_id').primaryKey(), revision: integer('revision').notNull(),
+  observedAt: integer('observed_at').notNull(), receivedAt: integer('received_at').notNull(),
+  lastMeasuredAt: integer('last_measured_at'), report: text('report').notNull(),
+})
+export const bedroomHistory = sqliteTable('bedroom_history', {
+  id: integer('id').primaryKey({ autoIncrement: true }), revision: integer('revision').notNull(),
+  sourceId: text('source_id').notNull(), receivedAt: integer('received_at').notNull(),
+  source: text('source').notNull(), report: text('report').notNull(),
+}, table => [index('bedroom_history_received').on(table.receivedAt), index('bedroom_history_source').on(table.sourceId, table.id)])
+export const roomContextLatest = sqliteTable('room_context_latest', {
+  metric: text('metric').primaryKey(), revision: integer('revision').notNull(),
+  measuredAt: integer('measured_at'), lastMeasuredAt: integer('last_measured_at'),
+  reportedAt: integer('reported_at').notNull(), receivedAt: integer('received_at').notNull(),
+  value: real('value'), available: integer('available').notNull(),
+})
+export const roomContextHistory = sqliteTable('room_context_history', {
+  id: integer('id').primaryKey({ autoIncrement: true }), revision: integer('revision').notNull(),
+  metric: text('metric').notNull(), entityId: text('entity_id').notNull(), unit: text('unit').notNull(),
+  measuredAt: integer('measured_at'), reportedAt: integer('reported_at').notNull(), receivedAt: integer('received_at').notNull(),
+  value: real('value'), available: integer('available').notNull(),
+}, table => [index('room_context_history_received').on(table.receivedAt)])
+
+/** Owner-visible automation alerts. Acknowledgment is separate from delivery. */
+export const notificationInbox = sqliteTable('notification_inbox', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  sourceId: integer('source_id').notNull(),
+  title: text('title').notNull(),
+  message: text('message').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  acknowledgedAt: integer('acknowledged_at'),
+}, table => [
+  index('notification_inbox_fingerprint_created').on(table.fingerprint, table.createdAt),
+  index('notification_inbox_created').on(table.createdAt),
+])
+
+// Kept across restarts: an interrupted actuator request must never be replayed.
+export const controlReceipts = sqliteTable('control_receipts', {
+  requestId: text('request_id').primaryKey(),
+  fingerprint: text('fingerprint').notNull(),
+  request: text('request').notNull(),
+  state: text('state', { enum: ['executing', 'acknowledged', 'not_dispatched', 'rejected', 'expired', 'unknown'] }).notNull(),
+  reason: text('reason'),
+  receivedAt: integer('received_at').notNull(),
+  finishedAt: integer('finished_at'),
+  dispatchCount: integer('dispatch_count').notNull().default(0),
+  lastDispatchAt: integer('last_dispatch_at'),
+  runId: text('run_id').notNull(),
+}, table => [index('control_receipts_received_idx').on(table.receivedAt)])
 
 // ============================================================================
 // Device Settings & Configuration
@@ -77,7 +171,7 @@ export const deviceSettings = sqliteTable('device_settings', {
   // so the kill-switch survives reboot.
   autopilotEnabled: integer('autopilot_enabled', { mode: 'boolean' })
     .notNull()
-    .default(true),
+    .default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -150,6 +244,7 @@ export const tapGestures = sqliteTable('tap_gestures', {
   temperatureAmount: integer('temperature_amount'), // 0-10
   // For alarm actions
   alarmBehavior: text('alarm_behavior', { enum: ['snooze', 'dismiss'] }),
+  // Retained for migration; the runtime snooze length now lives in alarm_schedules.
   alarmSnoozeDuration: integer('alarm_snooze_duration'), // 60-600 seconds
   alarmInactiveBehavior: text('alarm_inactive_behavior', {
     enum: ['power', 'none'],
@@ -167,6 +262,15 @@ export const tapGestures = sqliteTable('tap_gestures', {
 // ============================================================================
 // Schedules
 // ============================================================================
+
+/** Bedtime ownership keeps a night's phases together while scheduler rows remain calendar events. */
+export const bedtimeRoutines = sqliteTable('bedtime_routines', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  dayOfWeek: text('day_of_week', { enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] }).notNull(),
+  configuration: text('configuration').notNull(),
+  scheduleIds: text('schedule_ids').notNull(),
+}, table => [uniqueIndex('idx_bedtime_routines_side_day').on(table.side, table.dayOfWeek)])
 
 export const temperatureSchedules = sqliteTable('temperature_schedules', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -230,6 +334,8 @@ export const powerSchedules = sqliteTable('power_schedules', {
   }).notNull(),
   onTime: text('on_time').notNull(), // HH:mm format
   offTime: text('off_time').notNull(), // Curve end time; retained when maintaining temperature
+  // Existing Core rows are calendar-day events. Imports can explicitly end the next day.
+  offDayOffset: integer('off_day_offset').notNull().default(0),
   endAction: text('end_action', { enum: ['turn_off', 'maintain'] }).notNull().default('turn_off'),
   onTemperature: real('on_temperature').notNull(), // Temperature when powered on
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
@@ -266,6 +372,11 @@ export const alarmSchedules = sqliteTable('alarm_schedules', {
   alarmTemperature: real('alarm_temperature').notNull(), // Temperature during alarm
   // Minutes before `time` in which movement fires the alarm early; 0 = off.
   wakeWindow: integer('wake_window').notNull().default(0),
+  // How long a snooze lasts (seconds), and Snooze taper: each later snooze of
+  // the same alarm is this percent shorter (0 = off). Tap gestures and the
+  // HomeKit switch snooze with these.
+  snoozeDuration: integer('snooze_duration').notNull().default(300),
+  snoozeTaper: integer('snooze_taper').notNull().default(0),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -288,6 +399,47 @@ export const temperatureHolds = sqliteTable('temperature_holds', {
   startedAt: integer('started_at').notNull(),
   expiresAt: integer('expires_at').notNull(),
 })
+
+/** Personal comfort records are separate from the shared controller's holds. */
+export const comfortStates = sqliteTable('comfort_states', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  state: text('state', { mode: 'json' }).notNull(),
+})
+
+export const comfortFeedback = sqliteTable('comfort_feedback', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  localDate: text('local_date').notNull(),
+  comfort: text('comfort', { enum: ['warm', 'cold', 'comfortable'] }).notNull(),
+  recordedAt: integer('recorded_at').notNull(), // Epoch milliseconds
+}, table => [uniqueIndex('uq_comfort_feedback_side_date').on(table.side, table.localDate)])
+
+/** Deleted check-ins retain only a revision, preventing a stale client from resurrecting private notes. */
+export const journalEntries = sqliteTable('journal_entries', {
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  localDate: text('local_date').notNull(),
+  revision: text('revision').notNull(),
+  record: text('record', { mode: 'json' }),
+}, table => [uniqueIndex('uq_journal_entries_side_date').on(table.side, table.localDate)])
+
+/** Append-only owner reviews bind to an exact retained Preview report. */
+export const comfortReviews = sqliteTable('comfort_reviews', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  reportId: text('report_id').notNull(),
+  createdAt: integer('created_at').notNull(),
+  review: text('review', { mode: 'json' }).notNull(),
+  snapshot: text('snapshot', { mode: 'json' }).notNull(),
+}, table => [index('idx_comfort_reviews_side_report').on(table.side, table.reportId, table.id)])
+
+export const comfortEvents = sqliteTable('comfort_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  observedAt: integer('observed_at').notNull(), // Epoch milliseconds
+  event: text('event', { mode: 'json' }).notNull(),
+  reportId: text('report_id'),
+}, table => [index('idx_comfort_events_side_time').on(table.side, table.observedAt),
+  index('idx_comfort_events_side_report').on(table.side, table.reportId, table.id)])
 
 export const deviceState = sqliteTable('device_state', {
   // Explicit manual hardware cutoff, independent of temperature ownership (epoch ms).
@@ -338,6 +490,13 @@ export const curveTemplates = sqliteTable('curve_templates', {
   points: text('points', { mode: 'json' }).notNull().$type<Record<string, number>>(), // {"HH:mm": tempF}
   // Column predates the notes name (it held the AI wizard's reasoning).
   notes: text('reasoning').notNull().default(''),
+  endAction: text('end_action', { enum: ['turn_off', 'maintain'] }).notNull().default('turn_off'),
+  // Days the curve runs on per side. While active, no other active curve
+  // claims the same side and day, and that day's temperature and power rows
+  // are this curve's (src/server/scheduleLibrary.ts).
+  leftDays: text('left_days', { mode: 'json' }).notNull().$type<DayOfWeek[]>().default(sql`'[]'`),
+  rightDays: text('right_days', { mode: 'json' }).notNull().$type<DayOfWeek[]>().default(sql`'[]'`),
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -504,3 +663,210 @@ export const biometricConfigOutbox = sqliteTable('biometric_config_outbox', {
   uniqueIndex('uq_biometric_outbox_generation').on(t.side, t.generation),
   index('idx_biometric_outbox_pending').on(t.state, t.nextAttemptAtMs),
 ])
+
+export const sideStageModels = sqliteTable('side_stage_models', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  model: text('model', { mode: 'json' }).notNull(),
+  version: text('version').notNull(),
+  modelHash: text('model_hash').notNull(),
+  uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+  // When set, the side's stages are classified by this model instead of the profile's rules; the rules
+  // remain the fallback whenever the model cannot stage a night.
+  active: integer('active', { mode: 'boolean' }).notNull().default(false),
+})
+
+/** Saved candidates; the legacy per-side row remains the selected model for existing clients. */
+export const stageModelLibrary = sqliteTable('stage_model_library', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  model: text('model', { mode: 'json' }).notNull(),
+  version: text('version').notNull(),
+  modelHash: text('model_hash').notNull(),
+  uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+}, table => [index('stage_model_library_side_idx').on(table.side), uniqueIndex('stage_model_library_side_hash').on(table.side, table.modelHash)])
+
+// Temporary wake changes never rewrite alarm_schedules. Null records retain a
+// generation after restore so stale clients cannot replay a prior change.
+export const alarmOverrides = sqliteTable('alarm_overrides', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  revision: text('revision').notNull(),
+  record: text('record'),
+})
+
+// One durable attempt per original weekly occurrence, shared by early wake,
+// changed-time and normal callbacks. An unknown transport result is not retried.
+export const alarmOccurrences = sqliteTable('alarm_occurrences', {
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  scheduleId: integer('schedule_id').notNull(),
+  originalAt: integer('original_at').notNull(),
+  effectiveAt: integer('effective_at').notNull(),
+  outcome: text('outcome', { enum: ['attempting', 'acknowledged', 'unknown'] }).notNull(),
+  attemptedAt: integer('attempted_at').notNull(),
+}, table => [
+  uniqueIndex('idx_alarm_occurrences_identity').on(table.side, table.scheduleId, table.originalAt),
+  index('idx_alarm_occurrences_retention').on(table.attemptedAt),
+])
+
+// Identity is independent of a physical side. Initial membership prepares a
+// private workspace; it does not activate another sleeper or rewrite schedules.
+export const households = sqliteTable('households', {
+  id: text('id').primaryKey(),
+  podId: text('pod_id').notNull().unique(),
+  setupRequestId: text('setup_request_id').notNull().unique(),
+  revision: integer('revision').notNull().default(1),
+  assignmentRevision: integer('assignment_revision').notNull().default(1),
+  mode: text('mode', { enum: ['solo-anywhere', 'assigned'] }).notNull(),
+  sourceSide: text('source_side', { enum: ['left', 'right'] }).notNull(),
+  effectiveAt: integer('effective_at').notNull(),
+})
+
+export const householdAccounts = sqliteTable('household_accounts', {
+  id: text('id').primaryKey(),
+  householdId: text('household_id').notNull().references(() => households.id),
+  sleeperId: text('sleeper_id').notNull().unique(),
+  displayName: text('display_name').notNull(),
+  role: text('role', { enum: ['owner', 'member'] }).notNull(),
+  state: text('state', { enum: ['active', 'revoked'] }).notNull().default('active'),
+  assignedSide: text('assigned_side', { enum: ['left', 'right'] }),
+  sessionRevision: integer('session_revision').notNull().default(1),
+  createdAt: integer('created_at').notNull(),
+}, table => [uniqueIndex('idx_household_assigned_side').on(table.householdId, table.assignedSide)])
+
+export const householdDevices = sqliteTable('household_devices', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  tokenHash: text('token_hash').notNull().unique(),
+  name: text('name').notNull(),
+  createdAt: integer('created_at').notNull(),
+  revokedAt: integer('revoked_at'),
+})
+
+export const householdInvitations = sqliteTable('household_invitations', {
+  id: text('id').primaryKey(),
+  householdId: text('household_id').notNull().references(() => households.id),
+  issuerId: text('issuer_id').notNull().references(() => householdAccounts.id),
+  kind: text('kind', { enum: ['new_person', 'own_device'] }).notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  requestHash: text('request_hash').notNull(),
+  targetAccountId: text('target_account_id').references(() => householdAccounts.id),
+  claimedDeviceId: text('claimed_device_id').references(() => householdDevices.id),
+  expiresAt: integer('expires_at').notNull(),
+  revokedAt: integer('revoked_at'),
+})
+
+export const householdPersonalSettings = sqliteTable('household_personal_settings', {
+  accountId: text('account_id').primaryKey().references(() => householdAccounts.id),
+  preferences: text('preferences').notNull(),
+  preferencesRevision: integer('preferences_revision').notNull().default(1),
+  routines: text('routines').notNull(),
+  routinesRevision: integer('routines_revision').notNull().default(1),
+})
+
+export const householdMutationReceipts = sqliteTable('household_mutation_receipts', {
+  requestId: text('request_id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  kind: text('kind').notNull(),
+  requestHash: text('request_hash').notNull(),
+  result: text('result').notNull(),
+  createdAt: integer('created_at').notNull(),
+})
+
+// An inert shared-arrangement review, with independently approved private plans.
+// Creating or approving it never changes physical assignments or live routines.
+export const householdArrangementReviews = sqliteTable('household_arrangement_reviews', {
+  id: text('id').primaryKey(),
+  householdId: text('household_id').notNull().references(() => households.id),
+  creatorAccountId: text('creator_account_id').notNull().references(() => householdAccounts.id),
+  requestHash: text('request_hash').notNull(),
+  payload: text('payload').notNull(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  state: text('state', { enum: ['open', 'cancelled', 'consumed'] }).notNull().default('open'),
+}, table => [index('idx_household_arrangement_reviews').on(table.householdId, table.createdAt)])
+
+export const householdArrangementApprovals = sqliteTable('household_arrangement_approvals', {
+  requestId: text('request_id').primaryKey(),
+  reviewId: text('review_id').notNull().references(() => householdArrangementReviews.id),
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  deviceId: text('device_id').notNull().references(() => householdDevices.id),
+  requestHash: text('request_hash').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, table => [uniqueIndex('idx_household_arrangement_approval').on(table.reviewId, table.accountId)])
+
+// Persist the latest browser identity independently of response arrival order.
+// Only hashes are retained; this table cannot recreate a browser credential.
+export const householdBrowserScopes = sqliteTable('household_browser_scopes', {
+  keyHash: text('key_hash').primaryKey(),
+  kind: text('kind', { enum: ['owner', 'personal', 'signed_out'] }).notNull(),
+  sessionHash: text('session_hash').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+})
+
+// This one-way boundary outlives account revocation and arrangement changes.
+// It has no household foreign key: deleting membership must not reopen exports.
+export const householdPrivacyBoundary = sqliteTable('household_privacy_boundary', {
+  id: integer('id').primaryKey(),
+  requiredAt: integer('required_at').notNull(),
+  reason: text('reason').notNull(),
+})
+
+// Reviewed source intervals describe attribution, not physical sensor identity.
+// They never change the hardware arrangement or claim old rows during signup.
+export const householdHistoryState = sqliteTable('household_history_state', {
+  householdId: text('household_id').primaryKey().references(() => households.id),
+  attributionRevision: integer('attribution_revision').notNull().default(1),
+})
+
+export const householdAttributionEpochs = sqliteTable('household_attribution_epochs', {
+  id: text('id').primaryKey(),
+  householdId: text('household_id').notNull().references(() => households.id),
+  datasetId: text('dataset_id').notNull(),
+  startsAt: integer('starts_at').notNull(),
+  endsAt: integer('ends_at'),
+  mode: text('mode', { enum: ['solo_merged', 'assigned'] }).notNull(),
+  assignments: text('assignments').notNull(),
+  basis: text('basis', { enum: ['legacy_owner_review', 'verified_arrangement'] }).notNull(),
+  reviewReceiptId: text('review_receipt_id').notNull().unique(),
+  reviewedBy: text('reviewed_by').notNull().references(() => householdAccounts.id),
+  requestHash: text('request_hash').notNull(),
+  createdAt: integer('created_at').notNull(),
+  revokedAt: integer('revoked_at'),
+}, table => [index('idx_household_attribution_time').on(table.householdId, table.datasetId, table.startsAt)])
+
+export const householdPersonRecords = sqliteTable('household_person_records', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+  id: text('id').notNull().unique(),
+  householdId: text('household_id').notNull().references(() => households.id),
+  sleeperId: text('sleeper_id').notNull().references(() => householdAccounts.sleeperId),
+  epochId: text('epoch_id').notNull().references(() => householdAttributionEpochs.id),
+  datasetId: text('dataset_id').notNull(),
+  sourceKind: text('source_kind', { enum: ['presence', 'vitals', 'movement'] }).notNull(),
+  sourceRecordKey: text('source_record_key').notNull(),
+  contentHash: text('content_hash').notNull(),
+  recordedSide: text('recorded_side', { enum: ['left', 'right'] }).notNull(),
+  startsAt: integer('starts_at').notNull(),
+  endsAt: integer('ends_at').notNull(),
+  payload: text('payload').notNull(),
+  createdAt: integer('created_at').notNull(),
+  invalidatedAt: integer('invalidated_at'),
+}, table => [
+  uniqueIndex('idx_household_source_record').on(table.datasetId, table.sourceKind, table.sourceRecordKey),
+  index('idx_household_person_history').on(table.householdId, table.sleeperId, table.startsAt),
+])
+
+// Personal command receipts never enter the legacy owner-visible control table.
+export const householdControlReceipts = sqliteTable('household_control_receipts', {
+  requestId: text('request_id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  personalRequest: text('personal_request').notNull(),
+  resolvedZones: text('resolved_zones').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  request: text('request').notNull(),
+  state: text('state', { enum: ['executing', 'acknowledged', 'not_dispatched', 'rejected', 'expired', 'unknown'] }).notNull(),
+  reason: text('reason'),
+  receivedAt: integer('received_at').notNull(),
+  finishedAt: integer('finished_at'),
+  dispatchCount: integer('dispatch_count').notNull().default(0),
+  lastDispatchAt: integer('last_dispatch_at'),
+  runId: text('run_id').notNull(),
+}, table => [index('idx_household_control_account').on(table.accountId, table.receivedAt)])

@@ -62,8 +62,8 @@ describe('StageTimeline', () => {
   })
 
   it('holds each step\'s tone until the next set point instead of blending into it', () => {
-    const rows = (points: [string, number][]) => points.map(([time, temperature]) => ({ dayOfWeek: 'monday', time, temperature, enabled: true }))
-    const curves = stageCurves({ left: rows([['22:00', 70], ['02:00', 90], ['06:00', 70]]), right: [] }, win)
+    const rows = (day: string, points: [string, number][]) => points.map(([time, temperature]) => ({ dayOfWeek: day, time, temperature, enabled: true }))
+    const curves = stageCurves({ left: [...rows('monday', [['22:00', 70]]), ...rows('tuesday', [['02:00', 90], ['06:00', 70]])], right: [] }, win)
     const { container } = render(
       <StageTimeline win={win} now={NOW.getTime()} curves={curves} names={names} unit="F" display="degrees" previewAt={null} onScrub={vi.fn()} />,
     )

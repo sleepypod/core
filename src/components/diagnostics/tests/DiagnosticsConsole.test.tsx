@@ -152,7 +152,7 @@ describe('DiagnosticsConsole dashboard', () => {
     mocks.schedules = {
       left: { temperature: [
         { dayOfWeek: 'monday', time: '23:15', temperature: 80, enabled: true },
-        { dayOfWeek: 'monday', time: '07:00', temperature: 85, enabled: true },
+        { dayOfWeek: 'tuesday', time: '07:00', temperature: 85, enabled: true },
       ] },
       right: { temperature: [] },
     }

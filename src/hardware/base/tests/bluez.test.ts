@@ -3,6 +3,8 @@ import { Variant } from 'dbus-next'
 import type { Message, MessageBus } from 'dbus-next'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BluezTransport } from '../bluez'
+import { ControlDeadlineError, withinControlRequest } from '@/src/controls/context'
+import { testScope } from '@/src/controls/tests/fixtures'
 
 const device = '/org/bluez/hci1/dev_AA_BB_CC_DD_EE_FF'
 const notify = `${device}/service0042/char0043`
@@ -42,6 +44,32 @@ function signal(path: string, changed: Record<string, Variant<unknown>>, sender 
 }
 
 describe('BlueZ D-Bus adapter', () => {
+  it('checks the deadline and durable barrier immediately before GATT writes', async () => {
+    await transport.connect(config, data, disconnected)
+    const scope = testScope()
+    scope.beforeDispatch = vi.fn(() => {
+      expect(bus.call.mock.calls.some(([message]) => message.member === 'WriteValue')).toBe(false)
+    })
+    await withinControlRequest(scope, () => transport.write(new Uint8Array(20)))
+    expect(scope.dispatchCount).toBe(1)
+    expect(scope.beforeDispatch).toHaveBeenCalledOnce()
+    bus.call.mockClear()
+    const expired = testScope()
+    await expect(withinControlRequest(expired, async () => {
+      expired.now = () => 200
+      await transport.write(new Uint8Array(20))
+    })).rejects.toBeInstanceOf(ControlDeadlineError)
+    expect(bus.call).not.toHaveBeenCalled()
+    // Failed bookkeeping is also a hard boundary, without closing Bluetooth.
+    const unavailable = testScope()
+    unavailable.beforeDispatch = () => {
+      throw new Error('disk full')
+    }
+    await expect(withinControlRequest(unavailable, async () => {
+      await transport.write(new Uint8Array(20))
+    })).rejects.toThrow('disk full')
+    expect(bus.call).not.toHaveBeenCalled()
+  })
   it('discovers UUIDs on the configured device without fixed adapter or handles', async () => {
     await transport.connect(config, data, disconnected)
     expect(bus.call.mock.calls.find(([m]) => m.member === 'StartNotify')?.[0].path).toBe(notify)

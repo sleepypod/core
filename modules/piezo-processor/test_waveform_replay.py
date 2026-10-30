@@ -126,7 +126,7 @@ def test_recorded_home_change_resets_both_channels_and_selects_fixed_logical_con
         assert len(processor._hr_buf) == 500  # New logical side starts a fresh buffer.
 
 
-def test_replay_numerics_match_live_adapter_assembly_for_identical_recorded_inputs(monkeypatch):
+def test_retained_replay_matches_legacy_arrival_clock_adapter_for_identical_inputs(monkeypatch):
     import main
     from types import SimpleNamespace
 

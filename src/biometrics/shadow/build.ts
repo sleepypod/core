@@ -10,7 +10,7 @@ const dependencyPaths = z.object({ record: z.string().min(1).max(4096), wheel: z
 export const shadowPythonBuildSchema = waveformPythonBuildSchema.extend({
   dependencyFiles: z.object({ numpy: dependencyPaths, scipy: dependencyPaths }).strict(), identity: waveformPythonBuildSchema.shape.identity.extend({
     version: z.literal('shadow-python-build-v1'),
-  }).refine(identity => ['shadow_build.py', 'shadow.py', 'shadow_worker.py', 'shadow_process.py'].every(name =>
+  }).refine(identity => ['live_input.py', 'mechanical.py', 'shadow_build.py', 'shadow.py', 'shadow_worker.py', 'shadow_process.py'].every(name =>
     identity.sources[`common/biometrics/${name}`] !== undefined), 'Shadow source identity incomplete') })
 
 /** Fixed shipped probe, exact worker interpreter, bounded output/deadline. Never

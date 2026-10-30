@@ -364,6 +364,31 @@ describe('hardware/dacMonitor.instance', () => {
         expect(sendCommandMock).toHaveBeenNthCalledWith(2, '10', '600')
       })
 
+      it('authorizes passive heating only after both temperature commands succeed', async () => {
+        const mod = await freshModule()
+        const evidence = await import('../sideMutations')
+        evidence._resetHeatingSessionEvidence()
+        parseSimpleResponseMock.mockReturnValueOnce({ success: true, message: 'ok' })
+          .mockReturnValueOnce({ success: false, message: 'duration rejected' })
+        await expect(mod.getSharedHardwareClient().setTemperature('left', 75, 600)).rejects.toThrow('duration')
+        expect(evidence.hasHeatingSessionEvidence('left')).toBe(false)
+        await mod.getSharedHardwareClient().setTemperature('left', 75, 600)
+        expect(evidence.hasHeatingSessionEvidence('left')).toBe(true)
+        expect(evidence.hasHeatingSessionEvidence('right')).toBe(false)
+        await mod.getSharedHardwareClient().setTemperature('left', 75, 0)
+        expect(evidence.hasHeatingSessionEvidence('left')).toBe(false)
+      })
+
+      it('revokes heating evidence after clearing the timer even if neutralization fails', async () => {
+        const mod = await freshModule()
+        const evidence = await import('../sideMutations')
+        evidence.recordHeatingSession('left', true)
+        parseSimpleResponseMock.mockReturnValueOnce({ success: true, message: 'ok' })
+          .mockReturnValueOnce({ success: false, message: 'level rejected' })
+        await expect(mod.getSharedHardwareClient().setPower('left', false)).rejects.toThrow('power off')
+        expect(evidence.hasHeatingSessionEvidence('left')).toBe(false)
+      })
+
       it('setAlarm rejects vibrationIntensity outside 1..100', async () => {
         const mod = await freshModule()
         const c = mod.getSharedHardwareClient()

@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, renameSync
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { probeShadowBuild } from '../build'
+import { probeShadowBuild, shadowPythonBuildSchema } from '../build'
 import { guardShadowPythonInstallation } from '../python-installation'
 const directories: string[] = []
 afterEach(() => directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })))
@@ -58,4 +58,10 @@ it('refuses malformed build hashes and non-absolute dependency paths', async () 
   expect(() => guardShadowPythonInstallation(location, { ...build, hash: 'a'.repeat(64) })).toThrow(/integrity/)
   build.dependencyFiles.numpy.record = 'relative/RECORD'
   expect(() => guardShadowPythonInstallation(location, build)).toThrow(/absolute/)
+})
+
+it('refuses a build identity without the shared live timestamp and continuity boundary', async () => {
+  const { build } = await setup()
+  delete build.identity.sources['common/biometrics/live_input.py']
+  expect(() => shadowPythonBuildSchema.parse(build)).toThrow(/source identity incomplete/)
 })

@@ -100,6 +100,7 @@ export class ReferenceStore {
       tx.delete(measurements).where(eq(measurements.importId, id)).run()
       tx.delete(schema.referenceStages).where(eq(schema.referenceStages.importId, id)).run()
       tx.delete(schema.referenceVitals).where(eq(schema.referenceVitals.importId, id)).run()
+      tx.delete(schema.referenceSamples).where(eq(schema.referenceSamples.importId, id)).run()
       const deletedAtMs = this.now()
       tx.update(imports).set({ deletedAtMs }).where(eq(imports.id, id)).run()
       return { id, deletedAtMs }

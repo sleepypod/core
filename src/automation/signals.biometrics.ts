@@ -21,7 +21,7 @@
  * `{side}.presence` is the shared virtual occupancy sensor (`lib/occupancy`)
  * collapsed to 1 (a person is in bed) / 0 (empty, or a light load such as a
  * pet). It reads `undefined` while presence can't be sensed — no fresh
- * capSense2 frame or no calibration — so rules skip rather than fire blind.
+ * supported capacitance frame or no calibration — so rules skip rather than fire blind.
  * `{side}.presence.zones` is the lit head/torso/legs count behind that call.
  *
  * Automation temperature signals are Fahrenheit by contract because automation
@@ -35,6 +35,8 @@ import { centiDegreesToF, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { getOccupancy } from '@/src/lib/occupancy'
 import { getLatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
 import { mean, reduceCap } from './capReduce'
+import { finiteSignal } from './signalValidity'
+import { isMechanicallyQualifiedVital } from '@/src/biometrics/mechanical/eligibility'
 import type { SignalReader, SignalSnapshot } from './signals'
 
 // Freshness windows (ms). A latest row older than its window is treated as
@@ -51,72 +53,87 @@ export class BiometricsSignalReader implements SignalReader {
   read(): SignalSnapshot {
     const out: SignalSnapshot = {}
     const now = Date.now()
-    const fresh = (ts: Date | number, maxAgeMs: number): boolean =>
-      now - (ts instanceof Date ? ts.getTime() : ts) <= maxAgeMs
+    const fresh = (timestamp: Date | number, maxAgeMs: number): boolean => {
+      const observedAt = timestamp instanceof Date ? timestamp.getTime() : timestamp
+      return finiteSignal(observedAt) !== undefined && observedAt <= now && now - observedAt <= maxAgeMs
+    }
+    const publish = (key: string, value: unknown, convert?: (reading: number) => number): void => {
+      const reading = finiteSignal(value)
+      if (reading === undefined) return
+      const converted = convert ? finiteSignal(convert(reading)) : reading
+      if (converted !== undefined) out[key] = converted
+    }
 
     try {
       for (const side of SIDES) {
-        const [v] = biometricsDb.select().from(vitals)
+        const [vitalReading] = biometricsDb.select().from(vitals)
           .where(eq(vitals.side, side)).orderBy(desc(vitals.timestamp)).limit(1).all()
-        if (v && fresh(v.timestamp, VITALS_FRESH_MS)) {
-          if (v.heartRate != null) out[`${side}.heartRate`] = v.heartRate
-          if (v.hrv != null) out[`${side}.hrv`] = v.hrv
-          if (v.breathingRate != null) out[`${side}.breathingRate`] = v.breathingRate
+        if (vitalReading && fresh(vitalReading.timestamp, VITALS_FRESH_MS)
+          && isMechanicallyQualifiedVital(biometricsDb.$client, vitalReading.id, now)) {
+          publish(`${side}.heartRate`, vitalReading.heartRate)
+          publish(`${side}.hrv`, vitalReading.hrv)
+          publish(`${side}.breathingRate`, vitalReading.breathingRate)
         }
 
-        const [m] = biometricsDb.select().from(movement)
+        const [movementReading] = biometricsDb.select().from(movement)
           .where(eq(movement.side, side)).orderBy(desc(movement.timestamp)).limit(1).all()
-        if (m && fresh(m.timestamp, MOVEMENT_FRESH_MS)) {
-          out[`${side}.movement`] = m.totalMovement
+        if (movementReading && fresh(movementReading.timestamp, MOVEMENT_FRESH_MS)) {
+          publish(`${side}.movement`, movementReading.totalMovement)
         }
       }
 
-      const [bt] = biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1).all()
-      if (bt && fresh(bt.timestamp, ENV_FRESH_MS)) {
-        if (bt.ambientTemp != null) out['ambient.temperature'] = centiDegreesToF(bt.ambientTemp)
-        if (bt.humidity != null) out['ambient.humidity'] = centiPercentToPercent(bt.humidity)
+      const [bedReading] = biometricsDb.select().from(bedTemp).orderBy(desc(bedTemp.timestamp)).limit(1).all()
+      if (bedReading && fresh(bedReading.timestamp, ENV_FRESH_MS)) {
+        publish('ambient.temperature', bedReading.ambientTemp, centiDegreesToF)
+        publish('ambient.humidity', bedReading.humidity, centiPercentToPercent)
         const zonesBySide = {
-          left: { outer: bt.leftOuterTemp, center: bt.leftCenterTemp, inner: bt.leftInnerTemp },
-          right: { outer: bt.rightOuterTemp, center: bt.rightCenterTemp, inner: bt.rightInnerTemp },
+          left: { outer: bedReading.leftOuterTemp, center: bedReading.leftCenterTemp, inner: bedReading.leftInnerTemp },
+          right: { outer: bedReading.rightOuterTemp, center: bedReading.rightCenterTemp, inner: bedReading.rightInnerTemp },
         }
         for (const side of SIDES) {
-          const z = zonesBySide[side]
-          const presentF = [z.outer, z.center, z.inner]
-            .filter((t): t is number => t != null)
+          const zones = zonesBySide[side]
+          const presentF = [zones.outer, zones.center, zones.inner]
+            .filter((temperature): temperature is number => finiteSignal(temperature) !== undefined)
             .map(centiDegreesToF)
-          if (presentF.length > 0) out[`${side}.surfaceTemp`] = mean(presentF)
-          if (presentF.length >= 2) out[`${side}.surfaceTemp.spread`] = Math.max(...presentF) - Math.min(...presentF)
-          if (z.inner != null && z.outer != null) out[`${side}.surfaceTemp.gradient`] = centiDegreesToF(z.inner) - centiDegreesToF(z.outer)
+          if (presentF.length > 0) publish(`${side}.surfaceTemp`, mean(presentF))
+          if (presentF.length >= 2) publish(`${side}.surfaceTemp.spread`, Math.max(...presentF) - Math.min(...presentF))
+          const inner = finiteSignal(zones.inner)
+          const outer = finiteSignal(zones.outer)
+          if (inner !== undefined && outer !== undefined) {
+            publish(`${side}.surfaceTemp.gradient`, centiDegreesToF(inner) - centiDegreesToF(outer))
+          }
         }
       }
 
-      const [fz] = biometricsDb.select().from(freezerTemp).orderBy(desc(freezerTemp.timestamp)).limit(1).all()
-      if (fz && fresh(fz.timestamp, ENV_FRESH_MS)) {
-        if (fz.leftWaterTemp != null) out['left.waterTemp'] = centiDegreesToF(fz.leftWaterTemp)
-        if (fz.rightWaterTemp != null) out['right.waterTemp'] = centiDegreesToF(fz.rightWaterTemp)
+      const [waterReading] = biometricsDb.select().from(freezerTemp).orderBy(desc(freezerTemp.timestamp)).limit(1).all()
+      if (waterReading && fresh(waterReading.timestamp, ENV_FRESH_MS)) {
+        publish('left.waterTemp', waterReading.leftWaterTemp, centiDegreesToF)
+        publish('right.waterTemp', waterReading.rightWaterTemp, centiDegreesToF)
       }
 
-      const [al] = biometricsDb.select().from(ambientLight).orderBy(desc(ambientLight.timestamp)).limit(1).all()
-      if (al && fresh(al.timestamp, ENV_FRESH_MS) && al.lux != null) {
-        out['ambient.light'] = al.lux
+      const [lightReading] = biometricsDb.select().from(ambientLight).orderBy(desc(ambientLight.timestamp)).limit(1).all()
+      if (lightReading && fresh(lightReading.timestamp, ENV_FRESH_MS) && lightReading.lux != null) {
+        publish('ambient.light', lightReading.lux)
       }
 
       for (const side of SIDES) {
         const occ = getOccupancy(side)
         if (!occ.available) continue
         out[`${side}.presence`] = occ.classification === 'person' ? 1 : 0
-        if (occ.level.zones !== null) out[`${side}.presence.zones`] = occ.level.zones
+        publish(`${side}.presence.zones`, occ.level.zones)
       }
 
       const cap = getLatestCapSenseSnapshot()
-      if (cap && fresh(cap.receivedAtMs, CAP_FRESH_MS)) {
+      if (cap && fresh(cap.receivedAtMs, CAP_FRESH_MS) && fresh(cap.ts * 1000, CAP_FRESH_MS)) {
         for (const side of SIDES) {
           const raw = cap[side]
-          const r = reduceCap(Array.isArray(raw) ? raw : [raw])
-          if (r) {
-            out[`${side}.cap.max`] = r.max
-            out[`${side}.cap.mean`] = r.mean
-            out[`${side}.cap.spread`] = r.spread
+          const channels = Array.isArray(raw) ? raw : [raw]
+          if (channels.some(value => finiteSignal(value) === undefined)) continue
+          const reduced = reduceCap(channels)
+          if (reduced) {
+            publish(`${side}.cap.max`, reduced.max)
+            publish(`${side}.cap.mean`, reduced.mean)
+            publish(`${side}.cap.spread`, reduced.spread)
           }
         }
       }

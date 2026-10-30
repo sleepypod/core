@@ -9,7 +9,7 @@
  *      compared to RESTLESS_SCORE_MIN. Identical to the original HomeKit logic.
  *
  *   2. Level signal (catches a still occupant — deep sleep, etc.).
- *      Live capSense2 channel readings vs the per-side calibration baseline
+ *      Live capSense / capSense2 channel readings vs the per-side calibration baseline
  *      from `calibration_profiles`, with reference-channel compensation.
  *      Mirrors the Python sleep-detector's per-sample presence check.
  *
@@ -27,20 +27,18 @@
  * (auto-off) treat `light` as empty.
  */
 
-import { and, desc, eq, gte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { biometricsDb } from '@/src/db/biometrics'
 import { calibrationProfiles, movement, vitals } from '@/src/db/biometrics-schema'
 import { getLatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
 import { RESTLESS_SCORE_MIN } from '@/src/lib/movement'
 import type { Side } from '@/src/hardware/types'
+import { evaluateCapacitance, parseCapacitanceCalibration } from './capacitanceLevel'
+import { capacitanceSourceKey } from './capacitanceIdentity'
 
 const MOVEMENT_WINDOW_MS = 15 * 60_000
 /** capSense2 nominally arrives at ~2 Hz. >30s gap = sensor / stream down. */
 const CAPSENSE_STALE_MS = 30_000
-/** Nominal reference-channel value used when the calibration profile is
- *  missing a `ref.mean` field (older profiles). Matches the documented
- *  capSense2 reference baseline. */
-const REF_NOMINAL = 1.16
 /** Latest vitals row older than this is treated as absent (matches the
  *  automation engine's VITALS_FRESH_MS). */
 const VITALS_WINDOW_MS = 5 * 60_000
@@ -58,6 +56,9 @@ export interface MovementSignal {
 }
 
 export interface LevelSignal {
+  /** Firmware measurement time and calibrated source identity for transition tracking. */
+  sampleAt?: number
+  sourceKey?: string
   active: boolean
   /** Sum of compensated per-channel deviation from baseline, or null when
    *  the signal can't be evaluated (no frame, stale frame, no calibration). */
@@ -101,7 +102,7 @@ export interface OccupancyResult {
   classification: OccupancyClassification
   /**
    * True when presence can be sensed reliably enough to act on its ABSENCE —
-   * i.e. the level signal is evaluable (fresh capSense2 frame + completed
+   * i.e. the level signal is evaluable (fresh capacitance frame + completed
    * calibration). Only the level signal detects a perfectly still occupant;
    * movement alone reads a motionless sleeper as empty. Consumers that power
    * hardware off on "empty" (autoOffWatcher) must check this first and stand
@@ -109,13 +110,6 @@ export interface OccupancyResult {
    * action.
    */
   available: boolean
-}
-
-interface CapSenseCalibration {
-  channels: { A: { mean: number }, B: { mean: number }, C: { mean: number } }
-  threshold: number
-  format: string
-  ref?: { mean: number }
 }
 
 export function getOccupancy(side: Side): OccupancyResult {
@@ -145,17 +139,17 @@ function readVitalsSignal(side: Side): VitalsSignal {
   const absent: VitalsSignal = { heartRate: null, breathingRate: null, humanRange: null }
   try {
     const [row] = biometricsDb
-      .select({ timestamp: vitals.timestamp, heartRate: vitals.heartRate, breathingRate: vitals.breathingRate })
+      .select({ id: vitals.id, timestamp: vitals.timestamp, heartRate: vitals.heartRate, breathingRate: vitals.breathingRate })
       .from(vitals)
       .where(eq(vitals.side, side))
       .orderBy(desc(vitals.timestamp))
       .limit(1)
       .all()
-    if (!row) return absent
+    if (!row || !isMechanicallyQualifiedVital(biometricsDb.$client, row.id, Date.now())) return absent
     const ts = row.timestamp instanceof Date ? row.timestamp.getTime() : Number(row.timestamp) * 1000
-    if (Date.now() - ts > VITALS_WINDOW_MS) return absent
-    const heartRate = row.heartRate ?? null
-    const breathingRate = row.breathingRate ?? null
+    if (!Number.isFinite(ts) || ts > Date.now() || Date.now() - ts > VITALS_WINDOW_MS) return absent
+    const heartRate = Number.isFinite(row.heartRate) ? row.heartRate : null
+    const breathingRate = Number.isFinite(row.breathingRate) ? row.breathingRate : null
     if (heartRate === null && breathingRate === null) return absent
     const hrHuman = heartRate === null ? true : heartRate >= HUMAN_HR_MIN && heartRate <= HUMAN_HR_MAX
     const brHuman = breathingRate === null ? true : breathingRate >= HUMAN_BR_MIN && breathingRate <= HUMAN_BR_MAX
@@ -172,10 +166,10 @@ function readMovementSignal(side: Side): MovementSignal {
     const [row] = biometricsDb
       .select({ peak: sql<number>`MAX(${movement.totalMovement})` })
       .from(movement)
-      .where(and(eq(movement.side, side), gte(movement.timestamp, since)))
+      .where(and(eq(movement.side, side), gte(movement.timestamp, since), lte(movement.timestamp, new Date())))
       .limit(1)
       .all()
-    const peak = row?.peak ?? 0
+    const peak = typeof row?.peak === 'number' && Number.isFinite(row.peak) ? row.peak : 0
     return { active: peak >= RESTLESS_SCORE_MIN, peakScore: peak }
   }
   catch {
@@ -184,66 +178,32 @@ function readMovementSignal(side: Side): MovementSignal {
 }
 
 function readLevelSignal(side: Side): LevelSignal {
-  const snap = getLatestCapSenseSnapshot()
-  if (!snap) {
-    return { active: false, deviation: null, threshold: null, ageMs: null, zoneDeviations: null, zones: null }
+  const snapshot = getLatestCapSenseSnapshot()
+  const empty: LevelSignal = { active: false, deviation: null, threshold: null, ageMs: null, zoneDeviations: null, zones: null }
+  if (!snapshot) return empty
+  const now = Date.now()
+  const ageMs = now - snapshot.receivedAtMs
+  const sampleAgeMs = now - snapshot.ts * 1000
+  if (!Number.isFinite(ageMs) || !Number.isFinite(sampleAgeMs)
+    || ageMs < 0 || sampleAgeMs < 0 || ageMs > CAPSENSE_STALE_MS || sampleAgeMs > CAPSENSE_STALE_MS) {
+    return { ...empty, ageMs: Number.isFinite(ageMs) ? ageMs : null }
   }
-
-  const ageMs = Date.now() - snap.receivedAtMs
-  if (ageMs > CAPSENSE_STALE_MS) {
-    return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
-  }
-
-  // Pod-3 legacy capSense uses a scalar-per-side and a different calibration
-  // shape; level scoring there is not implemented (movement signal still works).
-  if (snap.type !== 'capSense2') {
-    return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
-  }
-
-  const cal = readCapSenseCalibration(side)
-  if (!cal) {
-    return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
-  }
-
-  const values = side === 'left' ? snap.left : snap.right
-  if (!Array.isArray(values) || values.length < 6) {
-    return { active: false, deviation: null, threshold: cal.threshold, ageMs, zoneDeviations: null, zones: null }
-  }
-
-  const avgPair = (x: number, y: number): number => (x + y) / 2
-  const a = avgPair(values[0], values[1])
-  const b = avgPair(values[2], values[3])
-  const c = avgPair(values[4], values[5])
-
-  let refDelta = 0
-  if (values.length >= 8) {
-    const ref = avgPair(values[6], values[7])
-    const refNominal = cal.ref?.mean ?? REF_NOMINAL
-    refDelta = ref - refNominal
-  }
-
-  const zoneDeviations = [
-    a - refDelta - cal.channels.A.mean,
-    b - refDelta - cal.channels.B.mean,
-    c - refDelta - cal.channels.C.mean,
-  ]
-  const deviation = zoneDeviations[0] + zoneDeviations[1] + zoneDeviations[2]
-  // The calibrated threshold bounds the three-zone sum; a zone counts as lit
-  // when it carries its share of that sum.
-  const zoneThreshold = cal.threshold / 3
-  const zones = zoneDeviations.filter(d => d > zoneThreshold).length
-
-  return {
-    active: deviation > cal.threshold,
-    deviation,
-    threshold: cal.threshold,
-    ageMs,
-    zoneDeviations,
-    zones,
-  }
+  // Scalar firmware lacks the independent channels needed by either calibration.
+  const values = snapshot[side]
+  if (!Array.isArray(values)) return { ...empty, ageMs }
+  const profile = readCapSenseCalibration(side, snapshot.type)
+  if (!profile) return { ...empty, ageMs }
+  const { calibration, sourceKey } = profile
+  const result = evaluateCapacitance(values, calibration, snapshot[`${side}Status`])
+  return { ...result, ageMs, ...(result.deviation === null
+    ? {}
+    : {
+        sampleAt: snapshot.ts * 1000,
+        ...(sourceKey === null ? {} : { sourceKey }),
+      }) }
 }
 
-function readCapSenseCalibration(side: Side): CapSenseCalibration | null {
+function readCapSenseCalibration(side: Side, format: 'capSense' | 'capSense2') {
   try {
     const [row] = biometricsDb
       .select({ parameters: calibrationProfiles.parameters })
@@ -256,17 +216,11 @@ function readCapSenseCalibration(side: Side): CapSenseCalibration | null {
       .limit(1)
       .all()
     if (!row) return null
-    const parsed = row.parameters as CapSenseCalibration
-    if (parsed?.format !== 'capSense2') return null
-    if (typeof parsed.channels?.A?.mean !== 'number'
-      || typeof parsed.channels?.B?.mean !== 'number'
-      || typeof parsed.channels?.C?.mean !== 'number') {
-      return null
-    }
-    if (typeof parsed.threshold !== 'number') return null
-    return parsed
+    const calibration = parseCapacitanceCalibration(row.parameters, format)
+    return calibration ? { calibration, sourceKey: capacitanceSourceKey(side, row.parameters, calibration) } : null
   }
   catch {
     return null
   }
 }
+import { isMechanicallyQualifiedVital } from '@/src/biometrics/mechanical/eligibility'

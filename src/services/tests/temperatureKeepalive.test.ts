@@ -39,6 +39,7 @@ vi.mock('@/src/db', async () => {
 
 import * as dbModule from '@/src/db'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { _resetHeatingSessionEvidence } from '@/src/hardware/sideMutations'
 import {
   startKeepalive,
   stopKeepalive,
@@ -112,6 +113,15 @@ afterEach(() => {
 })
 
 describe('startKeepalive', () => {
+  it('does not renew a saved always-on target without a confirmed current session', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 95 })
+    setSideSettings('left', { alwaysOn: 1 })
+    _resetHeatingSessionEvidence()
+    startKeepalive('left')
+    await flushAsync()
+    expect(setTemperature).not.toHaveBeenCalled()
+  })
+
   it('fires immediately and re-sends target temperature when side is on with alwaysOn', async () => {
     setSideState('left', { isPowered: 1, targetTemperature: 95 })
     setSideSettings('left', { alwaysOn: 1 })

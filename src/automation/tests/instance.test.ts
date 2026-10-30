@@ -21,6 +21,8 @@ vi.mock('@/src/temperature/instance', () => ({ getTemperatureController: () => c
 const startMock = vi.fn(async () => {})
 const stopMock = vi.fn()
 const setGlobalEnabledMock = vi.fn()
+const notifyMock = vi.fn(() => ({ notificationId: 42, duplicate: false }))
+vi.mock('@/src/notifications/instance', () => ({ publishAutomationNotification: notifyMock }))
 let capturedDeps: any = null
 
 vi.mock('../engine', () => {
@@ -131,7 +133,8 @@ describe('automation/instance — init & caching', () => {
     expect(ctorMock).toHaveBeenCalledTimes(1)
     expect(startMock).toHaveBeenCalledTimes(1)
     expect(mod.getAutomationEngineIfRunning()).toBe(a)
-    expect(setGlobalEnabledMock).not.toHaveBeenCalled() // kill-switch on → no override
+    expect(setGlobalEnabledMock).toHaveBeenCalledWith(true)
+    expect(setGlobalEnabledMock.mock.invocationCallOrder[0]).toBeLessThan(startMock.mock.invocationCallOrder[0])
     expect(log).toHaveBeenCalledWith('AutomationEngine initialized with timezone:', 'UTC')
     log.mockRestore()
   })
@@ -174,9 +177,10 @@ describe('automation/instance — kill-switch restore', () => {
     const mod = await freshModule()
     await mod.getAutomationEngine()
     expect(setGlobalEnabledMock).toHaveBeenCalledWith(false)
+    expect(setGlobalEnabledMock.mock.invocationCallOrder[0]).toBeLessThan(startMock.mock.invocationCallOrder[0])
   })
 
-  it('leaves autopilot enabled when the kill-switch read throws', async () => {
+  it('keeps autopilot disabled when the kill-switch read throws', async () => {
     // First select (timezone) succeeds; second (kill-switch) throws.
     let calls = 0
     selectImpl = async () => {
@@ -186,7 +190,16 @@ describe('automation/instance — kill-switch restore', () => {
     }
     const mod = await freshModule()
     await mod.getAutomationEngine()
-    expect(setGlobalEnabledMock).not.toHaveBeenCalled()
+    expect(setGlobalEnabledMock).toHaveBeenCalledWith(false)
+    expect(setGlobalEnabledMock.mock.invocationCallOrder[0]).toBeLessThan(startMock.mock.invocationCallOrder[0])
+  })
+
+  it('keeps autopilot disabled when settings are absent', async () => {
+    selectImpl = async () => []
+    const mod = await freshModule()
+    await mod.getAutomationEngine()
+    expect(setGlobalEnabledMock).toHaveBeenCalledWith(false)
+    expect(setGlobalEnabledMock.mock.invocationCallOrder[0]).toBeLessThan(startMock.mock.invocationCallOrder[0])
   })
 })
 
@@ -299,6 +312,7 @@ describe('automation/instance — injected dependency closures', () => {
 
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     capturedDeps.notify(9, 'hello')
+    expect(notifyMock).toHaveBeenCalledWith(9, 'hello')
     capturedDeps.log('a message')
     expect(log).toHaveBeenCalled()
     log.mockRestore()

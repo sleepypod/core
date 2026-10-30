@@ -411,7 +411,7 @@ export const health: DemoHandlers<'health'> = {
 
   history: () => history(),
 
-  restartService: input => ({ ok: true, message: `Restarted ${input.unit}` }),
+  restartService: input => ({ ok: true, message: `Demo: restart simulated for ${input.unit}. No service was restarted.` }),
 
   maintenance: () => {
     const today = new Date()

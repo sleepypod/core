@@ -197,6 +197,188 @@
       "when": 1791962178346,
       "tag": "0027_presence_auto_on",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1792952006284,
+      "tag": "0028_autopilot_opt_in",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1792957057474,
+      "tag": "0029_useful_tana_nile",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1792958874105,
+      "tag": "0030_explicit_power_off_day",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1792961339864,
+      "tag": "0031_bedtime_routines",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1792963020201,
+      "tag": "0032_control_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1792963766472,
+      "tag": "0033_alarm_snooze",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1792963766940,
+      "tag": "0034_alarm_snooze_from_gestures",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1792964726860,
+      "tag": "0035_schedule_library",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1792964727320,
+      "tag": "0036_schedule_library_adoption",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1792967369180,
+      "tag": "0037_personal_stage_models",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1792994735635,
+      "tag": "0038_same_charles_xavier",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1792996550205,
+      "tag": "0039_neat_inertia",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1793005510372,
+      "tag": "0040_comfort_report_reviews",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1793013513397,
+      "tag": "0041_morning_journal",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1793015287969,
+      "tag": "0042_next_alarm_occurrences",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1793020717510,
+      "tag": "0043_temperature_applications",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1793024990963,
+      "tag": "0044_comfort_owner_activation",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1793067187374,
+      "tag": "0045_bedroom_sensor_context",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1793309658053,
+      "tag": "0046_simple_slipstream",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1793310876667,
+      "tag": "0047_living_changeling",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1793312060095,
+      "tag": "0048_flat_zarda",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1793313343959,
+      "tag": "0049_nosy_living_lightning",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1793316071798,
+      "tag": "0050_tiny_drax",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "6",
+      "when": 1793321875134,
+      "tag": "0051_household_privacy_boundary",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1793321875874,
+      "tag": "0052_household_privacy_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1793323446018,
+      "tag": "0053_household_arrangement_reviews",
+      "breakpoints": true
     }
   ]
 }

@@ -11,6 +11,12 @@ echo "→ Drizzle schema validation..."
 pnpm drizzle-kit check
 pnpm drizzle-kit check --config=drizzle.biometrics.config.ts
 
+echo "→ Offline migration tests..."
+uv run --project scripts/migration --frozen python -m unittest discover -s scripts/migration -p 'test_*.py'
+python3 -m unittest discover -s scripts/deployment -p 'test_*.py'
+python3 -m unittest discover -s scripts/bedroom -p 'test_*.py'
+node --test scripts/bedroom/homebridge-cache.test.mjs
+
 CHANGED=$(git diff --name-only @{push}.. -- '*.ts' '*.tsx' 2>/dev/null || git diff --name-only origin/dev...HEAD -- '*.ts' '*.tsx' 2>/dev/null || true)
 if [ -n "$CHANGED" ]; then
   echo "→ Tests (changed files)..."

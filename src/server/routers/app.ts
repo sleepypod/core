@@ -4,6 +4,7 @@ import { publicProcedure, router } from '@/src/server/trpc'
 import { deviceRouter } from './device'
 import { settingsRouter } from './settings'
 import { schedulesRouter } from './schedules'
+import { routinesRouter } from './routines'
 import { biometricsRouter } from './biometrics'
 import { healthRouter } from './health'
 import { systemRouter } from './system'
@@ -22,6 +23,15 @@ import { sleepStagesRouter } from './sleepStages'
 import { curveTemplatesRouter } from './curveTemplates'
 import { biometricTuningRouter } from './biometricTuning'
 import { biometricShadowRouter } from './biometricShadow'
+import { capabilitiesRouter } from './capabilities'
+import { comfortRouter } from './comfort'
+import { controlsRouter } from './controls'
+import { notificationsRouter } from './notifications'
+import { roomContextRouter } from './roomContext'
+import { bedroomRouter } from './bedroom'
+import { nextAlarmRouter } from './nextAlarm'
+import { journalRouter } from './journal'
+import { importedHistoryRouter } from './importedHistory'
 
 export const appRouter = router({
   healthcheck: publicProcedure
@@ -34,12 +44,20 @@ export const appRouter = router({
   base: baseRouter,
   settings: settingsRouter,
   schedules: schedulesRouter,
+  routines: routinesRouter,
   biometrics: biometricsRouter,
   health: healthRouter,
-  // NOTE: systemRouter uses publicProcedure — acceptable because the pod runs on an
-  // isolated LAN with WAN blocked by iptables. If internet access is ever opened,
-  // add auth middleware before exposing these endpoints. See GitHub issue.
+  // REST and tRPC entry points authenticate owner requests before dispatch.
   system: systemRouter,
+  capabilities: capabilitiesRouter,
+  comfort: comfortRouter,
+  controls: controlsRouter,
+  notifications: notificationsRouter,
+  roomContext: roomContextRouter,
+  bedroom: bedroomRouter,
+  importedHistory: importedHistoryRouter,
+  journal: journalRouter,
+  nextAlarm: nextAlarmRouter,
   environment: environmentRouter,
   raw: rawRouter,
   calibration: calibrationRouter,

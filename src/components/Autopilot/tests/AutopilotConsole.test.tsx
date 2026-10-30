@@ -8,9 +8,10 @@ import { toAST } from '../builderModel'
 const mock = vi.hoisted(() => ({
   path: '/de/autopilot', query: '', push: vi.fn(), replace: vi.fn(), rows: [] as unknown[],
   enabled: vi.fn(), dryRun: vi.fn(), kill: vi.fn(), invalidate: vi.fn(),
-  activity: vi.fn(), globalEnabled: true, diag: undefined as unknown,
+  activity: vi.fn(), globalEnabled: true, statusAvailable: true, diag: undefined as unknown,
 }))
 vi.mock('next/navigation', () => ({ usePathname: () => mock.path, useRouter: () => ({ push: mock.push, replace: mock.replace }), useSearchParams: () => new URLSearchParams(mock.query) }))
+vi.mock('../PersonalComfortCard', () => ({ PersonalComfortCard: () => null }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ unit: 'F' }) }))
 vi.mock('@/src/components/Schedule/CurveChart', async importOriginal => ({ ...await importOriginal<typeof CurveChartModule>(), useNowMinute: () => 29800000 }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ sideName: (s: string) => s }) }))
@@ -29,7 +30,7 @@ vi.mock('@/src/utils/trpc', () => {
     useUtils: () => ({ automations: Object.fromEntries(['list', 'status', 'diagnostics', 'tonight', 'getKillSwitch'].map(k => [k, { invalidate: mock.invalidate }])) }),
     schedules: { getAll: { useQuery: () => ({}) } },
     automations: {
-      list: { useQuery: () => ({ data: mock.rows }) }, status: { useQuery: () => ({ data: { globalEnabled: mock.globalEnabled } }) },
+      list: { useQuery: () => ({ data: mock.rows }) }, status: { useQuery: () => ({ data: mock.statusAvailable ? { globalEnabled: mock.globalEnabled } : undefined }) },
       diagnostics: { useQuery: () => ({ data: mock.diag }) }, tonight: { useQuery: () => ({}) },
       backtestSummaries: { useQuery: () => ({ data: [{ id: 1, nights: 5, wouldFire: 0, peak: null, threshold: null }] }) },
       activity: { useQuery: (input: unknown, opts: { placeholderData: (p: unknown) => unknown }) => {
@@ -46,6 +47,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mock.query = ''
   mock.globalEnabled = true
+  mock.statusAvailable = true
   mock.rows = [{ ...toAST(requiredTemplate('water-low')), id: 1, name: 'Water', enabled: false, dryRun: true }]
   mock.diag = undefined
 })
@@ -101,4 +103,15 @@ it('routes diagnostic mode changes and the diagnostic kill switch through mutati
   await waitFor(() => expect(mock.enabled).toHaveBeenCalledWith({ id: 1, enabled: true }))
   fireEvent.click(screen.getAllByRole('switch', { name: 'Autopilot enabled' }).slice(-1)[0])
   expect(mock.kill).toHaveBeenCalledWith({ enabled: true })
+})
+
+it('does not show enabled Autopilot before its saved status arrives', () => {
+  mock.statusAvailable = false
+  render(<AutopilotConsole />)
+  const toggle = screen.getByRole('switch', { name: 'Autopilot enabled' }) as HTMLButtonElement
+  expect(toggle.disabled).toBe(true)
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+  expect(screen.getByText('Checking Autopilot…')).toBeTruthy()
+  fireEvent.click(toggle)
+  expect(mock.kill).not.toHaveBeenCalled()
 })

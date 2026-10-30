@@ -132,6 +132,14 @@ enum JobType {
 
 ## After a recurring schedule ends
 
+Power rows also carry `offDayOffset`: `0` means the same calendar weekday as
+`dayOfWeek`; `1` means the following weekday, wrapping Saturday to Sunday.
+Existing rows and omitted API create fields default to `0`; partial updates
+preserve the saved offset. The scheduler and Personal Comfort Preview use the
+same explicit offset. It is not inferred from the relative clock values.
+The offline Free Sleep importer uses `1` for an overnight routine's shutdown;
+see [migration semantics and remaining editor gates](../../docs/FREE_SLEEP_MIGRATION.md).
+
 Power rows retain `onTime` and `offTime` and add `endAction`: `turn_off`
 (the migration and API default) or `maintain`. With `maintain`, the scheduler
 registers power-on and temperature jobs but no power-off job. The final

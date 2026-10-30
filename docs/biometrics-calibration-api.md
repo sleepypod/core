@@ -81,6 +81,11 @@ leaves evaluation evidence unchecked.
 
 Experiment creation requires an idempotency key. `getExperiment` and
 `listExperiments` preserve access to its frozen protocol and audit identity.
+If the creation reply is lost, retry the exact dataset ID, normalized protocol
+and key. A committed match returns the original experiment even after its
+dataset inputs are released; it does not reopen or restore those inputs. Reusing
+the key for a different request remains a conflict. A new key still requires
+valid, retained inputs, and malformed protocols or keys are always rejected.
 
 `releaseDataset` is explicit and idempotent. It refuses release while queued,
 running, cancellation-pending, or interrupted jobs still need the inputs.
@@ -334,6 +339,12 @@ window has its own midpoint. A point at the midpoint belongs to the second half;
 an interval ending there belongs to the first. Intervals spanning the midpoint
 are excluded from both half-window groups without splitting or changing their
 aggregation; the report retains their excluded count.
+
+With all three numeric objectives and three configurations, the retained
+`numericSubgroupSummary` has up to 36 rows: four groups × three metrics × three
+pairwise comparisons. The bounded web projection accepts all 36; it must not
+truncate a valid multi-metric report to the 12 rows for a single metric. Metric
+identity, reference membership and missing scores remain separate in each row.
 
 Each group uses the same all-configuration common timestamp support as the main
 numeric comparison. References are weighted within a night, then nights receive

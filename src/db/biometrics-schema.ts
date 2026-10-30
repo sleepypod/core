@@ -275,6 +275,28 @@ export const referenceVitals = sqliteTable('reference_vitals', {
   uniqueIndex('uq_reference_vitals_side_timestamp_source').on(t.side, t.timestamp, t.source),
 ])
 
+/**
+ * Externally measured breathing rate (breaths/min) and HRV SDNN (ms) from an
+ * Apple Health export, one row per sample and metric. Kept apart from
+ * reference_vitals because the Watch records each metric at its own times, so
+ * a shared row keyed on timestamp would make one metric's first write block
+ * another's. Same rules as reference_vitals: never mixed into `vitals`, a
+ * repeated post is a no-op (unique on side, metric, timestamp, source), low
+ * volume, kept indefinitely.
+ */
+export const referenceSamples = sqliteTable('reference_samples', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  source: text('source', { enum: ['apple_watch'] }).notNull(),
+  metric: text('metric', { enum: ['breathing_rate', 'hrv_sdnn'] }).notNull(),
+  timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  value: real('value').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  importId: text('import_id'), // set in the inserting transaction, like reference_vitals
+}, t => [
+  uniqueIndex('uq_reference_samples_side_metric_timestamp_source').on(t.side, t.metric, t.timestamp, t.source),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {
@@ -554,3 +576,17 @@ export const biometricShadowSamples = sqliteTable('biometric_shadow_samples', {
   byteLength: integer('byte_length').notNull(),
 }, t => [uniqueIndex('uq_biometric_shadow_sample').on(t.runId, t.sequence),
   index('idx_biometric_shadow_sample_time').on(t.runId, t.timestampMs)])
+
+/** Observed quiet spans, used to qualify entire vital windows across processes. */
+export const biometricMechanicalSpans = sqliteTable('biometric_mechanical_spans', {
+  id: text('id').primaryKey(),
+  epoch: text('epoch').notNull(),
+  startMs: integer('start_ms').notNull(),
+  endMs: integer('end_ms').notNull(),
+}, table => [index('idx_mechanical_span_window').on(table.endMs, table.startMs)])
+
+/** One bounded controller heartbeat; missing/stale state is never clean evidence. */
+export const biometricMechanicalState = sqliteTable('biometric_mechanical_state', {
+  id: integer('id').primaryKey(),
+  payload: text('payload', { mode: 'json' }).notNull(),
+})

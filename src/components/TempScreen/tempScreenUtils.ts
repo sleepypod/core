@@ -1,5 +1,6 @@
-import { DAYS_OF_WEEK, getCurrentDay, hhmmToMinutes, type DayOfWeek } from '@/src/lib/scheduleTime'
-import { sortChronological, type SetPoint } from '@/src/lib/scheduleGrouping'
+import { getCurrentDay, type DayOfWeek } from '@/src/lib/scheduleTime'
+import type { SetPoint } from '@/src/lib/scheduleGrouping'
+import { calendarNightPoints, nextCalendarOccurrence, nextCalendarTemperature } from '@/src/lib/calendarTemperature'
 import { TEMP } from '@/src/lib/tempColors'
 import { displayToSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 
@@ -42,28 +43,8 @@ export function offsetLabel(targetF: number, unit: TempUnit): string {
   return '0'
 }
 
-/** The Date of the next weekly occurrence of `day` at `time` strictly after `now`. */
-function nextOccurrence(day: DayOfWeek, time: string, now: Date): Date | null {
-  const minutes = hhmmToMinutes(time)
-  if (Number.isNaN(minutes)) return null
-  const dayIdx = DAYS_OF_WEEK.indexOf(day)
-  const at = new Date(now)
-  at.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0)
-  at.setDate(at.getDate() + ((dayIdx - now.getDay() + 7) % 7))
-  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 7)
-  return at
-}
-
 /** Next enabled temperature set point (weekly cron semantics: day + time). */
-export function nextSetPoint(points: TempPointRow[], now: Date): { at: Date, time: string, temperature: number } | null {
-  let best: { at: Date, time: string, temperature: number } | null = null
-  for (const p of points) {
-    if (!p.enabled) continue
-    const at = nextOccurrence(p.dayOfWeek, p.time, now)
-    if (at && (!best || at < best.at)) best = { at, time: p.time, temperature: p.temperature }
-  }
-  return best
-}
+export const nextSetPoint = nextCalendarTemperature
 
 export interface TonightPlan {
   /** Night window (power schedule, else first → last set point). */
@@ -75,9 +56,7 @@ export interface TonightPlan {
 /** Tonight = the schedule day that owns the current night (before 4 AM counts as the previous day). */
 export function tonightPlan(temps: TempPointRow[], power: PowerRow[], now: Date): TonightPlan {
   const day = getCurrentDay(now)
-  const points = sortChronological(
-    temps.filter(t => t.enabled && t.dayOfWeek === day).map(t => ({ time: t.time, temperature: t.temperature })),
-  )
+  const points = calendarNightPoints(temps, day)
   const powerRow = power.find(p => p.enabled && p.dayOfWeek === day)
   const window = powerRow
     ? { start: powerRow.onTime, end: powerRow.offTime }
@@ -158,7 +137,7 @@ export function pickAlarmGroup(alarms: AlarmRow[], now: Date, pinnedTime?: strin
   const soonest = (rows: AlarmRow[]) => {
     let best: { at: Date, time: string } | null = null
     for (const r of rows) {
-      const at = nextOccurrence(r.dayOfWeek, r.time, now)
+      const at = nextCalendarOccurrence(r.dayOfWeek, r.time, now)
       if (at && (!best || at < best.at)) best = { at, time: r.time }
     }
     return best?.time ?? null

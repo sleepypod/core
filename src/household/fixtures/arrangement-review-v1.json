@@ -1,0 +1,125 @@
+{
+  "ownerReview": {
+    "version": 1,
+    "reviewId": "00000000-0000-4000-8000-000000000041",
+    "householdId": "00000000-0000-4000-8000-000000000002",
+    "podId": "00000000-0000-4000-8000-000000000001",
+    "sleeperId": "00000000-0000-4000-8000-000000000004",
+    "assignmentRevision": 1,
+    "createdAt": 1793311200000,
+    "expiresAt": 1793314800000,
+    "timeZone": "America/Los_Angeles",
+    "state": "awaiting_approval",
+    "self": {
+      "displayName": "Example owner",
+      "assignmentAtReview": "solo",
+      "proposedSide": "right",
+      "routineSource": "preserved_operating_week",
+      "week": [
+        {
+          "dayOfWeek": "sunday",
+          "draft": {
+            "power": {
+              "onTime": "22:00",
+              "offTime": "07:15",
+              "onTemperature": 70,
+              "enabled": true,
+              "endAction": "maintain"
+            },
+            "temperatures": [],
+            "alarm": {
+              "time": "07:00",
+              "vibrationIntensity": 50,
+              "vibrationPattern": "rise",
+              "duration": 20,
+              "alarmTemperature": 105,
+              "wakeWindow": 0,
+              "enabled": true,
+              "snoozeDuration": 540,
+              "snoozeTaper": 30
+            },
+            "notes": "Synthetic example only"
+          }
+        }
+      ],
+      "preferences": {
+        "displayUnit": "F",
+        "preferredTemperatureF": 70,
+        "comfort": "warm_sleeper",
+        "shareWakeTime": false,
+        "cloudAnalysisConsent": false
+      },
+      "approved": false
+    },
+    "partner": {
+      "displayName": "Example member",
+      "proposedSide": "left",
+      "approved": false
+    },
+    "canApprove": true,
+    "canActivate": false,
+    "effect": "review_only_bed_unchanged"
+  },
+  "memberReview": {
+    "version": 1,
+    "reviewId": "00000000-0000-4000-8000-000000000041",
+    "householdId": "00000000-0000-4000-8000-000000000002",
+    "podId": "00000000-0000-4000-8000-000000000001",
+    "sleeperId": "00000000-0000-4000-8000-000000000006",
+    "assignmentRevision": 1,
+    "createdAt": 1793311200000,
+    "expiresAt": 1793314800000,
+    "timeZone": "America/Los_Angeles",
+    "state": "awaiting_approval",
+    "self": {
+      "displayName": "Example member",
+      "assignmentAtReview": "unassigned",
+      "proposedSide": "left",
+      "routineSource": "own_private_draft",
+      "week": [],
+      "preferences": {
+        "displayUnit": "F",
+        "preferredTemperatureF": 78,
+        "comfort": "balanced",
+        "shareWakeTime": false,
+        "cloudAnalysisConsent": false
+      },
+      "approved": false
+    },
+    "partner": {
+      "displayName": "Example owner",
+      "proposedSide": "right",
+      "approved": false
+    },
+    "canApprove": true,
+    "canActivate": false,
+    "effect": "review_only_bed_unchanged"
+  },
+  "propose": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000041",
+    "expectedSessionRevision": 1,
+    "expectedAssignmentRevision": 1,
+    "ownerSide": "right",
+    "confirmPreserveOperatingOwnerWeek": true
+  },
+  "approve": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000042",
+    "expectedSessionRevision": 1,
+    "expectedAssignmentRevision": 1,
+    "reviewId": "00000000-0000-4000-8000-000000000041",
+    "issuedAt": 1793311201000,
+    "expiresAt": 1793311231000,
+    "confirmMySide": true,
+    "confirmMyRoutine": true,
+    "acknowledgeSeparateActivation": true
+  },
+  "cancel": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000043",
+    "expectedSessionRevision": 1,
+    "expectedAssignmentRevision": 1,
+    "reviewId": "00000000-0000-4000-8000-000000000041"
+  }
+}

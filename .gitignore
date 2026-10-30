@@ -62,3 +62,6 @@ sleepypod.local.db-wal
 *.db
 .reviews/
 __pycache__/
+
+# Generated isolated personal browser bundle
+/public/household/personal-runtime.js

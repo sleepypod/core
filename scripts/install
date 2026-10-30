@@ -650,7 +650,32 @@ for bin in node npm npx pnpm; do
 done
 
 INSTALL_DIR="/home/dac/sleepypod-core"
-GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+REPOSITORY_FILE="/etc/sleepypod/github-repo"
+GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-}"
+# The bootstrap script is standalone, so read the persistent pin before fetching
+# any source. A local/archive install with unknown provenance stays unpinned.
+if [ -z "$GITHUB_REPO" ] && { [ -e "$REPOSITORY_FILE" ] || [ -L "$REPOSITORY_FILE" ]; }; then
+  if [ ! -f "$REPOSITORY_FILE" ] || [ -L "$REPOSITORY_FILE" ] || [ ! -r "$REPOSITORY_FILE" ]; then
+    echo "Error: Update repository metadata must be a readable regular file." >&2
+    exit 1
+  fi
+  if [ "$(wc -c < "$REPOSITORY_FILE")" -gt 256 ]; then
+    echo "Error: Update repository metadata is too large." >&2
+    exit 1
+  fi
+  GITHUB_REPO="$(cat "$REPOSITORY_FILE")"
+  if [ -z "$GITHUB_REPO" ]; then
+    echo "Error: Empty update repository metadata." >&2
+    exit 1
+  fi
+fi
+if [ -z "$GITHUB_REPO" ] && [ "$INSTALL_LOCAL" = false ] && [ -z "$ARTIFACT_URL_OVERRIDE" ]; then
+  GITHUB_REPO="sleepypod/core"
+fi
+if [ -n "$GITHUB_REPO" ] && { [[ ! "$GITHUB_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]] || [[ "${GITHUB_REPO##*/}" = . || "${GITHUB_REPO##*/}" = .. ]] || [ "${#GITHUB_REPO}" -gt 255 ]; }; then
+  echo "Error: Update repository must be OWNER/REPO." >&2
+  exit 1
+fi
 SCRIPT_DEFAULT_BRANCH="__BRANCH__"  # substituted at release time by .github/workflows/{release,dev-release}.yml
 # Guard for users curling the raw source from main: the substitution only
 # happens inside the release tarball, so the file at raw.githubusercontent
@@ -813,14 +838,16 @@ fi
 # exactly `systemctl reboot` — both common systemctl paths so the rule matches
 # whichever the image ships. secure_path (below) lets sudo resolve it.
 # The restart rules back System → Health's "Restart <module>" fix, scoped to
-# exactly the three biometrics module units.
+# exactly the three biometrics module units. Core restart is a separate,
+# non-blocking command so the server does not await its own termination.
 SUDOERS_FILE="/etc/sudoers.d/sleepypod-update"
 SUDOERS_CONTENT='Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 sleepypod ALL=(root) NOPASSWD: /usr/local/bin/sp-update
 sleepypod ALL=(root) NOPASSWD: /bin/systemctl reboot, /usr/bin/systemctl reboot
 sleepypod ALL=(root) NOPASSWD: /bin/systemctl restart sleepypod-piezo-processor.service, /usr/bin/systemctl restart sleepypod-piezo-processor.service
 sleepypod ALL=(root) NOPASSWD: /bin/systemctl restart sleepypod-sleep-detector.service, /usr/bin/systemctl restart sleepypod-sleep-detector.service
-sleepypod ALL=(root) NOPASSWD: /bin/systemctl restart sleepypod-environment-monitor.service, /usr/bin/systemctl restart sleepypod-environment-monitor.service'
+sleepypod ALL=(root) NOPASSWD: /bin/systemctl restart sleepypod-environment-monitor.service, /usr/bin/systemctl restart sleepypod-environment-monitor.service
+sleepypod ALL=(root) NOPASSWD: /bin/systemctl --no-block restart sleepypod.service, /usr/bin/systemctl --no-block restart sleepypod.service'
 SUDOERS_TMP=$(mktemp)
 printf '%s\n' "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
 chmod 0440 "$SUDOERS_TMP"
@@ -931,7 +958,7 @@ fi
 # Install Node.js via binary download (works on any Linux, no apt required)
 # ============================================================================
 NODE_WANTED=24
-NODE_FULL="24.16.0"
+NODE_FULL="24.22.1"
 NODE_DIR="/usr/local/lib/nodejs"
 
 # Detect architecture
@@ -1096,7 +1123,7 @@ else
     RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/dev-latest"
   fi
 
-  if [ -n "${RELEASE_API:-}" ]; then
+  if [ -n "${RELEASE_API:-}" ] && [ -z "$ARTIFACT_URL_OVERRIDE" ]; then
     RELEASE_JSON=$(curl -sf "$RELEASE_API" || true)
     RELEASE_URL=$(printf '%s' "$RELEASE_JSON" \
       | grep -om1 '"browser_download_url": *"[^"]*sleepypod-core\.tar\.gz"' \
@@ -1187,6 +1214,10 @@ else
 
   # Fall back to source tarball
   if [ "$HAS_BUILD" = false ]; then
+    if [ -n "$ARTIFACT_URL_OVERRIDE" ]; then
+      echo "Error: The explicitly selected artifact failed; refusing a different source." >&2
+      exit 1
+    fi
     # "latest" is not a real branch — use main for the source tarball
     SOURCE_BRANCH="$DOWNLOAD_BRANCH"
     [ "$SOURCE_BRANCH" = "latest" ] && SOURCE_BRANCH="main"
@@ -1288,6 +1319,16 @@ else
   echo "Installing all dependencies (including devDependencies for build)..."
   CI=true pnpm install --frozen-lockfile
   SP_BRANCH="$EFFECTIVE_BRANCH" pnpm build
+fi
+
+# Keep the installed source outside the replaceable app tree and sudo environment.
+# This is deliberately independent of archive-provided metadata.
+if [ -n "$GITHUB_REPO" ]; then
+  mkdir -p "$(dirname "$REPOSITORY_FILE")"
+  repository_temporary="$(mktemp "$(dirname "$REPOSITORY_FILE")/.github-repo.XXXXXX")"
+  printf '%s\n' "$GITHUB_REPO" > "$repository_temporary"
+  chmod 0644 "$repository_temporary"
+  mv -f "$repository_temporary" "$REPOSITORY_FILE"
 fi
 
 # Create or preserve environment file

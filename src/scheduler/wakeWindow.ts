@@ -142,6 +142,12 @@ export class WakeWindows {
     this.watches.delete(scheduleId)
   }
 
+  /** Persisted occurrence receipts are authoritative after a schedule change. */
+  reset(scheduleId: number): void {
+    this.close(scheduleId)
+    this.firedEarly.delete(scheduleId)
+  }
+
   closeAll(): void {
     for (const id of [...this.watches.keys()]) this.close(id)
   }

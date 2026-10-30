@@ -15,9 +15,9 @@ describe('capSideChannels', () => {
       .toEqual([16.2, 16.1, 22.2, 1.16])
   })
 
-  it('drops non-numbers from the Pod 4/5 values array', () => {
+  it('rejects non-numbers without shifting the remaining electrodes', () => {
     expect(capSideChannels({ values: [16.2, null, 'nope', 1.16], status: 'good' }))
-      .toEqual([16.2, 1.16])
+      .toBeNull()
   })
 
   it('projects the Pod 3 {out,cen,in} object into the 6-slot paired layout', () => {
@@ -29,13 +29,18 @@ describe('capSideChannels', () => {
     expect(capSideChannels({ out: 10, cen: 20 })).toBeNull()
   })
 
-  it('passes a bare numeric array through, dropping non-numbers', () => {
-    expect(capSideChannels([1, 2, null, 3])).toEqual([1, 2, 3])
+  it('rejects a malformed bare array without shifting the remaining electrodes', () => {
+    expect(capSideChannels([1, 2, null, 3])).toBeNull()
   })
 
   it('returns null for an array with nothing numeric left after filtering', () => {
     expect(capSideChannels([])).toBeNull()
     expect(capSideChannels([null, 'nope'])).toBeNull()
+  })
+
+  it.each([NaN, Infinity, -Infinity])('rejects non-finite channel %s', (value) => {
+    expect(capSideChannels([1, value, 3])).toBeNull()
+    expect(capSideChannels({ out: 1, cen: value, in: 3 })).toBeNull()
   })
 
   it('wraps a scalar (degenerate) reading', () => {

@@ -99,7 +99,7 @@ vi.mock('../ScheduleTimeline', () => ({
   },
 }))
 vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
-vi.mock('../AlarmCard', () => ({ AlarmCard: () => null }))
+vi.mock('../AlarmCard', () => ({ AlarmCard: () => <div data-testid="next-alarm-card" /> }))
 vi.mock('../useTempNotices', async (importOriginal) => {
   const actual = await importOriginal<typeof NoticesModule>()
   return {
@@ -434,6 +434,7 @@ describe('TempScreen', () => {
     m.statusLoading = true
     const screen = render(<TempScreen />)
     expect(screen.getByText('Connecting…')).toBeTruthy()
+    expect(screen.getByTestId('next-alarm-card')).toBeTruthy()
     expect(screen.queryByRole('slider')).toBeNull()
   })
 

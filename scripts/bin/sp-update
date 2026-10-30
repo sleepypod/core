@@ -23,7 +23,10 @@ if [ -r /etc/sleepypod/data-dir ] && [ -s /etc/sleepypod/data-dir ]; then
 else
   DATA_DIR="/persistent/sleepypod-data"
 fi
-GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-sleepypod/core}"
+REPOSITORY_FILE="/etc/sleepypod/github-repo"
+GITHUB_REPO="${SLEEPYPOD_GITHUB_REPO:-}"
+SAVED_REPOSITORY=""
+REPOSITORY_CHANGED=false
 BRANCH=main
 ARCHIVE=""
 usage() {
@@ -33,7 +36,9 @@ Usage: sp-update [branch]
 
 Downloads a pre-built GitHub release; never builds Next.js on the Pod.
 For a cloned repo on your computer, run: ./scripts/deploy POD_IP [branch]
-SLEEPYPOD_GITHUB_REPO selects the release repository (default: sleepypod/core).
+The release repository is pinned in /etc/sleepypod/github-repo by installation.
+SLEEPYPOD_GITHUB_REPO explicitly selects and persists a different repository.
+An unpinned installation must select OWNER/REPO before downloading an update.
 TMPDIR selects temporary storage (default: /persistent).
 EOF
 }
@@ -56,6 +61,45 @@ if [ ! -d "$INSTALL_DIR" ] || ! command -v systemctl >/dev/null; then
   echo "Error: sp-update runs on an installed Pod. On your computer use ./scripts/deploy POD_IP [branch]." >&2
   exit 1
 fi
+# sudo intentionally need not preserve the app's environment. The installation
+# owns the source pin; missing or malformed metadata must never select upstream.
+if [ -e "$REPOSITORY_FILE" ] || [ -L "$REPOSITORY_FILE" ]; then
+  if [ ! -f "$REPOSITORY_FILE" ] || [ -L "$REPOSITORY_FILE" ] || [ ! -r "$REPOSITORY_FILE" ]; then
+    echo "Error: Update repository metadata must be a readable regular file: $REPOSITORY_FILE" >&2
+    exit 1
+  fi
+  if [ "$(wc -c < "$REPOSITORY_FILE")" -gt 256 ]; then
+    echo "Error: Update repository metadata is too large." >&2
+    exit 1
+  fi
+  SAVED_REPOSITORY="$(cat "$REPOSITORY_FILE")"
+  if [[ ! "$SAVED_REPOSITORY" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]] || [[ "${SAVED_REPOSITORY##*/}" = . || "${SAVED_REPOSITORY##*/}" = .. ]]; then
+    echo "Error: Invalid update repository metadata in $REPOSITORY_FILE; expected OWNER/REPO." >&2
+    exit 1
+  fi
+fi
+GITHUB_REPO="${GITHUB_REPO:-$SAVED_REPOSITORY}"
+if [ -n "$GITHUB_REPO" ] && { [[ ! "$GITHUB_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]] || [[ "${GITHUB_REPO##*/}" = . || "${GITHUB_REPO##*/}" = .. ]] || [ "${#GITHUB_REPO}" -gt 255 ]; }; then
+  echo "Error: SLEEPYPOD_GITHUB_REPO must be OWNER/REPO." >&2
+  exit 1
+fi
+if [ -z "$ARCHIVE" ] && [ -z "$GITHUB_REPO" ]; then
+  echo "Error: No update repository is pinned. Select the installed fork explicitly with sudo env SLEEPYPOD_GITHUB_REPO=OWNER/REPO sp-update." >&2
+  exit 1
+fi
+
+# Replace a complete metadata file, keeping the old source intact on failure.
+write_repository() {
+  local repository="$1" directory temporary
+  directory="$(dirname "$REPOSITORY_FILE")"
+  mkdir -p "$directory" || return 1
+  temporary="$(mktemp "$directory/.github-repo.XXXXXX")" || return 1
+  if printf '%s\n' "$repository" > "$temporary" && chmod 0644 "$temporary" && mv -f "$temporary" "$REPOSITORY_FILE"; then
+    return 0
+  fi
+  rm -f "$temporary"
+  return 1
+}
 # Existing installations may point at a release via a symlink. find does
 # not descend through a command-line symlink by default; resolve it so stale
 # .next/standalone files are removed rather than silently booting old code.
@@ -173,6 +217,13 @@ WORK_DIR=""
 BACKUP_DIR=""
 cleanup() {
   local exit_code=$?
+  if [ "$exit_code" -ne 0 ] && [ "$REPOSITORY_CHANGED" = true ]; then
+    if [ -n "$SAVED_REPOSITORY" ]; then
+      write_repository "$SAVED_REPOSITORY" || echo "Critical: could not restore update repository metadata." >&2
+    else
+      rm -f "$REPOSITORY_FILE"
+    fi
+  fi
   if [ "$WAN_WAS_BLOCKED" = true ]; then
     reload_iptables_helpers
     if ! restore_wan; then
@@ -637,6 +688,13 @@ if [ "$WAN_WAS_BLOCKED" = true ]; then
   reload_iptables_helpers
   restore_wan
   WAN_WAS_BLOCKED=false
+fi
+
+# Commit the selected source with the new code; cleanup restores it on failure.
+# Archives without an explicit repository retain the installation's source.
+if [ -n "$GITHUB_REPO" ] && [ "$GITHUB_REPO" != "$SAVED_REPOSITORY" ]; then
+  REPOSITORY_CHANGED=true
+  write_repository "$GITHUB_REPO"
 fi
 
 echo "Starting service..."

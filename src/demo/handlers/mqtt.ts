@@ -44,6 +44,7 @@ export const mqtt: DemoHandlers<'mqtt'> = {
     return {
       runState: connected ? 'connected' : 'stopped',
       connected,
+      commandsEnabled: false,
       lastError: null,
       deviceId: 'sleepypod-demo',
       topicPrefix: connected ? settings.topicPrefix : null,

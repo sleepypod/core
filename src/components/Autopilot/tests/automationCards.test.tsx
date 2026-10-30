@@ -99,7 +99,7 @@ it('groups activity by night, inserts holds, filters outcomes and requests more 
 })
 
 it('renders side ownership, schedule blocks, holds, rule windows and filtered fire marks', () => {
-  mock.schedule = { temperature: [{ enabled: true, dayOfWeek: 'monday', time: '22:00', temperature: 78 }, { enabled: true, dayOfWeek: 'monday', time: '07:00', temperature: 80 }] }
+  mock.schedule = { temperature: [{ enabled: true, dayOfWeek: 'monday', time: '22:00', temperature: 78 }, { enabled: true, dayOfWeek: 'tuesday', time: '07:00', temperature: 80 }] }
   const empty: SideTonight = { control: null, hold: null, runOnceUntil: null, lastAutopilot: null }
   const rules: TimelineRule[] = [
     { id: 1, name: 'Dry rule', mode: 'dryrun', side: null, conditions: { kind: 'and', conditions: [] }, missing: [] },

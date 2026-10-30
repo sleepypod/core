@@ -15,12 +15,12 @@ export function SettingRow({ label, sub, children, divider = true, className }: 
   className?: string
 }) {
   return (
-    <div className={cn('flex items-center gap-3', divider && 'border-t border-line pt-3', className)}>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+    <div className={cn('flex flex-wrap items-center gap-3', divider && 'border-t border-line pt-3', className)}>
+      <div className="flex min-w-0 flex-auto flex-col gap-0.5">
         <span className="flex items-center gap-2.5 text-sm">{label}</span>
         {sub && <span className="text-xs leading-[1.4] text-fg-2 text-pretty">{sub}</span>}
       </div>
-      {children !== undefined && <div className="flex shrink-0 items-center gap-2.5">{children}</div>}
+      {children !== undefined && <div className="flex max-w-full flex-wrap items-center gap-2.5">{children}</div>}
     </div>
   )
 }

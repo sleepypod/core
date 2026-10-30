@@ -7,9 +7,18 @@ import {
   hhmmToMinutes,
   isInWindow,
   isInWindowForTimezone,
+  powerOffDay,
 } from '../scheduleTime'
 
 describe('scheduleTime', () => {
+  it('requires an explicit valid next-day offset without inferring one', () => {
+    expect(powerOffDay({ dayOfWeek: 'saturday' })).toBe('saturday')
+    expect(powerOffDay({ dayOfWeek: 'saturday', offDayOffset: 1 })).toBe('sunday')
+    expect(powerOffDay({ dayOfWeek: 'sunday', offDayOffset: 1 })).toBe('monday')
+    for (const offDayOffset of [-1, 2, 0.5, NaN, Infinity]) {
+      expect(() => powerOffDay({ dayOfWeek: 'monday', offDayOffset })).toThrow()
+    }
+  })
   it('converts HH:mm strings to minutes', () => {
     expect(hhmmToMinutes('00:00')).toBe(0)
     expect(hhmmToMinutes('23:59')).toBe(1439)

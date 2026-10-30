@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from test_shadow import START, configs, frames
+from common.tests_support.mechanical import quiet_snapshot
 from common.biometrics.config import config_hash
 from common.biometrics.shadow_worker import MAX_LINE_BYTES, run
 
@@ -30,7 +31,7 @@ def encode(messages):
 def frame(sequence, timestamp, record):
     return {'type': 'frame', 'sequence': sequence, 'observedAtMs': timestamp,
         'record': {key: base64.b64encode(value).decode() if isinstance(value, bytes) else value for key, value in record.items()},
-        'context': {'activeSides': ['left'], 'leftOccupied': True, 'rightOccupied': False, 'pumpContextKnown': True}}
+        'context': {'activeSides': ['left'], 'leftOccupied': True, 'rightOccupied': False, 'pumpContextKnown': True, 'mechanical': quiet_snapshot(timestamp)}}
 
 
 def test_real_worker_protocol_produces_candidate_only_outputs_and_exits_cleanly(tmp_path):

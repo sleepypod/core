@@ -1,0 +1,197 @@
+{
+  "page": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "accountId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "householdRevision": 1,
+      "assignmentRevision": 1,
+      "sleeperId": "00000000-0000-4000-8000-000000000004"
+    },
+    "attributionRevision": 2,
+    "generatedAt": 1793397600000,
+    "source": "pod",
+    "interpretation": "recordings_not_confirmed_sleep",
+    "query": {
+      "startsAt": 1793314800000,
+      "endsAt": 1793336400000,
+      "kind": "presence",
+      "limit": 30
+    },
+    "intervalSelection": "overlap_full_records",
+    "records": [
+      {
+        "id": "10000000-0000-4000-8000-000000000001",
+        "sleeperId": "00000000-0000-4000-8000-000000000004",
+        "startsAt": 1793311200000,
+        "endsAt": 1793340000000,
+        "recordedSide": "left",
+        "payload": {
+          "kind": "presence",
+          "reportedPresenceSeconds": 25200,
+          "exits": 2,
+          "interpretation": "bed_presence_not_sleep"
+        },
+        "attribution": {
+          "epochId": "20000000-0000-4000-8000-000000000001",
+          "mode": "solo_merged",
+          "basis": "verified_arrangement",
+          "identity": "reviewed_arrangement_not_biometric_identification"
+        }
+      }
+    ],
+    "nextCursor": null
+  },
+  "detail": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "accountId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "householdRevision": 1,
+      "assignmentRevision": 1,
+      "sleeperId": "00000000-0000-4000-8000-000000000004"
+    },
+    "attributionRevision": 2,
+    "generatedAt": 1793397600000,
+    "source": "pod",
+    "interpretation": "recordings_not_confirmed_sleep",
+    "record": {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "sleeperId": "00000000-0000-4000-8000-000000000004",
+      "startsAt": 1793311200000,
+      "endsAt": 1793340000000,
+      "recordedSide": "left",
+      "payload": {
+        "kind": "presence",
+        "reportedPresenceSeconds": 25200,
+        "exits": 2,
+        "interpretation": "bed_presence_not_sleep"
+      },
+      "attribution": {
+        "epochId": "20000000-0000-4000-8000-000000000001",
+        "mode": "solo_merged",
+        "basis": "verified_arrangement",
+        "identity": "reviewed_arrangement_not_biometric_identification"
+      }
+    }
+  },
+  "emptyPage": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "accountId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "householdRevision": 1,
+      "assignmentRevision": 1,
+      "sleeperId": "00000000-0000-4000-8000-000000000004"
+    },
+    "attributionRevision": 2,
+    "generatedAt": 1793397600000,
+    "source": "pod",
+    "interpretation": "recordings_not_confirmed_sleep",
+    "query": {
+      "startsAt": 1793314800000,
+      "endsAt": 1793336400000,
+      "kind": "presence",
+      "limit": 30
+    },
+    "intervalSelection": "overlap_full_records",
+    "records": [],
+    "nextCursor": null
+  },
+  "vitalsPage": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "accountId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "householdRevision": 1,
+      "assignmentRevision": 1,
+      "sleeperId": "00000000-0000-4000-8000-000000000004"
+    },
+    "attributionRevision": 2,
+    "generatedAt": 1793397600000,
+    "source": "pod",
+    "interpretation": "recordings_not_confirmed_sleep",
+    "query": {
+      "startsAt": 1793314800000,
+      "endsAt": 1793336400000,
+      "kind": "vitals",
+      "limit": 30
+    },
+    "intervalSelection": "overlap_full_records",
+    "records": [
+      {
+        "id": "10000000-0000-4000-8000-000000000002",
+        "sleeperId": "00000000-0000-4000-8000-000000000004",
+        "startsAt": 1793318400000,
+        "endsAt": 1793318460000,
+        "recordedSide": "left",
+        "payload": {
+          "kind": "vitals",
+          "heartRateBpm": 61,
+          "breathingRatePerMinute": null,
+          "hrvMs": 28,
+          "hrvMetric": "window_ibi_variability_v1"
+        },
+        "attribution": {
+          "epochId": "20000000-0000-4000-8000-000000000001",
+          "mode": "solo_merged",
+          "basis": "verified_arrangement",
+          "identity": "reviewed_arrangement_not_biometric_identification"
+        }
+      }
+    ],
+    "nextCursor": null
+  },
+  "movementPage": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "accountId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "householdRevision": 1,
+      "assignmentRevision": 1,
+      "sleeperId": "00000000-0000-4000-8000-000000000004"
+    },
+    "attributionRevision": 2,
+    "generatedAt": 1793397600000,
+    "source": "pod",
+    "interpretation": "recordings_not_confirmed_sleep",
+    "query": {
+      "startsAt": 1793314800000,
+      "endsAt": 1793336400000,
+      "kind": "movement",
+      "limit": 30
+    },
+    "intervalSelection": "overlap_full_records",
+    "records": [
+      {
+        "id": "10000000-0000-4000-8000-000000000003",
+        "sleeperId": "00000000-0000-4000-8000-000000000004",
+        "startsAt": 1793318400000,
+        "endsAt": 1793318460000,
+        "recordedSide": "left",
+        "payload": {
+          "kind": "movement",
+          "total": 42,
+          "interpretation": "movement_not_sleep_stage"
+        },
+        "attribution": {
+          "epochId": "20000000-0000-4000-8000-000000000001",
+          "mode": "solo_merged",
+          "basis": "verified_arrangement",
+          "identity": "reviewed_arrangement_not_biometric_identification"
+        }
+      }
+    ],
+    "nextCursor": null
+  }
+}

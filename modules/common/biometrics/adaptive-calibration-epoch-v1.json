@@ -1,0 +1,22 @@
+[
+  {
+    "format": "capSense",
+    "names": ["out", "cen", "in"],
+    "means": [1025, 575, 950],
+    "threshold": 300,
+    "referenceMean": 1.16,
+    "inside": [1035, 570, 952],
+    "boundary": [1050, 600, 975],
+    "outside": [1050, 600, 975.01]
+  },
+  {
+    "format": "capSense2",
+    "names": ["A", "B", "C"],
+    "means": [10, 20, 30],
+    "threshold": 6,
+    "referenceMean": 1.16,
+    "inside": [10.25, 19.75, 30.25],
+    "boundary": [10.5, 20.5, 30.5],
+    "outside": [10.5, 20.5, 30.5001]
+  }
+]

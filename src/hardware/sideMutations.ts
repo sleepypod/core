@@ -80,3 +80,24 @@ export function hasConfirmedPumpRun(side: Side): boolean {
 export function _resetPumpRunEvidence(): void {
   G[PUMP_RUN_KEY] = undefined
 }
+
+// A retained non-neutral target or moving pump does not prove a heat session.
+// Only a positive live countdown or an acknowledged temperature+duration command
+// permits passive temperature writes. This evidence never survives a restart.
+const HEATING_SESSION_KEY = '__sp_heating_session_evidence__'
+
+export function recordHeatingSession(side: Side, active: boolean): void {
+  const evidence = G[HEATING_SESSION_KEY] as Partial<Record<Side, boolean>> | undefined
+  const next = evidence ?? {}
+  next[side] = active
+  G[HEATING_SESSION_KEY] = next
+}
+
+export function hasHeatingSessionEvidence(side: Side): boolean {
+  return (G[HEATING_SESSION_KEY] as Partial<Record<Side, boolean>> | undefined)?.[side] === true
+}
+
+/** @internal — for tests only */
+export function _resetHeatingSessionEvidence(): void {
+  G[HEATING_SESSION_KEY] = undefined
+}

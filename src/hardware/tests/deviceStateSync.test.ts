@@ -25,6 +25,7 @@ vi.mock('@/src/db', async () => {
 
 import * as dbModule from '@/src/db'
 import { DeviceStateSync, markSideMutated, _resetMutationStamps, _resetFirmwareSynced, getAlarmState, hasFirmwareSynced } from '../deviceStateSync'
+import { _resetHeatingSessionEvidence, hasHeatingSessionEvidence, recordHeatingSession } from '../sideMutations'
 
 const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
   sqlite: BetterSqlite3.Database
@@ -116,6 +117,50 @@ const status = (overrides: Partial<DeviceStatus['rightSide']> & { side?: 'left' 
     sensorLabel: 'test',
   }
 }
+
+describe('DeviceStateSync — passive heating authorization', () => {
+  beforeEach(() => {
+    resetSchema()
+    _resetMutationStamps()
+    _resetHeatingSessionEvidence()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-25T23:23:00Z'))
+  })
+  afterEach(() => {
+    _resetHeatingSessionEvidence()
+    vi.useRealTimers()
+  })
+
+  it('does not authorize retained targets at startup, then follows a real countdown and expiry', async () => {
+    seedSide('right', true, 83)
+    const sync = new DeviceStateSync()
+    const retained = status({ targetLevel: 5, currentLevel: 5, heatingDuration: 0 })
+    await sync.sync(retained)
+    expect(hasHeatingSessionEvidence('right')).toBe(false)
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 60 }))
+    expect(hasHeatingSessionEvidence('right')).toBe(true)
+    vi.advanceTimersByTime(60_000)
+    await sync.sync(retained)
+    expect(hasHeatingSessionEvidence('right')).toBe(false)
+    expect(readSide('right')?.is_powered).toBe(0)
+  })
+
+  it('does not let stale polls revoke a new command or revive an explicit stop', async () => {
+    const sync = new DeviceStateSync()
+    markSideMutated('right')
+    recordHeatingSession('right', true)
+    await sync.sync(status())
+    expect(hasHeatingSessionEvidence('right')).toBe(true)
+    recordHeatingSession('right', false)
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 60 }))
+    expect(hasHeatingSessionEvidence('right')).toBe(false)
+    vi.advanceTimersByTime(5_000)
+    await sync.sync(status({ targetLevel: 5, heatingDuration: 60 }))
+    expect(hasHeatingSessionEvidence('right')).toBe(true)
+    await sync.sync(status({ targetLevel: 0, heatingDuration: 60 }))
+    expect(hasHeatingSessionEvidence('right')).toBe(false)
+  })
+})
 
 describe('DeviceStateSync — mutation freshness window', () => {
   let sync: DeviceStateSync

@@ -55,8 +55,9 @@ const powerRow: RouterInputs['schedules']['createPowerSchedule'] = {
 }
 
 const powerCases = [
-  { name: 'defaults', settings: {}, expected: { endAction: 'turn_off', enabled: true } },
+  { name: 'defaults', settings: {}, expected: { endAction: 'turn_off', enabled: true, offDayOffset: 0 } },
   { name: 'maintain', settings: { endAction: 'maintain' as const, enabled: false }, expected: { endAction: 'maintain', enabled: false } },
+  { name: 'overnight', settings: { offDayOffset: 1 }, expected: { offDayOffset: 1 } },
 ]
 
 describe('demo power schedules', () => {

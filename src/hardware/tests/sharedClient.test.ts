@@ -49,6 +49,12 @@ afterEach(() => {
 })
 
 describe('sharedClient singleton', () => {
+  it('does not acknowledge a vibration clear that the firmware rejects', async () => {
+    const mod = await freshModule()
+    sendCommandMock.mockResolvedValueOnce('ERROR: rejected')
+    await expect(mod.getSharedHardwareClient().clearAlarm('left')).rejects.toThrow('Failed to clear alarm')
+    expect(sendCommandMock).toHaveBeenCalledExactlyOnceWith('16', '0')
+  })
   it('returns the same instance across calls', async () => {
     const mod = await freshModule()
     const a = mod.getSharedHardwareClient()

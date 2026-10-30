@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "prebuild": "node scripts/generate-git-info.mjs && lingui compile && node scripts/build/demo-biometric-worker.mjs",
+    "prebuild": "node scripts/generate-git-info.mjs && lingui compile && node scripts/build/demo-biometric-worker.mjs && node scripts/build/personal-workspace.mjs",
     "build": "next build && node scripts/strip-turbopack-external-hashes.mjs && cp -r .next/static .next/standalone/.next/static && { [ ! -d public ] || cp -r public .next/standalone/public || true; } && node scripts/build/biometrics-worker.mjs",
     "dev": "next dev",
     "db:generate": "drizzle-kit generate",
@@ -16,7 +16,7 @@
     "db:reset": "rm -f sleepypod.dev.db sleepypod.dev.db-shm sleepypod.dev.db-wal && pnpm db:migrate",
     "db:reset:all": "rm -f sleepypod.dev.db sleepypod.dev.db-shm sleepypod.dev.db-wal biometrics.dev.db biometrics.dev.db-shm biometrics.dev.db-wal && pnpm db:migrate && pnpm db:biometrics:migrate",
     "db:reset:biometrics": "rm -f biometrics.dev.db biometrics.dev.db-shm biometrics.dev.db-wal && pnpm db:biometrics:migrate",
-    "db:reset:schedules": "sqlite3 sleepypod.dev.db \"BEGIN; DELETE FROM temperature_schedules; DELETE FROM power_schedules; DELETE FROM alarm_schedules; DELETE FROM run_once_sessions; COMMIT;\"",
+    "db:reset:schedules": "sqlite3 sleepypod.dev.db \"BEGIN; DELETE FROM bedtime_routines; DELETE FROM temperature_schedules; DELETE FROM power_schedules; DELETE FROM alarm_schedules; DELETE FROM run_once_sessions; COMMIT;\"",
     "db:reset:settings": "sqlite3 sleepypod.dev.db \"BEGIN; DELETE FROM device_settings; DELETE FROM side_settings; DELETE FROM tap_gestures; COMMIT;\"",
     "db:reset:state": "sqlite3 sleepypod.dev.db \"BEGIN; DELETE FROM device_state; DELETE FROM system_health; COMMIT;\"",
     "lingui:extract": "lingui extract --clean",
@@ -30,7 +30,9 @@
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "build:biometrics-worker": "node scripts/build/biometrics-worker.mjs",
     "biometrics:experiment": "tsx scripts/algorithm-experiments/cli.ts",
-    "test:browser": "node tests/browser/run.mjs"
+    "test:browser": "node tests/browser/run.mjs",
+    "predev": "node scripts/build/personal-workspace.mjs",
+    "build:personal-workspace": "node scripts/build/personal-workspace.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx}": "eslint --fix",
@@ -67,7 +69,7 @@
     "lucide-react": "^1.0.0",
     "mqtt": "^5.15.1",
     "negotiator": "^1.0.0",
-    "next": "^16.1.6",
+    "next": "^16.4.3",
     "node-schedule": "^2.1.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.4",

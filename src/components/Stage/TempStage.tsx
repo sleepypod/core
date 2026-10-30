@@ -35,6 +35,7 @@ import { STAGE, STAGE_SIDES, formatStageTemp, sideStatus, tempColor } from './st
 import type { StageSide } from './stageColors'
 import { useStageAutoReturn, useStageZones } from './stagePrefs'
 import { ViewSwitch } from './ViewSwitch'
+import { SettingsLink } from '@/src/components/AppShell/MobileToolbar'
 import type { StageLabelRefs, StageSceneState } from './stageScene'
 import { CAMERA } from './stageCamera'
 import { HOUR, clock, scheduledAt, sideActivity, stageCurves, stageWindow } from './stageTimelineLogic'
@@ -129,7 +130,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     left: trpc.schedules.getAll.useQuery({ side: 'left' }, { staleTime: 60_000 }),
     right: trpc.schedules.getAll.useQuery({ side: 'right' }, { staleTime: 60_000 }),
   }
-  const curves = useMemo(() => stageCurves({ left: schedules.left.data?.temperature, right: schedules.right.data?.temperature }, win), [schedules.left.data, schedules.right.data, win])
+  const curves = useMemo(() => stageCurves({ left: schedules.left.data?.temperature, right: schedules.right.data?.temperature }, win, { left: schedules.left.data?.power, right: schedules.right.data?.power }), [schedules.left.data, schedules.right.data, win])
   // The Temp screen timeline's power and in-bed rows, on tonight's window.
   const recordsFrom = new Date(win.start - 12 * HOUR)
   const records = {
@@ -311,8 +312,13 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   return (
     <div
       data-testid="temp-stage"
-      className="fixed inset-0 z-30 select-none overflow-hidden bg-[#0b0b0c] font-sans text-[#ececec] min-[900px]:left-[224px] max-[899px]:bottom-[calc(60px+env(safe-area-inset-bottom,0px))]"
+      data-no-swipe
+      className={cn(
+        'fixed inset-0 z-30 select-none bg-[#0b0b0c] font-sans text-[#ececec] min-[900px]:left-[224px] max-[899px]:bottom-[var(--phone-nav-height,76px)]',
+        mode === '2d' ? 'flex flex-col gap-6 overflow-y-auto py-6' : 'overflow-hidden',
+      )}
     >
+      <h1 className="sr-only">Temperature</h1>
       {mode !== '2d' && (
         <StageCanvas
           ref={canvas}
@@ -373,11 +379,11 @@ export function TempStage({ onExit }: { onExit: () => void }) {
 
       {/* Live indicator · view switch · link and power, top centre, wrapping on phones;
           the pod's alarm, priming and pump notices sit underneath. */}
-      <div className="pointer-events-none absolute inset-x-4 top-6 z-20 flex flex-col items-center gap-3">
+      <div data-testid="stage-toolbar" className={cn('pointer-events-none z-20 flex shrink-0 flex-col items-center gap-3', mode === '2d' ? 'relative px-4' : 'absolute inset-x-4 top-6')}>
         <div className="flex flex-wrap items-center justify-center gap-2 whitespace-nowrap *:pointer-events-auto">
           {previewing
             ? (
-                <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
+                <button type="button" onClick={() => setPreviewAt(null)} data-testid="stage-mode" className={cn(PILL, 'h-auto min-h-[34px] min-w-0 max-w-full whitespace-normal py-[6px] text-center font-mono text-[11px] uppercase tracking-[0.12em]')} style={{ ...GLASS, color: STAGE.preview, borderColor: STAGE.preview }}>
                   <span aria-hidden className="size-1.5 rounded-full" style={{ background: STAGE.preview }} />
                   {`Preview · ${clock(previewAt, timeFormat)} · Back to live`}
                 </button>
@@ -389,6 +395,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
                 </span>
               )}
           <ViewSwitch view="stage" onChange={v => v === 'cards' && onExit()} />
+          <SettingsLink />
           <button
             type="button"
             aria-pressed={isLinked}
@@ -410,16 +417,17 @@ export function TempStage({ onExit }: { onExit: () => void }) {
       </div>
 
       {/* Room readouts, top right, once there is room beside the centred pills. */}
-      <div className="absolute right-7 top-6 z-10 hidden gap-7 rounded-xl border px-[18px] py-3 min-[1200px]:flex" style={{ ...GLASS, borderColor: STAGE.line }}>
+      <div className={cn('z-10 hidden gap-7 rounded-xl border px-[18px] py-3 min-[1200px]:flex', mode === '2d' ? 'relative mx-7 self-center' : 'absolute right-7 top-6')} style={{ ...GLASS, borderColor: STAGE.line }}>
         <Readout label="Room" value={roomText} testId="stage-room" />
         <Readout label="Humidity" value={humidityText} testId="stage-humidity" />
         <Readout label="Bed air" value={bedAirText} testId="stage-bed-air" />
       </div>
 
+      {/* Failed WebGL uses normal scroll flow so text and controls cannot overlap. */}
       {mode === '2d' && (
-        <div className="absolute inset-x-7 top-[104px] bottom-[232px] flex flex-col items-center gap-4 overflow-y-auto" data-testid="stage-fallback">
-          <span className="font-mono text-[12px] uppercase tracking-[0.12em] text-[#5d5d63]">3D view could not load</span>
-          <div className="grid w-full max-w-[760px] gap-4 min-[700px]:grid-cols-2">
+        <div className="relative flex shrink-0 flex-col items-center gap-4 px-[16px]" data-testid="stage-fallback">
+          <span className="font-mono text-[12px] uppercase tracking-[0.12em] text-[#8b8b92]">3D view could not load</span>
+          <div className="grid w-full max-w-[760px] gap-4 text-fg min-[700px]:grid-cols-2">
             {STAGE_SIDES.map((side) => {
               const c = controls[side]
               return (
@@ -458,37 +466,39 @@ export function TempStage({ onExit }: { onExit: () => void }) {
         </div>
       )}
 
-      <StagePanel
-        open={selected != null}
-        side={panelSide}
-        name={panelName}
-        scope={panelScope}
-        isOn={controls[panelSide].isOn}
-        paused={blocked[panelSide]}
-        powerDisabled={controls[panelSide].powerPending || blocked[panelSide]}
-        onPower={() => handlePower(panelSide)}
-        away={away.isAway(panelSide)}
-        onAwayToggle={isLinked ? undefined : () => away.toggle(panelSide)}
-        awayDisabled={away.pending}
-        onClose={() => setSelected(null)}
-        status={statusOf(panelSide)}
-        control={status?.temperatureControl?.[panelSide]}
-        onResumed={() => { void refetch() }}
-        controlStyle={controlStyle}
-        display={display}
-        unit={unit}
-        targetF={controls[panelSide].targetF}
-        bedF={controls[panelSide].bedF}
-        stepDisabled={!controls[panelSide].isOn || controls[panelSide].tempPending || blocked[panelSide]}
-        onPreview={f => handlePreview(panelSide, f)}
-        onCommit={f => handleCommit(panelSide, f)}
-        onStep={delta => handleStep(panelSide, delta)}
-        holdMinutes={holdMinutes}
-        onHoldChange={setHoldMinutes}
-        stepper={{ tab: stepperTab[panelSide], onTabChange: tab => handleTabChange(panelSide, tab), schedule: nightPhases[panelSide], onStepPhase: (phase, delta) => handleStepPhase(panelSide, phase, delta), now }}
-      />
+      {mode !== '2d' && (
+        <StagePanel
+          open={selected != null}
+          side={panelSide}
+          name={panelName}
+          scope={panelScope}
+          isOn={controls[panelSide].isOn}
+          paused={blocked[panelSide]}
+          powerDisabled={controls[panelSide].powerPending || blocked[panelSide]}
+          onPower={() => handlePower(panelSide)}
+          away={away.isAway(panelSide)}
+          onAwayToggle={isLinked ? undefined : () => away.toggle(panelSide)}
+          awayDisabled={away.pending}
+          onClose={() => setSelected(null)}
+          status={statusOf(panelSide)}
+          control={status?.temperatureControl?.[panelSide]}
+          onResumed={() => { void refetch() }}
+          controlStyle={controlStyle}
+          display={display}
+          unit={unit}
+          targetF={controls[panelSide].targetF}
+          bedF={controls[panelSide].bedF}
+          stepDisabled={!controls[panelSide].isOn || controls[panelSide].tempPending || blocked[panelSide]}
+          onPreview={f => handlePreview(panelSide, f)}
+          onCommit={f => handleCommit(panelSide, f)}
+          onStep={delta => handleStep(panelSide, delta)}
+          holdMinutes={holdMinutes}
+          onHoldChange={setHoldMinutes}
+          stepper={{ tab: stepperTab[panelSide], onTabChange: tab => handleTabChange(panelSide, tab), schedule: nightPhases[panelSide], onStepPhase: (phase, delta) => handleStepPhase(panelSide, phase, delta), now }}
+        />
+      )}
 
-      <div className="absolute inset-x-7 bottom-[60px] z-10 max-[899px]:inset-x-3 max-[899px]:bottom-3">
+      <div className={cn('z-10', mode === '2d' ? 'relative mx-[16px] shrink-0' : 'absolute inset-x-7 bottom-[60px] max-[899px]:inset-x-3 max-[899px]:bottom-3')}>
         <StageTimeline
           win={win}
           now={nowMs}
@@ -502,7 +512,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
           loading={schedules.left.isLoading || schedules.right.isLoading}
         />
       </div>
-      <div className="pointer-events-none absolute inset-x-7 bottom-5 hidden h-6 items-center gap-[22px] overflow-hidden whitespace-nowrap font-mono text-[11px] text-[#5d5d63] min-[900px]:flex" aria-hidden data-testid="stage-hints">
+      <div className={cn('pointer-events-none hidden h-6 shrink-0 items-center gap-[22px] overflow-hidden whitespace-nowrap font-mono text-[11px] text-[#5d5d63] min-[900px]:flex', mode === '2d' ? 'relative mx-7' : 'absolute inset-x-7 bottom-5')} aria-hidden data-testid="stage-hints">
         {KEY_HINTS.map(([key, label]) => (
           <span key={key} className="flex items-center gap-[7px]">
             <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded border px-[5px] text-[10px] text-[#8b8b92]" style={{ borderColor: STAGE.frame }}>{key}</span>

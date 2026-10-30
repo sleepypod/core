@@ -19,6 +19,8 @@
  * dacMonitor.instance.
  */
 
+import { assertControlDeadline } from '@/src/controls/context'
+
 type Side = 'left' | 'right'
 
 const G = globalThis as Record<string, unknown>
@@ -42,6 +44,7 @@ export async function withSideLock<T>(side: Side, fn: () => Promise<T>): Promise
   })
   try {
     await prev
+    assertControlDeadline()
     return await fn()
   }
   finally {

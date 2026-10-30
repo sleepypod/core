@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './ownerTest'
 
 for (const locale of ['en', 'es']) {
   test(`original vitals provenance is visible in ${locale}`, async ({ page }) => {

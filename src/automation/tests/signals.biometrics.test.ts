@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Eligibility has real SQLite/window tests; these fixtures isolate scalar conversion.
+const eligibility = vi.hoisted(() => ({ allowed: true }))
+vi.mock('@/src/biometrics/mechanical/eligibility', () => ({ isMechanicallyQualifiedVital: () => eligibility.allowed }))
+
 // Hoisted DB mock — drives BiometricsSignalReader by stubbing the chained
 // biometricsDb.select().from(table)[.where()].orderBy().limit().all() call.
 // Rows are keyed by table; per-side tables (vitals, movement) resolve left
@@ -95,6 +99,7 @@ describe('reduceCap', () => {
 
 describe('BiometricsSignalReader', () => {
   beforeEach(() => {
+    eligibility.allowed = true
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-15T12:00:00Z'))
     dbMock.state.rows = {}
@@ -177,6 +182,19 @@ describe('BiometricsSignalReader', () => {
     expect(out['right.cap.spread']).toBe(0)
   })
 
+  it('withholds unqualified vitals without hiding independent environmental signals', () => {
+    eligibility.allowed = false
+    dbMock.state.rows = {
+      'vitals.left': [{ timestamp: new Date(Date.now() - 1000), heartRate: 55, hrv: 40, breathingRate: 14 }],
+      'ambientLight': [{ timestamp: new Date(Date.now() - 1000), lux: 12 }],
+    }
+    const out = new BiometricsSignalReader().read()
+    expect(out['left.heartRate']).toBeUndefined()
+    expect(out['left.hrv']).toBeUndefined()
+    expect(out['left.breathingRate']).toBeUndefined()
+    expect(out['ambient.light']).toBe(12)
+  })
+
   it('treats rows older than their freshness window as absent', () => {
     const staleShort = new Date(Date.now() - 6 * 60_000) // past the 5-min vitals/movement window
     const staleEnv = new Date(Date.now() - 16 * 60_000) // past the 15-min environment window
@@ -197,6 +215,54 @@ describe('BiometricsSignalReader', () => {
       right: [10, 20, 30, 40, 50, 60, 999, 999],
     }
 
+    expect(new BiometricsSignalReader().read()).toEqual({})
+  })
+
+  it.each([
+    new Date('2026-01-15T12:00:01Z'),
+    new Date('invalid'),
+    NaN, Infinity, -Infinity,
+  ])('withholds malformed and future timestamps (%s) across all stored sources', (timestamp) => {
+    dbMock.state.rows = {
+      'vitals.left': [{ timestamp, heartRate: 55, hrv: 40, breathingRate: 14 }],
+      'movement.left': [{ timestamp, totalMovement: 120 }],
+      'bedTemp': [{ timestamp, ambientTemp: 2000, humidity: 4550, leftOuterTemp: 3000 }],
+      'freezerTemp': [{ timestamp, leftWaterTemp: 1500 }],
+      'ambientLight': [{ timestamp, lux: 12 }],
+      'vitals.right': [{ timestamp: new Date(), heartRate: 60 }],
+    }
+    expect(new BiometricsSignalReader().read()).toEqual({ 'right.heartRate': 60 })
+  })
+
+  it('does not propagate malformed numeric readings or manufacture missing values', () => {
+    const timestamp = new Date()
+    dbMock.state.rows = {
+      'vitals.left': [{ timestamp, heartRate: NaN, hrv: Infinity, breathingRate: '14' }],
+      'movement.left': [{ timestamp, totalMovement: -Infinity }],
+      'bedTemp': [{ timestamp, ambientTemp: Infinity, humidity: NaN, leftOuterTemp: NaN, leftCenterTemp: 3000, leftInnerTemp: Infinity }],
+      'freezerTemp': [{ timestamp, leftWaterTemp: '1500', rightWaterTemp: 1500 }],
+      'ambientLight': [{ timestamp, lux: -Infinity }],
+    }
+    capMock.snapshot = {
+      type: 'capSense2', ts: Date.now() / 1000, receivedAtMs: Date.now(),
+      left: [1, 2, NaN, 4, 5, 6, 0, 0], right: [10, 10, 10, 10, 10, 10, 0, 0],
+    }
+    expect(new BiometricsSignalReader().read()).toEqual({
+      'left.surfaceTemp': 86, 'right.waterTemp': 59,
+      'right.cap.max': 10, 'right.cap.mean': 10, 'right.cap.spread': 0,
+    })
+  })
+
+  it.each([
+    { receivedAtMs: 0 }, { receivedAtMs: Infinity }, { receivedAtMs: NaN },
+    { receivedAtMs: Date.parse('2026-01-15T12:00:00Z') + 1 },
+    { ts: 0 }, { ts: Infinity }, { ts: NaN },
+    { ts: Date.parse('2026-01-15T12:00:01Z') / 1000 },
+  ])('requires both cap receipt and source timestamps to be fresh (%j)', (overrides) => {
+    capMock.snapshot = {
+      type: 'capSense', ts: Date.now() / 1000, receivedAtMs: Date.now(),
+      left: 42, right: 17, ...overrides,
+    }
     expect(new BiometricsSignalReader().read()).toEqual({})
   })
 

@@ -10,7 +10,7 @@
  *
  * - TargetTemperature → setTargetTemperature (cached, gated on power)
  * - TargetHeatingCoolingState toggles power: 0=off, 3=auto (pod is bidirectional)
- * - CurrentHeatingCoolingState reflects the live drive direction
+ * - CurrentHeatingCoolingState reflects the reported current level mode
  *
  * All hardware writes go through sideController so concurrent characteristic
  * onSet callbacks don't race each other and stomp the user's setpoint.
@@ -18,117 +18,106 @@
  * HomeKit talks Celsius natively; we convert at the boundary.
  */
 
-import { Service, Characteristic } from 'hap-nodejs'
+import { Service, Characteristic, HapStatusError } from 'hap-nodejs'
 import type { Perms } from 'hap-nodejs'
 import type { DacMonitor } from '@/src/hardware/dacMonitor'
-import type { DeviceStatus, Side } from '@/src/hardware/types'
-import { MAX_TEMP, MIN_TEMP } from '@/src/hardware/types'
-import {
-  isEffectivelyPowered,
-  isPoweredFromStatus,
-  setSidePowerOff,
-  setSidePowerOn,
-  setTargetTemperature,
-} from './sideController'
+import type { Side } from '@/src/hardware/types'
+import { MAX_LEVEL, MAX_TEMP, MIN_LEVEL, MIN_TEMP } from '@/src/hardware/types'
+import { getRequestedTargetF, setSidePowerOff, setSidePowerOn, setTargetTemperature } from './sideController'
+import { registerServiceFault } from './serviceFaults'
+import { freshThermostatReport } from './reportedState'
+export { THERMOSTAT_FRESH_MS } from './reportedState'
 
-const f2c = (f: number): number => ((f - 32) * 5) / 9
+const fahrenheitToCelsius = (value: number): number => ((value - 32) * 5) / 9
+const MIN_C = fahrenheitToCelsius(MIN_TEMP)
+const MAX_C = fahrenheitToCelsius(MAX_TEMP)
+const TARGET_OFF = 0, TARGET_AUTO = 3
+const CURRENT_OFF = 0, CURRENT_HEAT = 1, CURRENT_COOL = 2
 
-const MIN_C = f2c(MIN_TEMP)
-const MAX_C = f2c(MAX_TEMP)
-const NEUTRAL_C = f2c(82.5)
+export interface ThermostatAccessory { service: Service, stop: () => void }
+interface Readings { current: number | null, target: number | null, requestedMode: number | null, currentMode: number | null }
 
-const TARGET_OFF = 0
-const TARGET_AUTO = 3
-const CURRENT_OFF = 0
-const CURRENT_HEAT = 1
-const CURRENT_COOL = 2
+function validLevel(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= MIN_LEVEL && value <= MAX_LEVEL
+}
+function temperature(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= MIN_TEMP && value <= MAX_TEMP ? fahrenheitToCelsius(value) : null
+}
 
-export interface ThermostatAccessory {
-  service: Service
-  stop: () => void
+/** Current mode is derived from the reported current level, not the requested level or physical heat-flow measurement. */
+function readThermostatState(monitor: DacMonitor, side: Side): Readings {
+  const missing: Readings = { current: null, target: null, requestedMode: null, currentMode: null }
+  try {
+    const observation = freshThermostatReport(monitor)
+    if (!observation) return missing
+    const reported = observation.status[side === 'left' ? 'leftSide' : 'rightSide']
+    // A target explicitly staged while OFF is a request. No neutral/default value becomes a measurement.
+    const requested = reported.targetLevel === 0 ? getRequestedTargetF(side) ?? reported.targetTemperature : reported.targetTemperature
+    return {
+      current: temperature(reported.currentTemperature), target: temperature(requested),
+      requestedMode: validLevel(reported.targetLevel) ? reported.targetLevel === 0 ? TARGET_OFF : TARGET_AUTO : null,
+      currentMode: validLevel(reported.currentLevel) ? reported.currentLevel === 0 ? CURRENT_OFF : reported.currentLevel > 0 ? CURRENT_HEAT : CURRENT_COOL : null,
+    }
+  }
+  catch { return missing }
+}
+
+function available(value: number | null): number {
+  if (value === null) throw new HapStatusError(-70402)
+  return value
 }
 
 export function buildThermostatService(side: Side, monitor: DacMonitor): ThermostatAccessory {
   const service = new Service.Thermostat(`Bed ${side}`, side)
-
-  service.getCharacteristic(Characteristic.CurrentTemperature)
+  const current = service.getCharacteristic(Characteristic.CurrentTemperature)
     .setProps({ minValue: MIN_C, maxValue: MAX_C, minStep: 0.5 })
-    .onGet(() => readCurrentC(monitor, side))
-
-  service.getCharacteristic(Characteristic.TargetTemperature)
+    .onGet(() => available(readThermostatState(monitor, side).current))
+  const target = service.getCharacteristic(Characteristic.TargetTemperature)
     .setProps({ minValue: MIN_C, maxValue: MAX_C, minStep: 0.5 })
-    .onGet(() => readTargetC(monitor, side))
+    .onGet(() => available(readThermostatState(monitor, side).target))
     .onSet(async (value) => {
-      const f = (Number(value) * 9) / 5 + 32
-      await setTargetTemperature(monitor, side, f)
+      try {
+        await setTargetTemperature(monitor, side, (Number(value) * 9) / 5 + 32)
+      }
+      finally { refresh() }
     })
-
-  // Lock to off / auto. HEAT and COOL are removed because the pod's auto
-  // controller decides direction internally — exposing them would let iOS
-  // pick a mode the firmware doesn't act on.
-  service.getCharacteristic(Characteristic.TargetHeatingCoolingState)
+  const requestedMode = service.getCharacteristic(Characteristic.TargetHeatingCoolingState)
     .setProps({ validValues: [TARGET_OFF, TARGET_AUTO] })
-    .onGet(() => isEffectivelyPowered(monitor, side) ? TARGET_AUTO : TARGET_OFF)
+    .onGet(() => available(readThermostatState(monitor, side).requestedMode))
     .onSet(async (value) => {
-      if (Number(value) === TARGET_OFF) await setSidePowerOff(monitor, side)
-      else await setSidePowerOn(monitor, side)
+      try {
+        if (Number(value) === TARGET_OFF) await setSidePowerOff(monitor, side)
+        else await setSidePowerOn(monitor, side)
+      }
+      finally { refresh() }
     })
-
-  service.getCharacteristic(Characteristic.CurrentHeatingCoolingState)
-    .onGet(() => deriveCurrentState(monitor, side))
-
-  // Pod is locked to Celsius natively (HAP requires C semantics; iOS converts
-  // for display per the controller setting). Drop PAIRED_WRITE so iOS doesn't
-  // render a writable C/F toggle that silently bounces back on the next read.
+  const currentMode = service.getCharacteristic(Characteristic.CurrentHeatingCoolingState)
+    .onGet(() => available(readThermostatState(monitor, side).currentMode))
   service.getCharacteristic(Characteristic.TemperatureDisplayUnits)
-    .setProps({ perms: ['pr', 'ev'] as Perms[] })
-    .onGet(() => 0)
+    .setProps({ perms: ['pr', 'ev'] as Perms[] }).onGet(() => 0)
+  const fault = registerServiceFault(service, () => Object.values(readThermostatState(monitor, side)).some(value => value === null))
+  let stopped = false
 
-  const onStatus = (status: DeviceStatus): void => {
-    service.updateCharacteristic(Characteristic.CurrentTemperature, sideC(status, side, 'current'))
-    service.updateCharacteristic(Characteristic.TargetTemperature, sideC(status, side, 'target'))
-    service.updateCharacteristic(
-      Characteristic.TargetHeatingCoolingState,
-      isPoweredFromStatus(status, side) ? TARGET_AUTO : TARGET_OFF,
-    )
-    service.updateCharacteristic(Characteristic.CurrentHeatingCoolingState, deriveStateFromStatus(status, side))
+  // Ignore event payloads: delayed polls and intervening writes must pass the monitor's freshness/revision fence.
+  function refresh() {
+    if (stopped) return
+    const observation = readThermostatState(monitor, side)
+    for (const [characteristic, value] of [[current, observation.current], [target, observation.target],
+      [requestedMode, observation.requestedMode], [currentMode, observation.currentMode]] as const) {
+      characteristic.updateValue(value === null ? new HapStatusError(-70402) : value)
+    }
+    fault.refresh()
   }
-  monitor.on('status:updated', onStatus)
-
-  return {
-    service,
-    stop: () => {
-      monitor.off('status:updated', onStatus)
-    },
-  }
-}
-
-function readCurrentC(monitor: DacMonitor, side: Side): number {
-  const status = monitor.getLastStatus()
-  return status ? sideC(status, side, 'current') : NEUTRAL_C
-}
-
-function readTargetC(monitor: DacMonitor, side: Side): number {
-  const status = monitor.getLastStatus()
-  return status ? sideC(status, side, 'target') : NEUTRAL_C
-}
-
-function sideC(status: DeviceStatus, side: Side, kind: 'current' | 'target'): number {
-  const s = side === 'left' ? status.leftSide : status.rightSide
-  const f = kind === 'current' ? s.currentTemperature : s.targetTemperature
-  // null = level 0 (off); HomeKit characteristics need a number, so map to neutral.
-  return f == null ? NEUTRAL_C : f2c(f)
-}
-
-function deriveCurrentState(monitor: DacMonitor, side: Side): number {
-  const status = monitor.getLastStatus()
-  return status ? deriveStateFromStatus(status, side) : CURRENT_OFF
-}
-
-function deriveStateFromStatus(status: DeviceStatus, side: Side): number {
-  const s = side === 'left' ? status.leftSide : status.rightSide
-  // targetLevel is signed: positive = driving warmer, negative = driving cooler,
-  // zero = idle/off. Thermostat has no idle state — collapse to OFF.
-  if (s.targetLevel === 0) return CURRENT_OFF
-  return s.targetLevel > 0 ? CURRENT_HEAT : CURRENT_COOL
+  refresh()
+  monitor.on('status:updated', refresh)
+  monitor.on('connection:lost', refresh)
+  const timer = setInterval(refresh, 1000)
+  timer.unref?.()
+  return { service, stop() {
+    stopped = true
+    clearInterval(timer)
+    monitor.off('status:updated', refresh)
+    monitor.off('connection:lost', refresh)
+    fault.stop()
+  } }
 }

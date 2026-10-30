@@ -89,6 +89,7 @@ from common.calibration import (
     capsense_threshold,
     capsense2_channel_values,
 )
+from common.calibration_identity import ensure_calibration_epoch
 from session_limits import ABSENCE_TIMEOUT_S, MAX_SESSION_S, MIN_SESSION_S
 
 # ---------------------------------------------------------------------------
@@ -605,7 +606,7 @@ class AdaptiveBaseline:
                  ref_mean: Optional[float] = None, source: str = "bootstrap",
                  profile_seen_at: Optional[float] = None, absence_ready: bool = False,
                  occupied_load: Optional[float] = None, collapse_since: Optional[float] = None,
-                 collapse_dwell_s: float = 0.0):
+                 collapse_dwell_s: float = 0.0, qualification_epoch: Optional[dict] = None):
         self.fmt = fmt
         self.means = {ch: float(v) for ch, v in means.items()}
         self.threshold = float(threshold)
@@ -631,6 +632,10 @@ class AdaptiveBaseline:
         self._load_avg: Optional[float] = None
         self._load_obs_s = 0.0
         self._load_last_ts: Optional[float] = None
+        self._qualification_epoch = qualification_epoch
+        # Normalize or rotate before persistence. A restart preserves the
+        # epoch only while its anchor still describes this adaptive baseline.
+        self.to_params()
 
     @property
     def exit_threshold(self) -> float:
@@ -639,26 +644,28 @@ class AdaptiveBaseline:
     @classmethod
     def from_profile(cls, params: dict, fmt: str, created_at: Optional[float]):
         """Seed from a calibration profile, or None if it doesn't match fmt."""
-        channels = params.get("channels") or {}
-        if fmt == "capSense2":
-            if params.get("format") != "capSense2":
-                return None
-            names = ("A", "B", "C")
-            threshold = float(params.get("threshold", CAPSENSE2_PRESENCE_THRESHOLD))
-            ref_mean = (params.get("ref") or {}).get("mean")
-        else:
-            if params.get("format") == "capSense2":
-                return None
-            names = ("out", "cen", "in")
-            threshold = capsense_threshold(params)
-            ref_mean = None
         try:
+            channels = params.get("channels") or {}
+            if fmt == "capSense2":
+                if params.get("format") != "capSense2":
+                    return None
+                names = ("A", "B", "C")
+                threshold = float(params.get("threshold", CAPSENSE2_PRESENCE_THRESHOLD))
+                ref_mean = (params.get("ref") or {}).get("mean")
+            else:
+                if params.get("format") == "capSense2":
+                    return None
+                names = ("out", "cen", "in")
+                threshold = capsense_threshold(params)
+                ref_mean = None
             means = {ch: float(channels[ch]["mean"]) for ch in names}
-        except (KeyError, TypeError, ValueError):
+            return cls(fmt, means, threshold, ref_mean=ref_mean,
+                       source=params.get("source", "profile"),
+                       profile_seen_at=created_at, absence_ready=params.get("absence_ready") is True,
+                       qualification_epoch=(params.get("qualification_epoch")
+                                            if params.get("source") == "adaptive" else None))
+        except (KeyError, TypeError, ValueError, OverflowError):
             return None
-        return cls(fmt, means, threshold, ref_mean=ref_mean,
-                   source=params.get("source", "profile"),
-                   profile_seen_at=created_at, absence_ready=params.get("absence_ready") is True)
 
     @classmethod
     def from_state(cls, state: Optional[dict]):
@@ -675,7 +682,8 @@ class AdaptiveBaseline:
                        profile_seen_at=state.get("profile_seen_at"),
                        absence_ready=state.get("absence_ready") is True,
                        occupied_load=occupied_load, collapse_since=collapse_since,
-                       collapse_dwell_s=collapse_dwell_s)
+                       collapse_dwell_s=collapse_dwell_s,
+                       qualification_epoch=state.get("qualification_epoch"))
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -683,7 +691,8 @@ class AdaptiveBaseline:
         return {"format": self.fmt, "means": self.means, "threshold": self.threshold,
                 "ref_mean": self.ref_mean, "profile_seen_at": self.profile_seen_at,
                 "absence_ready": self.absence_ready, "occupied_load": self.occupied_load,
-                "collapse_since": self.collapse_since, "collapse_dwell_s": self.collapse_dwell_s}
+                "collapse_since": self.collapse_since, "collapse_dwell_s": self.collapse_dwell_s,
+                "qualification_epoch": self.to_params()["qualification_epoch"]}
 
     def values(self, record: dict, side: str) -> Optional[dict]:
         """This format's per-channel values for a frame, or None if unusable."""
@@ -808,6 +817,7 @@ class AdaptiveBaseline:
     def reseed(self, values: dict, source: str) -> None:
         self.means = {ch: float(v) for ch, v in values.items()}
         self.source = source
+        self._qualification_epoch = None
         self.absence_ready = False
         self._absence_reference = sum(self.means.values())
         self._absence_drop_since = self._absence_rise_since = None
@@ -831,6 +841,13 @@ class AdaptiveBaseline:
                                    for ch, m in self.means.items()}}
         params["source"] = "adaptive"
         params["absence_ready"] = self.absence_ready
+        names = ("A", "B", "C") if self.fmt == "capSense2" else ("out", "cen", "in")
+        means = [params["channels"][channel]["mean"] for channel in names]
+        reference = params.get("ref", {}).get("mean", 1.16)
+        self._qualification_epoch = ensure_calibration_epoch(
+            self._qualification_epoch, self.fmt, means, self.threshold, reference)
+        params["qualification_epoch"] = {**self._qualification_epoch,
+                                          "means": list(self._qualification_epoch["means"])}
         return params
 
 

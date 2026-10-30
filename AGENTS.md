@@ -23,8 +23,9 @@ Next.js App Router runs on the pod and controls its hardware:
 
 - `src/hardware/`: DAC Unix-socket transport to frankenfirmware, status polling,
   gestures, pump-stall protection, and snooze.
-- `src/server/`: tRPC routers and REST endpoints at `/api/*`. The API uses a
-  LAN-only trust model without authentication; see `src/server/openapi.ts`.
+- `src/server/`: tRPC routers and REST endpoints at `/api/*`. Controller APIs
+  require owner authentication through a Bearer connection key or an expiring
+  browser session; see `src/server/openapi.ts`. Use LAN or private Tailscale access.
 - `src/scheduler/`: JobManager for temperature, power, alarms, and system jobs.
 - `src/automation/`: Autopilot rules evaluated in the device timezone.
 - `src/streaming/`: WebSocket sensor stream on port 3001, frame normalization,

@@ -1,4 +1,6 @@
 import { MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
+import { assertControlCurrent, ControlGuardError, withinDispatchGuard } from '@/src/controls/context'
+import type { RecordTemperatureApplication, TemperatureApplicationInput, TemperatureApplicationReceipt } from './applications'
 
 export class TemperatureBlockedError extends Error {
   constructor() {
@@ -33,6 +35,17 @@ export interface TemperatureControlStatus {
   blocked: 'safety' | 'off' | null
 }
 
+interface PolicyLease {
+  request: TemperatureRequest
+  /** Synchronous current-input check, repeated after transport recovery. */
+  isEligible: () => boolean
+  application?: PolicyApplication
+}
+
+/** Runs only for the selected policy, inside its side lock; never acquire that lock again. */
+export type PolicyApplication = (input: TemperatureApplicationInput,
+  execute: () => Promise<TemperatureApplicationReceipt | undefined>) => Promise<void>
+
 export interface TemperatureControllerDeps {
   now: () => number
   withSideLock: <T>(side: Side, fn: () => Promise<T>) => Promise<T>
@@ -50,8 +63,11 @@ export interface TemperatureControllerDeps {
   connect: () => Promise<void>
   /** Hardware write + state mirror; the caller already owns the side lock. */
   apply: (side: Side, temperature: number, durationSec?: number) => Promise<void>
+  recordApplication?: RecordTemperatureApplication
   powerOff: (side: Side) => Promise<void>
   publish: (side: Side, status: TemperatureControlStatus) => void
+  /** Persist the personal-policy pause. Must not throw or block manual shutdown on storage failure. */
+  onManualControl?: (side: Side) => void
 }
 
 const rank: Record<TemperatureSource, number> = {
@@ -86,6 +102,10 @@ export class TemperatureController {
     left: new Map(), right: new Map(),
   }
 
+  private policies: Record<Side, Map<string, PolicyLease[]>> = {
+    left: new Map(), right: new Map(),
+  }
+
   private poweredOff: Record<Side, boolean> = { left: false, right: false }
 
   private applied: Record<Side, number | null> = { left: null, right: null }
@@ -102,6 +122,26 @@ export class TemperatureController {
   }
 
   constructor(private deps: TemperatureControllerDeps) {}
+
+  /** Keep the selected owner with the attempt; arbitration status alone is not delivery evidence. */
+  private recordApplication(side: Side, targetF: number, durationSec: number | undefined,
+    request: TemperatureRequest | null, reason: TemperatureApplicationInput['reason'], apply: () => Promise<void>): Promise<void> {
+    const input = { side, targetF, durationSec: durationSec ?? null,
+      source: request?.source ?? null, requestId: request?.id ?? null, reason }
+    const execute = async () => {
+      if (this.deps.recordApplication) return this.deps.recordApplication(input, apply)
+      await apply()
+      return undefined
+    }
+    // Identity, not a caller-controlled ID: an automation rule cannot borrow a policy's hook.
+    const policy = request && [...this.policies[side].values()].flat().find(lease => lease.request === request)
+    if (!policy) return execute().then(() => {})
+    const guarded = () => withinDispatchGuard(() => {
+      if (!this.isPowered(side) || this.deps.isBlocked(side)
+        || this.select(side, this.deps.now()) !== request) throw new ControlGuardError()
+    }, execute)
+    return policy.application ? policy.application(input, guarded) : guarded().then(() => {})
+  }
 
   private isPowered(side: Side): boolean {
     const deadline = this.deps.readHardwareDeadline(side)
@@ -127,14 +167,67 @@ export class TemperatureController {
       ...(hold ? [hold] : []),
       ...this.deps.readBaseline(side, now),
       ...this.requests[side].values(),
+      ...this.livePolicyRequests(side, now),
     ], now)
+  }
+
+  /** Invalid input revokes a lease permanently; fresh data needs a new evaluation. */
+  private livePolicyRequests(side: Side, now: number): TemperatureRequest[] {
+    const requests: TemperatureRequest[] = []
+    for (const [producer, leases] of this.policies[side]) {
+      const live = leases.filter((lease) => {
+        try {
+          return isLiveRequest(lease.request, now) && lease.isEligible()
+        }
+        catch { return false }
+      })
+      if (live.length) this.policies[side].set(producer, live)
+      else this.policies[side].delete(producer)
+      requests.push(...live.map(lease => lease.request))
+    }
+    return requests
+  }
+
+  /**
+   * Replace one producer's passive proposals without erasing rules or another
+   * policy. Only the shared authority writes hardware; these leases never carry
+   * a power-on request or a hardware duration. The producer must include consent,
+   * fresh inputs and manual-pause checks in isEligible, not just at evaluation.
+   */
+  async replacePolicy(
+    side: Side,
+    producer: string,
+    requests: TemperatureRequest[],
+    isEligible: () => boolean,
+    isCurrent: () => boolean = () => true,
+    application?: PolicyApplication,
+  ): Promise<TemperatureControlStatus> {
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(producer)) throw new Error('Invalid policy producer')
+    return this.deps.withSideLock(side, async () => {
+      if (!isCurrent()) return this.status(side)
+      const now = this.deps.now()
+      const identities = new Set<string>()
+      const leases = requests.map((request) => {
+        if (request.source !== 'autopilot' || !isLiveRequest(request, now)
+          || request.durationSec !== undefined || !request.id || identities.has(request.id)
+          || !Number.isFinite(request.createdAt) || request.createdAt > now
+          || !Number.isFinite(request.priority)) {
+          throw new Error('Invalid policy lease')
+        }
+        identities.add(request.id)
+        return { request: { ...request, id: `policy:${producer}:${request.id}` }, isEligible: () => isCurrent() && isEligible(), application }
+      })
+      if (leases.length) this.policies[side].set(producer, leases)
+      else this.policies[side].delete(producer)
+      return this.reconcileLocked(side, false, isCurrent)
+    })
   }
 
   async setManual(side: Side, temperature: number, holdMs = DEFAULT_HOLD_MS, durationSec?: number): Promise<TemperatureControlStatus> {
     return this.deps.withSideLock(side, () => this.setManualLocked(side, temperature, holdMs, durationSec))
   }
 
-  async setManualLocked(side: Side, temperature: number, holdMs = DEFAULT_HOLD_MS, durationSec?: number): Promise<TemperatureControlStatus> {
+  async setManualLocked(side: Side, temperature: number, holdMs = DEFAULT_HOLD_MS, durationSec?: number, validateBeforeApply?: () => void): Promise<TemperatureControlStatus> {
     if (!Number.isFinite(temperature) || temperature < MIN_TEMP || temperature > MAX_TEMP) {
       throw new Error('Temperature outside hardware bounds')
     }
@@ -145,11 +238,15 @@ export class TemperatureController {
       throw new Error('Hardware duration must be a nonnegative integer')
     }
     if (durationSec === 0) {
-      await this.powerOffLocked(side)
+      await this.powerOffLocked(side, true)
       return this.status(side)
     }
     await this.deps.connect()
     if (this.deps.isBlocked(side)) throw new TemperatureBlockedError()
+    // Conditional manual surfaces recheck their evidence after a reconnect, before any hold or hardware write.
+    validateBeforeApply?.()
+    assertControlCurrent()
+    this.deps.onManualControl?.(side)
     const now = this.deps.now()
     const previous = this.deps.readHold(side)
     const previousDeadline = this.deps.readHardwareDeadline(side)
@@ -160,7 +257,8 @@ export class TemperatureController {
     })
     try {
       this.deps.writeHardwareDeadline(side, durationSec === undefined ? null : now + durationSec * 1_000)
-      await this.deps.apply(side, temperature, durationSec)
+      await this.recordApplication(side, temperature, durationSec, this.deps.readHold(side), 'manual',
+        () => this.deps.apply(side, temperature, durationSec))
       this.applied[side] = temperature
       this.appliedDeadline[side] = this.deps.readHardwareDeadline(side)
       this.poweredOff[side] = false
@@ -178,6 +276,8 @@ export class TemperatureController {
 
   async resume(side: Side): Promise<TemperatureControlStatus> {
     return this.deps.withSideLock(side, async () => {
+      assertControlCurrent()
+      this.deps.onManualControl?.(side)
       this.deps.writeHold(side, null)
       return this.reconcileLocked(side)
     })
@@ -185,15 +285,18 @@ export class TemperatureController {
 
   /** Explicit shutdown ends the hold; it must never reconcile an energizing target. */
   clearHoldLocked(side: Side): void {
+    assertControlCurrent()
     this.deps.writeHold(side, null)
     this.invalidate(side)
   }
 
   /** An explicit power event may energize the selected target, but creates no manual hold. */
-  async powerOnLocked(side: Side, fallback = 75, isCurrent: () => boolean = () => true): Promise<TemperatureControlStatus> {
+  async powerOnLocked(side: Side, fallback = 75, isCurrent: () => boolean = () => true, manual = false): Promise<TemperatureControlStatus> {
     await this.deps.connect()
     if (this.deps.isBlocked(side)) throw new TemperatureBlockedError()
     if (!isCurrent()) return this.status(side)
+    assertControlCurrent()
+    if (manual) this.deps.onManualControl?.(side)
     const selected = this.select(side, this.deps.now())
     const temperature = selected?.temperature ?? fallback
     if (!Number.isFinite(temperature) || temperature < MIN_TEMP || temperature > MAX_TEMP) {
@@ -209,8 +312,8 @@ export class TemperatureController {
       return this.status(side)
     }
     try {
-      if (duration === undefined) await this.deps.apply(side, temperature)
-      else await this.deps.apply(side, temperature, duration)
+      await this.recordApplication(side, temperature, duration, selected, 'power_on',
+        () => duration === undefined ? this.deps.apply(side, temperature) : this.deps.apply(side, temperature, duration))
     }
     catch (error) {
       this.invalidate(side)
@@ -225,7 +328,9 @@ export class TemperatureController {
     return status
   }
 
-  async powerOffLocked(side: Side): Promise<void> {
+  async powerOffLocked(side: Side, manual = false): Promise<void> {
+    assertControlCurrent()
+    if (manual) this.deps.onManualControl?.(side)
     this.poweredOff[side] = true
     this.invalidate(side)
     await this.deps.powerOff(side)
@@ -263,7 +368,8 @@ export class TemperatureController {
       const live = requests.filter(r => r.source === 'autopilot' && isLiveRequest(r, this.deps.now()))
       this.requests[side] = new Map(live.map(r => [r.id, { ...r }]))
       const selected = this.select(side, this.deps.now())
-      if (selected && powerOnIds.includes(selected.id) && !this.deps.isBlocked(side)) {
+      if (selected && this.requests[side].get(selected.id) === selected
+        && powerOnIds.includes(selected.id) && !this.deps.isBlocked(side)) {
         return this.powerOnLocked(side, 75, isCurrent)
       }
       return this.reconcileLocked(side, false, isCurrent)
@@ -353,8 +459,8 @@ export class TemperatureController {
           await this.powerOffLocked(side)
           return this.status(side)
         }
-        if (duration === undefined) await this.deps.apply(side, target)
-        else await this.deps.apply(side, target, duration)
+        await this.recordApplication(side, target, duration, selected, 'keepalive',
+          () => duration === undefined ? this.deps.apply(side, target) : this.deps.apply(side, target, duration))
         this.applied[side] = target
         this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
       }
@@ -375,8 +481,9 @@ export class TemperatureController {
           await this.powerOffLocked(side)
           return this.status(side)
         }
-        if (duration === undefined) await this.deps.apply(side, selected.temperature)
-        else await this.deps.apply(side, selected.temperature, duration)
+        const target = selected.temperature
+        await this.recordApplication(side, target, duration, selected, force ? 'keepalive' : 'reconcile',
+          () => duration === undefined ? this.deps.apply(side, target) : this.deps.apply(side, target, duration))
         this.applied[side] = selected.temperature
         this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
       }

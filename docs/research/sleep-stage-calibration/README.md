@@ -56,15 +56,22 @@ builds can use `--from-db` without an export:
 scripts/import-watch-health.py ~/Desktop/apple_health_export --pod <pod-ip> --side left
 ```
 
-It posts `SleepAnalysis` segments to `POST /api/biometrics/reference-stages`
-and `HeartRate` samples to `POST /api/biometrics/reference-vitals`, in batches
-of 2000, for the last 30 days (`--days 0` for everything; `--dry-run` to count
-only). Heart rate is first-write-wins on side + time + source, so re-running
-on a newer export only adds what is new. Stages are stricter: the pod rejects
+It posts `SleepAnalysis` segments to `POST /api/biometrics/reference-stages`,
+`HeartRate` samples to `POST /api/biometrics/reference-vitals`, and
+`RespiratoryRate` (`breathing_rate`, breaths/min) and
+`HeartRateVariabilitySDNN` (`hrv_sdnn`, ms) samples to
+`POST /api/biometrics/reference-samples`, in batches of 2000, for the last 30
+days (`--days 0` for everything; `--dry-run` to count only). Records the
+sleepypod iOS app wrote back into Health (source `sleepypod`, `sleepypod
+design`) are the pod's own readings and are always skipped, whatever
+`--source` says. Heart rate, breathing rate and HRV are first-write-wins on
+side + time + source (+ metric), so re-running on a newer export only adds
+what is new. Stages are stricter: the pod rejects
 a batch whose segment overlaps a stored one with different boundaries (say a
 night the iOS app already posted); the script skips that batch with a warning,
-still imports heart rate, and exits 1. Watch heart rate is kept
-in its own `reference_vitals` table and never mixed into the pod's `vitals`,
+still imports the vitals, and exits 1. Watch heart rate is kept in its own
+`reference_vitals` table, breathing rate and HRV in `reference_samples`, never
+mixed into the pod's `vitals`,
 which feed occupancy, sleep staging and the chart baselines.
 
 ## 3. Build the dataset

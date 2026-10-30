@@ -187,7 +187,7 @@ function OptionCard({ selected, onSelect, label, preview, mini }: {
     >
       <div className="pointer-events-none hidden @min-[800px]:block">{preview}</div>
       <div className="@min-[800px]:hidden">{mini}</div>
-      <span className={cn('flex items-center gap-2 text-[11px] whitespace-nowrap @min-[800px]:text-sm', !selected && 'text-fg-2')}>
+      <span className={cn('flex items-center gap-2 text-center text-[11px] @min-[800px]:text-sm', !selected && 'text-fg-2')}>
         <Icon size={15} className="hidden @min-[800px]:block" />
         {label}
       </span>
@@ -204,7 +204,7 @@ export function TempControlPicker() {
     { value: 'stepper', label: 'Now · Night · Dawn', mini: <MiniStepper /> },
   ]
   return (
-    <div role="radiogroup" aria-label="Temperature control" className="grid grid-cols-3 gap-2 @min-[800px]:gap-3 @max-[1100px]:@min-[800px]:grid-cols-2">
+    <div role="radiogroup" aria-label="Temperature control" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,6rem),1fr))] gap-2 @min-[800px]:grid-cols-3 @min-[800px]:gap-3 @max-[1100px]:@min-[800px]:grid-cols-2">
       {options.map(o => (
         <OptionCard
           key={o.value}

@@ -88,7 +88,7 @@ it('fails queue inspection on corrupted pending evidence', () => {
   expect(() => store.pending({ maximumRuns: 1 })).toThrow('integrity')
 })
 function workerOutput(timestampMs: number, sequence = 0) {
-  return { sequence, inputHash: hash, side: 'left', sourceSide: 'left', timestampMs, configHash: hash,
+  return { sequence, inputHash: hash, side: 'left', sourceSide: 'left', timestampBasis: 'firmware_event_time_v1', timestampMs, configHash: hash,
     readings: [{ metric: 'heart_rate', unit: 'bpm', windowMs: null, value: 60, quality: 1 },
       { metric: 'breathing_rate', unit: 'breaths/min', windowMs: null, value: 15, quality: 1 },
       { metric: 'window_ibi_variability_v1', unit: 'ms', windowMs: 300000, value: null, quality: 0 }], flags: null, limitations: [] }
@@ -255,7 +255,7 @@ describe('separate prospective shadow storage', () => {
     const { store, advance } = setup()
     const lease = store.claim(store.create(plan, 'first').id, 1000, () => undefined)
     const sink = new ShadowWorkerSink(store, lease)
-    const output = { sequence: 0, inputHash: hash, side: 'left', sourceSide: 'right', timestampMs: start, configHash: hash,
+    const output = { sequence: 0, inputHash: hash, side: 'left', sourceSide: 'right', timestampBasis: 'firmware_event_time_v1', timestampMs: start, configHash: hash,
       readings: [{ metric: 'heart_rate', unit: 'bpm', windowMs: null, value: 60, quality: 1 },
         { metric: 'breathing_rate', unit: 'breaths/min', windowMs: null, value: 15, quality: 1 },
         { metric: 'window_ibi_variability_v1', unit: 'ms', windowMs: 300000, value: null, quality: 0 }],
@@ -518,7 +518,7 @@ describe('storage policy and integrity guards', () => {
     const active = { ...activeOutput(start + 1000), inputHash: hash, provenance: { processingRunId: '11111111-1111-4111-8111-111111111111', sourceSide: 'left', generation: 1, manifestHash: hash } }
     expect(sink.append(output, active)).toEqual({ state: 'recorded' })
     expect(store.snapshot(run.id, { maximumPoints: 10, maximumBytes: 10000 }).samples[0]).toMatchObject({ activeProvenance: active.provenance,
-      readings: [{ active: { value: 60, quality: 1 } }], candidateProvenance: { limitations: [] } })
+      readings: [{ active: { value: 60, quality: 1 } }], candidateProvenance: { timestampBasis: 'firmware_event_time_v1', limitations: [] } })
     const join = new ShadowStreamJoin(store, lease)
     expect(() => join.active({ ...activeOutput(start + 2000), side: 'right' })).toThrow('join_identity_mismatch')
     expect(store.get(run.id).state).toBe('failed')

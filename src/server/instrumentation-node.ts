@@ -1,4 +1,5 @@
-import { shutdownBaseController } from '@/src/hardware/base/instance'
+import { getBaseController, shutdownBaseController } from '@/src/hardware/base/instance'
+import { startMechanicalContext, stopMechanicalContext } from '@/src/biometrics/mechanical/instance'
 /**
  * Server startup and process lifecycle management.
  *
@@ -19,6 +20,7 @@ import { shutdownBaseController } from '@/src/hardware/base/instance'
 import { getJobManager, shutdownJobManager } from '@/src/scheduler'
 import { getAutomationEngine, shutdownAutomationEngine } from '@/src/automation'
 import { startTemperatureController, stopTemperatureController } from '@/src/temperature/instance'
+import { startComfortPreview, stopComfortPreview } from '@/src/comfort/instance'
 import { closeDatabase, closeBiometricsDatabase } from '@/src/db'
 import { startBiometricsRetention, stopBiometricsRetention } from '@/src/db/retention'
 import { startAutomationRunsRetention, stopAutomationRunsRetention } from '@/src/db/automationRunsRetention'
@@ -66,6 +68,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // Step 0: Stop keepalive timers
   try {
+    await stopComfortPreview()
     await stopTemperatureController()
     shutdownBaseController()
     shutdownKeepalives()
@@ -180,6 +183,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // Step 7: Close database connections
   try {
+    stopMechanicalContext()
     closeDatabase()
     closeBiometricsDatabase()
   }
@@ -324,6 +328,9 @@ async function prepareHardware(): Promise<void> {
 
   // Start DAC monitor (non-blocking — waits for frankenfirmware to connect)
   initializeDacMonitor()
+  if (isShuttingDown) return
+  // Subscribe to configured base telemetry for interference detection; no movement.
+  getBaseController()
 
   if (isShuttingDown) return
   hardwareReady = true
@@ -441,6 +448,8 @@ async function initializeBackgroundServices(): Promise<void> {
         return
       }
       initializeKeepalives()
+      await startComfortPreview()
+      if (isShuttingDown) await stopComfortPreview()
     }).catch((error) => {
       console.warn(
         '[temperature] controller failed to start:',
@@ -476,6 +485,8 @@ export async function registerNodeInstrumentation(): Promise<void> {
     console.log('CI environment detected — skipping hardware initialization')
     return
   }
+
+  startMechanicalContext()
 
   // Validate and auto-repair iptables rules (mDNS, LAN access, NTP)
   try {

@@ -1797,7 +1797,7 @@ def test_main_flushes_pending_vitals_during_idle_poll(monkeypatch, tmp_path, pum
     router.submit(t._cand("right", 62.0, 0.7))
     monkeypatch.setattr(main, "BIOMETRICS_DB", tmp_path / "biometrics.db")
     monkeypatch.setattr(main, "open_biometrics_db", lambda: conn)
-    monkeypatch.setattr(main, "SingleSleeperVitals", lambda *args: router)
+    monkeypatch.setattr(main, "SingleSleeperVitals", lambda *args, **kwargs: router)
     monkeypatch.setattr(main, "report_health", lambda *args: None)
 
     monkeypatch.setattr(main, "KNOWN_RECORD_TYPES", {"piezo-dual"})

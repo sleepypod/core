@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync, symlinkSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -32,7 +32,7 @@ wan_is_blocked() { [ "$TEST_WAN_BLOCKED" = 1 ]; }
 unblock_wan() { echo unblock >> "$TEST_LOG"; }
 restore_wan() { echo restore >> "$TEST_LOG"; }
 `
-function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string } = {}) {
+function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: boolean, status?: string, blocked?: boolean, pnpmFail?: boolean, version?: string, downloadFail?: boolean, backupFail?: boolean, symlinkInstall?: boolean, lowTempSpace?: boolean, branch?: string, repository?: string | null, repositoryOverride?: string, repositorySymlink?: boolean, startFail?: boolean } = {}) {
   const dir = temp()
   const app = join(dir, 'app')
   const bundle = join(dir, 'bundle')
@@ -40,6 +40,13 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   const log = join(dir, 'log')
   mkdirSync(join(dir, 'data'))
   mkdirSync(join(dir, 'stage'))
+  const repositoryFile = join(dir, 'config/github-repo')
+  if (options.repository !== null) put(repositoryFile, options.repository ?? 'sleepypod/core\n')
+  if (options.repositorySymlink) {
+    rmSync(repositoryFile)
+    put(join(dir, 'untrusted-repository'), 'untrusted/core\n')
+    symlinkSync(join(dir, 'untrusted-repository'), repositoryFile)
+  }
   put(join(app, 'old.txt'), 'old code')
   put(join(app, '.next/standalone/server.js'), 'old standalone server')
   const installPath = options.symlinkInstall ? join(dir, 'install-link') : app
@@ -66,6 +73,7 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
     ['/home/dac/sleepypod-core', installPath],
     ['/persistent/sleepypod-data', join(dir, 'data')],
     ['/etc/sleepypod/data-dir', join(dir, 'data-dir')],
+    ['/etc/sleepypod/github-repo', repositoryFile],
     ['/etc/systemd/system', join(dir, 'systemd')],
     ['/etc/hosts', join(dir, 'hosts')],
   ]
@@ -75,7 +83,7 @@ function updater(options: { invalid?: boolean, noAsset?: boolean, archive?: bool
   }
   put(join(dir, 'hosts'), '# BEGIN sleepypod-telemetry-block')
   put(join(dir, 'update'), script)
-  put(join(bin, 'systemctl'), '#!/bin/bash\necho "systemctl $*" >> "$TEST_LOG"\n')
+  put(join(bin, 'systemctl'), '#!/bin/bash\necho "systemctl $*" >> "$TEST_LOG"\nif [ "$1" = is-active ] && [ "$TEST_START_FAIL" = 1 ]; then exit 1; fi\n')
   put(join(bin, 'df'), `#!/bin/bash
 available=900
 if [ "$2" = "$TMPDIR" ]; then available=$TEST_TEMP_SPACE; fi
@@ -111,16 +119,76 @@ exec '${tar}' "$@"
 `)
   const result = spawnSync('bash', [join(dir, 'update'), ...(options.archive ? ['--archive', archive] : [options.branch ?? 'fix/test'])], {
     encoding: 'utf8',
-    env: { ...testEnv, PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log,
+    env: { ...testEnv, SLEEPYPOD_GITHUB_REPO: options.repositoryOverride ?? '', PATH: `${bin}:${process.env.PATH}`, TMPDIR: join(dir, 'stage'), TEST_LOG: log,
+      TEST_START_FAIL: options.startFail ? '1' : '0',
       TEST_WAN_BLOCKED: options.blocked ? '1' : '0', TEST_PNPM_FAIL: options.pnpmFail ? '1' : '0',
       TEST_PNPM_VERSION: options.version ?? '10.34.5', TEST_DOWNLOAD_FAIL: options.downloadFail ? '1' : '0',
       TEST_BACKUP_FAIL: options.backupFail ? '1' : '0', TEST_TEMP_SPACE: options.lowTempSpace ? '100' : '900', TEST_HTTP_STATUS: options.status ?? '200', TEST_ARCHIVE: archive, TEST_ZIP: artifactZip,
       TEST_RELEASE: JSON.stringify({ assets: options.noAsset ? [] : [{ name: 'sleepypod-core.tar.gz', browser_download_url: 'https://example.test/bundle' }] }) },
   })
-  return { result, app, dir, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
+  return { result, app, dir, repositoryFile, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
 }
 
 describe('sp-update staged deployment', () => {
+  it.each(['main', 'fix/test'])('uses the installed fork for %s with no inherited environment', (branch) => {
+    const { result, log, repositoryFile } = updater({ repository: 'lucaandrea/sleepypod-core', branch })
+    expect(result.status, result.stderr).toBe(0)
+    expect(log).toContain(branch === 'main' ? 'api.github.com/repos/lucaandrea/sleepypod-core/releases/latest' : 'nightly.link/lucaandrea/sleepypod-core/workflows/build/fix%2Ftest')
+    expect(log).not.toContain('repos/sleepypod/core')
+    expect(log).not.toContain('nightly.link/sleepypod/core')
+    expect(readFileSync(repositoryFile, 'utf8')).toBe('lucaandrea/sleepypod-core')
+  })
+
+  it.each([null, '', 'owner/repo\nother/repo', 'https://github.com/owner/repo', 'owner/repo;touch nope', 'owner/..', `owner/${'x'.repeat(256)}`])('refuses missing or invalid source %j before network or service changes', (repository) => {
+    const { result, app, log } = updater({ repository, blocked: true })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('repository')
+    expect(log).toBe('')
+    expect(readFileSync(join(app, 'old.txt'), 'utf8')).toBe('old code')
+  })
+
+  it('rejects a symlinked repository pin before touching the controller', () => {
+    const { result, log } = updater({ repositorySymlink: true })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('readable regular file')
+    expect(log).toBe('')
+  })
+
+  it.each(['owner/..', 'owner/repo;echo invalid'])('rejects invalid explicit repository %j without changing the pin', (repositoryOverride) => {
+    const { result, repositoryFile, log } = updater({ repositoryOverride })
+    expect(result.status).not.toBe(0)
+    expect(log).toBe('')
+    expect(readFileSync(repositoryFile, 'utf8')).toBe('sleepypod/core\n')
+  })
+
+  it('persists an explicit fork outside the replaced app after successful update', () => {
+    const { result, log, repositoryFile } = updater({ repositoryOverride: 'lucaandrea/sleepypod-core' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(log).toContain('nightly.link/lucaandrea/sleepypod-core')
+    expect(readFileSync(repositoryFile, 'utf8')).toBe('lucaandrea/sleepypod-core\n')
+    expect(statSync(repositoryFile).mode & 0o777).toBe(0o644)
+  })
+
+  it.each([false, true])('retains the original source when an explicit update fails (after restart=%s)', (startFail) => {
+    const { result, app, repositoryFile } = updater({ repositoryOverride: 'lucaandrea/sleepypod-core', startFail, pnpmFail: !startFail })
+    expect(result.status).not.toBe(0)
+    expect(readFileSync(repositoryFile, 'utf8')).toBe('sleepypod/core\n')
+    expect(readFileSync(join(app, 'old.txt'), 'utf8')).toBe('old code')
+  })
+
+  it('removes a newly created source pin when startup fails', () => {
+    const { result, repositoryFile } = updater({ repository: null, repositoryOverride: 'lucaandrea/sleepypod-core', startFail: true })
+    expect(result.status).not.toBe(0)
+    expect(existsSync(repositoryFile)).toBe(false)
+  })
+
+  it('allows a local archive without inventing a future download source', () => {
+    const { result, repositoryFile, log } = updater({ archive: true, repository: null })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(repositoryFile)).toBe(false)
+    expect(log).not.toContain('curl')
+  })
+
   it('checks temporary storage before stopping the service or opening WAN', () => {
     const { result, app, log } = updater({ archive: true, blocked: true, lowTempSpace: true })
     expect(result.status).not.toBe(0)
@@ -216,7 +284,7 @@ describe('sp-update staged deployment', () => {
   })
 })
 
-function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false, repository: 'origin' | 'flag' | 'env' | 'override' = 'origin') {
+function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false, repository: 'origin' | 'flag' | 'env' | 'override' | 'https-origin' | 'ssh-origin' = 'origin') {
   const dir = temp()
   const project = join(dir, 'project')
   const bin = join(dir, 'bin')
@@ -233,7 +301,7 @@ function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false, 
   put(join(project, 'modules/piezo-processor/.pytest_cache/state'), 'local-test-cache')
   put(join(project, 'modules/piezo-processor/uv.lock'), 'locked-dependencies')
   put(join(project, 'source.ts'), 'source')
-  if (branch) {
+  if (branch || repository.endsWith('-origin')) {
     const git = (args: string[]) => {
       const result = spawnSync('git', ['-C', project, ...args], { encoding: 'utf8', env: testEnv })
       expect(result.status, result.stderr).toBe(0)
@@ -241,7 +309,7 @@ function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false, 
     git(['init', '-b', 'main'])
     git(['add', '.'])
     git(['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-m', 'fixture'])
-    if (repository === 'origin') {
+    if (repository === 'origin' || repository.endsWith('-origin')) {
       git(['branch', 'fix/test'])
     }
     else {
@@ -255,7 +323,7 @@ function deploy(fail: 'build' | 'transfer' | 'apply' | '' = '', branch = false, 
       // to a local fork. The fork-only branch is absent from origin.
       git(['config', `url.${fork}.insteadOf`, 'https://github.com/Kovbo/core.git'])
     }
-    git(['remote', 'add', 'origin', project])
+    git(['remote', 'add', 'origin', repository === 'https-origin' ? 'https://github.com/lucaandrea/sleepypod-core.git' : repository === 'ssh-origin' ? 'git@github.com:lucaandrea/sleepypod-core.git' : project])
     put(join(project, 'source.ts'), 'uncommitted local edits')
   }
   put(join(bin, 'pnpm'), `#!/bin/bash
@@ -285,7 +353,7 @@ case "$cmd" in
       cp "$TEST_REMOTE/sleepypod-core.tar.gz" "$TEST_CAPTURE"
       [ "$TEST_FAIL" != transfer ] || exit 1
     fi ;;
-  'bash '*) [ "$TEST_FAIL" != apply ] ;;
+  'bash '*|'env SLEEPYPOD_GITHUB_REPO='*) [ "$TEST_FAIL" != apply ] ;;
   'rm -rf '*) bash -c "$cmd" ;;
   *) exit 90 ;;
 esac
@@ -298,8 +366,13 @@ esac
 }
 
 describe('local deploy', () => {
+  it.each(['https-origin', 'ssh-origin'] as const)('carries the checkout fork from %s into the updater', (repository) => {
+    const { result, log } = deploy('', false, repository)
+    expect(result.status, result.stderr).toBe(0)
+    expect(log).toContain('env SLEEPYPOD_GITHUB_REPO=\'lucaandrea/sleepypod-core\' bash')
+  })
   it.each(['flag', 'env', 'override'] as const)('fetches a fork-only branch using %s without changing origin or local edits', (repository) => {
-    const { result, project, dir } = deploy('', true, repository)
+    const { result, project, dir, log } = deploy('', true, repository)
     expect(result.status, result.stderr).toBe(0)
     expect(readFileSync(join(project, 'source.ts'), 'utf8')).toBe('uncommitted local edits')
     const git = (args: string[]) => spawnSync('git', ['-C', project, ...args], { encoding: 'utf8', env: testEnv })
@@ -309,6 +382,7 @@ describe('local deploy', () => {
     expect(git(['worktree', 'list', '--porcelain']).stdout.match(/^worktree /gm)).toHaveLength(1)
     const archived = spawnSync('tar', ['xOf', join(dir, 'captured.tar.gz'), './source.ts'], { encoding: 'utf8' })
     expect(archived.stdout).toBe('fork-only source')
+    expect(log).toContain('env SLEEPYPOD_GITHUB_REPO=\'Kovbo/core\' bash')
   })
   it.each([
     ['--repo'],

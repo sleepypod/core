@@ -22,19 +22,21 @@ describe('timelineWindow', () => {
 
 describe('nightCurve', () => {
   const temps = [
-    row('sunday', '23:00', 80), row('sunday', '01:00', 70), row('sunday', '07:00', 84),
+    row('sunday', '23:00', 80), row('monday', '01:00', 70), row('monday', '07:00', 84),
+    row('sunday', '01:00', 99), row('sunday', '07:00', 98),
     row('sunday', '12:00', 99, false), row('monday', '23:00', 75),
   ]
-  it('places overnight points on the morning after', () => {
+  it('uses the following calendar morning, not the starting weekday\'s morning', () => {
     expect(nightCurve(temps, new Date(2026, 8, 27))).toEqual([
       { at: at(27, 23), temperature: 80 },
       { at: at(28, 1), temperature: 70 },
       { at: at(28, 7), temperature: 84 },
     ])
   })
-  it('moves a curve saved entirely after midnight to the next morning', () => {
-    const early = [row('sunday', '01:00', 70), row('sunday', '06:00', 82)]
+  it('places a morning-only calendar curve without inventing another day', () => {
+    const early = [row('monday', '01:00', 70), row('monday', '06:00', 82)]
     expect(nightCurve(early, new Date(2026, 8, 27)).map(p => p.at)).toEqual([at(28, 1), at(28, 6)])
+    expect(nightCurve(early, new Date(2026, 8, 28))).toEqual([])
   })
   it('is empty without enabled points for that day', () => {
     expect(nightCurve(temps, new Date(2026, 8, 29))).toEqual([])
@@ -120,5 +122,33 @@ describe('targetAt', () => {
     expect(targetAt([a, b], 500)).toBeNull()
     expect(targetAt([a, b], 1050)).toBe(80)
     expect(targetAt([[]], 0)).toBeNull()
+  })
+})
+
+describe('power-only bedtime curves', () => {
+  const midnight = new Date(2026, 8, 27)
+  const power = { dayOfWeek: 'sunday', onTime: '22:00', offTime: '07:00', offDayOffset: 1, endAction: 'turn_off', onTemperature: 70, enabled: true }
+  it('shows the 70°F hold with no intermediate phases and does not call shutdown a new target', () => {
+    const curve = nightCurve([], midnight, [power])
+    expect(curve).toEqual([{ at: at(27, 22), temperature: 70 }, { at: at(28, 7), temperature: 70, boundary: true }])
+    expect(targetAt([curve], at(27, 23))).toBe(70)
+    expect(targetAt([curve], at(28, 7))).toBeNull()
+    expect(nextPoint([curve], at(27, 23))).toBeNull()
+  })
+  it('uses actual next-calendar-day phases inside the power window', () => {
+    const curve = nightCurve([row('sunday', '01:00', 99), row('monday', '01:00', 69), row('monday', '08:00', 85)], midnight, [power])
+    expect(curve).toEqual([{ at: at(27, 22), temperature: 70 }, { at: at(28, 1), temperature: 69 }, { at: at(28, 7), temperature: 69, boundary: true }])
+  })
+  it('does not invent next-day shutdowns or combine ambiguous starts', () => {
+    expect(nightCurve([], midnight, [{ ...power, offDayOffset: 0 }])).toEqual([])
+    expect(nightCurve([], midnight, [{ ...power, enabled: false }])).toEqual([])
+    expect(nightCurve([], midnight, [{ ...power, dayOfWeek: 'monday' }])).toEqual([])
+    expect(nightCurve([], midnight, [power, { ...power, onTime: '23:00' }])).toEqual([])
+    expect(nightCurve([], midnight, [{ ...power, endAction: 'maintain' }])).toEqual([])
+  })
+  it('puts a post-midnight start on its actual weekday', () => {
+    const curve = nightCurve([], midnight, [{ ...power, dayOfWeek: 'monday', onTime: '01:00', offDayOffset: 0 }])
+    expect(curve[0]).toEqual({ at: at(28, 1), temperature: 70 })
+    expect(curve.at(-1)?.at).toBe(at(28, 7))
   })
 })

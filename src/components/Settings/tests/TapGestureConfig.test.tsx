@@ -60,7 +60,7 @@ describe('gesture descriptions', () => {
 
   it('describes alarm gestures by context', () => {
     const snooze = gesture({ actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 420, alarmInactiveBehavior: 'power' })
-    expect(ringingDescription(snooze)).toBe('Snooze 7 min')
+    expect(ringingDescription(snooze)).toBe('Snooze')
     expect(idleDescription(snooze)).toBe('Power on / off')
     const dismiss = gesture({ actionType: 'alarm', alarmBehavior: 'dismiss', alarmInactiveBehavior: 'none' })
     expect(ringingDescription(dismiss)).toBe('Stop alarm')
@@ -94,7 +94,6 @@ describe('TapGestureConfig', () => {
       tapType: 'quadTap',
       actionType: 'alarm',
       alarmBehavior: 'dismiss',
-      alarmSnoozeDuration: undefined,
       alarmInactiveBehavior: 'power',
     })
   })
@@ -105,6 +104,18 @@ describe('TapGestureConfig', () => {
     fireEvent.click(screen.getByLabelText('Double tap: Temperature +2°'))
     fireEvent.click(screen.getByText('Remove'))
     expect(trpcMock.deleteMutate).toHaveBeenCalledWith({ side: 'left', tapType: 'doubleTap' })
+  })
+
+  it('keeps snooze length on the alarm when saving a snoozing tap', () => {
+    trpcMock.state.gestures = { left: [gesture({ actionType: 'alarm', alarmBehavior: 'snooze', alarmSnoozeDuration: 420, alarmInactiveBehavior: 'none' })], right: [] }
+    render(<TapGestureConfig filterSide="left" />)
+    fireEvent.click(screen.getByLabelText('Double tap while ringing: Snooze'))
+    expect(screen.getByText('How long a snooze lasts is set on each alarm.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Increase.*snooze/i })).toBeNull()
+    fireEvent.click(screen.getByText('Save'))
+    expect(trpcMock.setMutate).toHaveBeenCalledWith({
+      side: 'left', tapType: 'doubleTap', actionType: 'alarm', alarmBehavior: 'snooze', alarmInactiveBehavior: 'none',
+    })
   })
 
   it('offers Remove only for gestures that exist', () => {

@@ -3,6 +3,9 @@ import { z } from 'zod'
 import { biometricManifest, manifestHash, validateConfig } from '../algorithms/registry'
 import { configHash, dataHash } from '../algorithms/canonical'
 import { shadowActiveReadingSchema } from './worker-sink'
+import { firmwareTimestampBasis } from './worker-protocol'
+import { MECHANICAL_CONTEXT_VERSION } from '../mechanical/context'
+import { mechanicalWindowProof } from '../mechanical/proof'
 
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const optionsSchema = z.object({ side: z.enum(['left', 'right']), startMs: integer, endMs: integer,
@@ -12,11 +15,13 @@ const rowSchema = z.object({ id: integer.positive(), side: z.enum(['left', 'righ
   processing_run_id: z.string().uuid(), run_side: z.enum(['left', 'right']), kind: z.literal('live'),
   config_hash: z.string(), bundle: z.string(), input_identity: z.string(), started_at_ms: integer, ended_at_ms: integer.nullable(),
   quality_count: z.literal(1), quality_score: z.number().min(0).max(1), quality_side: z.enum(['left', 'right']), quality_timestamp: integer,
+  quality_flags: z.string().max(8192),
 })
 const bundleSchema = z.object({ schemaVersion: z.literal(1), manifestHash: z.string(), resolved: z.unknown(),
   generation: integer, revisionId: z.string().uuid().nullable(), components: z.unknown(), sourceHashes: z.unknown() }).strict()
-const inputSchema = z.object({ sourceSide: z.enum(['left', 'right']), timestampBasis: z.literal('processing_clock'),
-  rawIdentity: z.literal('not_retained'), sensorCalibration: z.literal('not_consumed') }).strict()
+const inputSchema = z.object({ sourceSide: z.enum(['left', 'right']), timestampBasis: z.literal(firmwareTimestampBasis),
+  rawIdentity: z.literal('not_retained'), sensorCalibration: z.literal('not_consumed'),
+  mechanicalContext: z.literal(MECHANICAL_CONTEXT_VERSION) }).strict()
 
 /** Poll an already-open read-only connection. Only observations inserted after
  * construction are eligible; historical rows are never replayed as live output.
@@ -61,7 +66,8 @@ export class ShadowActiveReader {
         (SELECT COUNT(*) FROM vitals_quality q WHERE q.vitals_id = v.id) AS quality_count,
         (SELECT quality_score FROM vitals_quality q WHERE q.vitals_id = v.id LIMIT 1) AS quality_score,
         (SELECT side FROM vitals_quality q WHERE q.vitals_id = v.id LIMIT 1) AS quality_side,
-        (SELECT timestamp FROM vitals_quality q WHERE q.vitals_id = v.id LIMIT 1) AS quality_timestamp
+        (SELECT timestamp FROM vitals_quality q WHERE q.vitals_id = v.id LIMIT 1) AS quality_timestamp,
+        (SELECT CASE WHEN length(CAST(flags AS BLOB)) <= 8192 THEN flags END FROM vitals_quality q WHERE q.vitals_id = v.id LIMIT 1) AS quality_flags
         FROM vitals v LEFT JOIN biometric_processing_runs r ON r.id = v.processing_run_id
         WHERE v.id > ? AND v.id <= ? AND v.side = ? AND v.timestamp >= ? AND v.timestamp < ?
         ORDER BY v.id LIMIT ?`).all(this.cursor, latest.id, side, Math.ceil(startMs / 1000), Math.ceil(endMs / 1000), maximumRows + 1)
@@ -70,6 +76,7 @@ export class ShadowActiveReader {
       const readings = rows.map((raw) => {
         const row = rowSchema.parse(raw), timestampMs = row.timestamp * 1000
         const bundle = bundleSchema.parse(JSON.parse(row.bundle)), input = inputSchema.parse(JSON.parse(row.input_identity))
+        mechanicalWindowProof(JSON.parse(row.quality_flags), { timestampMs, heartRate: row.heart_rate, hrv: row.hrv, breathingRate: row.breathing_rate })
         validateConfig(bundle.resolved)
         if (!Number.isSafeInteger(timestampMs) || timestampMs > at || timestampMs + 999 < row.started_at_ms
           || (row.ended_at_ms !== null && timestampMs >= row.ended_at_ms)
@@ -78,7 +85,7 @@ export class ShadowActiveReader {
           || bundle.manifestHash !== manifestHash || configHash(bundle.components) !== configHash(biometricManifest.components)
           || configHash(bundle.sourceHashes) !== configHash(biometricManifest.sourceHashes)) throw new Error('Active observation provenance mismatch')
         return shadowActiveReadingSchema.parse({ side, timestampMs, configHash: activeConfigHash, inputHash: null,
-          provenance: { processingRunId: row.processing_run_id, sourceSide: input.sourceSide, generation: bundle.generation, manifestHash: bundle.manifestHash },
+          provenance: { processingRunId: row.processing_run_id, sourceSide: input.sourceSide, generation: bundle.generation, manifestHash: bundle.manifestHash, timestampBasis: input.timestampBasis },
           readings: [
             { metric: 'heart_rate', unit: 'bpm', windowMs: null, value: row.heart_rate, quality: row.quality_score },
             { metric: 'breathing_rate', unit: 'breaths/min', windowMs: null, value: row.breathing_rate, quality: row.quality_score },

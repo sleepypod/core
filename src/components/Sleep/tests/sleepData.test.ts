@@ -10,6 +10,7 @@ import {
   heatAlpha,
   hypnoTicks,
   mainRecord,
+  recordingSummary,
   monthCells,
   monthWeeks,
   nightKey,
@@ -31,17 +32,18 @@ const rec = (id: number, entered: Date, hours: number, exits = 0) => ({
 })
 
 describe('night grouping', () => {
-  it('assigns sessions starting before 6 AM to the previous night', () => {
+  it('assigns sessions starting before noon to the previous night', () => {
     expect(nightKey(at(27, 23, 20))).toBe('2026-09-27')
     expect(nightKey(at(28, 0, 30))).toBe('2026-09-27')
     expect(nightKey(at(28, 5, 59))).toBe('2026-09-27')
-    expect(nightKey(at(28, 6, 0))).toBe('2026-09-28')
+    expect(nightKey(at(28, 11, 59))).toBe('2026-09-27')
+    expect(nightKey(at(28, 12, 0))).toBe('2026-09-28')
   })
 
   it('shifts the query window by the rollover hour', () => {
     const { startDate, endDate } = nightWindow(new Date(2026, 8, 20), 7)
-    expect(startDate).toEqual(at(20, 6))
-    expect(endDate.getTime()).toBe(at(27, 6).getTime() - 1)
+    expect(startDate).toEqual(at(20, 12))
+    expect(endDate.getTime()).toBe(at(27, 12).getTime() - 1)
   })
 
   it('groups by night and picks the longest session as the main record', () => {
@@ -231,5 +233,17 @@ describe('month', () => {
       'Sep 27 – Oct 3',
     ])
     expect(monthWeeks(new Date(2026, 8, 1), at(10, 12))).toHaveLength(2)
+  })
+})
+
+describe('whole-night recordings', () => {
+  it('counts morning fragments and overlapping windows only once, leaving gaps unknown', () => {
+    const records = [rec(1, at(27, 22), 3), rec(2, at(28, 1, 30), 3), rec(3, at(28, 6, 30), 1), rec(4, at(27, 23), 1)]
+    const groups = groupByNight(records)
+    expect(groups.size).toBe(1)
+    expect(recordingSummary(records)).toEqual({ start: at(27, 22).getTime(), end: at(28, 7, 30).getTime(), seconds: 7 * 3600, gaps: 2.5 * 3600, count: 4 })
+  })
+  it('does not extrapolate open records to now or accept inverted windows', () => {
+    expect(recordingSummary([{ ...rec(1, at(27, 22), 1), leftBedAt: null }, { ...rec(2, at(27, 23), 1), leftBedAt: at(27, 22) }]).seconds).toBe(3600)
   })
 })

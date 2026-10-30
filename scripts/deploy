@@ -39,7 +39,7 @@ POD_IP="${POSITIONAL[0]}"
 BRANCH="${POSITIONAL[1]:-}"
 FETCH_REPO=origin
 if [ -n "$GITHUB_REPO" ]; then
-  if [[ ! "$GITHUB_REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] || [ -z "$BRANCH" ]; then
+  if [[ ! "$GITHUB_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]] || [[ "${GITHUB_REPO##*/}" = . || "${GITHUB_REPO##*/}" = .. ]] || [ "${#GITHUB_REPO}" -gt 255 ] || [ -z "$BRANCH" ]; then
     echo "Error: An explicit repository requires OWNER/REPO and a branch." >&2
     exit 1
   fi
@@ -52,6 +52,19 @@ if [[ ! "$POD_IP" =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] || [[ ! "$SSH_PORT" =~ ^[0-
 fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# Carry the known checkout source into the successful install, including when
+# sudo later starts an update without this workstation's environment.
+UPDATE_REPOSITORY="$GITHUB_REPO"
+if [ -z "$UPDATE_REPOSITORY" ]; then
+  origin_url="$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || true)"
+  case "$origin_url" in
+    https://github.com/*) UPDATE_REPOSITORY="${origin_url#https://github.com/}" ;;
+    git@github.com:*) UPDATE_REPOSITORY="${origin_url#git@github.com:}" ;;
+    ssh://git@github.com/*) UPDATE_REPOSITORY="${origin_url#ssh://git@github.com/}" ;;
+  esac
+  UPDATE_REPOSITORY="${UPDATE_REPOSITORY%.git}"
+  if [[ ! "$UPDATE_REPOSITORY" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$ ]] || [[ "${UPDATE_REPOSITORY##*/}" = . || "${UPDATE_REPOSITORY##*/}" = .. ]] || [ "${#UPDATE_REPOSITORY}" -gt 255 ]; then UPDATE_REPOSITORY=""; fi
+fi
 SSH=(ssh -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 "root@$POD_IP")
 LOCAL_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/sleepypod-deploy.XXXXXX")
 REMOTE_STAGE=""
@@ -139,5 +152,9 @@ fi
 "${SSH[@]}" "cat > '$REMOTE_STAGE/sleepypod-core.tar.gz'" < "$LOCAL_STAGE/sleepypod-core.tar.gz"
 "${SSH[@]}" "cat > '$REMOTE_STAGE/sp-update'" < "$SCRIPT_DIR/bin/sp-update"
 echo "Build uploaded. Applying update on the Pod..."
-"${SSH[@]}" "bash '$REMOTE_STAGE/sp-update' --archive '$REMOTE_STAGE/sleepypod-core.tar.gz'"
+if [ -n "$UPDATE_REPOSITORY" ]; then
+  "${SSH[@]}" "env SLEEPYPOD_GITHUB_REPO='$UPDATE_REPOSITORY' bash '$REMOTE_STAGE/sp-update' --archive '$REMOTE_STAGE/sleepypod-core.tar.gz'"
+else
+  "${SSH[@]}" "bash '$REMOTE_STAGE/sp-update' --archive '$REMOTE_STAGE/sleepypod-core.tar.gz'"
+fi
 echo "Deploy complete. Web UI: http://$POD_IP:3000/"

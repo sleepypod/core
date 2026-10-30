@@ -144,6 +144,20 @@ it('refuses signal experiments without immutable waveform inputs', () => {
 })
 
 describe('experiment and job bookkeeping', () => {
+  it('recovers an exact experiment retry after dataset release without reopening inputs or accepting a changed request', () => {
+    const original = store.createExperiment(datasetId, protocol, 'lost-experiment-reply')
+    datasets.release(datasetId)
+    now += 60000
+    const restarted = new BacktestJobStore(db, () => now)
+    expect(restarted.createExperiment(datasetId, { ...protocol, waveformStages: undefined }, 'lost-experiment-reply')).toEqual(original)
+    expect(() => restarted.createExperiment(datasetId, { ...protocol, clockOffsetMs: 1 }, 'lost-experiment-reply')).toThrow('idempotency key changed')
+    expect(() => restarted.createExperiment('00000000-0000-4000-8000-000000000000', protocol, 'lost-experiment-reply')).toThrow('idempotency key changed')
+    expect(() => restarted.createExperiment(datasetId, protocol, 'new-experiment')).toThrow('explicitly released')
+    expect(() => restarted.createExperiment(datasetId, { ...protocol, assumedStageCalibrationQuality: 2 }, 'lost-experiment-reply')).toThrow()
+    expect(() => restarted.createExperiment(datasetId, protocol, '')).toThrow()
+    expect(() => datasets.read(datasetId)).toThrow('explicitly released')
+    expect(db.select().from(schema.biometricExperiments).all()).toHaveLength(2)
+  })
   it('deduplicates experiments by idempotency key and pages them newest first', () => {
     const experiment = store.getExperiment(experimentId)
     expect(experiment.protocol).toEqual(protocol)

@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
-import { BedDouble, Calendar, Moon, Radio, Settings, Sparkles, Thermometer } from 'lucide-react'
+import { BedDouble, Calendar, Moon, Radio, Settings, Sparkles, Thermometer, House } from 'lucide-react'
 
-export type NavId = 'temp' | 'base' | 'autopilot' | 'schedule' | 'sleep' | 'system' | 'settings'
+export type NavId = 'temp' | 'base' | 'autopilot' | 'schedule' | 'sleep' | 'system' | 'settings' | 'home'
 
 export interface NavItem {
   id: NavId
@@ -22,9 +22,13 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'autopilot', label: 'Autopilot', icon: Sparkles, href: '/autopilot' },
   { id: 'schedule', label: 'Schedule', icon: Calendar, href: '/schedule' },
   { id: 'sleep', label: 'Sleep', icon: Moon, href: '/sleep', aliases: ['/data'] },
+  { id: 'home', label: 'Home', icon: House, href: '/home' },
   { id: 'system', label: 'System', icon: Radio, href: '/system', aliases: ['/sensors', '/debug', '/status'] },
   { id: 'settings', label: 'Settings', icon: Settings, href: '/settings' },
 ]
+
+// Match the native app's three primary phone destinations.
+export const PHONE_NAV_ITEMS = NAV_ITEMS.filter(item => ['temp', 'schedule', 'sleep'].includes(item.id))
 
 /** Strip the /[lang] prefix: /en/schedule → /schedule. */
 export function pathWithoutLang(pathname: string | null | undefined): string {

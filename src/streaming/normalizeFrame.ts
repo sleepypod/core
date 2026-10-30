@@ -132,21 +132,17 @@ function cdToC(v: unknown): number | null {
  * 6-slot paired layout capSense2 uses), and some builds send a bare array or
  * scalar. Returns null when nothing numeric is present so callers can skip.
  */
-export function capSideChannels(v: unknown): number[] | null {
-  if (typeof v === 'number') return [v]
-  if (Array.isArray(v)) {
-    const nums = v.filter((x): x is number => typeof x === 'number')
-    return nums.length > 0 ? nums : null
-  }
-  if (v && typeof v === 'object') {
-    const o = v as Record<string, unknown>
-    if (Array.isArray(o.values)) {
-      const nums = (o.values as unknown[]).filter((x): x is number => typeof x === 'number')
-      return nums.length > 0 ? nums : null
-    }
-    if (typeof o.out === 'number' && typeof o.cen === 'number' && typeof o.in === 'number') {
-      return [o.out, o.out, o.cen, o.cen, o.in, o.in]
-    }
+export function capSideChannels(value: unknown): number[] | null {
+  const finiteChannels = (channels: unknown[]): channels is number[] =>
+    channels.length > 0 && channels.every(channel => typeof channel === 'number' && Number.isFinite(channel))
+  if (typeof value === 'number') return Number.isFinite(value) ? [value] : null
+  if (Array.isArray(value)) return finiteChannels(value) ? value : null
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    if (Array.isArray(record.values)) return finiteChannels(record.values) ? record.values : null
+    const channels = [record.out, record.cen, record.in]
+    // Never remove bad entries: doing so silently assigns readings to another zone.
+    if (finiteChannels(channels)) return channels.flatMap(channel => [channel, channel])
   }
   return null
 }

@@ -71,6 +71,7 @@ const trpcMock = vi.hoisted(() => {
 })
 
 vi.mock('@/src/utils/trpc', () => ({ trpc: trpcMock.trpc }))
+vi.mock('../PersonalModelCard', () => ({ PersonalModelCard: () => <div>Personal model library</div> }))
 vi.mock('@/src/hooks/useSideNames', () => ({ useSideNames: () => ({ leftName: 'Left', rightName: 'Right', sideName: (s: string) => s }) }))
 
 import { SleepStageRules } from '../SleepStageRules'

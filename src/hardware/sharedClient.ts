@@ -13,7 +13,7 @@
  */
 
 import { connectDac, isDacConnected, sendCommand } from './dacTransport'
-import { confirmPumpRun } from './sideMutations'
+import { confirmPumpRun, recordHeatingSession } from './sideMutations'
 import { beginPrimingCommand } from './primeNotification'
 import { encodeAlarmPayload } from './alarmPayload'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
@@ -81,6 +81,7 @@ class DacHardwareClient {
     const seconds = duration ?? DEFAULT_HEATING_DURATION
     const durationResponse = parseSimpleResponse(await sendCommand(durationCommand, seconds.toString()))
     if (!durationResponse.success) throw new HardwareError(`Failed to set duration: ${durationResponse.message}`)
+    recordHeatingSession(side, level !== 0 && seconds > 0)
     if (level !== 0 && seconds > 0) confirmPumpRun(side)
   }
 
@@ -111,7 +112,9 @@ class DacHardwareClient {
   }
 
   async clearAlarm(side: Side): Promise<void> {
-    await sendCommand(HardwareCommand.ALARM_CLEAR, side === 'left' ? '0' : '1')
+    const response = await sendCommand(HardwareCommand.ALARM_CLEAR, side === 'left' ? '0' : '1')
+    const parsed = parseSimpleResponse(response)
+    if (!parsed.success) throw new HardwareError(`Failed to clear alarm: ${parsed.message}`)
   }
 
   async startPriming(): Promise<void> {
@@ -147,6 +150,7 @@ class DacHardwareClient {
       if (!durationParsed.success) {
         throw new HardwareError(`Failed to power off: ${durationParsed.message}`)
       }
+      recordHeatingSession(side, false)
 
       const levelCommand = side === 'left'
         ? HardwareCommand.TEMP_LEVEL_LEFT

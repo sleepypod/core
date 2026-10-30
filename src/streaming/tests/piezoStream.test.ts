@@ -1,4 +1,10 @@
 // @vitest-environment node
+import { homeSensors } from '@/src/telemetry/sensorCache'
+import { TEST_OWNER_TOKEN } from '@/src/auth/tests/support'
+import { bindBrowserScope, browserScopeRevision } from '@/src/auth/browserScope'
+import { issueSession, SESSION_COOKIE } from '@/src/auth/access'
+import Database from 'better-sqlite3'
+import { migratedComfortDatabase } from '@/src/comfort/tests/databaseFixture'
 /**
  * Tests for the WebSocket streaming resource-management surfaces:
  *   - Bounded frame index (issue #324 — was unbounded, ~70MB at 24h)
@@ -26,6 +32,7 @@ const tmpRawDir = vi.hoisted(() => {
   const pth = require('node:path') as typeof import('node:path')
   const dir = fsh.mkdtempSync(pth.join(osh.tmpdir(), 'piezo-stream-test-'))
   process.env.RAW_DATA_DIR = dir
+  process.env.SLEEPYPOD_AUTH_TOKEN = 'test-only-sleepypod-owner-key-not-for-production'
   process.env.PIEZO_WS_PORT = '0'
   // This suite exercises the legacy `.RAW` tailer. Disable NATS source selection
   // so startPiezoStreamServer starts file tailing immediately instead of probing
@@ -63,6 +70,7 @@ const {
   frameIndex,
   clientSubscriptions,
   clientDroppedFrames,
+  clientAccess,
   FRAME_INDEX_RETENTION_S,
   MAX_BUFFERED_BYTES,
   WS_MAX_PAYLOAD_BYTES,
@@ -94,6 +102,7 @@ function fakeWs(opts: Partial<FakeWs> = {}): FakeWs {
     },
     ...opts,
   }
+  clientAccess.set(ws as unknown as WsClient, new Headers({ Authorization: `Bearer ${TEST_OWNER_TOKEN}` }))
   return ws
 }
 
@@ -610,7 +619,7 @@ interface ConnectedClient {
 }
 
 async function connectClient(port: number): Promise<ConnectedClient> {
-  const ws = new WsClient(`ws://127.0.0.1:${port}`)
+  const ws = new WsClient(`ws://127.0.0.1:${port}`, { headers: { Authorization: `Bearer ${TEST_OWNER_TOKEN}` } })
   const messages: any[] = []
   ws.on('message', (data: Buffer) => {
     try {
@@ -745,6 +754,25 @@ describe('piezoStream — server lifecycle and protocol', () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('Client subscribed to'), 'piezo-dual, capSense')
     await client.close()
+  })
+
+  it('keeps startup backlog out of live home telemetry and clears observations on shutdown', async () => {
+    const timestamp = Math.floor(Date.now() / 1000)
+    homeSensors.clear()
+    const before = getLatestCapSenseSnapshot()
+    const cap = { type: 'capSense', ts: timestamp, left: { out: 1, cen: 2, in: 3 }, right: { out: 1, cen: 2, in: 3 } }
+    const ambient = { type: 'bedTemp', ts: timestamp, amb: 2150, hu: 4500 }
+    __test__.dispatchSensorFrame(cap, true)
+    __test__.dispatchSensorFrame(ambient, true)
+    expect(getLatestCapSenseSnapshot()).toBe(before)
+    expect(homeSensors.ambient().available).toBe(false)
+    __test__.dispatchSensorFrame(cap, false)
+    __test__.dispatchSensorFrame(ambient, false)
+    expect(getLatestCapSenseSnapshot()?.ts).toBe(timestamp)
+    expect(homeSensors.ambient()).toMatchObject({ available: true, temperature: 21.5 })
+    await shutdownPiezoStreamServer()
+    expect(getLatestCapSenseSnapshot()).toBeNull()
+    expect(homeSensors.ambient().available).toBe(false)
   })
 
   it('supports lps-only diagnostic subscriptions and preserves channel bytes', async () => {
@@ -1012,7 +1040,7 @@ describe('piezoStream — server lifecycle and protocol', () => {
     }
   })
 
-  it('uses the zero-byte early completion even if the requester closes during stat', async () => {
+  it('closes the seek source without sending after the requester closes during stat', async () => {
     const filePath = path.join(tmpRawDir, 'seek-zero-byte-close.RAW')
     const record = buildOuterRecord(1, [{ type: 'capSense', ts: 254, left: 1, right: 2 }])
     const port = startAndPort()
@@ -1038,10 +1066,9 @@ describe('piezoStream — server lifecycle and protocol', () => {
         configurable: true,
       })
       resolveStat({ size: 0 })
-      await waitUntil(() => send.mock.calls.length > 0)
+      await waitUntil(() => close.mock.calls.length === 1)
 
-      expect(send.mock.calls.some(([payload]) =>
-        JSON.parse(String(payload)).type === 'seek_complete')).toBe(true)
+      expect(send).not.toHaveBeenCalled()
       expect(close).toHaveBeenCalledOnce()
     }
     finally {
@@ -1049,6 +1076,43 @@ describe('piezoStream — server lifecycle and protocol', () => {
       send.mockRestore()
       open.mockRestore()
       await client.close()
+    }
+  })
+
+  it('closes a seek descriptor without replay when authority changes during its read', async () => {
+    const filePath = path.join(tmpRawDir, 'seek-revoked.RAW')
+    const record = buildOuterRecord(1, [{ type: 'capSense', ts: 254, left: 1, right: 2 }])
+    const port = startAndPort()
+    const client = await connectClient(port)
+    fs.writeFileSync(filePath, record)
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 254)
+    const before = client.messages.length
+    let releaseRead!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    const read = vi.fn(async (buffer: Buffer) => {
+      await gate
+      record.copy(buffer)
+      return { bytesRead: record.length }
+    })
+    const close = vi.fn(async () => {})
+    const open = vi.spyOn(fs.promises, 'open').mockResolvedValue({ stat: async () => ({ size: record.length }), read, close } as never)
+    try {
+      const closed = new Promise<number>(resolve => client.ws.once('close', code => resolve(code)))
+      client.ws.send(JSON.stringify({ type: 'seek', timestamp: 254 }))
+      await waitUntil(() => read.mock.calls.length === 1)
+      vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', TEST_OWNER_TOKEN + '-rotated')
+      releaseRead()
+      expect(await closed).toBe(1008)
+      expect(client.messages.slice(before)).toEqual([])
+      expect(close).toHaveBeenCalledOnce()
+    }
+    finally {
+      releaseRead()
+      vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', TEST_OWNER_TOKEN)
+      open.mockRestore()
+      client.ws.terminate()
     }
   })
 
@@ -1281,11 +1345,14 @@ describe('piezoStream — server lifecycle and protocol', () => {
     fs.writeFileSync(filePath, rec)
     fs.utimesSync(filePath, past, past)
     await client.waitFor(m => m.type === 'capSense2' && m.ts === 999, 3000)
+    expect(getLatestCapSenseSnapshot()).toBeNull() // The initial file is backlog.
+    fs.appendFileSync(filePath, buildOuterRecord(2, [{ type: 'capSense2', ts: 1000, left: channels, right: channels }]))
+    await client.waitFor(m => m.type === 'capSense2' && m.ts === 1000, 3000)
 
     const snap = getLatestCapSenseSnapshot()
     expect(snap).not.toBeNull()
     expect(snap?.type).toBe('capSense2')
-    expect(snap?.ts).toBe(999)
+    expect(snap?.ts).toBe(1000)
     expect(Array.isArray(snap?.left)).toBe(true)
     expect((snap?.left as number[])[0]).toBeCloseTo(14.5)
 
@@ -1868,10 +1935,13 @@ describe('piezoStream — server lifecycle and protocol', () => {
     const client = await connectClient(port)
     fs.writeFileSync(filePath, rec)
     await client.waitFor(m => m.type === 'capSense' && m.ts === 2200, 3000)
+    expect(getLatestCapSenseSnapshot()).toBeNull()
+    fs.appendFileSync(filePath, buildOuterRecord(2, [{ type: 'capSense', ts: 2201, left: 5, right: 7 }]))
+    await client.waitFor(m => m.type === 'capSense' && m.ts === 2201, 3000)
 
     const snap = getLatestCapSenseSnapshot()
     expect(snap?.type).toBe('capSense')
-    expect(snap?.ts).toBe(2200)
+    expect(snap?.ts).toBe(2201)
     expect(snap?.left).toEqual([5])
     expect(snap?.right).toEqual([7])
     expect(logSpy).toHaveBeenCalledWith(
@@ -1958,7 +2028,7 @@ describe('piezoStream — server lifecycle and protocol', () => {
 
     // The port must refuse new connections after shutdown.
     await expect(new Promise((resolve, reject) => {
-      const probe = new WsClient(`ws://127.0.0.1:${port}`)
+      const probe = new WsClient(`ws://127.0.0.1:${port}`, { headers: { Authorization: `Bearer ${TEST_OWNER_TOKEN}` } })
       probe.once('open', () => resolve('open'))
       probe.once('error', reject)
     })).rejects.toThrow()
@@ -2273,7 +2343,7 @@ describe('piezoStream — handshake Host/Origin gate', () => {
   })
 
   async function expectConnects(headers: Record<string, string>): Promise<void> {
-    const result = await attemptHandshake(port, headers)
+    const result = await attemptHandshake(port, { Authorization: `Bearer ${TEST_OWNER_TOKEN}`, ...headers })
     expect(result.status).toBe(101)
     const messages: any[] = []
     result.client.on('message', (data: Buffer) => messages.push(JSON.parse(data.toString('utf-8'))))
@@ -2291,11 +2361,68 @@ describe('piezoStream — handshake Host/Origin gate', () => {
 
   it('accepts .local and localhost origins', async () => {
     await expectConnects({ Origin: 'http://eight-pod.local:3000', Host: 'eight-pod.local:3001' })
-    await expectConnects({ Origin: 'http://localhost:3000' })
+    await expectConnects({ Origin: 'http://localhost:3000', Host: 'localhost:3001' })
   })
 
   it('accepts a native client that sends no Origin', async () => {
     await expectConnects({})
+  })
+
+  it.each(['live', 'subscribe', 'get_waveform', 'get_time_range', 'seek', 'malformed'])('revokes an open socket before %s can return data', async (operation) => {
+    const result = await attemptHandshake(port, { Authorization: `Bearer ${TEST_OWNER_TOKEN}` })
+    expect(result.status).toBe(101)
+    const messages: string[] = []
+    result.client.on('message', data => messages.push(String(data)))
+    const closed = new Promise<number>(resolve => result.client.once('close', code => resolve(code)))
+    vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', TEST_OWNER_TOKEN + '-rotated')
+    if (operation === 'live') broadcastFrame({ type: 'deviceStatus', ts: 1, private: 'must not escape' })
+    else result.client.send(operation === 'malformed' ? '{' : JSON.stringify({ type: operation, snapshot: true, requestId: 1, timestamp: 1 }))
+    expect(await closed).toBe(1008)
+    expect(messages).toEqual([])
+  })
+
+  it('withholds a live frame immediately after the browser changes to a personal account', async () => {
+    const databasePath = path.join(tmpRawDir, 'browser-scope.db')
+    migratedComfortDatabase(databasePath).close()
+    vi.stubEnv('DATABASE_URL', databasePath)
+    const session = issueSession(Date.now(), true)
+    const scope = bindBrowserScope(new Request('http://localhost/api/auth/session'), 'owner', session).split(';')[0]
+    const headers = new Headers({ host: `localhost:${port}`, origin: 'http://localhost:3000', cookie: `${scope}; ${SESSION_COOKIE}=${session}` })
+    const result = await attemptHandshake(port, Object.fromEntries(headers))
+    expect(result.status).toBe(101)
+    const messages: string[] = []
+    result.client.on('message', data => messages.push(String(data)))
+    const closed = new Promise<number>(resolve => result.client.once('close', code => resolve(code)))
+    const revision = browserScopeRevision(headers)
+    if (!revision) throw new Error('Expected browser scope')
+    headers.set('x-sleepypod-browser-revision', revision)
+    bindBrowserScope(new Request('http://localhost/api/household/session', { headers }), 'personal', 'changed-personal-session')
+    broadcastFrame({ type: 'deviceStatus', ts: 1, private: 'must not escape' })
+    expect(await closed).toBe(1008)
+    expect(messages).toEqual([])
+  })
+
+  it('closes an existing owner stream and rejects reconnection after a personal privacy boundary', async () => {
+    const result = await attemptHandshake(port, { Authorization: `Bearer ${TEST_OWNER_TOKEN}` })
+    expect(result.status).toBe(101)
+    const messages: string[] = []
+    result.client.on('message', data => messages.push(String(data)))
+    const closed = new Promise<number>(resolve => result.client.once('close', code => resolve(code)))
+    const database = new Database(process.env.DATABASE_URL)
+    try {
+      database.prepare('INSERT INTO household_privacy_boundary VALUES (1, ?, \'test-arrangement\')').run(Date.now())
+    }
+    finally { database.close() }
+    broadcastFrame({ type: 'deviceStatus', ts: 1, private: 'must not escape' })
+    expect(await closed).toBe(1008)
+    expect(messages).toEqual([])
+    expect((await attemptHandshake(port, { Authorization: `Bearer ${TEST_OWNER_TOKEN}` })).status).toBe(401)
+  })
+
+  it('rejects missing or wrong credentials before releasing sensor data', async () => {
+    expect((await attemptHandshake(port, {})).status).toBe(401)
+    expect((await attemptHandshake(port, { Authorization: 'Bearer wrong' })).status).toBe(401)
+    expect(startPiezoStreamServer().clients.size).toBe(0)
   })
 
   it('rejects a cross-site Origin with 403 before the upgrade', async () => {

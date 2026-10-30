@@ -76,7 +76,7 @@ describe('withHardwareClient', () => {
         .mockResolvedValueOnce('retried')
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-      await expect(withHardwareClient(callback, 'hardware failed')).resolves.toBe('retried')
+      await expect(withHardwareClient(callback, 'hardware failed', { retryReadOnly: true })).resolves.toBe('retried')
       expect(callback).toHaveBeenCalledTimes(2)
       expect(hardware.client.disconnect).toHaveBeenCalledOnce()
       expect(hardware.client.connect).toHaveBeenCalledTimes(2)
@@ -92,7 +92,7 @@ describe('withHardwareClient', () => {
       .mockRejectedValueOnce(retryFailure)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const error = await withHardwareClient(callback, 'Read status').catch((caught: unknown) => caught)
+    const error = await withHardwareClient(callback, 'Read status', { retryReadOnly: true }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(TRPCError)
     expect(error).toMatchObject({
       code: 'INTERNAL_SERVER_ERROR',
@@ -113,7 +113,7 @@ describe('withHardwareClient', () => {
       .mockRejectedValueOnce(precondition)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    await expect(withHardwareClient(callback, 'hardware failed')).rejects.toBe(precondition)
+    await expect(withHardwareClient(callback, 'hardware failed', { retryReadOnly: true })).rejects.toBe(precondition)
     expect(callback).toHaveBeenCalledTimes(2)
   })
 
@@ -123,13 +123,23 @@ describe('withHardwareClient', () => {
       .mockRejectedValueOnce('retry rejected')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const error = await withHardwareClient(callback, 'Write command').catch((caught: unknown) => caught)
+    const error = await withHardwareClient(callback, 'Read command', { retryReadOnly: true }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(TRPCError)
     expect(error).toMatchObject({
       code: 'INTERNAL_SERVER_ERROR',
-      message: 'Write command: Reconnect failed',
+      message: 'Read command: Reconnect failed',
     })
   })
+
+  it.each(['socket closed', 'stream ended', 'write EPIPE', 'read ECONNRESET'])(
+    'never replays a possibly applied write after %s', async (message) => {
+      const callback = vi.fn().mockRejectedValueOnce(new Error(message)).mockResolvedValueOnce('would repeat the action')
+      await expect(withHardwareClient(callback, 'Write command')).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' })
+      expect(callback).toHaveBeenCalledOnce()
+      expect(hardware.client.connect).toHaveBeenCalledOnce()
+      expect(hardware.client.disconnect).not.toHaveBeenCalled()
+    },
+  )
 
   it('wraps an ordinary Error without reconnecting', async () => {
     const failure = new Error('invalid response')

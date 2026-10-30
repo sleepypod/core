@@ -3,6 +3,13 @@ name: Publish OpenAPI Spec
 on:
   push:
     branches: [main, dev]
+  pull_request:
+    paths:
+      - '.github/workflows/openapi.yml'
+      - 'app/api/openapi.json/**'
+      - 'src/server/openapi.ts'
+      - 'src/auth/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,10 +36,18 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Exercise the same authenticated route as a real client without using
+      # any owner's credentials or weakening production authentication.
+      - name: Create temporary export credential
+        run: |
+          export_token=$(openssl rand -hex 32)
+          echo "::add-mask::$export_token"
+          printf 'SLEEPYPOD_AUTH_TOKEN=%s\n' "$export_token" >> "$GITHUB_ENV"
+
       - name: Start server
         run: |
           mkdir -p /tmp/sleepypod-raw
-          pnpm start > /tmp/server.log 2>&1 &
+          pnpm start --hostname 127.0.0.1 > /tmp/server.log 2>&1 &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
         env:
           DATABASE_URL: file:./ci-sleepypod.db
@@ -43,7 +58,8 @@ jobs:
       - name: Wait for server
         run: |
           for i in $(seq 1 90); do
-            if curl -sf http://localhost:3000/api/openapi.json > /dev/null 2>&1; then
+            if curl -sf --max-time 5 -H "Authorization: Bearer $SLEEPYPOD_AUTH_TOKEN" \
+              http://127.0.0.1:3000/api/openapi.json > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
               exit 0
             fi
@@ -55,7 +71,16 @@ jobs:
           exit 1
 
       - name: Download OpenAPI spec
-        run: curl -sf http://localhost:3000/api/openapi.json | jq . > openapi.json
+        run: |
+          curl -sf --max-time 30 -H "Authorization: Bearer $SLEEPYPOD_AUTH_TOKEN" \
+            http://127.0.0.1:3000/api/openapi.json | jq . > openapi.json
+          jq -e '.openapi and .paths and .security' openapi.json > /dev/null
+
+      - name: Verify anonymous access stays blocked
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+            http://127.0.0.1:3000/api/openapi.json)
+          test "$status" = 401
 
       - name: Stop server
         if: always()

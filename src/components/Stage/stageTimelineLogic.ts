@@ -2,7 +2,7 @@
 // schedule preview it drives.
 
 import { nightCurve, nightMismatch, nextPoint, powerIntervals, presenceIntervals, targetAt, tempRange } from '@/src/components/TempScreen/timelineLogic'
-import type { CurvePoint, Interval, SleepRecordLike } from '@/src/components/TempScreen/timelineLogic'
+import type { CurvePoint, Interval, PowerCurveRow, SleepRecordLike } from '@/src/components/TempScreen/timelineLogic'
 import { tonightWindow } from '@/src/components/diagnostics/dashboardLogic'
 import { formatCountdown } from '@/src/components/Schedule/bothNight'
 import type { TempRow } from '@/src/components/Schedule/bothNight'
@@ -40,10 +40,10 @@ export const timeAtFraction = (win: StageWindow, fraction: number) => Math.round
 
 export type StageCurves = Record<StageSide, CurvePoint[]>
 
-export function stageCurves(temps: Record<StageSide, TempRow[] | undefined>, win: StageWindow): StageCurves {
+export function stageCurves(temps: Record<StageSide, TempRow[] | undefined>, win: StageWindow, powers?: Record<StageSide, PowerCurveRow[] | undefined>): StageCurves {
   return {
-    left: nightCurve(temps.left, win.midnight),
-    right: nightCurve(temps.right, win.midnight),
+    left: nightCurve(temps.left, win.midnight, powers?.left),
+    right: nightCurve(temps.right, win.midnight, powers?.right),
   }
 }
 

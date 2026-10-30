@@ -1,0 +1,49 @@
+blueprint:
+  name: SleepyPod — Request Apple Home climate samples
+  description: >-
+    Pulse one dedicated virtual input_boolean every minute. Expose only that
+    helper through HomeKit Bridge, then use its On event to run the Apple Home
+    sensor-export shortcut. This does not switch a physical device or the Pod.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Enable periodic requests
+      default: false
+      selector:
+        boolean: {}
+    request_helper:
+      name: Dedicated sample-request helper
+      selector:
+        entity:
+          filter:
+            domain: input_boolean
+mode: single
+max_exceeded: silent
+variables:
+  allow_actions: !input allow_actions
+  request_helper: !input request_helper
+triggers:
+  - trigger: time_pattern
+    minutes: /1
+conditions: []
+actions:
+  - condition: template
+    value_template: >-
+      {{ allow_actions is sameas true and trigger is defined and trigger.platform == 'time_pattern'
+         and request_helper is string and request_helper | regex_match('^input_boolean[.][a-z0-9_]+$')
+         and states(request_helper) in ['on', 'off'] }}
+  - action: input_boolean.turn_off
+    target:
+      entity_id: !input request_helper
+  - delay:
+      seconds: 1
+  - action: input_boolean.turn_on
+    target:
+      entity_id: !input request_helper
+  - delay:
+      seconds: 1
+  - action: input_boolean.turn_off
+    target:
+      entity_id: !input request_helper

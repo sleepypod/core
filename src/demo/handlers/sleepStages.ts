@@ -45,7 +45,18 @@ function latestAgreement(side: Side, classifier: StageClassifier): number | null
   return classifyNights([nightInputs(side, n)], classifier.ruleset)?.summary.agreement?.accuracy ?? null
 }
 
+function requireLiveModelController(): never {
+  throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Personal models require a live, authenticated Pod. Demo data cannot validate a personal model.' })
+}
+
 export const sleepStages: DemoHandlers<'sleepStages'> = {
+  getModel: () => ({ model: null, uploadedAt: null, active: false, modelHash: null }),
+  listModels: () => [],
+  uploadModel: requireLiveModelController,
+  selectModel: requireLiveModelController,
+  setModel: requireLiveModelController,
+  setModelActive: requireLiveModelController,
+  previewModel: requireLiveModelController,
   getClassifier: async input => ({
     ...await demoStageSettings(input.side),
     defaults: DEFAULT_STAGE_CLASSIFIER,

@@ -195,7 +195,7 @@ export const automationsRouter = router({
     .output(z.object({ enabled: z.boolean() }))
     .query(() => {
       const [settings] = db.select({ on: deviceSettings.autopilotEnabled }).from(deviceSettings).limit(1).all()
-      return { enabled: settings?.on ?? true }
+      return { enabled: settings?.on === true }
     }),
 
   /** Flip the global kill-switch (persisted + applied to the running engine). */
@@ -296,7 +296,7 @@ export const automationsRouter = router({
           firesToday: today.length,
         }
       })
-      return { globalEnabled: settings?.on ?? true, rules }
+      return { globalEnabled: settings?.on === true, rules }
     }),
 
   /**
@@ -347,7 +347,7 @@ export const automationsRouter = router({
           signals,
         }
       })
-      return { now, since, startOfDay, globalEnabled: settings?.on ?? true, rules }
+      return { now, since, startOfDay, globalEnabled: settings?.on === true, rules }
     }),
 
   /**

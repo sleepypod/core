@@ -122,6 +122,7 @@ vi.mock('@/src/db', () => ({
 }))
 
 vi.mock('@/src/server/routers/raw', () => rawMock)
+vi.mock('@/src/biometrics/stage-model-store', () => ({ loadActiveStageModel: () => null }))
 vi.mock('@/src/lib/sleep-stages', () => sleepStagesMock)
 // Runtime profile adoption is integration-tested with real SQLite separately.
 vi.mock('@/src/biometrics/profiles/stage-view', async (importOriginal) => {
@@ -622,7 +623,7 @@ describe('biometrics.getSleepStages', () => {
     dbState.rowsQueue.push([{ id: 1, timestamp: new Date(), totalMovement: 100 }])
 
     sleepStagesMock.classifySleepStages.mockReturnValue([
-      { start: 0, duration: 300_000, stage: 'light', heartRate: 60, hrv: 50, breathingRate: 14, movement: 100 },
+      { start: Date.parse('2025-01-01T22:00:00Z'), duration: 300_000, stage: 'light', heartRate: 60, hrv: 50, breathingRate: 14, movement: 100 },
     ])
     sleepStagesMock.mergeIntoBlocks.mockReturnValue([{ start: 0, end: 300_000, stage: 'light' }])
     sleepStagesMock.calculateDistribution.mockReturnValue({ wake: 0, light: 1, deep: 0, rem: 0 })
@@ -641,7 +642,7 @@ describe('biometrics.getSleepStages', () => {
     dbState.rowsQueue.push([{ qualityScore: 0.2 }])
     sleepStagesMock.piezoCalibrationQuality.mockImplementationOnce((p?: { qualityScore: number | null } | null) => p?.qualityScore ?? 1)
     sleepStagesMock.classifySleepStages.mockReturnValue([
-      { start: 0, duration: 300_000, stage: 'light', heartRate: 60, hrv: 50, breathingRate: 14, movement: 50 },
+      { start: Date.parse('2025-01-01T01:00:00Z'), duration: 300_000, stage: 'light', heartRate: 60, hrv: 50, breathingRate: 14, movement: 50 },
     ])
 
     await caller.getSleepStages({ side: 'left', startDate: new Date('2025-01-01'), endDate: new Date('2025-01-02') })
@@ -680,7 +681,7 @@ describe('biometrics.getSleepStages', () => {
     dbState.rowsQueue.push([{ id: 1, timestamp: new Date(), totalMovement: 50 }])
 
     sleepStagesMock.classifySleepStages.mockReturnValue([
-      { start: 0, duration: 600_000, stage: 'deep', heartRate: 55, hrv: 60, breathingRate: 12, movement: 10 },
+      { start: Date.parse('2025-01-01T22:00:00Z'), duration: 600_000, stage: 'deep', heartRate: 55, hrv: 60, breathingRate: 12, movement: 10 },
     ])
     sleepStagesMock.mergeIntoBlocks.mockReturnValue([{ start: 0, end: 600_000, stage: 'deep' }])
     sleepStagesMock.calculateDistribution.mockReturnValue({ wake: 0, light: 0, deep: 1, rem: 0 })
@@ -1637,6 +1638,7 @@ describe('biometrics.getSleepStages query window', () => {
 
     const out = await caller.getSleepStages({ side: 'left', sleepRecordId: 3 })
     expect(out).toEqual({
+      stagedBy: { engine: 'rules', version: null, modelHash: null, reason: 'rules_selected' },
       stageView: expect.objectContaining({ provenance: expect.objectContaining({ interpretation: 'current_classifier_view' }) }),
       epochs: [],
       blocks: [],

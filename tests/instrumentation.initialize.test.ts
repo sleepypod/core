@@ -12,6 +12,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  getBaseController: vi.fn(),
+  startMechanicalContext: vi.fn(),
+  stopMechanicalContext: vi.fn(),
   startConfiguredShadowService: vi.fn(),
   startBiometricRuntime: vi.fn(),
   stopBiometricRuntime: vi.fn(),
@@ -47,6 +50,8 @@ const mocks = vi.hoisted(() => ({
   recordStartupPhase: vi.fn(),
   startTemperatureController: vi.fn(async () => undefined),
   stopTemperatureController: vi.fn(),
+  startComfortPreview: vi.fn(async () => undefined),
+  stopComfortPreview: vi.fn(async () => undefined),
   getAutomationEngine: vi.fn(async () => ({})),
   shutdownAutomationEngine: vi.fn(async () => undefined),
   stopShadowService: vi.fn(async () => undefined),
@@ -70,7 +75,8 @@ vi.mock('@/src/biometrics/shadow/service-host', () => ({ stopShadowService: mock
 vi.mock('@/src/biometrics/backtest/host', () => ({ stopBacktestHost: mocks.stopBacktestHost }))
 vi.mock('@/src/biometrics/backtest/host-startup', () => ({ startConfiguredBacktestHost: mocks.startConfiguredBacktestHost }))
 vi.mock('@/src/biometrics/backtest/coordinator-service', () => ({ stopBiometricCoordinator: mocks.stopBiometricCoordinator }))
-vi.mock('@/src/hardware/base/instance', () => ({ shutdownBaseController: mocks.shutdownBaseController }))
+vi.mock('@/src/hardware/base/instance', () => ({ shutdownBaseController: mocks.shutdownBaseController, getBaseController: mocks.getBaseController }))
+vi.mock('@/src/biometrics/mechanical/instance', () => ({ startMechanicalContext: mocks.startMechanicalContext, stopMechanicalContext: mocks.stopMechanicalContext }))
 vi.mock('@/src/db/automationRunsRetention', () => ({
   startAutomationRunsRetention: mocks.startAutomationRunsRetention,
   stopAutomationRunsRetention: mocks.stopAutomationRunsRetention,
@@ -88,6 +94,10 @@ vi.mock('@/src/lib/serverPerformance', () => ({
 vi.mock('@/src/temperature/instance', () => ({
   startTemperatureController: mocks.startTemperatureController,
   stopTemperatureController: mocks.stopTemperatureController,
+}))
+vi.mock('@/src/comfort/instance', () => ({
+  startComfortPreview: mocks.startComfortPreview,
+  stopComfortPreview: mocks.stopComfortPreview,
 }))
 
 vi.mock('@/src/automation', () => ({
@@ -421,6 +431,7 @@ describe('register()', () => {
     release(jobManager)
     await initializeScheduler()
     expect(mocks.initializeKeepalives).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(mocks.startComfortPreview).toHaveBeenCalledOnce())
   })
 
   it('does not start background writers when shutdown occurs during scheduler initialization', async () => {
@@ -478,6 +489,8 @@ describe('register()', () => {
     expect(mocks.checkAndRepairIptables).not.toHaveBeenCalled()
     expect(mocks.getJobManager).not.toHaveBeenCalled()
     expect(mocks.startConfiguredShadowService).not.toHaveBeenCalled()
+    expect(mocks.startMechanicalContext).not.toHaveBeenCalled()
+    expect(mocks.getBaseController).not.toHaveBeenCalled()
   })
 
   it('runs migrations and full init when not in CI', async () => {
@@ -486,6 +499,9 @@ describe('register()', () => {
     expect(mocks.runMigrations).toHaveBeenCalled()
     expect(mocks.checkAndRepairIptables).toHaveBeenCalled()
     expect(mocks.getJobManager).toHaveBeenCalled()
+    expect(mocks.startMechanicalContext.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.runMigrations.mock.invocationCallOrder[0])
+    expect(mocks.startMechanicalContext.mock.invocationCallOrder[0]).toBeLessThan(mocks.startDacServer.mock.invocationCallOrder[0])
+    expect(mocks.getBaseController).toHaveBeenCalledOnce()
     const { db, biometricsDb } = await import('@/src/db')
     expect(mocks.startConfiguredShadowService).toHaveBeenCalledWith(db, biometricsDb)
     expect(mocks.startConfiguredShadowService.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.runMigrations.mock.invocationCallOrder[0])

@@ -67,8 +67,8 @@ export function SegmentedControl<T extends string>({ options, value, onChange, f
       role="tablist"
       aria-label={ariaLabel}
       className={cn(
-        'shrink-0 border border-line',
-        full ? 'grid rounded-card p-1' : 'flex rounded-seg p-[3px]',
+        'max-w-full shrink-0 border border-line',
+        full ? 'grid rounded-card p-1' : 'flex flex-wrap rounded-seg p-[3px]',
         fs,
         className,
       )}

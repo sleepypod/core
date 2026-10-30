@@ -16,7 +16,7 @@ beforeEach(() => {
 
 describe('getOpenApiDocument', () => {
   it('passes the complete public API description to the generator', () => {
-    expect(getOpenApiDocument('http://pod.local/api')).toEqual({ openapi: '3.1.0' })
+    expect(getOpenApiDocument('http://pod.local/api')).toEqual({ openapi: '3.1.0', security: [{ bearerAuth: [] }] })
     expect(openapi.generate).toHaveBeenCalledWith(openapi.appRouter, {
       title: 'Sleepypod Core API',
       version: process.env.npm_package_version ?? '0.0.0-dev',
@@ -24,11 +24,10 @@ describe('getOpenApiDocument', () => {
       description:
         'REST-style API for the Sleepypod Pod controller. '
         + 'All endpoints are also available via tRPC at /api/trpc. '
-        + 'There is no authentication: the API trusts the local network '
-        + '(the pod firewalls WAN exposure via iptables — see /health/system). '
-        + 'Do not port-forward or reverse-proxy this API to the internet.',
+        + 'Owner authentication is required: a Bearer connection key or an expiring browser session. '
+        + 'Use LAN or private Tailscale access; do not expose the controller publicly.',
       tags: ['Health', 'Device', 'Settings', 'Schedules', 'Biometrics', 'Biometric tuning', 'System', 'Environment', 'Raw', 'Calibration', 'Water Level'],
-      securitySchemes: {},
+      securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } },
     })
   })
 

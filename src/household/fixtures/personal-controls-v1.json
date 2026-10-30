@@ -1,0 +1,243 @@
+{
+  "soloBed": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "arrangement": "solo-anywhere",
+    "availability": "ready",
+    "routing": {
+      "temperature": [
+        "left",
+        "right"
+      ],
+      "power": [
+        "left",
+        "right"
+      ],
+      "vibrationCancellation": [
+        "left",
+        "right"
+      ],
+      "scheduledVibration": [
+        "left"
+      ],
+      "routines": "left"
+    },
+    "observation": {
+      "state": "fresh",
+      "observedAt": 1793314800000,
+      "water": "ok",
+      "priming": false
+    },
+    "zones": [
+      {
+        "side": "left",
+        "measuredTemperatureF": 69,
+        "reportedTargetF": 70,
+        "reportedPowered": true,
+        "requestedTargetF": 68
+      },
+      {
+        "side": "right",
+        "measuredTemperatureF": 81,
+        "reportedTargetF": 82,
+        "reportedPowered": true,
+        "requestedTargetF": 80
+      }
+    ],
+    "physicalVerification": "unverified"
+  },
+  "assignedBed": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000004",
+      "sessionRevision": 1,
+      "assignmentRevision": 2,
+      "configurationRevision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "arrangement": "assigned",
+    "availability": "ready",
+    "routing": {
+      "temperature": [
+        "left"
+      ],
+      "power": [
+        "left"
+      ],
+      "vibrationCancellation": [
+        "left"
+      ],
+      "scheduledVibration": [
+        "left"
+      ],
+      "routines": "left"
+    },
+    "observation": {
+      "state": "fresh",
+      "observedAt": 1793314800000,
+      "water": "ok",
+      "priming": false
+    },
+    "zones": [
+      {
+        "side": "left",
+        "measuredTemperatureF": 69,
+        "reportedTargetF": 70,
+        "reportedPowered": true,
+        "requestedTargetF": 68
+      }
+    ],
+    "physicalVerification": "unverified"
+  },
+  "unassignedBed": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000004",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "arrangement": "solo-anywhere",
+    "availability": "unassigned",
+    "routing": {
+      "temperature": [],
+      "power": [],
+      "vibrationCancellation": [],
+      "scheduledVibration": [],
+      "routines": null
+    },
+    "observation": {
+      "state": "unavailable",
+      "observedAt": null,
+      "water": "unknown",
+      "priming": null
+    },
+    "zones": [],
+    "physicalVerification": "unverified"
+  },
+  "disabledBed": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "arrangement": "solo-anywhere",
+    "availability": "runtime_disabled",
+    "routing": {
+      "temperature": [],
+      "power": [],
+      "vibrationCancellation": [],
+      "scheduledVibration": [],
+      "routines": null
+    },
+    "observation": {
+      "state": "unavailable",
+      "observedAt": null,
+      "water": "unknown",
+      "priming": null
+    },
+    "zones": [],
+    "physicalVerification": "unverified"
+  },
+  "temperatureRequest": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000005",
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "issuedAt": 1793314800000,
+    "expiresAt": 1793314830000,
+    "action": {
+      "kind": "temperature",
+      "temperatureF": 70,
+      "holdMinutes": 30
+    }
+  },
+  "acknowledged": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000005",
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "issuedAt": 1793314800000,
+    "expiresAt": 1793314830000,
+    "action": {
+      "kind": "temperature",
+      "temperatureF": 70,
+      "holdMinutes": 30
+    },
+    "receivedAt": 1793314800000,
+    "finishedAt": 1793314800200,
+    "lastDispatchAt": 1793314800100,
+    "state": "acknowledged",
+    "reason": null,
+    "dispatchCount": 2,
+    "physicalVerification": "unverified",
+    "replayAllowed": false,
+    "resolvedZones": [
+      "left",
+      "right"
+    ]
+  },
+  "partialUnknown": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000005",
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "issuedAt": 1793314800000,
+    "expiresAt": 1793314830000,
+    "action": {
+      "kind": "temperature",
+      "temperatureF": 70,
+      "holdMinutes": 30
+    },
+    "receivedAt": 1793314800000,
+    "finishedAt": 1793314800200,
+    "lastDispatchAt": 1793314800100,
+    "state": "unknown",
+    "reason": "dispatch_outcome_unknown",
+    "dispatchCount": 1,
+    "physicalVerification": "unverified",
+    "replayAllowed": false,
+    "resolvedZones": [
+      "left",
+      "right"
+    ]
+  },
+  "missingReceipt": {
+    "error": {
+      "code": "not_ready",
+      "message": "No personal command receipt is available."
+    }
+  }
+}

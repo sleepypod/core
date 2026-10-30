@@ -670,7 +670,8 @@ describe('temperature controller API', () => {
       await assertion
       await vi.advanceTimersByTimeAsync(250)
       expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
-      expect(action === 'resume' ? controllerMock.resume : controllerMock.powerOffLocked).toHaveBeenCalledWith('left')
+      if (action === 'resume') expect(controllerMock.resume).toHaveBeenCalledWith('left')
+      else expect(controllerMock.powerOffLocked).toHaveBeenCalledWith('left', true)
     }
     finally { vi.useRealTimers() }
   })
@@ -679,7 +680,7 @@ describe('temperature controller API', () => {
     expect(await caller.setPower({ side: 'left', powered: true, temperature: 72 })).toEqual({ success: true })
     await caller.setPower({ side: 'right', powered: true })
     expect(controllerMock.setManualLocked.mock.calls).toEqual([['left', 72]])
-    expect(controllerMock.powerOnLocked).toHaveBeenCalledExactlyOnceWith('right')
+    expect(controllerMock.powerOnLocked).toHaveBeenCalledExactlyOnceWith('right', 75, expect.any(Function), true)
     expect(dbMock.update).not.toHaveBeenCalled()
   })
 
@@ -694,7 +695,7 @@ describe('temperature controller API', () => {
   it('never gates shutdown behind pump protection', async () => {
     pumpStallMock.shouldBlock.mockReturnValue(true)
     await caller.setPower({ side: 'left', powered: false })
-    expect(controllerMock.powerOffLocked).toHaveBeenCalledExactlyOnceWith('left')
+    expect(controllerMock.powerOffLocked).toHaveBeenCalledExactlyOnceWith('left', true)
     expect(controllerMock.setManualLocked).not.toHaveBeenCalled()
   })
 
@@ -794,6 +795,16 @@ describe('device.startPriming / dismissPrimeNotification', () => {
 })
 
 describe('device.execute (raw command)', () => {
+  beforeEach(() => {
+    vi.stubEnv('SLEEPYPOD_ENABLE_RAW_COMMANDS', '1')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+  it('refuses hardware passthrough without explicit enablement', async () => {
+    vi.stubEnv('SLEEPYPOD_ENABLE_RAW_COMMANDS', '')
+    await expect(caller.execute({ command: 'DEVICE_STATUS' })).rejects.toThrow('General-purpose hardware commands are disabled')
+  })
   it('maps an allowlisted name to its opcode and returns disclaimer', async () => {
     sharedClientMock.sendRaw.mockResolvedValue('{ "ok": true }')
 

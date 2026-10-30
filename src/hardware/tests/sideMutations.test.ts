@@ -1,11 +1,26 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { _resetPumpRunEvidence, confirmPumpRun, hasConfirmedPumpRun, _resetFirmwareSynced, _resetMutationStamps, getLastSideMutationAt, hasFirmwareSynced } from '../sideMutations'
+import { _resetHeatingSessionEvidence, hasHeatingSessionEvidence, recordHeatingSession } from '../sideMutations'
 
 afterEach(() => {
   _resetMutationStamps()
   _resetPumpRunEvidence()
   _resetFirmwareSynced()
+  _resetHeatingSessionEvidence()
   vi.useRealTimers()
+})
+
+it('shares revocable heating evidence across chunks without treating pump movement as heat', async () => {
+  _resetHeatingSessionEvidence()
+  confirmPumpRun('left')
+  expect(hasHeatingSessionEvidence('left')).toBe(false)
+  vi.resetModules()
+  const writer = await import('../sideMutations')
+  writer.recordHeatingSession('left', true)
+  expect(hasHeatingSessionEvidence('left')).toBe(true)
+  expect(hasHeatingSessionEvidence('right')).toBe(false)
+  recordHeatingSession('left', false)
+  expect(writer.hasHeatingSessionEvidence('left')).toBe(false)
 })
 
 it('shares the first-sync flag with an independently loaded DAC-side module instance', async () => {

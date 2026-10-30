@@ -11,7 +11,7 @@
  *   - Runaway guard: a rule exceeding N hardware actions/hour auto-disables.
  *   - Manual-override hold: touching the dial suspends autopilot on that side.
  *   - Run-once gate: never writes a side with an active run-once session.
- *   - Dry-run: notify-only; logs would-fire events without touching hardware.
+ *   - Dry-run: audit-only; logs would-fire events without delivering alerts or touching hardware.
  *
  * Every evaluation (i.e. every tick where a rule's trigger is active) writes one
  * row to automation_runs with outcome fired/skipped/clamped/dry_run/error — the
@@ -41,6 +41,7 @@ import {
   type Side,
 } from './types'
 import { WindowStore } from './windows'
+import { finiteSignal } from './signalValidity'
 
 /** How many minutes after a timeOfDay slot a late tick may still fire it. */
 const TIME_OF_DAY_GRACE_MIN = 10
@@ -58,7 +59,7 @@ export interface AutomationEngineDeps {
   /** Persist enabled=false when the runaway guard trips. */
   disableRule: (automationId: number) => Promise<void>
   /** Side-effect for notify actions (e.g. push/log); never touches hardware. */
-  notify: (automationId: number, message: string) => void
+  notify: (automationId: number, message: string) => undefined | { notificationId: number, duplicate: boolean }
   log?: (msg: string) => void
 }
 
@@ -219,7 +220,8 @@ export class AutomationEngine {
           if (lease.expiresAt <= now) this.leases[side].delete(id)
         }
       }
-      const snapshot = this.deps.signals.read()
+      const snapshot = Object.fromEntries(Object.entries(this.deps.signals.read())
+        .map(([key, value]) => [key, finiteSignal(value)]))
       const { nowMinutes, dayOfWeek, dateKey } = this.deps.clock()
 
       // Feed windowed-aggregate buffers, then prune to the largest window asked.
@@ -383,12 +385,11 @@ export class AutomationEngine {
       return
     }
 
-    // Policies remain valid between triggers, but a stopped engine cannot keep
-    // owning a side forever. Conditions are checked on every evaluator tick.
-    for (const side of ['left', 'right'] as const) {
-      for (const [id, lease] of this.leases[side]) {
-        if (id.startsWith(`rule:${rule.id}:`) && lease.policy) lease.expiresAt = now + 2 * AUTOMATION_TICK_MS
-      }
+    // Recheck action inputs between triggers as well as the IF condition.
+    const withdrawn = this.refreshPolicies(rule, ctx, now)
+    if (withdrawn.length > 0) {
+      await this.deps.recordRun(rule.id, 'skipped', { reason: 'policy-input-unavailable', requests: withdrawn })
+      if (generation !== this.generation) return
     }
     if (!triggered && !unownedPolicies.size) return
 
@@ -434,6 +435,41 @@ export class AutomationEngine {
     }
   }
 
+  /** Relative actions use the routine baseline, never their own previous output. */
+  private actionContext(ctx: EvalContext): EvalContext {
+    return {
+      ...ctx,
+      windows: this.actionWindows,
+      signal: (key) => {
+        const target = /^(left|right)\.(targetTemperature|currentTemperature)$/.exec(key)
+        return target ? this.deps.control.automationBaseline(target[1] as Side) : ctx.signal(key)
+      },
+    }
+  }
+
+  /** Withdraw live policies with missing inputs; leave explicit one-shot holds intact. */
+  private refreshPolicies(rule: AutomationRule, ctx: EvalContext, now: number): string[] {
+    const withdrawn: string[] = []
+    const actionContext = this.actionContext(ctx)
+    const triggerAvailable = rule.trigger.kind !== 'signalChange' || ctx.signal(rule.trigger.signal) !== undefined
+    for (const [index, action] of rule.actions.entries()) {
+      if (action.kind === 'notify') continue
+      const requestId = `rule:${rule.id}:${index}`
+      for (const side of ['left', 'right'] as const) {
+        const lease = this.leases[side].get(requestId)
+        if (!lease?.policy) continue
+        if (!triggerAvailable || (action.temp && evaluateExpr(action.temp, actionContext) === undefined)) {
+          this.leases[side].delete(requestId)
+          withdrawn.push(`${side}:${requestId}`)
+        }
+        else {
+          lease.expiresAt = now + 2 * AUTOMATION_TICK_MS
+        }
+      }
+    }
+    return withdrawn
+  }
+
   private async runAction(
     rule: AutomationRule,
     action: Action,
@@ -442,8 +478,9 @@ export class AutomationEngine {
     now: number,
   ): Promise<ActionResult[]> {
     if (action.kind === 'notify') {
-      this.deps.notify(rule.id, action.message)
-      return [{ kind: 'notify', notified: true }]
+      if (rule.dryRun) return [{ kind: 'notify', dryRun: true }]
+      const receipt = this.deps.notify(rule.id, action.message)
+      return [{ kind: 'notify', notified: true, ...receipt }]
     }
     const sides: Side[] = action.side ? [action.side] : (rule.side ? [rule.side] : ['left', 'right'])
     const results: ActionResult[] = []
@@ -463,14 +500,7 @@ export class AutomationEngine {
         results.push({ kind: action.kind, side, requestId: id, temp: previous.temperature, antiThrash: true })
         continue
       }
-      const actionContext: EvalContext = {
-        ...ctx,
-        windows: this.actionWindows,
-        signal: (key) => {
-          const target = /^(left|right)\.(targetTemperature|currentTemperature)$/.exec(key)
-          return target ? this.deps.control.automationBaseline(target[1] as Side) : ctx.signal(key)
-        },
-      }
+      const actionContext = this.actionContext(ctx)
       const raw = expr ? evaluateExpr(expr, actionContext) : 75
       if (raw === undefined) {
         this.leases[side].delete(id)
@@ -509,6 +539,8 @@ interface ActionResult {
   kind: Action['kind']
   side?: Side
   notified?: boolean
+  notificationId?: number
+  duplicate?: boolean
   sent?: boolean
   dryRun?: boolean
   antiThrash?: boolean

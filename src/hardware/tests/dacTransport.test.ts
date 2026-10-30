@@ -14,6 +14,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Server, Socket } from 'net'
 import { once } from 'events'
 import { getStatusRevision } from '../statusRevision'
+import { installMechanicalObserver } from '@/src/biometrics/mechanical/dispatch'
+import { ControlDeadlineError, ControlGuardError, withinControlRequest, withinDispatchGuard } from '@/src/controls/context'
+import { testScope } from '@/src/controls/tests/fixtures'
 import { promises as fs } from 'fs'
 import {
   connectDac,
@@ -126,6 +129,122 @@ describe('dacTransport', () => {
       '[DAC] connected',
     ]))
     log.mockRestore()
+  })
+
+  test('journals mechanical commands inside the real FIFO before sending, preserving emergency clear', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(async () => {
+      await fs.stat(socketPath)
+    })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    const recorded: unknown[][] = [], received: string[] = []
+    let fail = false
+    const uninstall = installMechanicalObserver({ command: (...args) => {
+      recorded.push(args)
+      if (fail) throw new Error('journal unavailable')
+    } })
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mockFranken.on('data', (bytes) => {
+      received.push(bytes.toString().split('\n')[0])
+      expect(recorded.length).toBeGreaterThanOrEqual(received.length)
+    })
+    handleCommands(mockFranken, { 5: 'SET: ok', 13: 'SET: ok', 16: 'SET: ok' })
+    try {
+      await sendCommand('5', 'opaque-firmware-payload')
+      await sendCommand('13')
+      expect(recorded).toEqual([['vibration', 180000], ['priming', 0]])
+      fail = true
+      await expect(sendCommand('13')).rejects.toThrow('journal unavailable')
+      await sendCommand('16', '0')
+      expect(received).toEqual(['5', '13', '16'])
+    }
+    finally {
+      uninstall()
+      warning.mockRestore()
+    }
+  })
+
+  test('expires an actuator request behind a queued read without sending its bytes', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(async () => {
+      await fs.stat(socketPath)
+    })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    const received = Promise.withResolvers<undefined>()
+    const bytes: string[] = []
+    mockFranken.on('data', (chunk) => {
+      bytes.push(chunk.toString())
+      received.resolve(undefined)
+    })
+    const earlier = sendCommand('14')
+    await received.promise
+    const scope = testScope()
+    const pending = withinControlRequest(scope, () => sendCommand('11', '20'))
+    const rejected = expect(pending).rejects.toBeInstanceOf(ControlDeadlineError)
+    scope.now = () => 200
+    mockFranken.write('OK\n\n')
+    await earlier
+    await rejected
+    expect(bytes).toEqual(['14\n\n'])
+    expect(scope.beforeDispatch).not.toHaveBeenCalled()
+    expect(isDacConnected()).toBe(true)
+  })
+
+  test('rechecks policy permission at FIFO dispatch after another command finishes', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.stat(socketPath))
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    const received = Promise.withResolvers<undefined>()
+    const bytes: string[] = []
+    mockFranken.on('data', (chunk) => {
+      bytes.push(chunk.toString())
+      received.resolve(undefined)
+    })
+    const earlier = sendCommand('14')
+    await received.promise
+    let allowed = true
+    const pending = withinDispatchGuard(() => {
+      if (!allowed) throw new ControlGuardError()
+    }, () => sendCommand('11', '20'))
+    const rejected = expect(pending).rejects.toBeInstanceOf(ControlGuardError)
+    allowed = false
+    mockFranken.write('OK\n\n')
+    await earlier
+    await rejected
+    expect(bytes).toEqual(['14\n\n'])
+    expect(isDacConnected()).toBe(true)
+  })
+
+  test('persists each actuator dispatch before socket write and excludes read-only commands', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(async () => {
+      await fs.stat(socketPath)
+    })
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    handleCommands(mockFranken)
+    await connecting
+    const scope = testScope()
+    const writes: string[] = []
+    mockFranken.on('data', (chunk) => {
+      writes.push(chunk.toString())
+      if (chunk.toString().startsWith('11\n')) expect(scope.dispatchCount).toBe(1)
+    })
+    await withinControlRequest(scope, async () => {
+      await sendCommand('0')
+      await sendCommand('14')
+      await sendCommand('11', '20')
+    })
+    expect(writes).toEqual(['0\n\n', '14\n\n', '11\n20\n\n'])
+    expect(scope.beforeDispatch).toHaveBeenCalledOnce()
+    const failure = testScope()
+    failure.beforeDispatch = () => {
+      throw new Error('disk full')
+    }
+    await expect(withinControlRequest(failure, () => sendCommand('12', '30'))).rejects.toThrow('disk full')
+    expect(writes).toHaveLength(3)
   })
 
   test.each(['before', 'after'] as const)('recovers when replacement firmware connects %s the next command', async (when) => {

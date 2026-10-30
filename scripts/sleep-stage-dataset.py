@@ -82,21 +82,31 @@ def night_of(dt):
 
 # ── Health export ──────────────────────────────────────────────────────────
 
-def parse_export(path, source_pattern='Watch', cutoff=None):
+def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exclude_pattern=None, units=None):
     """Stream export.xml and return (stage_segments, hr_samples) for sources
-    matching source_pattern.
+    matching source_pattern and, when given, not matching exclude_pattern.
 
     stage_segments: [(start_dt, end_dt, stage)] in file order (aware datetimes)
     hr_samples:     [(unix_s, bpm)] sorted by time
+    quantities:     optional {HK quantity type: list}; each list receives that
+                    type's (unix_s, value) samples, sorted by time
+    units:          optional {HK quantity type: {unit: factor}}; values of those
+                    types are multiplied into the canonical unit, and records in
+                    any other unit are skipped rather than imported unconverted
     """
     if isinstance(path, (str, os.PathLike)) and os.path.isdir(path):
         path = os.path.join(path, 'export.xml')
     source_re = re.compile(source_pattern)
+    exclude_re = re.compile(exclude_pattern) if exclude_pattern else None
     segments, hr = [], []
+    quantities = quantities or {}
+    units = units or {}
 
     def add(a):
         kind = a.get('type')
-        if kind not in (HK_SLEEP, HK_HR) or not source_re.search(a.get('sourceName', '')):
+        source = a.get('sourceName', '')
+        if (kind not in (HK_SLEEP, HK_HR) and kind not in quantities) \
+                or not source_re.search(source) or (exclude_re and exclude_re.search(source)):
             return
         try:
             start = datetime.strptime(a['startDate'], '%Y-%m-%d %H:%M:%S %z')
@@ -111,11 +121,16 @@ def parse_export(path, source_pattern='Watch', cutoff=None):
                 segments.append((start, end, stage))
             return
         try:
-            bpm = float(a['value'])
+            value = float(a['value'])
         except (KeyError, ValueError):
             return
-        if math.isfinite(bpm):
-            hr.append((int(start.timestamp()), bpm))
+        if kind in units:
+            factor = units[kind].get(a.get('unit', ''))
+            if factor is None:
+                return
+            value *= factor
+        if math.isfinite(value):
+            (hr if kind == HK_HR else quantities[kind]).append((int(start.timestamp()), value))
 
     # Incremental parse, so record layout (line breaks, attribute wrapping)
     # does not matter. Clearing the root after each record keeps memory flat.
@@ -126,6 +141,8 @@ def parse_export(path, source_pattern='Watch', cutoff=None):
             add(elem.attrib)
             root.clear()
     hr.sort()
+    for samples in quantities.values():
+        samples.sort()
     return segments, hr
 
 

@@ -1,13 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/src/server/routers/app', () => ({
   appRouter: { createCaller: () => ({}) },
 }))
 
+import { ownerRequest } from '@/src/auth/tests/support'
 import { POST, isOriginAllowed } from '@/app/api/mcp/route'
 
 function rpc(body: unknown, extraHeaders: Record<string, string> = {}): Request {
-  return new Request('http://pod.local/api/mcp', {
+  return ownerRequest('http://pod.local/api/mcp', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream', 'host': 'pod.local', ...extraHeaders },
     body: JSON.stringify(body),
@@ -17,10 +18,20 @@ function rpc(body: unknown, extraHeaders: Record<string, string> = {}): Request 
 const listTools = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
 
 describe('POST /api/mcp', () => {
+  beforeEach(() => {
+    vi.stubEnv('SLEEPYPOD_ENABLE_MCP', '1')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+  it('is disabled unless explicitly enabled, even for an authenticated owner', async () => {
+    vi.stubEnv('SLEEPYPOD_ENABLE_MCP', '')
+    expect((await POST(rpc(listTools))).status).toBe(404)
+  })
   it('rejects cross-origin browser requests (DNS rebinding) but allows same-origin and originless clients', async () => {
     const evil = await POST(rpc(listTools, { origin: 'http://evil.example' }))
-    expect(evil.status).toBe(403)
-    expect((await evil.json()).error.message).toContain('cross-origin')
+    expect(evil.status).toBe(401)
+    expect((await evil.json()).error).toBe('Authentication required')
 
     const same = await POST(rpc(listTools, { origin: 'http://pod.local' }))
     expect(same.status).toBe(200)

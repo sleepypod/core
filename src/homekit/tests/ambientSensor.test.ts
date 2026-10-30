@@ -1,137 +1,41 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Characteristic } from 'hap-nodejs'
-
-// Hoisted DB mock — drives readAmbientC by stubbing the chained
-// biometricsDb.select().from().orderBy().limit() call.
-const dbMock = vi.hoisted(() => {
-  const state: { row: { ambientTemp: number | null } | null, throws: false | true | string } = {
-    row: null,
-    throws: false,
-  }
-  const select = vi.fn(() => ({
-    from: vi.fn(() => ({
-      orderBy: vi.fn(() => ({
-        limit: vi.fn(async () => {
-          if (state.throws !== false) {
-            throw typeof state.throws === 'string' ? state.throws : new Error('biometrics db down')
-          }
-          return state.row ? [state.row] : []
-        }),
-      })),
-    })),
-  }))
-  return { state, select }
-})
-
-vi.mock('@/src/db', () => ({
-  biometricsDb: { select: dbMock.select },
-}))
-
+import { homeSensors, ENVIRONMENT_LIFETIME_MS } from '@/src/telemetry/sensorCache'
 import { buildAmbientSensor } from '../accessories/ambientSensor'
 
-describe('ambientSensor accessory', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-    dbMock.state.row = null
-    dbMock.state.throws = false
-  })
-  afterEach(() => {
-    vi.useRealTimers()
-  })
+beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(1700000000000)
+  homeSensors.clear()
+})
+afterEach(() => {
+  homeSensors.clear()
+  vi.useRealTimers()
+})
 
-  it('uses the stable HomeKit display name and subtype', () => {
-    const { service, stop } = buildAmbientSensor()
-    expect(service.displayName).toBe('Pod ambient')
-    expect(service.subtype).toBe('ambient')
-    stop()
-  })
+it('keeps the paired identity and faults until a real reading arrives, then expires it', async () => {
+  const { service, stop } = buildAmbientSensor()
+  expect(service.displayName).toBe('Pod ambient')
+  expect(service.subtype).toBe('ambient')
+  const characteristic = service.getCharacteristic(Characteristic.CurrentTemperature)
+  await expect(characteristic.handleGetRequest()).rejects.toBe(-70402)
+  homeSensors.record({ type: 'bedTemp', ts: Date.now() / 1000, amb: 2150 }, false, Date.now())
+  vi.advanceTimersByTime(5000)
+  expect(await characteristic.handleGetRequest()).toBe(21.5)
+  expect(service.getCharacteristic(Characteristic.StatusFault).value).toBe(0)
+  vi.advanceTimersByTime(ENVIRONMENT_LIFETIME_MS)
+  await expect(characteristic.handleGetRequest()).rejects.toBe(-70402)
+  expect(service.getCharacteristic(Characteristic.StatusFault).value).toBe(1)
+  stop()
+  expect(vi.getTimerCount()).toBe(0)
+})
 
-  it('reads latest ambient_temp (centidegrees) and converts to Celsius', async () => {
-    dbMock.state.row = { ambientTemp: 2150 } // 21.5°C
-    const { service, stop } = buildAmbientSensor()
-    // First refresh is queued by buildAmbientSensor — drain the microtask
-    // before sampling so the converted value is in place.
-    await vi.runOnlyPendingTimersAsync()
-    await Promise.resolve()
-    await Promise.resolve()
-    const value = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
-    expect(value).toBeCloseTo(21.5, 2)
-    stop()
-  })
-
-  it('returns the neutral 20°C sentinel before the first DB row resolves', async () => {
-    // No row queued; readAmbientC returns null and lastC stays at the sentinel.
-    const { service, stop } = buildAmbientSensor()
-    const value = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
-    expect(value).toBe(20)
-    stop()
-  })
-
-  it('keeps last known value when the latest row has a null ambient_temp', async () => {
-    dbMock.state.row = { ambientTemp: 2500 } // 25°C — distinct from the 20°C sentinel
-    const { service, stop } = buildAmbientSensor()
-    await vi.runOnlyPendingTimersAsync()
-    await Promise.resolve()
-    await Promise.resolve()
-
-    dbMock.state.row = { ambientTemp: null }
-    await vi.advanceTimersByTimeAsync(60_000)
-    const value = await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()
-    expect(value).toBeCloseTo(25, 2)
-    stop()
-  })
-
-  it('swallows DB errors and leaves the cached value untouched', async () => {
-    dbMock.state.row = { ambientTemp: 2500 } // 25°C
-    const { service, stop } = buildAmbientSensor()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()).toBeCloseTo(25, 2)
-
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    dbMock.state.throws = true
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[homekit] ambient sensor read failed:',
-      'biometrics db down',
-    )
-    // 25°C still cached.
-    expect(await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()).toBeCloseTo(25, 2)
-    warnSpy.mockRestore()
-    stop()
-  })
-
-  it('logs the raw value when a non-Error is thrown from the DB', async () => {
-    dbMock.state.throws = 'plain string boom'
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { stop } = buildAmbientSensor()
-    await vi.runOnlyPendingTimersAsync()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[homekit] ambient sensor read failed:',
-      'plain string boom',
-    )
-    warnSpy.mockRestore()
-    stop()
-  })
-
-  it('polls the DB on a 60s cadence', async () => {
-    dbMock.state.row = { ambientTemp: 2000 }
-    const { stop } = buildAmbientSensor()
-    const before = dbMock.select.mock.calls.length
-    await vi.advanceTimersByTimeAsync(180_000)
-    // Three additional polls in 180s.
-    expect(dbMock.select.mock.calls.length).toBeGreaterThanOrEqual(before + 3)
-    stop()
-  })
-
-  it('stop() halts the poll interval', async () => {
-    const { stop } = buildAmbientSensor()
-    await Promise.resolve()
-    const after = dbMock.select.mock.calls.length
-    stop()
-    await vi.advanceTimersByTimeAsync(300_000)
-    expect(dbMock.select.mock.calls.length).toBe(after)
-  })
+it('withdraws a previous value when the next firmware record has no ambient sensor', async () => {
+  homeSensors.record({ type: 'bedTemp2', ts: Date.now() / 1000, left: { amb: 25 } }, false, Date.now())
+  const { service, stop } = buildAmbientSensor()
+  expect(await service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()).toBe(25)
+  vi.advanceTimersByTime(1000)
+  homeSensors.record({ type: 'bedTemp2', ts: Date.now() / 1000, left: { amb: -327.68 } }, false, Date.now())
+  await expect(service.getCharacteristic(Characteristic.CurrentTemperature).handleGetRequest()).rejects.toBe(-70402)
+  stop()
 })

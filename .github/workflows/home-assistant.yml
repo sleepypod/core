@@ -1,0 +1,30 @@
+name: Home Assistant Templates
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/home-assistant/**'
+      - 'scripts/home-assistant/**'
+      - '.github/workflows/home-assistant.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'integrations/home-assistant/**'
+      - 'scripts/home-assistant/**'
+      - '.github/workflows/home-assistant.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Home Assistant schemas and actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Validate isolated Home Assistant templates
+        run: uv run --project scripts/home-assistant --frozen python -m unittest discover -s scripts/home-assistant -p 'test_*.py' -v

@@ -1,5 +1,5 @@
 /**
- * Tests for useSwipeNavigation — horizontal swipes between the 5 main
+ * Tests for useSwipeNavigation — horizontal swipes between the three primary
  * screens. Filters out vertical scroll, slow swipes, and gestures that
  * start inside horizontally-scrollable elements.
  */
@@ -40,14 +40,6 @@ afterEach(() => {
 })
 
 describe('useSwipeNavigation', () => {
-  it('includes Base in swipe navigation only when it exists', () => {
-    const { result } = renderHook(() => useSwipeNavigation(true))
-    act(() => {
-      result.current.onTouchStart(touchEvent([{ clientX: 200, clientY: 100 }]))
-      result.current.onTouchEnd(touchEvent([{ clientX: 50, clientY: 100 }]))
-    })
-    expect(navMock.push).toHaveBeenCalledWith('/en/base')
-  })
   it('navigates to the next screen on a leftward swipe', () => {
     const { result } = renderHook(() => useSwipeNavigation())
     act(() => {
@@ -111,7 +103,7 @@ describe('useSwipeNavigation', () => {
   })
 
   it('does not navigate past the last screen', () => {
-    navMock.pathname = '/en/settings'
+    navMock.pathname = '/en/sleep'
     const { result } = renderHook(() => useSwipeNavigation())
     act(() => {
       result.current.onTouchStart(touchEvent([{ clientX: 200, clientY: 100 }]))
@@ -187,7 +179,7 @@ describe('useSwipeNavigation', () => {
     })
     expect(navMock.push).not.toHaveBeenCalled()
     expect(target.closest).toHaveBeenCalledWith(
-      '[data-no-swipe], [style*="overflow-x"], .overflow-x-auto, .overflow-x-scroll',
+      'input, textarea, select, button, a, [role="slider"], [role="dialog"], canvas, svg, [data-no-swipe], [style*="overflow-x"], .overflow-x-auto, .overflow-x-scroll',
     )
   })
 

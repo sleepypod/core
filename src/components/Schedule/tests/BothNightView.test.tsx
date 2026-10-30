@@ -11,7 +11,7 @@ afterEach(() => {
 it('shows the end countdown while tonight is running and selects another night', () => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date(2026, 8, 28, 23, 0))
-  const left = [{ dayOfWeek: 'monday', time: '22:00', temperature: 80, enabled: true }, { dayOfWeek: 'monday', time: '07:00', temperature: 82, enabled: true }]
+  const left = [{ dayOfWeek: 'monday', time: '22:00', temperature: 80, enabled: true }, { dayOfWeek: 'tuesday', time: '07:00', temperature: 82, enabled: true }]
   render(<BothNightView temps={{ left, right: undefined }} names={{ left: 'Alex', right: 'Sam' }} />)
   expect(screen.getByText(/ends in 8h 0m/)).toBeTruthy()
   expect(screen.getByText('No curve on Mon')).toBeTruthy()
@@ -30,10 +30,10 @@ it('shows each person’s sleep window in the pod’s time format', () => {
 it('shows a maintained final temperature only for the side whose curve maintains it', () => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date(2026, 8, 28, 23, 0))
-  const curve = (dayOfWeek: string) => [{ dayOfWeek, time: '22:00', temperature: 80, enabled: true }, { dayOfWeek, time: '07:00', temperature: 82, enabled: true }]
+  const curve = (dayOfWeek: string, nextDay: string) => [{ dayOfWeek, time: '22:00', temperature: 80, enabled: true }, { dayOfWeek: nextDay, time: '07:00', temperature: 82, enabled: true }]
   render(
     <BothNightView
-      temps={{ left: curve('monday'), right: curve('monday') }}
+      temps={{ left: curve('monday', 'tuesday'), right: curve('monday', 'tuesday') }}
       power={{ left: [{ dayOfWeek: 'monday', endAction: 'maintain' }], right: [{ dayOfWeek: 'monday', endAction: 'turn_off' }] }}
       names={{ left: 'Alex', right: 'Sam' }}
     />,

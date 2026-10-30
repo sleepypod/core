@@ -276,7 +276,10 @@ function ThenEditor({ rule, set, liveAmbient }: { rule: BuilderRule, set: (r: Bu
       )}
 
       {a.action === 'notify' && (
-        <input value={a.message} onChange={e => setA({ message: e.target.value })} placeholder="Notification message…" aria-label="Notification message" className="w-full rounded-ctl border border-line-2 bg-field px-3 py-2 text-[13px] text-fg placeholder:text-fg-3 focus:border-fg-3 focus:outline-none" />
+        <div className="flex flex-col gap-2">
+          <input value={a.message} onChange={e => setA({ message: e.target.value })} maxLength={280} placeholder="Notification message…" aria-label="Notification message" className="w-full rounded-ctl border border-line-2 bg-field px-3 py-2 text-[13px] text-fg placeholder:text-fg-3 focus:border-fg-3 focus:outline-none" />
+          <p className="text-xs text-fg-2">Saves an alert in your inbox. Live alerts appear while the app is open; Preview only records the proposed action in Activity.</p>
+        </div>
       )}
       {a.action === 'setPower' && (
         <Segmented size="sm" value={a.on ? 'on' : 'off'} options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]} onChange={v => setA({ on: v === 'on' })} />

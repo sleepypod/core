@@ -74,7 +74,8 @@ export interface TempControlProps {
 
 /**
  * Swappable temperature control. Both variants occupy 280×250 so switching
- * between dial and slider never moves the surrounding layout.
+ * between dial and slider never moves the surrounding layout. The dial scales
+ * down to its container on narrow screens; pointer math uses its rendered size.
  */
 export function TempControl({
   variant = 'dial',
@@ -222,13 +223,13 @@ export function TempControl({
   }
 
   return (
-    <div data-no-swipe className={cn('relative', !power && 'opacity-35', className)} style={{ width: W, height: H }}>
+    <div data-no-swipe className={cn('relative max-w-full', !power && 'opacity-35', className)} style={{ width: W, aspectRatio: `${W} / ${H}` }}>
       <svg
         {...a11y}
         viewBox={`0 0 ${W} ${W}`}
         width={W}
         height={W}
-        className={cn('absolute left-0 top-0 touch-none outline-none focus-visible:[&>circle:first-child]:stroke-fg-3', interactive && 'cursor-grab active:cursor-grabbing')}
+        className={cn('absolute left-0 top-0 h-auto w-full touch-none outline-none focus-visible:[&>circle:first-child]:stroke-fg-3', interactive && 'cursor-grab active:cursor-grabbing')}
         onPointerDown={(e) => {
           if (!interactive) return
           e.currentTarget.setPointerCapture(e.pointerId)
@@ -276,7 +277,7 @@ export function TempControl({
         />
         <circle cx={kx.toFixed(1)} cy={ky.toFixed(1)} r="9" fill="var(--text-1)" />
       </svg>
-      <div className="pointer-events-none absolute inset-x-0 top-[84px] flex flex-col items-center gap-1.5">
+      <div className="pointer-events-none absolute inset-x-0 top-[33.6%] flex flex-col items-center gap-1.5">
         {numeral}
         {subEl}
         {statusEl}

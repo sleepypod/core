@@ -1,11 +1,12 @@
 // @vitest-environment node
+import { ownerRequest, TEST_OWNER_TOKEN } from '@/src/auth/tests/support'
 import { Readable } from 'node:stream'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { GET } from '../route'
 const fs = vi.hoisted(() => ({ lstat: vi.fn(), realpath: vi.fn(), stat: vi.fn(), createReadStream: vi.fn() }))
 vi.mock('node:fs/promises', () => ({ lstat: fs.lstat, realpath: fs.realpath, stat: fs.stat }))
 vi.mock('node:fs', () => ({ createReadStream: fs.createReadStream }))
-const request = (filename = 'capture.RAW') => GET(new Request('http://localhost/api/raw/' + filename), { params: Promise.resolve({ filename }) })
+const request = (filename = 'capture.RAW') => GET(ownerRequest('http://localhost/api/raw/' + filename), { params: Promise.resolve({ filename }) })
 beforeEach(() => {
   vi.resetAllMocks()
   fs.lstat.mockResolvedValue({ isSymbolicLink: () => false })
@@ -20,6 +21,16 @@ it('streams the original bytes with explicit download metadata', async () => {
   expect(response.headers.get('Content-Disposition')).toBe('attachment; filename="capture.RAW"')
   expect(response.headers.get('Content-Length')).toBe('3')
   expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
+})
+it('withholds RAW bytes after the connection key changes during filesystem inspection', async () => {
+  fs.stat.mockImplementationOnce(async () => {
+    vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', TEST_OWNER_TOKEN + '-rotated')
+    return { size: 3 }
+  })
+  const response = await request()
+  expect(response.status).toBe(401)
+  expect(response.headers.get('Content-Disposition')).toBeNull()
+  expect(await response.text()).not.toContain('capture.RAW')
 })
 it.each(['../private.RAW', 'nested/capture.RAW', 'capture.txt', 'capture.RAW\n'])('rejects invalid filename %s before filesystem access', async (filename) => {
   expect((await request(filename)).status).toBe(400)

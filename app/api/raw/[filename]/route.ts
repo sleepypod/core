@@ -1,3 +1,5 @@
+import { requireAccess } from '@/src/auth/access'
+import { privateApiResponse } from '@/src/auth/privateResponse'
 import { NextResponse } from 'next/server'
 import { createReadStream } from 'node:fs'
 import { lstat, realpath, stat } from 'node:fs/promises'
@@ -13,6 +15,8 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ filename: string }> },
 ) {
+  const denied = requireAccess(_request)
+  if (denied) return denied
   const { filename } = await params
 
   if (!SAFE_FILENAME.test(filename)) {
@@ -42,13 +46,13 @@ export async function GET(
     const stream = createReadStream(/* turbopackIgnore: true */ resolved)
     const webStream = Readable.toWeb(stream) as ReadableStream
 
-    return new Response(webStream, {
+    return privateApiResponse(_request, new Response(webStream, {
       headers: {
         'Content-Type': 'application/octet-stream',
         'Content-Disposition': `attachment; filename="${filename}"`,
         'Content-Length': String(s.size),
       },
-    })
+    }))
   }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {

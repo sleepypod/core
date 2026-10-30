@@ -14,6 +14,7 @@ import type { DayOfWeek } from '@/src/lib/scheduleTime'
 
 import { displayToSetpointF, setpointFToDisplay } from '@/src/lib/tempUtils'
 import { FIXED_INTENSITY, FIXED_PATTERN } from '@/src/lib/vibrationPatterns'
+import { nextSnoozeSeconds } from '@/src/hardware/snoozeLength'
 import type { AlarmGroup } from './AlarmCard'
 import { DAY_ORDER, DAY_PICKER_LABELS, WEEKDAYS, WEEKENDS, daysToIndexes, indexesToDays, sameDays } from './scheduleFormat'
 
@@ -52,6 +53,25 @@ const WAKE_WINDOW_OPTIONS = [
   { value: '30', label: '30 min' },
 ] as const
 type WakeWindowOption = typeof WAKE_WINDOW_OPTIONS[number]['value']
+
+const DEFAULT_SNOOZE_MINUTES = 5
+const MAX_SNOOZE_MINUTES = 30
+
+const SNOOZE_TAPER_OPTIONS = [
+  { value: '0', label: 'Off' },
+  { value: '30', label: '30' },
+  { value: '40', label: '40' },
+  { value: '50', label: '50' },
+  { value: '60', label: '60%' },
+] as const
+type SnoozeTaperOption = typeof SNOOZE_TAPER_OPTIONS[number]['value']
+
+/** "9, 6.3, 4.4, 3.1 min": the first snoozes of an alarm with this taper. */
+export function snoozeTaperPreview(minutes: number, taper: number, count = 4): string {
+  const lengths = Array.from({ length: count }, (_, snoozeCount) =>
+    Math.round(nextSnoozeSeconds({ vibrationIntensity: 0, vibrationPattern: 'rise', duration: 0, snoozeDuration: minutes * 60, snoozeTaper: taper, snoozeCount }) / 6) / 10)
+  return `${lengths.join(', ')} min`
+}
 
 const QUICK_PICKS: Array<{ label: string, days: DayOfWeek[] }> = [
   { label: 'Weekdays', days: WEEKDAYS },
@@ -99,6 +119,9 @@ export function AlarmEditor({
   const [duration, setDuration] = useState(DEFAULT_DURATION)
   const [displayTemperature, setDisplayTemperature] = useState(defaultDisplayTemp)
   const [wakeWindow, setWakeWindow] = useState(0)
+  const [snoozeDuration, setSnoozeDuration] = useState(DEFAULT_SNOOZE_MINUTES * 60)
+  const snoozeMinutes = snoozeDuration / 60
+  const [snoozeTaper, setSnoozeTaper] = useState(0)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
 
@@ -122,6 +145,8 @@ export function AlarmEditor({
       setDuration(existingGroup.duration)
       setDisplayTemperature(Math.round(setpointFToDisplay(existingGroup.alarmTemperature, unit) ?? existingGroup.alarmTemperature))
       setWakeWindow(existingGroup.wakeWindow)
+      setSnoozeDuration(existingGroup.snoozeDuration)
+      setSnoozeTaper(existingGroup.snoozeTaper)
     }
     else {
       setDays(new Set())
@@ -132,6 +157,8 @@ export function AlarmEditor({
       setDuration(DEFAULT_DURATION)
       setDisplayTemperature(defaultDisplayTemp)
       setWakeWindow(0)
+      setSnoozeDuration(DEFAULT_SNOOZE_MINUTES * 60)
+      setSnoozeTaper(0)
     }
     setSaveError(null)
     setTesting(false)
@@ -184,6 +211,8 @@ export function AlarmEditor({
       duration,
       alarmTemperature: temperatureF,
       wakeWindow,
+      snoozeDuration,
+      snoozeTaper,
       enabled,
     })))
 
@@ -200,7 +229,7 @@ export function AlarmEditor({
     catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
     }
-  }, [days, sides, time, intensity, pattern, duration, displayTemperature, wakeWindow, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
+  }, [days, sides, time, intensity, pattern, duration, displayTemperature, wakeWindow, snoozeDuration, snoozeTaper, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
 
   const clock = formatTime(time)
   const [clockDigits, clockPeriod] = clock.split(' ')
@@ -307,6 +336,36 @@ export function AlarmEditor({
           {wakeWindow > 0
             ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
             : 'Goes off at the set time.'}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-3 border-t border-line pt-3.5">
+        <span className="text-xs text-fg-2">Snooze</span>
+        <div className="flex items-center gap-3">
+          <span className="flex-1 text-sm">Snooze for</span>
+          <Stepper
+            value={snoozeMinutes}
+            onChange={minutes => setSnoozeDuration(Math.round(minutes * 60))}
+            min={1}
+            max={MAX_SNOOZE_MINUTES}
+            format={v => `${v} min`}
+            label="snooze length"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="flex-1 whitespace-nowrap text-sm">Snooze taper</span>
+          <SegmentedControl<SnoozeTaperOption>
+            size="sm"
+            ariaLabel="Snooze taper"
+            value={String(snoozeTaper) as SnoozeTaperOption}
+            onChange={v => setSnoozeTaper(Number(v))}
+            options={SNOOZE_TAPER_OPTIONS}
+          />
+        </div>
+        <span className="text-xs leading-[1.4] text-fg-3">
+          {snoozeTaper > 0
+            ? `Each snooze is ${snoozeTaper}% shorter than the last, so you ease out of bed instead of drifting back off: ${snoozeTaperPreview(snoozeMinutes, snoozeTaper)}…`
+            : `Every snooze lasts ${snoozeMinutes} min. Snooze taper makes each one shorter than the last.`}
         </span>
       </div>
 

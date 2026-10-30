@@ -46,7 +46,7 @@ export function idleDescription(g: GestureRecord | undefined): string {
 export function ringingDescription(g: GestureRecord | undefined): string {
   if (!g) return 'Not set'
   if (g.actionType === 'temperature') return temperatureLabel(g)
-  if (g.alarmBehavior === 'snooze') return `Snooze ${Math.round((g.alarmSnoozeDuration ?? 300) / 60)} min`
+  if (g.alarmBehavior === 'snooze') return 'Snooze'
   return 'Stop alarm'
 }
 
@@ -57,7 +57,6 @@ interface EditState {
   temperatureChange: 'increment' | 'decrement'
   temperatureAmount: number
   alarmBehavior: 'snooze' | 'dismiss'
-  alarmSnoozeDuration: number
   alarmInactiveBehavior: 'power' | 'none'
 }
 
@@ -68,7 +67,6 @@ const defaultEditState = (side: Side, tapType: TapType): EditState => ({
   temperatureChange: 'increment',
   temperatureAmount: 2,
   alarmBehavior: 'snooze',
-  alarmSnoozeDuration: 300,
   alarmInactiveBehavior: 'none',
 })
 
@@ -80,7 +78,6 @@ function editStateFromGesture(g: GestureRecord): EditState {
     temperatureChange: g.temperatureChange ?? 'increment',
     temperatureAmount: g.temperatureAmount ?? 2,
     alarmBehavior: g.alarmBehavior ?? 'snooze',
-    alarmSnoozeDuration: g.alarmSnoozeDuration ?? 300,
     alarmInactiveBehavior: g.alarmInactiveBehavior ?? 'none',
   }
 }
@@ -156,8 +153,6 @@ export function TapGestureConfig({ filterSide = 'left', onSideChange }: {
         tapType: editing.tapType,
         actionType: 'alarm',
         alarmBehavior: editing.alarmBehavior,
-        alarmSnoozeDuration:
-          editing.alarmBehavior === 'snooze' ? editing.alarmSnoozeDuration : undefined,
         alarmInactiveBehavior: editing.alarmInactiveBehavior,
       })
     }
@@ -316,16 +311,7 @@ function GestureEditPanel({
             />
           </SettingRow>
           {state.alarmBehavior === 'snooze' && (
-            <SettingRow label="Snooze for">
-              <Stepper
-                label="Snooze duration"
-                value={Math.round(state.alarmSnoozeDuration / 60)}
-                min={1}
-                max={10}
-                format={v => `${v} min`}
-                onChange={mins => onChange({ ...state, alarmSnoozeDuration: mins * 60 })}
-              />
-            </SettingRow>
+            <span className="text-xs leading-[1.4] text-fg-3">How long a snooze lasts is set on each alarm.</span>
           )}
           <SettingRow label="When no alarm">
             <SegmentedControl

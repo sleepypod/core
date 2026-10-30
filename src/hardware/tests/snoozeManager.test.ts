@@ -23,6 +23,9 @@ vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
 
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus, restoreSnoozes, suspendSnoozes, SNOOZE_LATE_GRACE_MS } from '../snoozeManager'
 import { loadAlarmState, resetAlarmStateCache, updateAlarmState } from '../alarmPersistence'
+import { withSideLock } from '../sideLock'
+import { withinControlRequest } from '@/src/controls/context'
+import { testScope } from '@/src/controls/tests/fixtures'
 
 describe('snoozeManager', () => {
   let dir: string
@@ -47,6 +50,72 @@ describe('snoozeManager', () => {
   })
 
   const config = { vibrationIntensity: 50, vibrationPattern: 'rise' as const, duration: 120 }
+
+  it('cancels a fired snooze while it is waiting behind a side operation', async () => {
+    const gate = Promise.withResolvers<undefined>()
+    const held = withSideLock('left', () => gate.promise)
+    snoozeAlarm('left', 1, config)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mockSetAlarm).not.toHaveBeenCalled()
+    cancelSnooze('left')
+    gate.resolve(undefined)
+    await held
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mockSetAlarm).not.toHaveBeenCalled()
+  })
+
+  it('a replacement invalidates the older snooze waiting for the side lock', async () => {
+    const gate = Promise.withResolvers<undefined>()
+    const held = withSideLock('left', () => gate.promise)
+    snoozeAlarm('left', 1, config)
+    await vi.advanceTimersByTimeAsync(1000)
+    const replacement = { ...config, vibrationIntensity: 80, snoozeDuration: 120, snoozeTaper: 50 }
+    snoozeAlarm('left', 30, replacement)
+    gate.resolve(undefined)
+    await held
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(mockSetAlarm).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(mockSetAlarm).toHaveBeenCalledExactlyOnceWith('left', { ...replacement, snoozeCount: 1 })
+  })
+
+  it('does not fire a snooze whose queue wait exceeded the late grace period', async () => {
+    const gate = Promise.withResolvers<undefined>()
+    const held = withSideLock('left', () => gate.promise)
+    snoozeAlarm('left', 1, config)
+    await vi.advanceTimersByTimeAsync(1000 + SNOOZE_LATE_GRACE_MS + 1)
+    gate.resolve(undefined)
+    await held
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mockSetAlarm).not.toHaveBeenCalled()
+    expect(getSnoozeStatus('left').active).toBe(false)
+  })
+
+  it('does not inherit the immediate request deadline into an approved future snooze', async () => {
+    const scope = testScope()
+    await withinControlRequest(scope, async () => {
+      snoozeAlarm('left', 30, config)
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(mockSetAlarm).toHaveBeenCalledOnce()
+    expect(scope.beforeDispatch).not.toHaveBeenCalled()
+  })
+
+  it.each([Number.NaN, Infinity, -1])('rejects invalid delay %s without cancelling an existing snooze', (delay) => {
+    const until = snoozeAlarm('left', 300, config)
+    expect(() => snoozeAlarm('left', delay, config)).toThrow('Invalid snooze duration')
+    expect(getSnoozeStatus('left').snoozeUntil).toBe(Math.floor(until.getTime() / 1000))
+  })
+
+  it('preserves taper and snooze count through an actual state-file reload', async () => {
+    const tapered = { ...config, snoozeDuration: 540, snoozeTaper: 30, snoozeCount: 2 }
+    snoozeAlarm('right', 60, tapered)
+    suspendSnoozes()
+    resetAlarmStateCache()
+    restoreSnoozes()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockSetAlarm).toHaveBeenCalledExactlyOnceWith('right', { ...tapered, snoozeCount: 3 })
+  })
 
   it('reports no active snooze initially', () => {
     const status = getSnoozeStatus('left')
@@ -74,9 +143,10 @@ describe('snoozeManager', () => {
     expect(mockSetAlarm).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
 
-    expect(mockSetAlarm).toHaveBeenCalledWith('left', config)
+    // Comes back as it was, counting the snooze (for Snooze taper).
+    expect(mockSetAlarm).toHaveBeenCalledWith('left', { ...config, snoozeCount: 1 })
     // Recorded as vibrating (so a tap can snooze it again), not just broadcast.
-    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('left', config)
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('left', { ...config, snoozeCount: 1 })
     expect(getSnoozeStatus('left')).toEqual({ active: false, snoozeUntil: null })
     expect(loadAlarmState().snoozes.left).toBeUndefined()
   })
@@ -101,8 +171,14 @@ describe('snoozeManager', () => {
     vi.advanceTimersByTime(60_000)
     await vi.runAllTimersAsync()
 
-    expect(mockSetAlarm).toHaveBeenCalledWith('left', config2)
+    expect(mockSetAlarm).toHaveBeenCalledWith('left', { ...config2, snoozeCount: 1 })
     expect(mockSetAlarm).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts each snooze of the same alarm', async () => {
+    snoozeAlarm('left', 60, { ...config, snoozeCount: 2 })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('left', { ...config, snoozeCount: 3 })
   })
 
   it('clamps delays to the signed 32-bit setTimeout ceiling', () => {
@@ -134,7 +210,7 @@ describe('snoozeManager', () => {
     it('keeps a pending snooze on disk until it fires or is cancelled', async () => {
       vi.setSystemTime(10_000)
       snoozeAlarm('left', 300, config)
-      expect(loadAlarmState().snoozes.left).toEqual({ until: 310_000, config })
+      expect(loadAlarmState().snoozes.left).toEqual({ until: 310_000, config: { ...config, snoozeCount: 1 } })
       cancelSnooze('left')
       expect(loadAlarmState().snoozes.left).toBeUndefined()
     })
@@ -154,6 +230,7 @@ describe('snoozeManager', () => {
     })
 
     it('fires at once a snooze missed by a short outage', async () => {
+      vi.setSystemTime(100_000 + SNOOZE_LATE_GRACE_MS)
       updateAlarmState((s) => {
         s.snoozes.left = { until: 100_000, config }
       })

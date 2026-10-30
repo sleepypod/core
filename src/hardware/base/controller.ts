@@ -1,4 +1,6 @@
 import { withSideLock } from '../sideLock'
+import { ControlDeadlineError } from '@/src/controls/context'
+import { recordMechanicalCommand } from '@/src/biometrics/mechanical/dispatch'
 import { PositionDecoder, positionPacket, stopPacket } from './protocol'
 import { BaseError, baseConfigurationSchema, baseMoveSchema } from './types'
 import type { BaseConfiguration, BaseMove, BaseStatus, BaseTransport } from './types'
@@ -137,10 +139,12 @@ export class BaseController {
     const write = this.writes.catch(() => {}).then(async () => {
       if (generation !== undefined && generation !== this.generation) throw new BaseError('cancelled', 'Base movement cancelled')
       this.assertReady(generation !== undefined)
+      recordMechanicalCommand('base', 0, generation === undefined)
       try {
         await this.transport.write(packet)
       }
       catch (error) {
+        if (error instanceof ControlDeadlineError) throw error
         this.disconnected(error instanceof Error ? error : new Error('Bluetooth write failed'))
         throw new BaseError('unavailable', 'Bluetooth write failed; movement was not confirmed')
       }

@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { execFile } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { lstat, readdir, readFile, stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { getStorageReport, runStorageCleanup } from '@/src/lib/podStorage'
 import {
@@ -354,7 +354,7 @@ export const systemRouter = router({
    * Trigger a self-update via curl+tarball from GitHub.
    *
    * sp-update handles the full flow: iptables toggle, tarball download,
-   * dependency install, build, and service restart. The response may not
+   * dependency install and service restart. The response may not
    * arrive since the service restarts — client should poll for reconnection.
    *
    * Optional `branch` param for deploying feature branches.
@@ -367,10 +367,27 @@ export const systemRouter = router({
     .output(z.object({
       triggered: z.boolean(),
       branch: z.string(),
+      repository: z.string(),
       message: z.string(),
     }))
     .mutation(async ({ input }) => {
       const branch = input?.branch ?? 'main'
+      // Match the root updater's persistent source; never choose a repository
+      // from web input or assume sudo carries the server's environment.
+      let repository: string
+      try {
+        const path = '/etc/sleepypod/github-repo'
+        const metadata = await lstat(path)
+        if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 256) throw new Error('Invalid source file')
+        repository = (await readFile(path, 'utf8')).replace(/\n+$/, '')
+        if (repository.length > 255 || !/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(repository) || ['.', '..'].includes(repository.split('/')[1])) throw new Error('Invalid repository')
+      }
+      catch {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'The installed update repository is missing or invalid. Configure /etc/sleepypod/github-repo with the installed OWNER/REPO before updating.',
+        })
+      }
 
       try {
         const { spawn } = await import('node:child_process')
@@ -397,6 +414,7 @@ export const systemRouter = router({
         return {
           triggered: true,
           branch,
+          repository,
           message: 'Update started. Service will restart — poll for reconnection.',
         }
       }

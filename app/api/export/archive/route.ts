@@ -1,3 +1,5 @@
+import { requireAccess } from '@/src/auth/access'
+import { privateApiResponse } from '@/src/auth/privateResponse'
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, rm, stat, symlink } from 'node:fs/promises'
 import path from 'node:path'
@@ -97,6 +99,8 @@ async function backupSqlite(dbPath: string, outPath: string): Promise<void> {
 }
 
 export async function GET(request: Request) {
+  const denied = requireAccess(request)
+  if (denied) return denied
   const url = new URL(request.url)
 
   if (inflight) {
@@ -156,8 +160,10 @@ export async function GET(request: Request) {
 
     const cleanup = () => {
       const dir = stagingDir
+      // A canceled producer may exit after another request has acquired the slot.
+      if (!dir) return
       stagingDir = null
-      if (dir) rm(dir, { recursive: true, force: true }).catch(() => {})
+      rm(dir, { recursive: true, force: true }).catch(() => {})
       inflight = false
     }
 
@@ -165,6 +171,7 @@ export async function GET(request: Request) {
     // the stream, and a wedged tar never emits close on its own.
     const abortExport = () => {
       tarChild.kill('SIGKILL')
+      settle()
       cleanup()
     }
     const watchdog = setTimeout(abortExport, EXPORT_WATCHDOG_MS)
@@ -186,12 +193,12 @@ export async function GET(request: Request) {
 
     const stream = Readable.toWeb(tarChild.stdout) as ReadableStream<Uint8Array>
     const filename = `sleepypod-export-${startTs}-${endTs}.tar.gz`
-    return new Response(stream, {
+    return privateApiResponse(request, new Response(stream, {
       headers: {
         'Content-Type': 'application/gzip',
         'Content-Disposition': `attachment; filename="${filename}"`,
       },
-    })
+    }), { onCancel: abortExport })
   }
   catch (error) {
     if (stagingDir) await rm(stagingDir, { recursive: true, force: true }).catch(() => {})

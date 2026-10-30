@@ -6,9 +6,11 @@ describe('resolveSleepSection', () => {
     expect(resolveSleepSection(null)).toBe('nights')
     expect(resolveSleepSection('bogus')).toBe('nights')
     expect(resolveSleepSection('biometrics')).toBe('biometrics')
+    expect(resolveSleepSection('history')).toBe('history')
+    expect(resolveSleepSection('journal')).toBe('journal')
   })
 
   it('lists Nights first', () => {
-    expect(SLEEP_SECTIONS.map(s => s.label)).toEqual(['Nights', 'Biometrics'])
+    expect(SLEEP_SECTIONS.map(s => s.label)).toEqual(['Nights', 'Biometrics', 'History', 'Journal'])
   })
 })

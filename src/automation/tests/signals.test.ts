@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AutomationRule, Condition, Expr } from '../types'
 
 // The DAC monitor is mocked at the import boundary so DeviceSignalReader can be
-// exercised without real hardware. `getLastStatusMock` is swapped per test.
-let getLastStatusMock: () => unknown = () => null
+// exercised without real hardware. `getFreshStatusMock` is swapped per test.
+let getFreshStatusMock: (maxAgeMs: number) => unknown = () => null
 let monitorRunning = true
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
-  getDacMonitorIfRunning: () => (monitorRunning ? { getLastStatus: getLastStatusMock } : null),
+  getDacMonitorIfRunning: () => (monitorRunning ? { getFreshStatus: getFreshStatusMock } : null),
 }))
 
 import {
@@ -18,7 +18,7 @@ import {
 } from '../signals'
 
 beforeEach(() => {
-  getLastStatusMock = () => null
+  getFreshStatusMock = () => null
   monitorRunning = true
 })
 
@@ -49,12 +49,33 @@ describe('DeviceSignalReader', () => {
   })
 
   it('returns an empty snapshot when there is no last status frame', () => {
-    getLastStatusMock = () => null
+    getFreshStatusMock = () => null
     expect(new DeviceSignalReader().read()).toEqual({})
   })
 
+  it('requires a fresh healthy observation rather than a cached last status', () => {
+    const freshStatus = vi.fn(() => null)
+    getFreshStatusMock = freshStatus
+    expect(new DeviceSignalReader().read()).toEqual({})
+    expect(freshStatus).toHaveBeenCalledExactlyOnceWith(15_000)
+  })
+
+  it('withholds non-finite device values while retaining valid independent signals', () => {
+    getFreshStatusMock = () => ({
+      leftSide: { currentTemperature: NaN, targetTemperature: Infinity, currentLevel: -Infinity },
+      rightSide: { currentTemperature: 70, targetTemperature: 68, currentLevel: -5 },
+      waterLevel: 'ok',
+    })
+    const snapshot = new DeviceSignalReader().read()
+    expect(snapshot['left.currentTemperature']).toBeUndefined()
+    expect(snapshot['left.targetTemperature']).toBeUndefined()
+    expect(snapshot['left.currentLevel']).toBeUndefined()
+    expect(snapshot['right.currentTemperature']).toBe(70)
+    expect(snapshot['water.low']).toBe(0)
+  })
+
   it('maps both sides plus a low water flag', () => {
-    getLastStatusMock = () => ({
+    getFreshStatusMock = () => ({
       leftSide: { currentTemperature: 75, targetTemperature: 80, currentLevel: 10 },
       rightSide: { currentTemperature: 70, targetTemperature: 68, currentLevel: -5 },
       waterLevel: 'low',
@@ -71,7 +92,7 @@ describe('DeviceSignalReader', () => {
   })
 
   it('omits temperature signals for an off side reporting null level-0 temps', () => {
-    getLastStatusMock = () => ({
+    getFreshStatusMock = () => ({
       leftSide: { currentTemperature: null, targetTemperature: null, currentLevel: 0 },
       rightSide: { currentTemperature: 70, targetTemperature: 68, currentLevel: -5 },
       waterLevel: 'ok',
@@ -87,7 +108,7 @@ describe('DeviceSignalReader', () => {
   })
 
   it('encodes an ok water level as 0 and skips an absent side', () => {
-    getLastStatusMock = () => ({
+    getFreshStatusMock = () => ({
       leftSide: { currentTemperature: 72, targetTemperature: 72, currentLevel: 0 },
       rightSide: undefined,
       waterLevel: 'ok',
@@ -101,7 +122,7 @@ describe('DeviceSignalReader', () => {
   })
 
   it('omits the water flag for an unknown water level', () => {
-    getLastStatusMock = () => ({
+    getFreshStatusMock = () => ({
       leftSide: { currentTemperature: 72, targetTemperature: 72, currentLevel: 0 },
       rightSide: { currentTemperature: 72, targetTemperature: 72, currentLevel: 0 },
       waterLevel: 'unknown',
@@ -111,7 +132,7 @@ describe('DeviceSignalReader', () => {
 
   it('warns and degrades to an empty snapshot when the read throws', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    getLastStatusMock = () => {
+    getFreshStatusMock = () => {
       throw new Error('frame corrupt')
     }
     expect(new DeviceSignalReader().read()).toEqual({})

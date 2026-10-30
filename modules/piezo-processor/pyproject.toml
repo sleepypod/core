@@ -5,6 +5,8 @@ requires-python = ">=3.9,<3.11"
 dependencies = [
     "cbor2>=5.9.0",
     "heartpy>=1.2.7",
+    # HeartPy 1.2.7 imports pkg_resources at runtime; newer setuptools removes it.
+    "setuptools>=70,<82",
     "nats-py>=2.6.0",
     "numpy>=2.0.2",
     "scipy>=1.13.1,<1.16",

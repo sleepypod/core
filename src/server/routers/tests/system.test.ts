@@ -27,6 +27,7 @@ const fsPromisesMock = vi.hoisted(() => ({
   writeFile: vi.fn(async () => undefined),
   mkdir: vi.fn(async () => undefined),
   stat: vi.fn(async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }),
+  lstat: vi.fn(async () => ({ isFile: (): boolean => true, isSymbolicLink: (): boolean => false, size: 30 })),
 }))
 
 // getSensorSource reads the stream's startup pick + frame times in-process.
@@ -71,6 +72,7 @@ beforeEach(() => {
   fsPromisesMock.writeFile.mockReset().mockResolvedValue(undefined)
   fsPromisesMock.mkdir.mockReset().mockResolvedValue(undefined)
   fsPromisesMock.stat.mockReset().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+  fsPromisesMock.lstat.mockReset().mockResolvedValue({ isFile: () => true, isSymbolicLink: () => false, size: 30 })
   sensorMock.frameTimes = {}
   sensorMock.perf = { sensorSource: 'pending', firstFrameMs: null, uptimeSeconds: 12 }
   delete process.env.PIEZO_SENSOR_SOURCE
@@ -283,6 +285,34 @@ describe('system.wifiStatus', () => {
 })
 
 describe('system.triggerUpdate', () => {
+  beforeEach(() => {
+    fsPromisesMock.readFile.mockResolvedValue('lucaandrea/sleepypod-core\n')
+  })
+
+  it.each(['', 'owner/repo\nother/repo', 'https://github.com/owner/repo', 'owner/..'])('rejects invalid source %j without spawning the updater', async (repository) => {
+    fsPromisesMock.readFile.mockResolvedValue(repository)
+    await expect(caller.triggerUpdate({})).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+    expect(execMock.spawn).not.toHaveBeenCalled()
+  })
+
+  it('rejects missing source metadata without inheriting a server override', async () => {
+    fsPromisesMock.lstat.mockRejectedValueOnce(new Error('ENOENT'))
+    vi.stubEnv('SLEEPYPOD_GITHUB_REPO', 'sleepypod/core')
+    try {
+      await expect(caller.triggerUpdate({})).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+      expect(execMock.spawn).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it.each(['symlink', 'oversize'])('rejects %s source metadata', async (kind) => {
+    fsPromisesMock.lstat.mockResolvedValueOnce({ isFile: () => true, isSymbolicLink: () => kind === 'symlink', size: kind === 'oversize' ? 257 : 30 })
+    await expect(caller.triggerUpdate({})).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
+    expect(execMock.spawn).not.toHaveBeenCalled()
+  })
+
   it('spawns sp-update with the requested branch', async () => {
     const result = await caller.triggerUpdate({ branch: 'feature/cool' })
     expect(execMock.spawn).toHaveBeenCalledWith('sudo',
@@ -291,6 +321,7 @@ describe('system.triggerUpdate', () => {
     )
     expect(result.triggered).toBe(true)
     expect(result.branch).toBe('feature/cool')
+    expect(result.repository).toBe('lucaandrea/sleepypod-core')
     expect(result.message).toMatch(/Update started/)
   })
 

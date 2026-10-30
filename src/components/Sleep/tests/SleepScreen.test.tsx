@@ -99,6 +99,17 @@ afterEach(() => {
 })
 
 describe('SleepScreen night view', () => {
+  it('totals every overnight segment without filling gaps or presenting partial stages as the full night', () => {
+    const fragments = [record(24, at(23, 6), 1), record(23, at(23, 2), 3), record(22, at(22, 22), 3)]
+    state.sleep.mockReturnValue({ data: fragments, isLoading: false })
+    render(<SleepScreen />)
+    expect(screen.getByText('Recorded bed time').nextSibling?.textContent).toBe('7h 0m')
+    expect(screen.getByText('Bedtime').nextSibling?.textContent).toBe('10:00 PM')
+    expect(screen.getByText('Wake').nextSibling?.textContent).toBe('7:00 AM')
+    expect(screen.getByText('Estimated sleep · longest segment')).toBeTruthy()
+    expect(screen.getByText(/Stages, quality and vitals below describe the longest segment only/)).toBeTruthy()
+  })
+
   it('shows the latest night of the week with its summary and vitals', () => {
     render(<SleepScreen />)
     expect(state.stages).toHaveBeenCalledWith({ side: 'left', sleepRecordId: 12 }, { enabled: true })
@@ -107,7 +118,7 @@ describe('SleepScreen night view', () => {
     expect(screen.getByText('Bedtime').nextSibling?.textContent).toBe('11:20 PM')
     expect(screen.getByText('Wake').nextSibling?.textContent).toBe('6:50 AM')
     // Asleep excludes the awake epoch (3 × 5 min).
-    expect(screen.getByText('Asleep').nextSibling?.textContent).toBe('15m')
+    expect(screen.getByText('Estimated sleep').nextSibling?.textContent).toBe('15m')
     expect(screen.getByText('Bed exits').nextSibling?.textContent).toBe('1')
     expect(screen.getByText('min 54 · avg 63 · max 70 bpm')).toBeTruthy()
     expect(screen.getByTestId('record-actions').textContent).toBe('12')
@@ -198,7 +209,7 @@ describe('SleepScreen week and month views', () => {
   it('shows the month calendar, stats and nights list', () => {
     render(<SleepScreen />)
     pick('Month')
-    expect(state.sleep).toHaveBeenLastCalledWith(expect.objectContaining({ side: 'left', limit: 100, startDate: new Date(2026, 8, 1, 6) }))
+    expect(state.sleep).toHaveBeenLastCalledWith(expect.objectContaining({ side: 'left', limit: 100, startDate: new Date(2026, 8, 1, 12) }))
     expect(screen.getAllByText('September 2026').length).toBeGreaterThan(0)
     const day3 = screen.getByTestId('day-2026-09-03')
     expect(day3.style.background).toContain('0.6')
@@ -213,6 +224,6 @@ describe('SleepScreen week and month views', () => {
     expect(nextMonth.disabled).toBe(true)
     fireEvent.click(screen.getAllByRole('button', { name: 'Previous month' })[0])
     expect(screen.getAllByText('August 2026').length).toBeGreaterThan(0)
-    expect(state.sleep).toHaveBeenLastCalledWith(expect.objectContaining({ startDate: new Date(2026, 7, 1, 6) }))
+    expect(state.sleep).toHaveBeenLastCalledWith(expect.objectContaining({ startDate: new Date(2026, 7, 1, 12) }))
   })
 })

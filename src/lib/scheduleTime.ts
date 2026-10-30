@@ -10,6 +10,14 @@ export const DAYS_OF_WEEK = [
 
 export type DayOfWeek = (typeof DAYS_OF_WEEK)[number]
 
+/** Preserve calendar-day schedules while supporting explicit overnight power windows. */
+export function powerOffDay(row: { dayOfWeek: DayOfWeek, offDayOffset?: number }): DayOfWeek {
+  const offset = row.offDayOffset ?? 0
+  const dayIndex = DAYS_OF_WEEK.indexOf(row.dayOfWeek)
+  if (dayIndex < 0 || (offset !== 0 && offset !== 1)) throw new Error('Invalid power-off weekday offset')
+  return DAYS_OF_WEEK[(dayIndex + offset) % DAYS_OF_WEEK.length]
+}
+
 export function hhmmToMinutes(time: string): number {
   const [hour, minute] = time.split(':').map(Number)
   if (Number.isNaN(hour) || Number.isNaN(minute)) return Number.NaN

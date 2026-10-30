@@ -9,6 +9,7 @@ import importlib.util
 import logging
 import sqlite3
 import sys
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -30,7 +31,7 @@ _stubs["common.dialect"].log_capsense_status_once = lambda *a, **kw: None
 # common.calibration and common.side_mode are stdlib-only, so load the real
 # modules rather than stubbing them — the baseline and single-sleeper tests
 # depend on their behaviour.
-for _name in ("calibration", "side_mode"):
+for _name in ("calibration", "calibration_identity", "side_mode"):
     _spec = importlib.util.spec_from_file_location(
         f"common.{_name}", Path(__file__).resolve().parent.parent / "common" / f"{_name}.py")
     _stubs[f"common.{_name}"] = importlib.util.module_from_spec(_spec)
@@ -40,6 +41,63 @@ sys.modules.update(_stubs)
 
 import main  # noqa: E402
 from main import sanitize_ts, MIN_VALID_WALL_CLOCK_TS  # noqa: E402
+
+
+class TestAdaptiveQualificationEpoch:
+    """Routine drift must not invalidate every qualification/Preview night."""
+
+    def baseline(self):
+        return main.AdaptiveBaseline("capSense", {"out": 1025, "cen": 575, "in": 950}, 300)
+
+    def test_publications_state_restore_and_profile_restore_keep_anchor(self):
+        baseline = self.baseline()
+        epoch = baseline.to_params()["qualification_epoch"]
+        baseline.means["out"] += 10
+        baseline.means["cen"] -= 5
+        published = baseline.to_params()
+        assert published["qualification_epoch"] == epoch
+        restored = main.AdaptiveBaseline.from_state(json.loads(json.dumps(baseline.snapshot())))
+        assert restored.to_params()["qualification_epoch"] == epoch
+        from_profile = main.AdaptiveBaseline.from_profile(published, "capSense", 1793300000)
+        assert from_profile.to_params()["qualification_epoch"] == epoch
+
+    def test_manual_recalibration_reseed_and_large_cumulative_drift_rotate(self):
+        baseline = self.baseline()
+        epoch = baseline.to_params()["qualification_epoch"]
+        manual = baseline.to_params()
+        manual.pop("source")
+        recalibrated = main.AdaptiveBaseline.from_profile(manual, "capSense", 1793300000)
+        assert recalibrated.to_params()["qualification_epoch"]["id"] != epoch["id"]
+        baseline.reseed(dict(baseline.means), "exit-rebase")
+        reseeded = baseline.to_params()["qualification_epoch"]
+        assert reseeded["id"] != epoch["id"]
+        for increment in range(1, 4):
+            baseline.means["out"] += 25
+            assert baseline.to_params()["qualification_epoch"] == reseeded
+        baseline.means["out"] += 0.01
+        assert baseline.to_params()["qualification_epoch"]["id"] != reseeded["id"]
+
+    def test_legacy_saved_state_gets_one_persisted_epoch(self):
+        state = self.baseline().snapshot()
+        state.pop("qualification_epoch")
+        restored = main.AdaptiveBaseline.from_state(state)
+        epoch = restored.to_params()["qualification_epoch"]
+        next_restart = main.AdaptiveBaseline.from_state(restored.snapshot())
+        assert next_restart.to_params()["qualification_epoch"] == epoch
+
+    def test_published_parameters_cannot_mutate_internal_anchor(self):
+        baseline = self.baseline()
+        published = baseline.to_params()
+        published["qualification_epoch"]["means"][0] += 50
+        assert baseline.to_params()["qualification_epoch"]["means"][0] == 1025
+
+    def test_unusable_profile_is_ignored_instead_of_crashing_detector(self):
+        profile = self.baseline().to_params()
+        profile["threshold"] = float("nan")
+        assert main.AdaptiveBaseline.from_profile(profile, "capSense", 1793300000) is None
+        profile = self.baseline().to_params()
+        profile["channels"]["out"]["mean"] = float("inf")
+        assert main.AdaptiveBaseline.from_profile(profile, "capSense", 1793300000) is None
 
 
 class TestSanitizeTs:

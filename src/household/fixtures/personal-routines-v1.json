@@ -1,0 +1,329 @@
+{
+  "readyReview": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "sourceSide": "left",
+    "temperatureZones": [
+      "left",
+      "right"
+    ],
+    "timeZone": "America/Los_Angeles",
+    "draftRevision": 2,
+    "liveRevision": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "reviewRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "liveWeek": [
+      {
+        "dayOfWeek": "sunday",
+        "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "draft": {
+          "power": {
+            "onTime": "22:00",
+            "offTime": "07:15",
+            "onTemperature": 70,
+            "enabled": true,
+            "endAction": "maintain"
+          },
+          "temperatures": [],
+          "alarm": {
+            "time": "07:00",
+            "vibrationIntensity": 50,
+            "vibrationPattern": "rise",
+            "duration": 20,
+            "alarmTemperature": 105,
+            "wakeWindow": 0,
+            "enabled": true,
+            "snoozeDuration": 540,
+            "snoozeTaper": 30
+          },
+          "notes": "Synthetic example only"
+        }
+      }
+    ],
+    "draftWeek": [
+      {
+        "dayOfWeek": "sunday",
+        "draft": {
+          "power": {
+            "onTime": "22:00",
+            "offTime": "07:15",
+            "onTemperature": 69,
+            "enabled": true,
+            "endAction": "maintain"
+          },
+          "temperatures": [],
+          "alarm": {
+            "time": "07:00",
+            "vibrationIntensity": 50,
+            "vibrationPattern": "rise",
+            "duration": 20,
+            "alarmTemperature": 105,
+            "wakeWindow": 0,
+            "enabled": true,
+            "snoozeDuration": 540,
+            "snoozeTaper": 30
+          },
+          "notes": "Synthetic example only"
+        }
+      }
+    ],
+    "changes": [
+      {
+        "dayOfWeek": "sunday",
+        "operation": "replace"
+      }
+    ],
+    "canPublish": true,
+    "reason": "ready",
+    "effect": "saved_routines_can_affect_the_current_target"
+  },
+  "untouchedReview": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "sourceSide": "left",
+    "temperatureZones": [
+      "left",
+      "right"
+    ],
+    "timeZone": "America/Los_Angeles",
+    "draftRevision": 1,
+    "liveRevision": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "reviewRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "liveWeek": [
+      {
+        "dayOfWeek": "sunday",
+        "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "draft": {
+          "power": {
+            "onTime": "22:00",
+            "offTime": "07:15",
+            "onTemperature": 70,
+            "enabled": true,
+            "endAction": "maintain"
+          },
+          "temperatures": [],
+          "alarm": {
+            "time": "07:00",
+            "vibrationIntensity": 50,
+            "vibrationPattern": "rise",
+            "duration": 20,
+            "alarmTemperature": 105,
+            "wakeWindow": 0,
+            "enabled": true,
+            "snoozeDuration": 540,
+            "snoozeTaper": 30
+          },
+          "notes": "Synthetic example only"
+        }
+      }
+    ],
+    "draftWeek": [],
+    "changes": [
+      {
+        "dayOfWeek": "sunday",
+        "operation": "remove"
+      }
+    ],
+    "canPublish": false,
+    "reason": "draft_not_prepared",
+    "effect": "saved_routines_can_affect_the_current_target"
+  },
+  "publishRequest": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000006",
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "issuedAt": 1793314800000,
+    "expiresAt": 1793314830000,
+    "reviewRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "confirmReplaceLiveWeek": true,
+    "acknowledgeCurrentTargetEffect": true
+  },
+  "saved": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000006",
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "sourceSide": "left",
+    "publishedAt": 1793314800100,
+    "draftRevision": 2,
+    "reviewRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "state": "saved",
+    "scheduler": "refreshed",
+    "publishedWeek": [
+      {
+        "dayOfWeek": "sunday",
+        "revision": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "draft": {
+          "power": {
+            "onTime": "22:00",
+            "offTime": "07:15",
+            "onTemperature": 69,
+            "enabled": true,
+            "endAction": "maintain"
+          },
+          "temperatures": [],
+          "alarm": {
+            "time": "07:00",
+            "vibrationIntensity": 50,
+            "vibrationPattern": "rise",
+            "duration": 20,
+            "alarmTemperature": 105,
+            "wakeWindow": 0,
+            "enabled": true,
+            "snoozeDuration": 540,
+            "snoozeTaper": 30
+          },
+          "notes": "Synthetic example only"
+        }
+      }
+    ],
+    "changes": [
+      {
+        "dayOfWeek": "sunday",
+        "operation": "replace"
+      }
+    ],
+    "physicalVerification": "unverified",
+    "replayAllowed": false
+  },
+  "schedulerPending": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000006",
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "sourceSide": "left",
+    "publishedAt": 1793314800100,
+    "draftRevision": 2,
+    "reviewRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "state": "saved",
+    "scheduler": "pending",
+    "publishedWeek": [
+      {
+        "dayOfWeek": "sunday",
+        "revision": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "draft": {
+          "power": {
+            "onTime": "22:00",
+            "offTime": "07:15",
+            "onTemperature": 69,
+            "enabled": true,
+            "endAction": "maintain"
+          },
+          "temperatures": [],
+          "alarm": {
+            "time": "07:00",
+            "vibrationIntensity": 50,
+            "vibrationPattern": "rise",
+            "duration": 20,
+            "alarmTemperature": 105,
+            "wakeWindow": 0,
+            "enabled": true,
+            "snoozeDuration": 540,
+            "snoozeTaper": 30
+          },
+          "notes": "Synthetic example only"
+        }
+      }
+    ],
+    "changes": [
+      {
+        "dayOfWeek": "sunday",
+        "operation": "replace"
+      }
+    ],
+    "physicalVerification": "unverified",
+    "replayAllowed": false
+  },
+  "schedulerUnconfirmed": {
+    "version": 1,
+    "requestId": "00000000-0000-4000-8000-000000000006",
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "sourceSide": "left",
+    "publishedAt": 1793314800100,
+    "draftRevision": 2,
+    "reviewRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "state": "saved",
+    "scheduler": "unconfirmed",
+    "publishedWeek": [
+      {
+        "dayOfWeek": "sunday",
+        "revision": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "draft": {
+          "power": {
+            "onTime": "22:00",
+            "offTime": "07:15",
+            "onTemperature": 69,
+            "enabled": true,
+            "endAction": "maintain"
+          },
+          "temperatures": [],
+          "alarm": {
+            "time": "07:00",
+            "vibrationIntensity": 50,
+            "vibrationPattern": "rise",
+            "duration": 20,
+            "alarmTemperature": 105,
+            "wakeWindow": 0,
+            "enabled": true,
+            "snoozeDuration": 540,
+            "snoozeTaper": 30
+          },
+          "notes": "Synthetic example only"
+        }
+      }
+    ],
+    "changes": [
+      {
+        "dayOfWeek": "sunday",
+        "operation": "replace"
+      }
+    ],
+    "physicalVerification": "unverified",
+    "replayAllowed": false
+  },
+  "missingReceipt": {
+    "error": {
+      "code": "not_ready",
+      "message": "No personal publication receipt is available."
+    }
+  }
+}

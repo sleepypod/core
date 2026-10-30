@@ -2,13 +2,9 @@ import type * as ThreeModule from 'three'
 
 export type Three = typeof ThreeModule
 
-// Pinned to the vendored copy in public/vendor; keep the three versions in step.
-export const THREE_SOURCES = [
-  'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js',
-  'https://unpkg.com/three@0.170.0/build/three.module.min.js',
-  // Many pods sit on LANs without internet access.
-  '/vendor/three.module.min.js',
-] as const
+// Serve the reviewed renderer from this controller, including when internet is unavailable.
+// The vendored file and its license are pinned together at revision 170.
+export const THREE_SOURCES = ['/vendor/three.module.min.js'] as const
 export const THREE_TIMEOUT_MS = 4000
 
 type Importer = (url: string) => Promise<unknown>

@@ -1,3 +1,4 @@
+import { requireAccess } from '@/src/auth/access'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
@@ -6,6 +7,8 @@ import type { NextRequest } from 'next/server'
  * Scalar is loaded from CDN — no extra dependencies required.
  */
 export function GET(req: NextRequest) {
+  const denied = requireAccess(req)
+  if (denied) return denied
   const specUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}/api/openapi.json`
 
   const html = `<!doctype html>

@@ -8,7 +8,7 @@ const NOW = new Date(2026, 8, 28, 17, 54)
 describe('bothNight', () => {
   it('picks enabled set points saved under the day', () => {
     const temps = [row('monday', '23:15', 80), row('monday', '07:00', 82, false), row('tuesday', '22:00', 78)]
-    expect(nightSetPoints(temps, 'monday')).toEqual([{ time: '23:15', temperature: 80 }])
+    expect(nightSetPoints(temps, 'monday')).toEqual([{ time: '23:15', temperature: 80, dayOffset: 0 }])
     expect(nightSetPoints(undefined, 'monday')).toEqual([])
   })
 
@@ -29,9 +29,16 @@ describe('bothNight', () => {
     // Sunday 19:00 → 23:00 stays on Sunday evening, so the next point is Monday 23:15.
     expect(nextSetPoint(temps, NOW)).toMatchObject({ time: '23:15', temperature: 80 })
     const early = new Date(2026, 8, 28, 3, 0)
-    const overnight = [row('sunday', '23:00', 79), row('sunday', '06:30', 84)]
-    expect(nextSetPoint(overnight, early)).toMatchObject({ time: '06:30', at: new Date(2026, 8, 28, 6, 30) })
+    const overnight = [row('sunday', '23:00', 79), row('sunday', '06:30', 84), row('monday', '07:00', 78)]
+    expect(nextSetPoint(overnight, early)).toMatchObject({ time: '07:00', temperature: 78, at: new Date(2026, 8, 28, 7) })
     expect(nextSetPoint([], NOW)).toBeNull()
+  })
+
+  it('puts next-day morning-only points on the correct night window', () => {
+    const points = nightSetPoints([row('tuesday', '06:30', 82)], 'monday')
+    const window = nightWindow(points, new Date(2026, 8, 28))
+    expect(window?.start).toEqual(new Date(2026, 8, 29, 6, 30))
+    expect(window?.end).toEqual(window?.start)
   })
 
   it('formats countdowns and night dates', () => {

@@ -1,4 +1,5 @@
 import { Message, Variant, systemBus } from 'dbus-next'
+import { beforeControlWrite } from '@/src/controls/context'
 import type { MessageBus } from 'dbus-next'
 import type { BaseConfiguration, BaseTransport } from './types'
 
@@ -137,6 +138,7 @@ export class BluezTransport implements BaseTransport {
     const bus = this.bus
     const path = this.writePath
     if (!bus || !path) throw new Error('Base Bluetooth connection is not ready')
+    beforeControlWrite()
     await this.call(bus, path, CHARACTERISTIC, 'WriteValue', 'aya{sv}', [Array.from(packet), { type: new Variant('s', 'request') }])
   }
 

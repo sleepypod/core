@@ -2,16 +2,17 @@
 
 import { useCallback, useRef } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
+import { PHONE_NAV_ITEMS } from '@/src/components/AppShell/navItems'
 
 /** Ordered screen routes for swipe navigation. */
-const SCREEN_ORDER = ['/', '/schedule', '/sleep', '/system', '/settings']
-const BASE_SCREEN_ORDER = ['/', '/base', '/schedule', '/sleep', '/system', '/settings']
+const SCREEN_ORDER = PHONE_NAV_ITEMS.map(item => item.href)
 
 /** Minimum horizontal swipe distance in px to trigger navigation. */
 const SWIPE_THRESHOLD = 60
 
 /** Maximum vertical movement allowed — prevents hijacking vertical scroll. */
 const VERTICAL_LIMIT = 80
+const INTERACTIVE_TARGETS = 'input, textarea, select, button, a, [role="slider"], [role="dialog"], canvas, svg, [data-no-swipe], [style*="overflow-x"], .overflow-x-auto, .overflow-x-scroll'
 
 interface SwipeState {
   startX: number
@@ -20,14 +21,14 @@ interface SwipeState {
 }
 
 /**
- * Hook that provides horizontal swipe navigation between the 5 main screens.
+ * Hook that provides horizontal swipe navigation between the three primary screens.
  * Returns touch event handlers to attach to the swipeable container.
  *
  * Swipe right → previous screen, swipe left → next screen.
  * Only triggers if the swipe is predominantly horizontal and exceeds threshold.
  */
-export function useSwipeNavigation(hasBase = false) {
-  const screenOrder = hasBase ? BASE_SCREEN_ORDER : SCREEN_ORDER
+export function useSwipeNavigation() {
+  const screenOrder = SCREEN_ORDER
   const router = useRouter()
   const pathname = usePathname()
   const swipeRef = useRef<SwipeState | null>(null)
@@ -46,8 +47,9 @@ export function useSwipeNavigation(hasBase = false) {
   }, [pathname])
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
-    // Only track single-finger swipes
-    if (e.touches.length !== 1) return
+    // Never turn a control drag or a stale multi-touch start into navigation.
+    swipeRef.current = null
+    if (e.touches.length !== 1 || (e.target as HTMLElement).closest(INTERACTIVE_TARGETS)) return
 
     const touch = e.touches[0]
     swipeRef.current = {
@@ -78,11 +80,11 @@ export function useSwipeNavigation(hasBase = false) {
 
     // Don't intercept swipes that started inside horizontally scrollable elements
     const target = e.target as HTMLElement
-    if (target.closest('[data-no-swipe], [style*="overflow-x"], .overflow-x-auto, .overflow-x-scroll')) return
+    if (target.closest(INTERACTIVE_TARGETS)) return
 
     const basePath = getBasePath()
     const currentIndex = screenOrder.findIndex(
-      p => basePath === p || (p !== '/' && basePath.startsWith(p))
+      path => basePath === path || (path !== '/' && basePath.startsWith(`${path}/`)),
     )
     if (currentIndex === -1) return
 

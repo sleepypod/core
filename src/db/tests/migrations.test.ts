@@ -9,6 +9,36 @@ import * as biometricsSchema from '../biometrics-schema'
 import * as schema from '../schema'
 
 describe('migrations smoke test', () => {
+  it('preserves existing device settings while new controllers require Autopilot opt-in', () => {
+    const migrationsDir = path.resolve(process.cwd(), 'src/db/migrations')
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-upgrade-'))
+    const raw = new Database(':memory:')
+    try {
+      fs.cpSync(migrationsDir, temporaryDirectory, { recursive: true })
+      const journalPath = path.join(temporaryDirectory, 'meta/_journal.json')
+      const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as {
+        entries: Array<{ idx: number, when: number, tag: string }>
+      }
+      journal.entries = journal.entries.filter(entry => entry.idx <= 27)
+      fs.writeFileSync(journalPath, JSON.stringify(journal))
+      const database = drizzle(raw, { schema })
+      migrate(database, { migrationsFolder: temporaryDirectory })
+      raw.prepare('INSERT INTO device_settings (id, timezone, autopilot_enabled, mqtt_topic_prefix) VALUES (?, ?, ?, ?)')
+        .run(1, 'Europe/Rome', 1, 'existing-bedroom')
+      const before = raw.prepare('SELECT * FROM device_settings WHERE id = 1').get()
+      migrate(database, { migrationsFolder: migrationsDir })
+      expect(raw.prepare('SELECT * FROM device_settings WHERE id = 1').get()).toEqual(before)
+      raw.prepare('INSERT INTO device_settings (id) VALUES (2)').run()
+      expect(raw.prepare('SELECT autopilot_enabled FROM device_settings WHERE id = 2').get())
+        .toEqual({ autopilot_enabled: 0 })
+      expect(raw.pragma('foreign_key_check')).toEqual([])
+    }
+    finally {
+      raw.close()
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true })
+    }
+  })
+
   it('main DB migrations apply cleanly from empty', () => {
     const raw = new Database(':memory:')
     try {
@@ -56,6 +86,53 @@ describe('migrations smoke test', () => {
           .get('table', name)).toEqual({ name })
       }
       expect(() => migrate(db, { migrationsFolder: migrationsDir })).not.toThrow()
+    }
+    finally {
+      raw.close()
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('moves each side\'s gesture snooze length onto its alarms', () => {
+    const migrationsDir = path.resolve(process.cwd(), 'src/db/migrations')
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'alarm-snooze-'))
+    const raw = new Database(':memory:')
+    try {
+      fs.cpSync(migrationsDir, tmpDir, { recursive: true })
+      const journalPath = path.join(tmpDir, 'meta/_journal.json')
+      const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as {
+        entries: Array<{ idx: number, tag: string }>
+      }
+      journal.entries = journal.entries.filter(entry => entry.tag < '0033')
+      fs.writeFileSync(journalPath, JSON.stringify(journal))
+      const db = drizzle(raw, { schema })
+      migrate(db, { migrationsFolder: tmpDir })
+      const gesture = raw.prepare(`INSERT INTO tap_gestures (side, tap_type, action_type, alarm_behavior, alarm_snooze_duration)
+        VALUES (?, ?, ?, ?, ?)`)
+      // This fork still separates temperature/alarm actions: dormant alarm fields
+      // on a temperature tap and stop actions must not change the migrated length.
+      gesture.run('left', 'tripleTap', 'alarm', 'snooze', 420)
+      gesture.run('left', 'doubleTap', 'temperature', 'snooze', 120)
+      gesture.run('left', 'quadTap', 'alarm', 'dismiss', 600)
+      // Right: no snoozing gesture.
+      gesture.run('right', 'doubleTap', 'alarm', 'dismiss', null)
+      const alarm = raw.prepare(`INSERT INTO alarm_schedules (side, day_of_week, time, vibration_intensity, duration, alarm_temperature)
+        VALUES (?, 'monday', '07:00', 50, 60, 80)`)
+      const alarmId = Number(alarm.run('left').lastInsertRowid)
+      alarm.run('right')
+      const metadata = { power: { enabled: false }, alarm: { time: '07:00', enabled: false }, notes: 'Retain this note' }
+      raw.prepare('INSERT INTO bedtime_routines (side, day_of_week, configuration, schedule_ids) VALUES (?, ?, ?, ?)')
+        .run('left', 'sunday', JSON.stringify(metadata), JSON.stringify({ power: [1], temperature: [], alarm: [alarmId] }))
+
+      migrate(db, { migrationsFolder: migrationsDir })
+
+      expect(raw.prepare('SELECT side, snooze_duration AS snooze, snooze_taper AS taper FROM alarm_schedules ORDER BY side').all())
+        .toEqual([
+          { side: 'left', snooze: 420, taper: 0 },
+          { side: 'right', snooze: 300, taper: 0 },
+        ])
+      const updated = raw.prepare('SELECT configuration FROM bedtime_routines').get() as { configuration: string }
+      expect(JSON.parse(updated.configuration)).toEqual({ ...metadata, alarm: { ...metadata.alarm, snoozeDuration: 420, snoozeTaper: 0 } })
     }
     finally {
       raw.close()

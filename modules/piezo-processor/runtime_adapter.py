@@ -5,10 +5,12 @@ import logging
 import sqlite3
 import time
 from uuid import uuid4
+from typing import Optional
 
 from common.biometrics.config import config_hash, manifest
 from common.biometrics.runtime import BoundarySelection, RuntimeSnapshot, read_latest_snapshot
 from common.biometrics.signal import ProcessingParameters
+from common.biometrics.mechanical import VERSION as MECHANICAL_VERSION
 
 log = logging.getLogger(__name__)
 COMPONENTS = ("heart_rate", "breathing_rate", "hrv_index")
@@ -22,20 +24,27 @@ class RunContext:
     bundle_json: str
     config_hash: str
     started_at_ms: int
+    timestamp_basis: str = "processing_clock"
+    mechanical_context: Optional[str] = None
 
     def ensure(self, connection):
         """Called inside the observation transaction, including after DB reset."""
+        identity = {"sourceSide": self.source_side, "timestampBasis": self.timestamp_basis,
+                    "rawIdentity": "not_retained", "sensorCalibration": "not_consumed"}
+        if self.mechanical_context is not None:
+            if self.mechanical_context != MECHANICAL_VERSION:
+                raise ValueError('Unsupported mechanical context')
+            identity['mechanicalContext'] = self.mechanical_context
         connection.execute(
             "INSERT OR IGNORE INTO biometric_processing_runs "
             "(id, side, kind, bundle, config_hash, calibration_hash, input_identity, started_at_ms) "
             "VALUES (?, ?, 'live', ?, ?, NULL, ?, ?)",
             (self.id, self.side, self.bundle_json, self.config_hash,
-             json.dumps({"sourceSide": self.source_side, "timestampBasis": "processing_clock",
-                         "rawIdentity": "not_retained", "sensorCalibration": "not_consumed"}),
+             json.dumps(identity),
              self.started_at_ms))
 
 
-def make_context(side, source_side, snapshot, now_ms):
+def make_context(side, source_side, snapshot, now_ms, timestamp_basis="processing_clock", mechanical_context=None):
     shipped = manifest()
     resolved = snapshot.resolved if snapshot else shipped["defaults"]
     bundle = {"schemaVersion": 1, "manifestHash": config_hash(shipped),
@@ -43,7 +52,7 @@ def make_context(side, source_side, snapshot, now_ms):
               "revisionId": snapshot.revision_id if snapshot else None,
               "components": shipped["components"], "sourceHashes": shipped["sourceHashes"]}
     return RunContext(str(uuid4()), side, source_side, json.dumps(bundle),
-                      config_hash(resolved), now_ms)
+                      config_hash(resolved), now_ms, timestamp_basis, mechanical_context)
 
 
 def restore_applied(connection, side):
@@ -72,10 +81,13 @@ def restore_applied(connection, side):
 
 
 class RuntimeCoordinator:
-    def __init__(self, holder, processors, clock=time.monotonic, wall=time.time):
+    def __init__(self, holder, processors, clock=time.monotonic, wall=time.time,
+                 timestamp_basis="processing_clock", mechanical_context=None):
         self.holder = holder
         self.processors = processors
         self.clock, self.wall = clock, wall
+        self.timestamp_basis = timestamp_basis
+        self.mechanical_context = mechanical_context
         self.selections = {side: BoundarySelection(side) for side in ("left", "right")}
         self.initialized = False
         self.enabled = False
@@ -143,7 +155,7 @@ class RuntimeCoordinator:
                 key = (side, snapshot)
                 if getattr(processor, "runtime_key", None) != key:
                     parameters = ProcessingParameters.from_config(snapshot.resolved if snapshot else manifest()["defaults"])
-                    processor.install_runtime(parameters, make_context(side, source_side, snapshot, now_ms),
+                    processor.install_runtime(parameters, make_context(side, source_side, snapshot, now_ms, self.timestamp_basis, self.mechanical_context),
                                               reset_side=getattr(processor, "runtime_key", (None,))[0] != side)
                     processor.runtime_key = key
             if ready:

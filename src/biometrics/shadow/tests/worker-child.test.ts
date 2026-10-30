@@ -21,7 +21,7 @@ const readline = require('node:readline');
 const mode = ${JSON.stringify(state.mode)};
 let init, records = 0, outputs = 0;
 const health = state => ({state, reason:null, records, outputs, cpu_ms:1, input_hash:'a'.repeat(64), limitations:[],
- counts:{records,accepted_frames:records,empty_channel_frames:0,pump_gated_frames:0,preroll_outputs:0,scored_outputs:outputs}});
+ timestampBasis:"firmware_event_time_v1",counts:{mechanical_gated_frames:0,timestamp_rejected_frames:0,records,accepted_frames:records,empty_channel_frames:0,pump_gated_frames:0,preroll_outputs:0,scored_outputs:outputs}});
 function emit(row) { process.stdout.write(JSON.stringify({runId:init.runId,attemptId:init.attemptId,...row})+'\\n'); }
 if(mode==='ignore') { setInterval(()=>{},1000); }
 else readline.createInterface({input:process.stdin}).on('line', line => {
@@ -40,7 +40,7 @@ else readline.createInterface({input:process.stdin}).on('line', line => {
  }
  if(message.type==='frame') {
   records++;
-  const batch = mode==='output' ? [{sequence:outputs++,inputHash:'a'.repeat(64),side:init.side,sourceSide:init.side,
+  const batch = mode==='output' ? [{sequence:outputs++,inputHash:'a'.repeat(64),side:init.side,sourceSide:init.side,timestampBasis:"firmware_event_time_v1",
    timestampMs:init.startMs+records*1000,configHash:init.configHashes[init.side],flags:null,limitations:[],readings:[
     {metric:'heart_rate',unit:'bpm',windowMs:null,value:60,quality:1},
     {metric:'breathing_rate',unit:'breaths/min',windowMs:null,value:12,quality:1},

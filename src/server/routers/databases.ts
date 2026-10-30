@@ -125,7 +125,7 @@ export const databasesRouter = router({
               manual: manual[d.key] ?? null,
             },
             migrations: { applied: d.appliedMigrations, ...mig },
-            tables: d.tables.map(t => ({ ...t, retention: retentionFor(d.key, t.name) })),
+            tables: d.tables.filter(t => !t.name.startsWith('household')).map(t => ({ ...t, retention: retentionFor(d.key, t.name) })),
           }
         }))
         return {
@@ -183,6 +183,7 @@ export const databasesRouter = router({
       total: z.number(),
     }))
     .query(({ input }) => {
+      if (input.table.startsWith('household')) throw new TRPCError({ code: 'FORBIDDEN', message: 'Personal household records are not available through the database browser.' })
       const conn = connection(input.db)
       const known = conn.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(input.table)
       if (!known) throw new TRPCError({ code: 'NOT_FOUND', message: `No table ${input.table} in ${input.db}.db` })

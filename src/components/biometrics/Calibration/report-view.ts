@@ -34,6 +34,8 @@ export const reportViewSchema = z.object({
 
 const numericMetric = z.enum(['heart_rate', 'breathing_rate', 'window_ibi_variability_v1'])
 const configuration = z.enum(['default', 'current', 'candidate'])
+// Four reference groups × three metrics × three pairwise configuration comparisons.
+const maximumNumericSubgroupRows = numericSubgroupNames.length * numericMetric.options.length * 3
 const count = z.number().int().nonnegative()
 const numericSupport = z.object({
   metrics: z.object({ mae: score, medianAbsoluteError: score, p95AbsoluteError: score, signedBias: score }).nullable(),
@@ -60,7 +62,7 @@ export const numericReportViewSchema = z.object({
     summary: z.object({ metric: numericMetric, baseline: configuration, candidate: configuration, baselineHash: z.string(), candidateHash: z.string(),
       scoredNights: count, unscoredNights: count, equalNightMeanMaeDifference: score,
     }),
-  })).max(12).optional(),
+  })).max(maximumNumericSubgroupRows).optional(),
   numericNightSummary: z.array(z.object({
     version: z.literal('numeric-night-summary-v1'), metric: numericMetric, baseline: configuration, candidate: configuration,
     baselineHash: z.string(), candidateHash: z.string(), totalNights: count, scoredNights: count, unscoredNights: count,

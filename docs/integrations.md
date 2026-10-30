@@ -31,17 +31,18 @@ pod ship once.
 
 | Accessory | Type | Reads from | Writes to |
 |---|---|---|---|
-| `Bed <side>` | Thermostat (single setpoint) | `deviceStatus.<side>` | `setTemperature` / `setPower` |
-| `Bed <side> power` | Switch | `deviceStatus.<side>.powered` | `setPower` (preserves last setpoint) |
-| `Bed <side> occupancy` | OccupancySensor | `sleep_records` (latest with `leftBedAt IS NULL`) | — |
+| `Bed <side>` | Thermostat (single setpoint) | Fresh reported DAC state; explicit staged target while off | Shared temperature/power controller |
+| `Bed <side> occupancy` | OccupancySensor | Fresh calibrated capacitance and movement | — |
 | `Snooze <side>` | Switch | `snoozeManager` | `snoozeAlarm` / `cancelSnooze` |
 | `Prime` | Switch | `primeNotification` (auto-off on completion) | `startPriming` |
-| `Pod ambient` | TemperatureSensor | `bed_temp.ambient_temp` (centidegrees → °C) | — |
+| `Pod ambient` | TemperatureSensor | Live `bedTemp` / `bedTemp2` ambient cache | — |
 
 Thermostat is HomeKit's single-setpoint primitive (the pod hardware exposes
 one setpoint, not a heat/cool deadband). Mode `off` cuts power; `auto` powers
 on at the last requested temperature. HomeKit Celsius is converted at the
-boundary; the in-app unit preference is unaffected.
+boundary; the in-app unit preference is unaffected. Missing or stale reports
+return HAP unavailable, with a fault combined with any pump-stall notice.
+See [reported-state semantics and qualification limits](HOMEKIT_REPORTED_STATE.md).
 
 ### Identity durability
 
@@ -102,53 +103,60 @@ the bridge resolves config in this order: `device_settings` row > env var > buil
 | UI field | Env var | Default |
 |---|---|---|
 | Enable bridge | `MQTT_ENABLED` | `false` |
+| Accept commands (host configuration only) | `MQTT_COMMANDS_ENABLED` | `false` |
 | Broker URL | `MQTT_URL` | _(unset — bridge stays dormant)_ |
 | Username | `MQTT_USERNAME` | _(none)_ |
 | Password | `MQTT_PASSWORD` | _(none)_ |
 | Topic prefix | `MQTT_TOPIC_PREFIX` | `sleepypod` |
 | HA discovery | `MQTT_HA_DISCOVERY` | `true` |
 | HA discovery prefix | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` |
-| TLS | `MQTT_TLS` | `false` |
+| Require TLS | `MQTT_TLS` | `false` |
 | TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
 
-The URL scheme decides whether the connection is encrypted: `mqtts://` uses
-TLS, `mqtt://` is plain TCP. The TLS toggle does not upgrade an `mqtt://` URL;
-it only gates `MQTT_TLS_INSECURE`, which skips certificate verification when
-both are on.
+The URL scheme selects the transport: `mqtts://` and `wss://` are encrypted;
+`mqtt://` and `ws://` are plaintext. **Require TLS** rejects plaintext URLs
+before opening a connection. It does not change the URL or port. Enter the
+broker's actual secure endpoint when enabling this requirement. A secure URL
+still uses TLS when the requirement is off. Unsupported schemes are rejected.
+
+Enabled settings updates validate the fully resolved configuration, including
+inherited database/environment fields. Disabling an invalid configuration remains
+possible. If the settings database cannot be read, startup and connection tests
+stop rather than falling back to an unknown transport policy.
+
+Certificate verification stays enabled unless both Require TLS and the separate
+host-only `MQTT_TLS_INSECURE` override are on. That override permits unverified
+certificates; it is not exposed as an ordinary settings toggle.
+
+Saving a blank password preserves the saved password. **Test connection** uses
+only a password entered for that test; it never silently sends the saved password
+to a proposed broker. Re-enter it to test authenticated access. Editing the
+endpoint, TLS requirement or credentials clears the previous test result.
 
 ### Topics
 
 `<prefix>` defaults to `sleepypod`. `<device-id>` is the slugified hostname
-(override with `MQTT_DEVICE_ID`). All state topics are retained.
+(override with `MQTT_DEVICE_ID`). Discovery and connection availability are retained; measurements and execution receipts are not.
+See [qualified home telemetry](HOME_TELEMETRY.md) for source timestamps, expiry, null fields and migration.
 
 | Topic | Direction | Payload |
 |---|---|---|
 | `<prefix>/<device-id>/availability` | pod → broker | `online` / `offline` (LWT) |
-| `<prefix>/<device-id>/state/device-status` | pod → broker | full deviceStatus JSON |
+| `<prefix>/<device-id>/state/device-status` | pod → broker | fresh reported DAC status; no optimistic overlay |
 | `<prefix>/<device-id>/state/<side>/climate` | pod → broker | per-side temp / mode |
 | `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
-| `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
+| `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | qualified live HR / beat-interval variability / BR |
 | `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts": <epoch_ms>, "temperature": <number\|null>, "humidity": <number\|null>}` (°C, %) |
-| `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
-| `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
-| `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
-| `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` |
-| `<prefix>/<device-id>/cmd/start-priming` | broker → pod | `{}` |
+| `<prefix>/<device-id>/state/occupancy/<side>` | pod → broker | calibrated occupied / classification, or unavailable |
+| `<prefix>/<device-id>/cmd/request` | broker → pod | Expiring control request; explicit opt-in required |
+| `<prefix>/<device-id>/receipt/<request-id>` | pod → broker | Non-retained execution receipt; physical effect unverified |
 
-Commands route through the same tRPC procedures the iOS app calls, so Zod
-input schemas validate every payload — the bridge cannot accidentally
-diverge from the app's safety envelope.
+Enabling the bridge now enables telemetry only. Command reception separately
+requires `MQTT_COMMANDS_ENABLED=true`, dedicated broker credentials and topic
+ACLs. The old raw actuator topics are no longer supported. Commands reuse the
+app's durable control authority, deadlines and hardware guards; they cannot
+invoke priming or base movement through MQTT.
 
-### Example: turn off the left side from any MQTT client
-
-```bash
-mosquitto_pub -h broker.lan \
-  -t 'sleepypod/eight-pod/cmd/set-power' \
-  -m '{"side":"left","powered":false}'
-```
-
-State mirrors back on `sleepypod/eight-pod/state/left/climate` within ~1 s.
-
-See **[ADR 0019](adr/0019-mqtt-bridge.md)** for the design rationale —
-why client-not-broker, the credential storage decision, the tRPC dispatch
-model, and what's deferred until `protectedProcedure` lands.
+See [MQTT command delivery](MQTT_COMMANDS.md) for the full envelope, Home
+Assistant discovery behavior, receipt lookup, migration and validation limits.
+The original [ADR 0019](adr/0019-mqtt-bridge.md) describes the earlier design.

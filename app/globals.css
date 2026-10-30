@@ -574,3 +574,8 @@ html.dark {
     animation-name: sp-toast-fade;
   }
 }
+
+/* The full-screen bed has its own Settings control. */
+main:has([data-testid="temp-stage"]) > [data-mobile-toolbar] {
+  display: none;
+}

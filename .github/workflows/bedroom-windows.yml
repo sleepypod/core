@@ -1,0 +1,28 @@
+name: Bedroom Windows installer
+
+on:
+  pull_request:
+    paths: ['scripts/bedroom/**', '.github/workflows/bedroom-windows.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Validate the Windows PowerShell 5.1 installation
+        shell: powershell
+        run: ./scripts/bedroom/Test-WindowsInstaller.ps1
+      - name: Validate the isolated sensor-reader installation
+        shell: powershell
+        run: ./scripts/bedroom/Test-GoveeInstaller.ps1
+      - name: Test appliance power installation and handoff
+        shell: powershell
+        run: ./scripts/bedroom/Test-GoveeInstaller.ps1 -ReaderProfile AppliancePower

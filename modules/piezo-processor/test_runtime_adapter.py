@@ -10,6 +10,7 @@ import pytest
 import main
 from common.biometrics.config import resolve_config
 from runtime_adapter import RuntimeCoordinator, restore_applied
+from common.biometrics.live_input import FIRMWARE_TIMESTAMP_BASIS
 
 
 class Clock:
@@ -45,6 +46,20 @@ def project(conn, generation=1, side="left", boundary="immediate", overrides=Non
         conn.execute("INSERT INTO biometric_runtime_configs VALUES (?, ?, ?, ?, ?, ?)",
                      (side, generation, config["hash"], json.dumps(payload), boundary, 0))
     return config
+
+
+def test_firmware_time_provenance_survives_delayed_candidate_write(rig):
+    conn, holder, processors, clock, _ = rig
+    runtime = RuntimeCoordinator(holder, processors, clock=clock,
+                                 timestamp_basis=FIRMWARE_TIMESTAMP_BASIS)
+    runtime.before_frame(None, lambda _: True, 5000)
+    context = processors["left"].run_context
+    candidate = main.VitalsCandidate("left", datetime.fromtimestamp(5, timezone.utc),
+                                     70, 30, 12, .8, None, 70, context)
+    assert candidate.write(holder)
+    assert conn.execute("SELECT timestamp FROM vitals").fetchone() == (5,)
+    identity = json.loads(conn.execute("SELECT input_identity FROM biometric_processing_runs").fetchone()[0])
+    assert identity["timestampBasis"] == FIRMWARE_TIMESTAMP_BASIS
 
 
 def test_actual_parameters_reset_before_samples_and_ack_after(rig):

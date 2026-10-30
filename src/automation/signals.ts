@@ -6,14 +6,13 @@
  * signal not present resolves to `undefined`, which makes dependent conditions
  * skip rather than fire on stale/missing data.
  *
- * P0 wires the device-status signals that are reliably available now (per-side
- * temperature/level from the live DAC monitor). Ambient and biometric signals
- * are part of the catalog but read `undefined` until their sources are wired in
- * a later phase — the engine degrades to "skip", which is the safe default.
+ * The DAC reader supplies fresh device status; the companion biometrics reader
+ * supplies timestamped environmental, occupancy and biometric measurements.
  */
 
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import type { AutomationRule, DayOfWeek, Expr } from './types'
+import { finiteSignal } from './signalValidity'
 
 export type SignalSnapshot = Record<string, number | undefined>
 
@@ -66,23 +65,23 @@ export function clockInTimezone(
 }
 
 /**
- * Production reader backed by the live DAC monitor's last status frame. Reads
- * are lazy-imported so the engine module stays decoupled from hardware in tests.
+ * Production reader backed by a healthy, unchanged DAC observation. Fifteen
+ * seconds covers the monitor's slowest five-second polling cadence.
  */
 export class DeviceSignalReader implements SignalReader {
   read(): SignalSnapshot {
     const snapshot: SignalSnapshot = {}
     try {
-      const status = getDacMonitorIfRunning()?.getLastStatus()
+      const status = getDacMonitorIfRunning()?.getFreshStatus(15_000)
       if (!status) return snapshot
       for (const side of ['left', 'right'] as const) {
-        const s = side === 'left' ? status.leftSide : status.rightSide
-        if (!s) continue
+        const reading = side === 'left' ? status.leftSide : status.rightSide
+        if (!reading) continue
         // null = level 0 (off); leave the signal absent so conditions don't
         // fire against a phantom neutral temperature.
-        snapshot[`${side}.currentTemperature`] = s.currentTemperature ?? undefined
-        snapshot[`${side}.targetTemperature`] = s.targetTemperature ?? undefined
-        snapshot[`${side}.currentLevel`] = s.currentLevel
+        snapshot[`${side}.currentTemperature`] = finiteSignal(reading.currentTemperature)
+        snapshot[`${side}.targetTemperature`] = finiteSignal(reading.targetTemperature)
+        snapshot[`${side}.currentLevel`] = finiteSignal(reading.currentLevel)
       }
       if (status.waterLevel === 'low' || status.waterLevel === 'ok') {
         snapshot['water.low'] = status.waterLevel === 'low' ? 1 : 0

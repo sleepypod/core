@@ -40,7 +40,7 @@ export class ShadowWorkerSink {
     const result = this.store.append(this.lease, { sequence: this.baseSequence + output.sequence, side: output.side, timestampMs: output.timestampMs,
       inputHash: output.inputHash, candidateConfigHash: output.configHash, activeConfigHash: this.plan.activeConfigHash, readings,
       ...(active?.provenance ? { activeProvenance: active.provenance } : {}),
-      candidateProvenance: { sourceSide: output.sourceSide, outputSequence: output.sequence, flags: output.flags,
+      candidateProvenance: { timestampBasis: output.timestampBasis, sourceSide: output.sourceSide, outputSequence: output.sequence, flags: output.flags,
         limitations: active ? output.limitations : [...output.limitations, 'missing_contemporaneous_active_reading'] } })
     if (result.state !== 'quota_reached') this.nextOutput = Math.max(this.nextOutput, output.sequence + 1)
     return result

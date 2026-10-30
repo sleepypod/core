@@ -13,6 +13,8 @@ import { NEUTRAL_TEMP_F, TONE_VAR, tempTone } from './scheduleFormat'
 export interface CurveSetPoint {
   time: string
   temperature: number
+  /** Present only for calendar-backed previews; editable curve templates keep their own ordering. */
+  dayOffset?: 0 | 1
 }
 
 export interface TimelinePoint<T extends CurveSetPoint> {
@@ -60,6 +62,10 @@ export function minutesToTime(minutes: number): string {
  */
 export function buildTimeline<T extends CurveSetPoint>(points: T[]): TimelinePoint<T>[] {
   const withMinutes = points.map(item => ({ item, minutes: toMinutes(item.time), temperature: item.temperature }))
+  if (points.every(point => point.dayOffset !== undefined)) {
+    return withMinutes.map(point => ({ ...point, minutes: point.minutes + (point.item.dayOffset ?? 0) * DAY }))
+      .sort((first, second) => first.minutes - second.minutes)
+  }
   const byClock = [...withMinutes].sort((a, b) => a.minutes - b.minutes)
   let overnight = false
   if (byClock.some(p => p.minutes < HALF_DAY) && byClock.some(p => p.minutes >= HALF_DAY)) {

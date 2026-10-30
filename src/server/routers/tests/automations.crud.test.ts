@@ -317,7 +317,7 @@ describe('automations CRUD', () => {
 
 describe('automations kill switch, runs, and status', () => {
   it.each([
-    [[], true],
+    [[], false],
     [[{ on: false }], false],
     [[{ on: true }], true],
   ])('reads kill-switch rows %#', async (rows, enabled) => {
@@ -409,12 +409,12 @@ describe('automations kill switch, runs, and status', () => {
     expect(selectionWith(primaryDb, ['firedAt'], true)).toEqual({ firedAt: expect.anything() })
   })
 
-  it('defaults live status to globally enabled when device settings have no row', async () => {
+  it('defaults live status to disabled when device settings have no row', async () => {
     states.primary.queue.push([])
     states.primary.queue.push([])
 
     await expect(caller.status({})).resolves.toEqual({
-      globalEnabled: true,
+      globalEnabled: false,
       rules: [],
     })
   })
@@ -690,10 +690,10 @@ describe('automations diagnostics', () => {
     expect(out.rules[0].name).toBe('Cool sleeping side')
   })
 
-  it('defaults to enabled and rejects out-of-range hours', async () => {
+  it('defaults to disabled and rejects out-of-range hours', async () => {
     states.primary.queue.push([])
     states.primary.queue.push([])
-    await expect(caller.diagnostics({ hours: 24 })).resolves.toMatchObject({ globalEnabled: true, rules: [] })
+    await expect(caller.diagnostics({ hours: 24 })).resolves.toMatchObject({ globalEnabled: false, rules: [] })
     await expect(caller.diagnostics({ hours: 0 })).rejects.toThrow()
     await expect(caller.diagnostics({ hours: 25 })).rejects.toThrow()
   })

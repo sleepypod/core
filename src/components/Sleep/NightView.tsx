@@ -29,6 +29,7 @@ import {
   hypnoTicks,
   keyToDate,
   mainRecord,
+  recordingSummary,
   sleepSplit,
   nightKey as toNightKey,
   stageDurations,
@@ -71,6 +72,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
   const error = recordsQuery.error ?? stagesQuery.error
 
   const night = useMemo(() => {
+    const recording = recordingSummary(key ? byNight.get(key) ?? [] : [])
     const epochs = stages?.epochs ?? []
     const start = stages?.enteredBedAt ?? (record ? new Date(record.enteredBedAt).getTime() : epochs[0]?.start)
     const lastEpoch = epochs[epochs.length - 1]
@@ -81,6 +83,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
     const id = record?.id ?? stages?.sleepRecordId ?? null
     return {
       id,
+      recording,
       start: start ?? null,
       end: end ?? null,
       epochs,
@@ -100,7 +103,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       avgHrv: average(epochs.map(e => e.hrv)),
       avgBr: average(epochs.map(e => e.breathingRate)),
     }
-  }, [stages, record, records, key, timeFormat])
+  }, [stages, record, records, key, timeFormat, byNight])
 
   const selectedKey = key ?? (night.start != null ? toNightKey(new Date(night.start)) : null)
   const round = (v: number | null) => (v == null ? '—' : Math.round(v))
@@ -127,7 +130,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
           )}
           >
             <span className="min-[900px]:hidden">Heart rate</span>
-            <span className="max-[899px]:hidden">Heart rate through the night</span>
+            <span className="max-[899px]:hidden">{night.recording.count > 1 ? 'Heart rate · longest segment' : 'Heart rate through the night'}</span>
           </SectionLabel>
           {loading
             ? <div className="h-24 animate-pulse rounded-ctl bg-active" />
@@ -172,9 +175,10 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
 
         <Card className="grid grid-cols-2 gap-3">
           <SectionLabel className="col-span-2">Summary</SectionLabel>
-          <KeyValue label="Bedtime" value={formatClock(night.start)} size={16} />
-          <KeyValue label="Wake" value={formatClock(night.end)} size={16} />
-          <KeyValue label="Asleep" value={formatDuration(night.asleepSeconds)} size={16} />
+          <KeyValue label="Bedtime" value={formatClock(night.recording.start ?? night.start)} size={16} />
+          <KeyValue label="Wake" value={formatClock(night.recording.end ?? night.end)} size={16} />
+          <KeyValue label="Recorded bed time" value={formatDuration(night.recording.seconds || null)} size={16} />
+          <KeyValue label={night.recording.count > 1 ? 'Estimated sleep · longest segment' : 'Estimated sleep'} value={formatDuration(night.hasStages ? night.asleepSeconds : null)} size={16} />
           <KeyValue label="Bed exits" value={night.exits ?? '—'} size={16} />
         </Card>
 
@@ -189,6 +193,7 @@ function epochsHr(epochs: Array<{ heartRate: number | null }>): number[] {
 }
 
 interface Night {
+  recording: ReturnType<typeof recordingSummary>
   id: number | null
   start: number | null
   end: number | null
@@ -226,7 +231,7 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
     light: fmtStage(night.durations.light),
     deep: fmtStage(night.durations.deep),
   }
-  const times = `${formatClock(night.start)} → ${formatClock(night.end)}`
+  const times = `${formatClock(night.recording.start ?? night.start)} → ${formatClock(night.recording.end ?? night.end)}`
   const edit = night.id != null && night.start != null && (
     <SleepRecordActions
       recordId={night.id}
@@ -251,11 +256,18 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
         <div className="flex min-w-0 flex-col gap-0.5 min-[900px]:flex-row min-[900px]:items-center min-[900px]:gap-2.5">
           <span className="text-[15px] font-medium min-[900px]:hidden">{night.date ? formatNightShort(night.date) : '—'}</span>
           <span className="text-base font-medium max-[899px]:hidden">{night.date ? formatNightLong(night.date) : '—'}</span>
-          <span className="font-mono text-xl font-light min-[900px]:hidden">{formatDuration(night.asleepSeconds)}</span>
+          <span className="font-mono text-xl font-light">{formatDuration(night.recording.seconds || night.asleepSeconds)}</span>
           <span className="font-mono text-xs text-fg-2">{times}</span>
         </div>
         <div className="ml-auto self-start min-[900px]:self-center">{edit}</div>
       </div>
+
+      <p className="text-xs text-fg-2">Recorded bed time includes awake periods; it is not a measurement of time asleep.</p>
+      {night.recording.count > 1 && (
+        <p className="text-sm text-fg-2">
+          {`${night.recording.count} recording segments · ${formatDuration(night.recording.gaps)} between segments, not counted. Stages, quality and vitals below describe the longest segment only.`}
+        </p>
+      )}
 
       <div className="flex items-center gap-7">
         <div className="hidden min-[900px]:block">{ring(96)}</div>

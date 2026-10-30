@@ -33,6 +33,14 @@ describe('demo sleepStages', () => {
     vi.useRealTimers()
   })
 
+  it('requires a real controller for model selection and evaluation', async () => {
+    expect(await required(sleepStages.getModel)({ side: 'left' })).toMatchObject({ model: null, active: false })
+    expect(await required(sleepStages.listModels)({ side: 'left' })).toEqual([])
+    expect(() => required(sleepStages.setModelActive)({ side: 'left', active: true })).toThrow(/live, authenticated Pod/)
+    expect(() => required(sleepStages.selectModel)({ side: 'left', id: 1, active: true })).toThrow(/live, authenticated Pod/)
+    expect(() => required(sleepStages.previewModel)({ side: 'left', nights: 1 })).toThrow(/Demo data cannot validate/)
+  })
+
   it('keeps a classifier per side for the session', async () => {
     expect((await required(sleepStages.getClassifier)({ side: 'left' })).isDefault).toBe(true)
     await required(sleepStages.setClassifier)({ side: 'left', classifier: movementOnly })

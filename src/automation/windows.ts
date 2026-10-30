@@ -7,6 +7,7 @@
  */
 
 import type { WindowFn } from './types'
+import { finiteSignal } from './signalValidity'
 
 interface Sample {
   t: number // epoch ms
@@ -18,6 +19,7 @@ export class WindowStore {
 
   /** Record a numeric sample for a signal key at time `atMs`. */
   record(key: string, value: number, atMs: number): void {
+    if (finiteSignal(value) === undefined || finiteSignal(atMs) === undefined) return
     let buf = this.buffers.get(key)
     if (!buf) {
       buf = []

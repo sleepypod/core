@@ -1,4 +1,6 @@
 // @vitest-environment node
+import Database from 'better-sqlite3'
+import { ownerRequest } from '@/src/auth/tests/support'
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,8 +10,8 @@ import { POST } from './route'
 
 let directory: string
 let server: Server
-const seen = new Set<number>()
-const requests: Array<{ side: string, source: string }> = []
+const seen = new Set<string>()
+const requests: Array<{ side: string, source: string, metric?: string, samples?: Array<{ value?: number, heartRate?: number }> }> = []
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), 'watch-upload-test-'))
   vi.stubEnv('WATCH_UPLOAD_DIR', directory)
@@ -20,8 +22,9 @@ beforeAll(async () => {
     requests.push(data)
     let written = 0
     for (const sample of data.samples ?? []) {
-      if (!seen.has(sample.timestamp)) {
-        seen.add(sample.timestamp)
+      const key = `${data.side}:${data.metric ?? 'heart_rate'}:${sample.timestamp}`
+      if (!seen.has(key)) {
+        seen.add(key)
         written++
       }
     }
@@ -42,7 +45,7 @@ afterAll(async () => {
 it('streams XML through the real importer, routes to the selected side, dedupes, and removes the file', async () => {
   const date = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +0000')
   const xml = `<HealthData><Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" startDate="${date}" endDate="${date}" value="62" unit="count/min" /></HealthData>`
-  const request = () => new Request('http://pod/api/biometrics/watch-upload?side=right&days=7', { method: 'POST', body: xml })
+  const request = () => ownerRequest('http://pod/api/biometrics/watch-upload?side=right&days=7', { method: 'POST', body: xml })
   const response = await POST(request())
   expect(response.status).toBe(200)
   expect(await response.json()).toMatchObject({ vitals: 1, stages: 0, matchedVitals: 1 })
@@ -51,8 +54,31 @@ it('streams XML through the real importer, routes to the selected side, dedupes,
   expect(await readdir(directory)).toEqual([])
 })
 
+it('imports Watch breathing rate and SDNN separately, excludes Pod sources, and dedupes each metric', async () => {
+  requests.length = 0
+  const date = new Date(Date.now() - 60_000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +0000')
+  const record = (type: string, source: string, value: number, unit: string) =>
+    `<Record type="HKQuantityTypeIdentifier${type}" sourceName="${source}" startDate="${date}" endDate="${date}" value="${value}" unit="${unit}" />`
+  const xml = `<HealthData>${[
+    record('RespiratoryRate', 'Apple Watch', 14.5, 'count/min'),
+    record('HeartRateVariabilitySDNN', 'Apple Watch', 48, 'ms'),
+    record('RespiratoryRate', 'sleepypod', 20, 'count/min'),
+    record('HeartRateVariabilitySDNN', 'sleepypod design', 99, 'ms'),
+    record('HeartRate', 'sleepypod Watch', 99, 'count/min'),
+    record('RespiratoryRate', 'Free Sleep Watch', 20, 'count/min'),
+  ].join('')}</HealthData>`
+  const request = () => ownerRequest('http://pod/api/biometrics/watch-upload?side=left&days=7', { method: 'POST', body: xml })
+  const response = await POST(request())
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ stages: 0, vitals: 0, breathing: 1, hrv: 1, rejectedStageBatches: 0,
+    matchedStages: 0, matchedVitals: 0, matchedBreathing: 1, matchedHrv: 1 })
+  expect(requests.map(entry => [entry.metric, entry.side, entry.samples?.map(sample => sample.value)])).toEqual([['breathing_rate', 'left', [14.5]], ['hrv_sdnn', 'left', [48]]])
+  expect(await (await POST(request())).json()).toMatchObject({ breathing: 0, hrv: 0, matchedBreathing: 1, matchedHrv: 1 })
+  expect(await readdir(directory)).toEqual([])
+})
+
 it('rejects malformed files and cleans up after parser failure', async () => {
-  const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body: '<HealthData><broken' }))
+  const response = await POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body: '<HealthData><broken' }))
   expect(response.status).toBe(422)
   expect(await readdir(directory)).toEqual([])
 })
@@ -76,7 +102,7 @@ it('gives import a fresh budget after staging and ignores the expired upload bud
         controller.close()
       },
     })
-    const request = new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body, duplex: 'half' } as RequestInit)
+    const request = ownerRequest('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body, duplex: 'half' } as RequestInit)
     const response = await POST(request)
     expect(response.status).toBe(200)
     expect(timeout.mock.calls.map(call => call[0])).toEqual([30 * 60_000, 10 * 60_000])
@@ -86,7 +112,7 @@ it('gives import a fresh budget after staging and ignores the expired upload bud
 })
 
 it('accepts a same-origin browser upload even though Next reports the 0.0.0.0 bind address in request.url', async () => {
-  const response = await POST(new Request('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', {
+  const response = await POST(ownerRequest('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', {
     method: 'POST', headers: { origin: 'http://192.168.1.88:3000', host: '192.168.1.88:3000' }, body: '<HealthData/>',
   }))
   expect(response.status).toBe(200)
@@ -95,11 +121,11 @@ it('accepts a same-origin browser upload even though Next reports the 0.0.0.0 bi
 
 it('rejects cross-origin requests, missing side, and oversized bodies before import', async () => {
   for (const origin of ['http://evil', 'http://192.168.1.88:8080', 'null']) {
-    const response = await POST(new Request('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { origin, host: '192.168.1.88:3000' }, body: 'x' }))
-    expect(response.status).toBe(403)
+    const response = await POST(ownerRequest('http://0.0.0.0:3000/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { origin, host: '192.168.1.88:3000' }, body: 'x' }))
+    expect(response.status).toBe(401)
   }
-  expect((await POST(new Request('http://pod/api/biometrics/watch-upload', { method: 'POST', body: 'x' }))).status).toBe(400)
-  expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { 'content-length': String(513 * 1024 * 1024) }, body: 'x' }))).status).toBe(413)
+  expect((await POST(ownerRequest('http://pod/api/biometrics/watch-upload', { method: 'POST', body: 'x' }))).status).toBe(400)
+  expect((await POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', headers: { 'content-length': String(513 * 1024 * 1024) }, body: 'x' }))).status).toBe(413)
 })
 
 it('still honors a client disconnect when switching to the import budget', async () => {
@@ -111,7 +137,7 @@ it('still honors a client disconnect when switching to the import budget', async
       return new AbortController().signal
     })
   try {
-    const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', {
+    const response = await POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', {
       method: 'POST', body: '<HealthData/>', signal: client.signal,
     }))
     expect(response.status).toBe(408)
@@ -122,7 +148,7 @@ it('still honors a client disconnect when switching to the import budget', async
 
 it('rejects missing and empty bodies without retaining staged files', async () => {
   for (const body of [undefined, '']) {
-    const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body }))
+    const response = await POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body }))
     expect(response.status).toBe(400)
     expect(await readdir(directory)).toEqual([])
   }
@@ -137,7 +163,7 @@ it('enforces the streaming size limit even without a content-length header', asy
       controller.close()
     },
   })
-  const response = await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body, duplex: 'half' } as RequestInit))
+  const response = await POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body, duplex: 'half' } as RequestInit))
   expect(response.status).toBe(413)
   expect(await response.json()).toEqual({ error: 'Upload exceeds 512 MiB' })
   expect(await readdir(directory)).toEqual([])
@@ -145,13 +171,33 @@ it('enforces the streaming size limit even without a content-length header', asy
 
 it('rejects concurrent uploads and releases the slot after staging is cancelled', async () => {
   const client = new AbortController()
-  const response = POST(new Request('http://pod/api/biometrics/watch-upload?side=left', {
+  const response = POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', {
     method: 'POST', body: new ReadableStream(), duplex: 'half', signal: client.signal,
   } as RequestInit))
-  const competing = await POST(new Request('http://pod/api/biometrics/watch-upload?side=right', { method: 'POST', body: '<HealthData/>' }))
+  const competing = await POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=right', { method: 'POST', body: '<HealthData/>' }))
   expect(competing.status).toBe(409)
   client.abort()
   expect((await response).status).toBe(408)
   expect(await readdir(directory)).toEqual([])
-  expect((await POST(new Request('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body: '<HealthData/>' }))).status).toBe(200)
+  expect((await POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body: '<HealthData/>' }))).status).toBe(200)
+})
+
+it('stops a paused legacy Health upload when a personal arrangement activates', async () => {
+  const previousBatches = requests.length
+  let source: ReadableStreamDefaultController<Uint8Array> | undefined
+  const body = new ReadableStream<Uint8Array>({ start(controller) {
+    source = controller
+  } })
+  const pending = POST(ownerRequest('http://pod/api/biometrics/watch-upload?side=left', { method: 'POST', body, duplex: 'half' } as RequestInit))
+  source?.enqueue(new TextEncoder().encode('<HealthData>'))
+  const database = new Database(process.env.DATABASE_URL)
+  try {
+    database.prepare('INSERT INTO household_privacy_boundary VALUES (1, ?, \'test-arrangement\')').run(Date.now())
+  }
+  finally { database.close() }
+  const response = await pending
+  expect(response.status).toBe(403)
+  expect(await response.json()).toMatchObject({ code: 'personal_connection_required' })
+  expect(requests.length).toBe(previousBatches)
+  expect(await readdir(directory)).toEqual([])
 })

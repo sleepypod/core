@@ -29,12 +29,13 @@ export function assertPumpStallNotBlocked(side: Side): void {
  * for frankenfirmware connections. The client persists across requests —
  * it is NOT disconnected after each call.
  *
- * If the first attempt fails with a socket error (ended/reset), reconnects
- * and retries once before throwing.
+ * Writes are never retried: firmware may have acted before a connection failed.
+ * Only explicitly read-only callbacks may reconnect and retry once.
  */
 export async function withHardwareClient<T>(
   callback: (client: HardwareClient) => Promise<T>,
-  errorMessage: string
+  errorMessage: string,
+  options: { retryReadOnly?: true } = {},
 ): Promise<T> {
   const client = getSharedHardwareClient()
 
@@ -54,7 +55,7 @@ export async function withHardwareClient<T>(
 
     // Socket may have died — retry once with a fresh connection
     const msg = error instanceof Error ? error.message : ''
-    if (msg.includes('socket') || msg.includes('ended') || msg.includes('EPIPE') || msg.includes('ECONNRESET')) {
+    if (options.retryReadOnly && (msg.includes('socket') || msg.includes('ended') || msg.includes('EPIPE') || msg.includes('ECONNRESET'))) {
       console.warn(`[hardware] Socket error, reconnecting: ${msg}`)
       try {
         client.disconnect()

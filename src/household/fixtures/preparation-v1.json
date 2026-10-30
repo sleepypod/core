@@ -1,0 +1,117 @@
+{
+  "ownerSession": {
+    "apiVersion": 1,
+    "featureVersion": 1,
+    "podId": "00000000-0000-4000-8000-000000000001",
+    "householdId": "00000000-0000-4000-8000-000000000002",
+    "accountId": "00000000-0000-4000-8000-000000000003",
+    "selfSleeperId": "00000000-0000-4000-8000-000000000004",
+    "role": "owner",
+    "membership": "active",
+    "sessionRevision": 1,
+    "householdRevision": 1,
+    "assignmentRevision": 1,
+    "arrangement": {
+      "mode": "solo-anywhere",
+      "effectiveAt": "2026-10-29T22:00:00.000Z"
+    },
+    "self": {
+      "displayName": "Example owner",
+      "zones": [
+        "left",
+        "right"
+      ],
+      "assignment": "solo"
+    },
+    "capabilities": {
+      "manageInvitations": true,
+      "manageOwnDevices": true,
+      "personalPreferences": true,
+      "personalRoutineDrafts": true,
+      "activateArrangement": false,
+      "personalControls": false,
+      "personalHistory": false,
+      "healthImport": false,
+      "cloudAnalysis": false
+    }
+  },
+  "memberSession": {
+    "apiVersion": 1,
+    "featureVersion": 1,
+    "podId": "00000000-0000-4000-8000-000000000001",
+    "householdId": "00000000-0000-4000-8000-000000000002",
+    "accountId": "00000000-0000-4000-8000-000000000005",
+    "selfSleeperId": "00000000-0000-4000-8000-000000000006",
+    "role": "member",
+    "membership": "active",
+    "sessionRevision": 1,
+    "householdRevision": 2,
+    "assignmentRevision": 1,
+    "arrangement": {
+      "mode": "solo-anywhere",
+      "effectiveAt": "2026-10-29T22:00:00.000Z"
+    },
+    "self": {
+      "displayName": "Example member",
+      "zones": [],
+      "assignment": "unassigned"
+    },
+    "capabilities": {
+      "manageInvitations": false,
+      "manageOwnDevices": true,
+      "personalPreferences": true,
+      "personalRoutineDrafts": true,
+      "activateArrangement": false,
+      "personalControls": false,
+      "personalHistory": false,
+      "healthImport": false,
+      "cloudAnalysis": false
+    }
+  },
+  "preferences": {
+    "sleeperId": "00000000-0000-4000-8000-000000000006",
+    "revision": 1,
+    "preferences": {
+      "displayUnit": "F",
+      "preferredTemperatureF": 76,
+      "comfort": "balanced",
+      "shareWakeTime": false,
+      "cloudAnalysisConsent": false
+    }
+  },
+  "routines": {
+    "sleeperId": "00000000-0000-4000-8000-000000000006",
+    "revision": 1,
+    "status": "draft_only",
+    "routines": []
+  },
+  "devices": {
+    "devices": [
+      {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "name": "Example phone",
+        "createdAt": "2026-10-29T22:00:00.000Z",
+        "current": true
+      }
+    ]
+  },
+  "invitations": {
+    "invitations": [
+      {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "kind": "own_device",
+        "expiresAt": "2026-10-29T22:30:00.000Z",
+        "status": "pending"
+      }
+    ]
+  },
+  "revoked": {
+    "revoked": true
+  },
+  "conflict": {
+    "error": {
+      "code": "conflict",
+      "message": "Your account or bed assignment changed. Reload before saving."
+    }
+  }
+}

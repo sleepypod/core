@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { deviceSettings } from '@/src/db/schema'
+import { mqttEndpointIssue } from '@/src/streaming/mqttEndpoint'
 import {
   getBridgeStatus,
   resolveConfig,
@@ -104,7 +105,7 @@ export const mqttRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       try {
-        const updates: Record<string, unknown> = { updatedAt: new Date() }
+        const updates: Partial<typeof deviceSettings.$inferSelect> = { updatedAt: new Date() }
         if ('enabled' in input) updates.mqttEnabled = input.enabled ?? null
         if ('url' in input) updates.mqttUrl = input.url ?? null
         if ('username' in input) updates.mqttUsername = input.username ?? null
@@ -113,9 +114,15 @@ export const mqttRouter = router({
         if ('haDiscovery' in input) updates.mqttHaDiscovery = input.haDiscovery ?? null
         if ('tlsEnabled' in input) updates.mqttTlsEnabled = input.tlsEnabled ?? null
 
+        const { config } = await resolveConfig(updates)
+        // Disabling must remain possible even when an existing configuration is invalid.
+        const issue = config.enabled ? mqttEndpointIssue(config.url, config.tlsEnabled) : null
+        if (issue) throw new TRPCError({ code: 'BAD_REQUEST', message: issue })
+
         await db.update(deviceSettings).set(updates).where(eq(deviceSettings.id, 1))
       }
       catch (err) {
+        if (err instanceof TRPCError) throw err
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Failed to update MQTT settings: ${err instanceof Error ? err.message : 'Unknown error'}`,
@@ -149,14 +156,25 @@ export const mqttRouter = router({
       url: z.string().url(),
       username: z.string().nullable().optional(),
       password: z.string().nullable().optional(),
+      useSavedPassword: z.boolean().optional(),
       tlsEnabled: z.boolean().optional(),
     }).strict())
     .output(z.object({ ok: z.boolean(), error: z.string().optional() }))
     .mutation(async ({ input }) => {
+      let password = input.password ?? null
+      if (input.useSavedPassword) {
+        const { config } = await resolveConfig()
+        // Never send a saved credential to a changed endpoint or a different account.
+        if (input.url !== config.url || (input.username ?? null) !== config.username
+          || (input.tlsEnabled ?? false) !== config.tlsEnabled || input.password != null) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter a password to test a different broker or account.' })
+        }
+        password = config.password
+      }
       return testConnection({
         url: input.url,
         username: input.username ?? null,
-        password: input.password ?? null,
+        password,
         tlsEnabled: input.tlsEnabled ?? false,
       })
     }),
@@ -171,6 +189,7 @@ export const mqttRouter = router({
     .output(z.object({
       runState: z.enum(['stopped', 'starting', 'connected', 'reconnecting', 'errored']),
       connected: z.boolean(),
+      commandsEnabled: z.boolean(),
       lastError: z.string().nullable(),
       deviceId: z.string(),
       topicPrefix: z.string().nullable(),

@@ -21,15 +21,15 @@ vi.mock('../worker-child', () => ({ runShadowChild: async (_location: unknown, i
     for await (const frame of frames) {
       worker.frames++
       if (worker.fail) throw new Error('processor_failed')
-      output({ side: init.side, sourceSide: init.side, timestampMs: frame.observedAtMs, configHash: init.configHashes[init.side], sequence: sequence++,
+      output({ side: init.side, sourceSide: init.side, timestampBasis: 'firmware_event_time_v1', timestampMs: frame.observedAtMs, configHash: init.configHashes[init.side], sequence: sequence++,
         inputHash: 'a'.repeat(64), flags: null, limitations: [], readings: [
           { metric: 'heart_rate', unit: 'bpm', windowMs: null, value: 60, quality: 1 },
           { metric: 'breathing_rate', unit: 'breaths/min', windowMs: null, value: 12, quality: 1 },
           { metric: 'window_ibi_variability_v1', unit: 'ms', windowMs: 300000, value: null, quality: 0 },
         ] })
     }
-    result = { health: { state: 'completed', reason: 'window_complete', records: sequence, outputs: sequence, cpu_ms: 1,
-      input_hash: 'a'.repeat(64), counts: { records: sequence, accepted_frames: sequence, empty_channel_frames: 0,
+    result = { health: { timestampBasis: 'firmware_event_time_v1', state: 'completed', reason: 'window_complete', records: sequence, outputs: sequence, cpu_ms: 1,
+      input_hash: 'a'.repeat(64), counts: { mechanical_gated_frames: 0, timestamp_rejected_frames: 0, records: sequence, accepted_frames: sequence, empty_channel_frames: 0,
         pump_gated_frames: 0, preroll_outputs: 0, scored_outputs: sequence }, limitations: [] },
     inputBytes: worker.corruptReceipt ? 100001 : 100, outputBytes: 100, peakObservedRssBytes: 1000, rssSamples: 2, maximumObservationGapMs: 100,
     budgets: options.budgets, memoryScope: 'sum_rss_of_shadow_process_group', exactKernelPeak: false }

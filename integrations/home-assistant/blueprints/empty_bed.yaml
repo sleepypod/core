@@ -1,0 +1,95 @@
+# Disabled at startup; review inputs and qualify devices before enabling.
+blueprint:
+  name: SleepyPod — Empty-bed scene
+  description: Run a selected scene only after a qualified occupied-to-empty transition has remained empty
+    for five minutes and both sides have been continuously known empty for five minutes. No action at
+    startup or on unavailable-to-empty transitions. It never switches the Pod off.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Allow this automation
+      selector:
+        boolean: {}
+      default: false
+      description: Leave off until you review the selected devices and qualify the sensors. It is checked
+        inside actions too; Run actions cannot bypass it. The automation also starts disabled after every
+        reload/restart.
+    left_occupancy:
+      name: Left qualified occupancy
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
+            device_class: occupancy
+      description: Use the calibrated, expiring occupancy entity published by this Core fork after MQTT
+        and actual occupancy have been qualified. Occupancy is not sleep. Unknown/unavailable transitions
+        do not trigger actions.
+    right_occupancy:
+      name: Right qualified occupancy
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
+            device_class: occupancy
+      description: Use the calibrated, expiring occupancy entity published by this Core fork after MQTT
+        and actual occupancy have been qualified. Occupancy is not sleep. Unknown/unavailable transitions
+        do not trigger actions.
+    scene:
+      name: Scene
+      selector:
+        entity:
+          filter:
+            domain: scene
+      description: Select a locally tested Home Assistant scene containing only the intended lights, shades,
+        or supported audio. No scene or device is selected automatically. This never commands the Pod.
+initial_state: false
+mode: single
+max_exceeded: silent
+variables:
+  allow_actions: !input 'allow_actions'
+  left_occupancy: !input 'left_occupancy'
+  right_occupancy: !input 'right_occupancy'
+triggers:
+- trigger: state
+  entity_id:
+  - !input 'left_occupancy'
+  - !input 'right_occupancy'
+  from: 'on'
+  to: 'off'
+  for:
+    minutes: 5
+conditions:
+- condition: template
+  value_template: |-
+    {{ allow_actions is sameas true and trigger is defined and trigger.platform == 'state'
+       and trigger.from_state is not none and trigger.from_state.state == 'on'
+       and trigger.to_state is not none and trigger.to_state.state == 'off'
+       and left_occupancy != right_occupancy
+       and is_state(left_occupancy, 'off') and is_state(right_occupancy, 'off') }}
+- condition: state
+  entity_id:
+  - !input 'left_occupancy'
+  - !input 'right_occupancy'
+  state: 'off'
+  for:
+    minutes: 5
+actions:
+- condition: template
+  value_template: |-
+    {{ allow_actions is sameas true and trigger is defined and trigger.platform == 'state'
+       and trigger.from_state is not none and trigger.from_state.state == 'on'
+       and trigger.to_state is not none and trigger.to_state.state == 'off'
+       and left_occupancy != right_occupancy
+       and is_state(left_occupancy, 'off') and is_state(right_occupancy, 'off') }}
+- condition: state
+  entity_id:
+  - !input 'left_occupancy'
+  - !input 'right_occupancy'
+  state: 'off'
+  for:
+    minutes: 5
+- action: scene.turn_on
+  target:
+    entity_id: !input 'scene'

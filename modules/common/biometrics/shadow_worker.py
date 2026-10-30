@@ -13,6 +13,7 @@ from .config import config_hash
 from .replay import MAX_CHANNEL_BYTES, RecordedContext
 from .shadow import ProspectiveShadow
 from .processing import HRV_WINDOW_S
+from .live_input import FIRMWARE_TIMESTAMP_BASIS
 
 MAX_LINE_BYTES = 128 * 1024
 
@@ -74,7 +75,7 @@ def run(source, destination):
         candidate = output.reading.candidate
         pending.append({'sequence': output.sequence, 'inputHash': output.input_hash,
             'side': output.reading.side, 'sourceSide': candidate.run_context.source_side,
-            'timestampMs': output.reading.timestamp_ms, 'configHash': candidate.run_context.config_hash,
+            'timestampMs': output.reading.timestamp_ms, 'timestampBasis': FIRMWARE_TIMESTAMP_BASIS, 'configHash': candidate.run_context.config_hash,
             'readings': [
                 {'metric': 'heart_rate', 'unit': 'bpm', 'windowMs': None, 'value': candidate.heart_rate, 'quality': candidate.quality_score},
                 {'metric': 'breathing_rate', 'unit': 'breaths/min', 'windowMs': None, 'value': candidate.breathing_rate, 'quality': candidate.quality_score},
@@ -99,12 +100,13 @@ def run(source, destination):
             exact(message, 'type sequence observedAtMs record context')
             if message['type'] != 'frame' or type(message['sequence']) is not int or message['sequence'] != expected_sequence:
                 raise ValueError('Out-of-order shadow protocol frame')
-            exact(message['context'], 'activeSides leftOccupied rightOccupied pumpContextKnown')
+            exact(message['context'], 'activeSides leftOccupied rightOccupied pumpContextKnown'
+                  + (' mechanical' if 'mechanical' in message['context'] else ''))
             context = message['context']
             if context['activeSides'] is not None and not isinstance(context['activeSides'], list):
                 raise ValueError('Invalid shadow active sides')
             recorded = RecordedContext(tuple(context['activeSides']) if context['activeSides'] is not None else None,
-                context['leftOccupied'], context['rightOccupied'], context['pumpContextKnown'])
+                context['leftOccupied'], context['rightOccupied'], context['pumpContextKnown'], context.get('mechanical'))
             if not isinstance(message['record'], dict):
                 raise ValueError('Invalid shadow record')
             record = dict(message['record'])

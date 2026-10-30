@@ -122,7 +122,7 @@ vi.mock('../StageCanvas', () => ({
 import { TempStage } from '../TempStage'
 
 const sideStatus = (target: number, level: number, current = 80) => ({ currentTemperature: current, targetTemperature: target, currentLevel: 0, targetLevel: level, heatingDuration: 0 })
-const rows = (points: [string, number][]) => points.map(([time, temperature], i) => ({ id: i + 1, dayOfWeek: 'monday', time, temperature, enabled: true }))
+const rows = (dayOfWeek: string, points: [string, number][]) => points.map(([time, temperature], index) => ({ id: index + 1, dayOfWeek, time, temperature, enabled: true }))
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW })
@@ -150,7 +150,7 @@ beforeEach(() => {
   m.notices = []
   m.settings = { device: { temperatureUnit: 'F' }, sides: { left: { name: 'Jon' }, right: { name: 'Heidi' } } }
   m.occupancy = { left: { occupied: true, available: true }, right: { occupied: false, available: true } }
-  m.schedules = { left: rows([['22:00', 72], ['02:00', 68], ['06:00', 79]]), right: [] }
+  m.schedules = { left: [...rows('monday', [['22:00', 72]]), ...rows('tuesday', [['02:00', 68], ['06:00', 79]])], right: [] }
   m.records = { left: undefined, right: undefined }
   m.history = undefined
   localStorage.clear()
@@ -357,6 +357,7 @@ describe('TempStage', () => {
     expect(screen.queryByTestId('stage-canvas')).toBeNull()
     expect(screen.queryByTestId('stage-labels')).toBeNull()
     expect(screen.queryByTestId('stage-loading')).toBeNull()
+    expect(screen.queryByTestId('stage-panel')).toBeNull()
     expect(screen.getByTestId('stage-timeline')).toBeTruthy()
     expect(screen.getByTestId('stage-mode').textContent).toBe('Live')
     expect(screen.getByTestId('stage-hints').textContent).toContain('set temp on a side')

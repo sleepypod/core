@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { ArrowUpRight, BookOpen, ChevronLeft } from 'lucide-react'
 import type { inferRouterOutputs } from '@trpc/server'
 import { trpc } from '@/src/utils/trpc'
@@ -11,7 +12,9 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { cn } from '@/lib/utils'
 import { Card, IndexRow, InlineError, PageHeader, SectionLabel, SettingRow, Skeleton } from '@/src/components/ds'
 import { InternetToggleCard } from '@/src/components/status/InternetToggleCard'
-import { DOCS_URL } from '@/src/components/AppShell/navItems'
+import { DOCS_URL, NAV_ITEMS, langFromPath } from '@/src/components/AppShell/navItems'
+import { useBaseAvailable } from '@/src/components/AppShell/useBaseAvailable'
+import { OwnerSessionControls } from '@/src/components/AppShell/OwnerSessionControls'
 import { UpdateCard } from '@/src/components/status/UpdateCard'
 import { SystemInfoCard } from '@/src/components/status/SystemInfoCard'
 import { DeviceSettingsForm } from './DeviceSettingsForm'
@@ -114,6 +117,25 @@ function SectionBody({ section, side, onSideChange }: {
   onSideChange: (side: Side) => void
 }) {
   switch (section) {
+    case 'connection':
+      return (
+        <SectionColumns left={(
+          <>
+            <OwnerSessionControls />
+            <Card>
+              <h2 className="text-lg font-medium">Personal household preparation</h2>
+              <p className="mt-2 text-sm text-fg-2">Prepare separate profiles and private routine drafts. Joining does not activate a second sleeper or move your existing routine.</p>
+              <Link href="/household/index.html" prefetch={false} className="mt-3 block text-sm text-link">Open personal preparation</Link>
+              <a href="/guide/marissa.html" className="mt-2 block text-sm text-link">Marissa’s interactive practice guide</a>
+            </Card>
+            <Card>
+              <p className="text-sm text-fg-2">Built on SleepyPod Core, with Pod 4 compatibility, personal comfort and owner access.</p>
+              <a href="https://github.com/lucaandrea/sleepypod-core" className="text-sm text-link" target="_blank" rel="noopener noreferrer">Controller source & AGPL license</a>
+            </Card>
+          </>
+        )}
+        />
+      )
     case 'device':
       return (
         <>
@@ -213,6 +235,8 @@ function SidesSection({ data, side, onSideChange }: {
 
 /** Phone Settings index: inline appearance, then section rows. */
 function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void, className?: string }) {
+  const lang = langFromPath(usePathname())
+  const hasBase = useBaseAvailable()
   const { leftName, rightName } = useSideNames()
   const settings = trpc.settings.getAll.useQuery({})
   const row = (id: SectionId, value?: ReactNode) => {
@@ -223,6 +247,17 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
   return (
     <div className={cn('flex flex-col gap-3.5', className)}>
       <PageHeader title="Settings" />
+
+      <SectionLabel>CONTROLS</SectionLabel>
+      <div className="rounded-card border border-line bg-surface px-4">
+        {NAV_ITEMS.filter(item => ['base', 'autopilot', 'home', 'system'].includes(item.id) && (item.id !== 'base' || hasBase)).map(item => (
+          <Link key={item.id} href={`/${lang}${item.href}`} className="flex min-h-12 items-center gap-3 border-t border-line py-3.5 text-[15px] text-fg no-underline first:border-t-0 hover:bg-active hover:no-underline">
+            <item.icon size={17} className="text-icon" aria-hidden />
+            <span className="flex-1">{item.label}</span>
+            <ArrowUpRight size={16} className="text-fg-3" aria-hidden />
+          </Link>
+        ))}
+      </div>
 
       <SectionLabel className="mt-1">APPEARANCE</SectionLabel>
       <div className="flex flex-col gap-3 rounded-card border border-line bg-surface px-4 py-3.5">
@@ -255,6 +290,7 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
         {row('network')}
         {row('sides', <span className="font-sans">{`${leftName}, ${rightName}`}</span>)}
         {row('sleep-stages')}
+        {row('biometric-calibration')}
       </div>
 
       <SectionLabel className="mt-1">SYSTEM</SectionLabel>
@@ -262,6 +298,7 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
         {row('appearance')}
         {row('backup')}
         {row('updates')}
+        {row('connection')}
       </div>
 
       <SectionLabel className="mt-1">HELP</SectionLabel>
@@ -270,7 +307,7 @@ function SettingsIndex({ onOpen, className }: { onOpen: (id: SectionId) => void,
           href={DOCS_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex w-full items-center gap-3 px-0.5 py-3.5 text-[15px] text-fg no-underline hover:bg-active hover:no-underline"
+          className="flex w-full flex-wrap items-center gap-3 px-0.5 py-3.5 text-[15px] text-fg no-underline hover:bg-active hover:no-underline"
         >
           <BookOpen size={17} className="text-icon" />
           <span className="flex-1">Docs</span>

@@ -25,6 +25,7 @@ vi.mock('@/src/components/Schedule/SchedulePage', () => ({ SchedulePage: (props:
 } }))
 vi.mock('@/src/components/Sleep/SleepSections', () => ({ SleepSections: () => <div>Sleep page</div> }))
 vi.mock('@/src/components/System/SystemScreen', () => ({ SystemScreen: () => <div>System page</div> }))
+vi.mock('@/src/components/Home/BedroomSummary', () => ({ BedroomSummary: () => <aside>Bedroom context</aside> }))
 
 it('renders redesigned entry pages and passes rule route parameters', async () => {
   const { default: Autopilot } = await import('../autopilot/page')
@@ -69,7 +70,9 @@ it('sets fonts, locale and pre-paint theme initialization in the app layout', as
   const html = renderToStaticMarkup(await Layout({ params: Promise.resolve({ lang: 'en' }), children: <h1>Pod</h1> }))
   expect(html).toContain('class="dark sans mono"')
   expect(html).toContain('sleepypod-pref-theme')
-  expect(html).toContain('<main><h1>Pod</h1></main>')
+  // Server markup must not mount device queries or expose children before authentication.
+  expect(html).toContain('Checking your connection')
+  expect(html).not.toContain('<h1>Pod</h1>')
 })
 
 it('retries a failed System page and includes an optional error digest', async () => {

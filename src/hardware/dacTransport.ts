@@ -19,6 +19,8 @@ import { createServer, type Server, type Socket } from 'net'
 import split from 'binary-split'
 import type { Transform } from 'stream'
 import { beginStatusChange } from './statusRevision'
+import { beforeControlWrite } from '@/src/controls/context'
+import { recordMechanicalCommand } from '@/src/biometrics/mechanical/dispatch'
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -273,6 +275,14 @@ class DacTransport {
       }
 
       const requestBytes = Buffer.concat([Buffer.from(message), SEPARATOR])
+      const command = message.split('\n', 1)[0]
+      if (command !== '0' && command !== '14') beforeControlWrite()
+      // Record at the actual FIFO dispatch boundary, including raw/legacy callers.
+      // A conservative maximum avoids trusting malformed or firmware-specific payloads.
+      const mechanicalOpcode = Number.parseInt(command, 10)
+      if ([2, 5, 6, 17].includes(mechanicalOpcode)) recordMechanicalCommand('vibration', 180_000)
+      if (mechanicalOpcode === 16) recordMechanicalCommand('vibration', 0, true)
+      if (mechanicalOpcode === 13) recordMechanicalCommand('priming')
       await this.write(requestBytes)
 
       const timeoutMs = messageResponseTimeoutMs()

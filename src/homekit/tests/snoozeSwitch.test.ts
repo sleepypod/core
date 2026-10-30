@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Characteristic } from 'hap-nodejs'
+import type { AlarmConfig } from '@/src/hardware/alarmPersistence'
 
 const mocks = vi.hoisted(() => ({
   clearAlarm: vi.fn().mockResolvedValue(undefined),
   snoozeAlarmFn: vi.fn(),
   cancelSnoozeFn: vi.fn(),
-  activeConfig: vi.fn((): { vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number } | null => null),
+  activeConfig: vi.fn((): AlarmConfig | null => null),
   markAlarmEnded: vi.fn().mockResolvedValue(undefined),
   state: { active: false },
 }))
@@ -52,7 +53,7 @@ describe('snoozeSwitch accessory', () => {
 
   it('on → clears alarm and registers snooze with neutral pattern', async () => {
     const { service, stop } = buildSnoozeSwitch('left')
-    await service.getCharacteristic(Characteristic.On).setValue(true)
+    await service.getCharacteristic(Characteristic.On).handleSetRequest(true)
     expect(clearAlarm).toHaveBeenCalledWith('left')
     expect(snoozeAlarm).toHaveBeenCalledWith(
       'left',
@@ -63,17 +64,18 @@ describe('snoozeSwitch accessory', () => {
   })
 
   it('on → repeats the vibrating alarm\'s own settings and records it stopped', async () => {
-    mocks.activeConfig.mockReturnValue({ vibrationIntensity: 100, vibrationPattern: 'double', duration: 120 })
+    const config = { vibrationIntensity: 100, vibrationPattern: 'double' as const, duration: 120, snoozeDuration: 600, snoozeTaper: 50, snoozeCount: 2 }
+    mocks.activeConfig.mockReturnValue(config)
     const { service, stop } = buildSnoozeSwitch('right')
-    await service.getCharacteristic(Characteristic.On).setValue(true)
+    await service.getCharacteristic(Characteristic.On).handleSetRequest(true)
     expect(mocks.markAlarmEnded).toHaveBeenCalledWith('right')
-    expect(snoozeAlarm).toHaveBeenCalledWith('right', 9 * 60, { vibrationIntensity: 100, vibrationPattern: 'double', duration: 120 })
+    expect(snoozeAlarm).toHaveBeenCalledWith('right', 150, config)
     stop()
   })
 
   it('off → calls cancelSnooze and skips clearAlarm', async () => {
     const { service, stop } = buildSnoozeSwitch('right')
-    await service.getCharacteristic(Characteristic.On).setValue(false)
+    await service.getCharacteristic(Characteristic.On).handleSetRequest(false)
     expect(cancelSnooze).toHaveBeenCalledWith('right')
     expect(clearAlarm).not.toHaveBeenCalled()
     expect(snoozeAlarm).not.toHaveBeenCalled()
@@ -84,7 +86,7 @@ describe('snoozeSwitch accessory', () => {
     clearAlarm.mockRejectedValueOnce(new Error('hardware unreachable'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { service, stop } = buildSnoozeSwitch('left')
-    await service.getCharacteristic(Characteristic.On).setValue(true)
+    await service.getCharacteristic(Characteristic.On).handleSetRequest(true)
     expect(snoozeAlarm).toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith(
       '[homekit] clearAlarm(left) failed during snooze:',

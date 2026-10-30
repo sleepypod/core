@@ -2,6 +2,7 @@ import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
 import type { AlarmConfig } from './alarmPersistence'
+import { nextSnoozeSeconds } from './snoozeLength'
 import { getTemperatureController } from '@/src/temperature/instance'
 import { shouldBlock as pumpStallShouldBlock } from './pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
@@ -140,40 +141,44 @@ export class GestureActionHandler {
     const isAlarmVibrating = state?.isAlarmVibrating ?? false
 
     if (isAlarmVibrating) {
-      const client = this.deps.newHardwareClient(this.socketPath)
-      // The firmware already stopped the vibration on the tap, so the clear only
-      // confirms it. A failed write must not drop the snooze or leave the alarm
-      // marked vibrating.
-      const clear = async () => {
+      await withSideLock(event.side, async () => {
+        const current = await this.deps.findDeviceState(event.side)
+        if (!current?.isAlarmVibrating) return
+        const client = this.deps.newHardwareClient(this.socketPath)
+        // The firmware already stopped the vibration on the tap, so the clear only
+        // confirms it. A failed write must not drop the snooze or leave the alarm
+        // marked vibrating.
+        const clear = async () => {
+          try {
+            await client.connect()
+            await client.clearAlarm(event.side)
+          }
+          catch (error) {
+            console.error(`[gestureActionHandler] clearAlarm failed for ${event.side}:`, error)
+          }
+        }
         try {
-          await client.connect()
-          await client.clearAlarm(event.side)
+          if (gesture.alarmBehavior === 'dismiss') {
+            await clear()
+            this.deps.alarm.cancelSnooze(event.side)
+            await this.deps.alarm.ended(event.side)
+          }
+          else if (gesture.alarmBehavior === 'snooze') {
+            // Read before ended() forgets it: the snoozed alarm comes back as it was.
+            const config = this.deps.alarm.activeConfig(event.side) ?? DEFAULT_SNOOZE_ALARM
+            await clear()
+            await this.deps.alarm.ended(event.side)
+            this.deps.alarm.snooze(event.side, nextSnoozeSeconds(config), config)
+          }
+          else {
+            // No alarm behavior configured: the firmware still stopped it.
+            await this.deps.alarm.ended(event.side)
+          }
         }
-        catch (error) {
-          console.error(`[gestureActionHandler] clearAlarm failed for ${event.side}:`, error)
+        finally {
+          client.disconnect()
         }
-      }
-      try {
-        if (gesture.alarmBehavior === 'dismiss') {
-          await clear()
-          this.deps.alarm.cancelSnooze(event.side)
-          await this.deps.alarm.ended(event.side)
-        }
-        else if (gesture.alarmBehavior === 'snooze') {
-          // Read before ended() forgets it: the snoozed alarm comes back as it was.
-          const config = this.deps.alarm.activeConfig(event.side) ?? DEFAULT_SNOOZE_ALARM
-          await clear()
-          await this.deps.alarm.ended(event.side)
-          this.deps.alarm.snooze(event.side, gesture.alarmSnoozeDuration ?? 300, config)
-        }
-        else {
-          // No alarm behavior configured: the firmware still stopped it.
-          await this.deps.alarm.ended(event.side)
-        }
-      }
-      finally {
-        client.disconnect()
-      }
+      })
     }
     else {
       if (gesture.alarmInactiveBehavior === 'power') {
@@ -190,7 +195,7 @@ export class GestureActionHandler {
           try {
             await client.connect()
             if (nextPowered) await getTemperatureController().setManualLocked(event.side, target)
-            else await getTemperatureController().powerOffLocked(event.side)
+            else await getTemperatureController().powerOffLocked(event.side, true)
           }
           finally {
             client.disconnect()

@@ -1,0 +1,49 @@
+# Disabled at startup; review inputs and qualify devices before enabling.
+blueprint:
+  name: SleepyPod — Wind-down scene
+  description: Run a selected scene at your chosen Home Assistant local time. This is a separate house
+    schedule, not a Pod bedtime routine. Starts disabled. No catch-up after outages.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Allow this automation
+      selector:
+        boolean: {}
+      default: false
+      description: Leave off until you review the selected devices and qualify the sensors. It is checked
+        inside actions too; Run actions cannot bypass it. The automation also starts disabled after every
+        reload/restart.
+    scene:
+      name: Scene
+      selector:
+        entity:
+          filter:
+            domain: scene
+      description: Select a locally tested Home Assistant scene containing only the intended lights, shades,
+        or supported audio. No scene or device is selected automatically. This never commands the Pod.
+    time:
+      name: Wind-down time (Home Assistant timezone)
+      selector:
+        time: {}
+      default: '21:30:00'
+initial_state: false
+mode: single
+max_exceeded: silent
+variables:
+  allow_actions: !input 'allow_actions'
+triggers:
+- trigger: time
+  at: !input 'time'
+conditions:
+- condition: template
+  value_template: '{{ allow_actions is sameas true and trigger is defined and trigger.platform == ''time''
+    }}'
+actions:
+- condition: template
+  value_template: '{{ allow_actions is sameas true and trigger is defined and trigger.platform == ''time''
+    }}'
+- action: scene.turn_on
+  target:
+    entity_id: !input 'scene'

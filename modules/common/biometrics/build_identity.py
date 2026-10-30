@@ -16,7 +16,7 @@ SOURCE_FILES = (
     'common/__init__.py', 'common/cbor_raw.py',
     'common/biometrics/__init__.py', 'common/biometrics/build_identity.py',
     'common/biometrics/config.py', 'common/biometrics/manifest.v1.json',
-    'common/biometrics/frames.py', 'common/biometrics/gates.py',
+    'common/biometrics/live_input.py', 'common/biometrics/mechanical.py', 'common/biometrics/frames.py', 'common/biometrics/gates.py',
     'common/biometrics/processing.py', 'common/biometrics/routing.py',
     'common/biometrics/signal.py', 'common/biometrics/raw_artifacts.py',
     'common/biometrics/raw_records.py', 'common/biometrics/retained_replay.py',

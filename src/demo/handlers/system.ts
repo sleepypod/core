@@ -124,7 +124,7 @@ export const system: DemoHandlers<'system'> = {
     const branch = input.branch ?? 'main'
     // Pretend the pod restarts on a fresh build a few seconds later.
     pendingUpdateAt = Date.now() + 6_000
-    return { triggered: true, branch, message: `Update to ${branch} started (demo — nothing is installed)` }
+    return { triggered: true, branch, repository: 'example/sleepypod-core', message: `Update to ${branch} started (demo — nothing is installed)` }
   },
 
   getLogSources: () => ({ sources: LOG_SOURCES.map(s => ({ ...s, active: true })) }),

@@ -30,8 +30,8 @@ describe('tonight window', () => {
 describe('curves and preview', () => {
   const win = stageWindow(now)
   const curves = stageCurves({
-    left: rows('monday', [['22:00', 72], ['02:00', 68], ['06:00', 79]]),
-    right: rows('monday', [['23:00', 84], ['05:30', 80]]),
+    left: [...rows('monday', [['22:00', 72]]), ...rows('tuesday', [['02:00', 68], ['06:00', 79]])],
+    right: [...rows('monday', [['23:00', 84]]), ...rows('tuesday', [['05:30', 80]])],
   }, win)
   it('places both nights on absolute time and shares one range', () => {
     expect(curves.left).toHaveLength(3)
@@ -59,7 +59,7 @@ describe('curves and preview', () => {
 
 describe('side activity', () => {
   const win = stageWindow(now)
-  const curve = stageCurves({ left: rows('monday', [['22:00', 84], ['06:00', 84]]), right: [] }, win).left
+  const curve = stageCurves({ left: [...rows('monday', [['22:00', 84]]), ...rows('tuesday', [['06:00', 84]])], right: [] }, win).left
   const at = (day: number, h: number, min = 0) => new Date(2026, 8, day, h, min).getTime()
 
   it('clips powered stretches to the window and reads the side\'s own target column', () => {

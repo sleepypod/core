@@ -1,10 +1,12 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db } from '@/src/db'
+import { db, sqlite } from '@/src/db'
+import { readTemperatureApplications, temperatureApplicationQuerySchema, temperatureApplicationsSchema } from '@/src/temperature/applications'
 import { deviceState } from '@/src/db/schema'
 import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
+import { pauseComfortAfterManual } from '@/src/comfort/manual'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { markAlarmEnded, markAlarmStarted } from '@/src/hardware/alarmState'
@@ -113,6 +115,11 @@ const pendingTemps = new Map<string, PendingTemp>()
  * polling, consider caching device state from database instead.
  */
 export const deviceRouter = router({
+  temperatureApplications: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/device/temperature/applications', tags: ['Device'] } })
+    .input(temperatureApplicationQuerySchema)
+    .output(temperatureApplicationsSchema)
+    .query(({ input }) => readTemperatureApplications(sqlite, input.side, input.beforeId)),
   /**
    * Get current device status directly from hardware.
    *
@@ -200,7 +207,7 @@ export const deviceRouter = router({
 
       if (!status) {
         status = await withHardwareClient(
-          client => client.getDeviceStatus(), 'Failed to get device status',
+          client => client.getDeviceStatus(), 'Failed to get device status', { retryReadOnly: true },
         )
         // The monitor already persists cached observations. Preserve the fallback
         // sync only when a hardware read was necessary. Like the monitor's
@@ -441,11 +448,11 @@ export const deviceRouter = router({
           // not switch it off once the alarm is over.
           const jobManager = await getJobManager()
           jobManager.releaseHeldPowerOff(input.side)
-          if (input.temperature === undefined) await getTemperatureController().powerOnLocked(input.side)
+          if (input.temperature === undefined) await getTemperatureController().powerOnLocked(input.side, 75, () => true, true)
           else await getTemperatureController().setManualLocked(input.side, input.temperature)
         }
         else {
-          await getTemperatureController().powerOffLocked(input.side)
+          await getTemperatureController().powerOffLocked(input.side, true)
         }
 
         return { success: true }
@@ -498,7 +505,7 @@ export const deviceRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       markSideMutated(input.side)
-      return withHardwareClient(async (client) => {
+      return withSideLock(input.side, () => withHardwareClient(async (client) => {
         cancelSnooze(input.side)
         const alarm = {
           vibrationIntensity: input.vibrationIntensity,
@@ -510,7 +517,7 @@ export const deviceRouter = router({
         // vibration's duration runs out.
         await markAlarmStarted(input.side, alarm)
         return { success: true }
-      }, 'Failed to set alarm')
+      }, 'Failed to set alarm'))
     }),
 
   /**
@@ -536,12 +543,12 @@ export const deviceRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async ({ input }) => {
       markSideMutated(input.side)
-      return withHardwareClient(async (client) => {
+      return withSideLock(input.side, () => withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
         cancelSnooze(input.side)
         await markAlarmEnded(input.side)
         return { success: true }
-      }, 'Failed to clear alarm')
+      }, 'Failed to clear alarm'))
     }),
 
   /**
@@ -560,7 +567,7 @@ export const deviceRouter = router({
     )
     .output(z.object({ success: z.boolean(), snoozeUntil: z.number() }))
     .mutation(async ({ input }) => {
-      return withHardwareClient(async (client) => {
+      return withSideLock(input.side, () => withHardwareClient(async (client) => {
         await client.clearAlarm(input.side)
 
         const snoozeUntil = snoozeAlarm(input.side, input.duration, {
@@ -570,7 +577,7 @@ export const deviceRouter = router({
         })
         await markAlarmEnded(input.side)
         return { success: true, snoozeUntil: Math.floor(snoozeUntil.getTime() / 1000) }
-      }, 'Failed to snooze alarm')
+      }, 'Failed to snooze alarm'))
     }),
 
   /**
@@ -611,6 +618,11 @@ export const deviceRouter = router({
     .output(z.object({ success: z.boolean() }))
     .mutation(async () => {
       return withHardwareClient(async (client) => {
+        for (const side of ['left', 'right'] as const) {
+          await withSideLock(side, async () => {
+            pauseComfortAfterManual(side)
+          })
+        }
         await client.startPriming()
         return { success: true }
       }, 'Failed to start priming')
@@ -673,6 +685,9 @@ export const deviceRouter = router({
       disclaimer: z.string(),
     }))
     .mutation(async ({ input }) => {
+      if (process.env.SLEEPYPOD_ENABLE_RAW_COMMANDS !== '1') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'General-purpose hardware commands are disabled' })
+      }
       const opcode = Object.hasOwn(COMMAND_MAP, input.command)
         ? COMMAND_MAP[input.command]
         : input.command

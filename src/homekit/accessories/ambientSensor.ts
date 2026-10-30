@@ -1,70 +1,32 @@
-/**
- * HomeKit TemperatureSensor accessory bound to the Pod's ambient air sensor.
- *
- * The Pod's bed unit ships an ambient temperature reading alongside the
- * fluid-temperature channels; biometrics modules persist it to
- * bed_temp.ambient_temp (centidegrees C) at roughly 60s cadence. This
- * accessory exposes the latest row as a generic HomeKit temperature
- * sensor so Home / automations can react to room conditions the same
- * way they would to any third-party thermometer.
- *
- * Poll cadence matches the upstream write rate — a faster poll would
- * just return the same row.
- */
+import { Service, Characteristic, HapStatusError } from 'hap-nodejs'
+// HAP SERVICE_COMMUNICATION_FAILURE; the library exports this as an ambient const enum.
+import { homeSensors } from '@/src/telemetry/sensorCache'
 
-import { Service, Characteristic } from 'hap-nodejs'
-import { desc } from 'drizzle-orm'
-import { biometricsDb } from '@/src/db'
-import { bedTemp } from '@/src/db/biometrics-schema'
-import { centiDegreesToC } from '@/src/lib/tempUtils'
-
-const POLL_MS = 60_000
-
-// Returned by onGet before the first DB read lands. HomeKit requires a
-// numeric value; 20°C is a benign room-temperature sentinel that won't
-// look like a sensor fault in the Home app.
-const NEUTRAL_C = 20
-
-export interface AmbientSensorAccessory {
-  service: Service
-  stop: () => void
-}
-
-async function readAmbientC(): Promise<number | null> {
-  try {
-    const [row] = await biometricsDb
-      .select({ ambientTemp: bedTemp.ambientTemp })
-      .from(bedTemp)
-      .orderBy(desc(bedTemp.timestamp))
-      .limit(1)
-    if (!row || row.ambientTemp == null) return null
-    return centiDegreesToC(row.ambientTemp)
-  }
-  catch (e) {
-    console.warn('[homekit] ambient sensor read failed:', e instanceof Error ? e.message : e)
-    return null
-  }
-}
+export interface AmbientSensorAccessory { service: Service, stop: () => void }
 
 export function buildAmbientSensor(): AmbientSensorAccessory {
   const service = new Service.TemperatureSensor('Pod ambient', 'ambient')
-  let lastC: number = NEUTRAL_C
-
-  service.getCharacteristic(Characteristic.CurrentTemperature)
-    .onGet(() => lastC)
-
-  const refresh = async (): Promise<void> => {
-    const c = await readAmbientC()
-    if (c == null) return
-    lastC = c
-    service.updateCharacteristic(Characteristic.CurrentTemperature, c)
+  const read = (): number => {
+    const reading = homeSensors.ambient()
+    if (!reading.available || typeof reading.temperature !== 'number') {
+      throw new HapStatusError(-70402)
+    }
+    return reading.temperature
   }
-  void refresh()
-  const handle = setInterval(() => void refresh(), POLL_MS)
-  handle.unref()
-
-  return {
-    service,
-    stop: () => clearInterval(handle),
+  const characteristic = service.getCharacteristic(Characteristic.CurrentTemperature)
+    .setProps({ minValue: -100, maxValue: 100 }).onGet(read)
+  const refresh = () => {
+    try {
+      characteristic.updateValue(read())
+      service.updateCharacteristic(Characteristic.StatusFault, Characteristic.StatusFault.NO_FAULT)
+    }
+    catch {
+      characteristic.updateValue(new HapStatusError(-70402))
+      service.updateCharacteristic(Characteristic.StatusFault, Characteristic.StatusFault.GENERAL_FAULT)
+    }
   }
+  refresh()
+  const handle = setInterval(refresh, 5_000)
+  handle.unref?.()
+  return { service, stop: () => clearInterval(handle) }
 }

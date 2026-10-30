@@ -57,14 +57,16 @@ export class BacktestJobStore {
     if (protocol.waveformStages === undefined) delete protocol.waveformStages
     key.parse(idempotencyKey)
     const requestHash = configHash({ datasetId, protocol })
-    const dataset = new DatasetStore(this.db).read(datasetId)
-    if (protocol.mode === 'signal_replay' && dataset.snapshot.version !== 'waveform-dataset-v1') throw new ReferenceInputError('INSUFFICIENT_RAW_DATA', 'Signal replay requires retained waveform inputs')
     return this.db.transaction((tx) => {
       const existing = tx.select().from(experiments).where(eq(experiments.idempotencyKey, idempotencyKey)).get()
       if (existing) {
         if (existing.requestHash !== requestHash) throw new ReferenceInputError('REVISION_CONFLICT', 'Experiment idempotency key changed')
         return existing
       }
+      // Recover a committed request before reading inputs that the owner may
+      // since have released. New experiments still require verified retention.
+      const dataset = new DatasetStore(tx).read(datasetId)
+      if (protocol.mode === 'signal_replay' && dataset.snapshot.version !== 'waveform-dataset-v1') throw new ReferenceInputError('INSUFFICIENT_RAW_DATA', 'Signal replay requires retained waveform inputs')
       const total = tx.select({ count: sql<number>`count(*)` }).from(experiments).get()?.count ?? 0
       if (total >= 1000) throw new ReferenceInputError('RESOURCE_LIMIT', 'Experiment history has reached its 1000-entry bound')
       return tx.insert(experiments).values({ id: randomUUID(), datasetId, idempotencyKey, requestHash, side: dataset.side,

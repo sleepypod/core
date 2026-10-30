@@ -47,6 +47,7 @@ export default defineConfig([
     'next-env.d.ts',
     'out/**',
     'public/vendor/**',
+    'public/household/personal-runtime.js', // Generated bundle; its TypeScript source is linted above.
   ]),
 
   /** Global JS overrides */

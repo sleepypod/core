@@ -121,6 +121,11 @@ jobs:
               uv pip install --python .venv/bin/python ${{ matrix.module.deps }}
             fi
           fi
+          # Probe the production environment before pytest or other test-only deps can mask missing imports.
+          if [ -f uv.lock ]; then
+            python "${{ github.workspace }}/scripts/deployment/probe_modules.py" \
+              --modules-root "${{ github.workspace }}/modules" --module "${{ matrix.module.name }}"
+          fi
           # shellcheck source=/dev/null
           . .venv/bin/activate
           uv pip install pytest pytest-cov

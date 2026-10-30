@@ -1,6 +1,7 @@
 /**
  * HomeKit Switch that snoozes (on) or cancels snooze (off) a side's alarm.
- * Snooze duration mirrors the iOS default (9 minutes) at neutral pattern.
+ * Snooze length comes from the ringing alarm (with its snooze taper); an
+ * alarm without one snoozes for the iOS default, 9 minutes.
  */
 
 import { Service, Characteristic } from 'hap-nodejs'
@@ -9,8 +10,10 @@ import {
   getSnoozeStatus,
   snoozeAlarm,
 } from '@/src/hardware/snoozeManager'
+import { nextSnoozeSeconds } from '@/src/hardware/snoozeLength'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getActiveAlarmConfig, markAlarmEnded } from '@/src/hardware/alarmState'
+import { withSideLock } from '@/src/hardware/sideLock'
 import type { Side } from '@/src/hardware/types'
 
 const SNOOZE_SECONDS = 9 * 60
@@ -32,22 +35,25 @@ export function buildSnoozeSwitch(side: Side): SnoozeSwitchAccessory {
     .onGet(() => getSnoozeStatus(side).active)
     .onSet(async (value) => {
       const on = Number(value) === 1
-      if (on) {
-        // Pull alarm-vibration off the bed and re-fire after the window,
-        // as it was (or gently, if no alarm of ours is vibrating).
-        const config = getActiveAlarmConfig(side) ?? { vibrationIntensity: 50, vibrationPattern: 'rise' as const, duration: 60 }
-        try {
-          await getSharedHardwareClient().clearAlarm(side)
+      if (!on) cancelSnooze(side)
+      return withSideLock(side, async () => {
+        if (on) {
+          // Pull alarm-vibration off the bed and re-fire after the window,
+          // as it was (or gently, if no alarm of ours is vibrating).
+          const config = getActiveAlarmConfig(side) ?? { vibrationIntensity: 50, vibrationPattern: 'rise' as const, duration: 60 }
+          try {
+            await getSharedHardwareClient().clearAlarm(side)
+          }
+          catch (e) {
+            console.warn(`[homekit] clearAlarm(${side}) failed during snooze:`, e instanceof Error ? e.message : e)
+          }
+          snoozeAlarm(side, nextSnoozeSeconds(config, SNOOZE_SECONDS), config)
+          await markAlarmEnded(side)
         }
-        catch (e) {
-          console.warn(`[homekit] clearAlarm(${side}) failed during snooze:`, e instanceof Error ? e.message : e)
+        else {
+          cancelSnooze(side)
         }
-        snoozeAlarm(side, SNOOZE_SECONDS, config)
-        await markAlarmEnded(side)
-      }
-      else {
-        cancelSnooze(side)
-      }
+      })
     })
 
   const handle = setInterval(() => {

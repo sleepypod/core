@@ -43,7 +43,8 @@ import * as databaseModule from '@/src/db'
 import { alarmSchedules, deviceSettings, deviceState, runOnceSessions, sideSettings, temperatureHolds, temperatureSchedules } from '@/src/db/schema'
 import { getTemperatureController, getTemperatureControlStatus, startTemperatureController, stopTemperatureController } from '../instance'
 import { withSideLock } from '@/src/hardware/sideLock'
-import { _resetFirmwareSynced, markFirmwareSynced } from '@/src/hardware/sideMutations'
+import { readTemperatureApplications } from '../applications'
+import { _resetFirmwareSynced, markFirmwareSynced, _resetHeatingSessionEvidence, recordHeatingSession } from '@/src/hardware/sideMutations'
 
 const fileDatabase = databaseModule as typeof databaseModule & { reopenForTest: () => void, cleanupForTest: () => void }
 afterAll(() => fileDatabase.cleanupForTest())
@@ -54,6 +55,8 @@ beforeEach(() => {
   safety.blocked = false
   vi.clearAllMocks()
   markFirmwareSynced() // the firmware has reported in, as it has on a running pod
+  recordHeatingSession('left', true)
+  recordHeatingSession('right', true)
   resetControlDatabase(sqlite)
   db.insert(deviceSettings).values({ id: 1, timezone: 'UTC', unusedZoneMode: 'follow' }).run()
   db.insert(sideSettings).values([{ side: 'left', name: 'Left' }, { side: 'right', name: 'Right' }]).run()
@@ -73,6 +76,64 @@ afterEach(async () => {
 })
 
 describe('production controller with migrated SQLite', () => {
+  it('journals the actual arbitration winner, never an unselected policy proposal', async () => {
+    const controller = getTemperatureController()
+    const now = Date.now()
+    await controller.setManual('left', 76)
+    await controller.replacePolicy('left', 'comfort', [{ id: 'step-1', source: 'autopilot', temperature: 74,
+      startsAt: now, expiresAt: now + 60000, createdAt: now, priority: 0 }], () => true)
+    expect(readTemperatureApplications(sqlite, 'left').items).toHaveLength(1)
+    expect(readTemperatureApplications(sqlite, 'left').items[0]).toMatchObject({ reason: 'manual', source: 'manual',
+      requestId: 'manual', targetF: 76, outcome: 'acknowledged', acknowledgment: 'accepted_not_physically_verified' })
+    await controller.resume('left')
+    expect(readTemperatureApplications(sqlite, 'left').items[0]).toMatchObject({ reason: 'reconcile', source: 'autopilot',
+      requestId: 'policy:comfort:step-1', targetF: 74, outcome: 'acknowledged' })
+    expect(readTemperatureApplications(sqlite, 'right').items).toEqual([])
+  })
+
+  it('records the current owner after transport recovery invalidates a policy', async () => {
+    let eligible = true
+    hardware.connect.mockImplementationOnce(async () => {
+      eligible = false
+    })
+    await getTemperatureController().replacePolicy('left', 'comfort', [{ id: 'expired', source: 'autopilot', temperature: 74,
+      startsAt: Date.now(), expiresAt: Date.now() + 60000, createdAt: Date.now(), priority: 0 }], () => eligible)
+    expect(readTemperatureApplications(sqlite, 'left').items).toHaveLength(1)
+    expect(readTemperatureApplications(sqlite, 'left').items[0]).toMatchObject({ source: 'schedule', targetF: 72 })
+  })
+
+  it('blocks temperature dispatch if the attempt cannot be saved but still allows shutdown', async () => {
+    const controller = getTemperatureController()
+    sqlite.exec('CREATE TRIGGER reject_attempt BEFORE INSERT ON temperature_applications BEGIN SELECT RAISE(ABORT, \'audit unavailable\'); END')
+    await expect(controller.setManual('left', 76)).rejects.toThrow('audit unavailable')
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+    await controller.powerOff('left')
+    expect(hardware.setPower).toHaveBeenCalledWith('left', false)
+    expect(readTemperatureApplications(sqlite, 'left').items).toEqual([])
+  })
+
+  it('keeps the successful owner hold and does not repeat a target when saving its acknowledgment fails', async () => {
+    const controller = getTemperatureController()
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    sqlite.exec('CREATE TRIGGER reject_ack BEFORE UPDATE ON temperature_applications WHEN NEW.outcome = \'acknowledged\' BEGIN SELECT RAISE(ABORT, \'audit unavailable\'); END')
+    await controller.setManual('left', 76)
+    await controller.reconcile('left')
+    expect(hardware.setTemperature).toHaveBeenCalledTimes(1)
+    expect(controller.status('left')).toMatchObject({ source: 'manual', targetTemperature: 76 })
+    expect(readTemperatureApplications(sqlite, 'left').items[0]).toMatchObject({ outcome: 'unknown', acknowledgment: 'unconfirmed' })
+    warning.mockRestore()
+  })
+
+  it('records power-on and unowned keepalive separately and never journals an off-side proposal', async () => {
+    const controller = getTemperatureController()
+    await controller.powerOff('right')
+    await controller.reconcile('right')
+    expect(readTemperatureApplications(sqlite, 'right').items).toEqual([])
+    await withSideLock('right', () => controller.powerOnLocked('right', 77))
+    await controller.reconcile('right', true)
+    expect(readTemperatureApplications(sqlite, 'right').items.map(item => [item.reason, item.source, item.targetF]))
+      .toEqual([['keepalive', null, 77], ['power_on', null, 77]])
+  })
   it('keeps a dial target across a schedule step, then resolves the current point on expiry', async () => {
     const controller = getTemperatureController()
     await controller.setManual('left', 76)
@@ -279,6 +340,33 @@ describe('production controller with migrated SQLite', () => {
       expect(hardware.setTemperature).toHaveBeenCalledWith('left', 72)
     }
     finally { markFirmwareSynced() }
+  })
+
+  it('withholds passive writes after a fresh but ambiguous zero-countdown startup report', async () => {
+    _resetHeatingSessionEvidence()
+    const controller = getTemperatureController()
+    await startTemperatureController()
+    await vi.advanceTimersByTimeAsync(10_000)
+    await controller.replaceAutopilot('left', [])
+    await controller.resume('left')
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+    expect(controller.status('left').blocked).toBe('off')
+
+    // Confirming the other side cannot authorize the left's saved target.
+    recordHeatingSession('right', true)
+    await controller.reconcile('left')
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+    recordHeatingSession('left', true)
+    await controller.reconcile('left')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 72)
+    hardware.setTemperature.mockClear()
+    recordHeatingSession('left', false)
+    await controller.reconcile('left')
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+
+    // Explicit owner control still works while passive reconciliation waits.
+    await controller.setManual('left', 75)
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 75)
   })
 
   it('expires the right hold while the left side lock is occupied', async () => {

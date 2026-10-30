@@ -13,6 +13,7 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:3218',
     locale: 'en-US',
+    launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
     actionTimeout: 15_000,
     viewport: { width: 1440, height: 1000 },
     screenshot: 'only-on-failure',

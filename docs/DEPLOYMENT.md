@@ -125,7 +125,48 @@ The pod downloads this pre-built tarball via `sp-update`, so it never needs to r
 
 ### Path 3: Remote Update (Web UI / iOS)
 
-The pod self-updates by downloading from GitHub. Triggered via the `system.triggerUpdate` tRPC endpoint.
+The pod self-updates by downloading from its installed GitHub repository. Triggered via the `system.triggerUpdate` tRPC endpoint.
+
+The installer records the selected `OWNER/REPO` in the root-owned, mode-0644
+`/etc/sleepypod/github-repo`, outside the replaceable application directory.
+Reinstallation preserves that source unless explicitly overridden. The updater
+reads this file directly, so a web/native request through `sudo` does not rely
+on inherited environment variables. It never silently falls back to upstream.
+
+Existing unpinned installations must select their actual repository explicitly
+during an attended update, for example `sudo env SLEEPYPOD_GITHUB_REPO=OWNER/REPO
+sp-update main`. A successful update persists that selection; failure restores
+the previous pin with the code. Missing, malformed or symlinked metadata stops
+an ordinary update before network or service changes. Local archives preserve
+the existing pin; an archive with no known source stays unpinned. The deployment
+script passes an explicit `--repo` or a recognized GitHub `origin` to the updater.
+Archive contents cannot choose their own future update source.
+
+The API also checks the pin before spawning the updater. It returns
+`PRECONDITION_FAILED` if unavailable, and includes `repository` alongside
+`triggered`, `branch` and `message` when a request is launched. Launch is not
+proof of installation success. The separately staged, isolated offline runtime
+still uses its reviewed deployment and rollback workflow; this change neither
+grants it updater privileges nor activates it.
+
+### Updating sensors in an isolated runtime
+
+`scripts/deployment/stage_sensors.py` prepares a separate versioned sensor source
+directory from the staged release's checksum-verified source archive. It reuses
+the previous virtual environments only when every running module's `uv.lock` and
+`pyproject.toml` match exactly. A dependency change requires a separately prepared
+locked environment and is refused by this source-only workflow.
+
+Run the existing dependency probe against the candidate as the `dac` account
+before changing services. Render a new service plan that selects both the new
+release and candidate modules directory. `upgrade.py` verifies the complete
+sensor source and environment links before stopping the controller. Its existing
+quiesced backup, restore rehearsal and startup verification then switch the Core
+and sensor unit files together. Failure restores the previous units and data;
+the previous sensor files and environments were never modified.
+
+Keep reused environment directories as rollback dependencies. Staging does not
+start a daemon, claim a hardware check, or carry qualifications to the new build.
 
 ```bash
 # From SSH on the pod:
@@ -139,7 +180,7 @@ sp-update --archive /persistent/sleepypod-core.tar.gz  # uploaded pre-built arch
 ```
 
 **How it works:**
-1. Resolves `main`/`latest` to the latest stable release, `dev` to `dev-latest`, and other branches to `<slug>-latest`.
+1. Resolves `main`/`latest` to the pinned repository's latest stable release, `dev` to `dev-latest`, and other branches to its Build & Package artifact via nightly.link.
 2. Downloads and validates the pre-built archive before replacing installed files.
 3. Backs up the installed code and database, then installs the new code and production dependencies.
 4. Restores the firewall and starts the service (database migrations run at startup).

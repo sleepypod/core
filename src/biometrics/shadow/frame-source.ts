@@ -1,9 +1,11 @@
 import { shadowFrameBudgetsSchema as budgetsSchema } from './execution-policy'
 import { z } from 'zod'
 import { subscribeProspectiveFrames } from '../../streaming/prospectiveFrameTap'
+import { mechanicalSnapshotSchema } from '../mechanical/snapshot'
 
 const contextSchema = z.object({ activeSides: z.array(z.enum(['left', 'right'])).max(2).nullable(),
   leftOccupied: z.boolean().nullable(), rightOccupied: z.boolean().nullable(), pumpContextKnown: z.boolean(),
+  mechanical: mechanicalSnapshotSchema.nullable().optional(),
 }).strict().refine(value => value.activeSides === null || new Set(value.activeSides).size === value.activeSides.length, 'Duplicate active side')
 const pumpKeys = ['pumpRpm', 'pump_rpm', 'pumpRPM', 'rpm', 'pumpDuty', 'pump_duty', 'duty'] as const
 function pumpValue(value: unknown) {

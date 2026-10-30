@@ -8,6 +8,7 @@ import { getCaller, jsonResult, runTool, type Caller } from '@/src/mcp/caller'
 import { days, isoDate, optionalSide, side } from '@/src/mcp/schemas'
 import { STAGE_RULESET_PRESETS, stageRulesetSchema, type StageClassifier, type StageRule, type StageRuleset } from '@/src/lib/sleep-stage-rules'
 import { scoreAgainstReference, type SleepStage, type StageAgreement } from '@/src/lib/sleep-stages'
+import { REFERENCE_SAMPLE_RANGE } from '@/src/server/routers/biometrics'
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 
@@ -27,6 +28,12 @@ const PRESET_IDS = Object.keys(STAGE_RULESET_PRESETS) as [keyof typeof STAGE_RUL
 const IMPORT_HINT = `No sleep records overlapping reference stages in the last ${COVERAGE_DAYS} days. Run import_apple_watch_data (or POST /api/biometrics/watch-upload) first; nights without reference stages cannot be scored.`
 const UNCOVERED_HINT = 'Reference stages exist for these nights but cover none of the classified epochs, so agreement is null. Check the imported segment times.'
 
+const unixSeconds = z.number().int().min(1_000_000_000).max(4_102_444_800)
+const referenceSamples = (metric: keyof typeof REFERENCE_SAMPLE_RANGE) => z.array(z.object({
+  timestamp: unixSeconds,
+  value: z.number().min(REFERENCE_SAMPLE_RANGE[metric][0]).max(REFERENCE_SAMPLE_RANGE[metric][1]),
+})).max(2000).default([])
+
 const presetId = z.enum(PRESET_IDS).optional()
   .describe(`A built-in ruleset preset: ${PRESET_IDS.join(', ')}. Ids come from get_sleep_stage_rules.`)
 const ruleset = stageRulesetSchema.optional()
@@ -42,21 +49,33 @@ const overrides = z.array(z.object({
 
 export function registerSleepTools(server: McpServer) {
   server.registerTool('import_apple_watch_data', {
-    title: 'Import Apple Watch heart rate and sleep stages',
-    description: 'Sync extracted Apple Health records to one sleeper. Send at most 2000 samples/segments per call; repeat calls are safe. '
+    title: 'Import Apple Watch heart rate, breathing rate, HRV and sleep stages',
+    description: 'Sync extracted Apple Health records to one sleeper: heart rate (samples), respiratory rate (breathingRates, breaths/min), '
+      + 'HRV SDNN (hrvSdnn, ms) and sleep stages (segments). Send at most 2000 records per array per call; repeat calls are safe. '
+      + 'Only Apple Watch records belong here, never ones the sleepypod app wrote to Health (source "sleepypod"). '
       + 'For a complete export.zip or export.xml, stream the file with POST /api/biometrics/watch-upload?side=left|right&days=30 '
-      + '(application/octet-stream, 512 MiB maximum, days 1..90) instead of placing the export in model context. '
-      + 'Stage conflicts are reported without blocking heart-rate import. Records remain separate from pod measurements.',
+      + '(application/octet-stream, 512 MiB maximum, days 1..90; imports heart rate, breathing rate, HRV and stages) instead of placing the export in model context. '
+      + 'Stage conflicts are reported without blocking the other imports. Records remain separate from pod measurements.',
     inputSchema: {
       side,
-      samples: z.array(z.object({ timestamp: z.number().int().min(1_000_000_000).max(4_102_444_800), heartRate: z.number().min(20).max(250) })).max(2000).default([]),
-      segments: z.array(z.object({ start: z.number().int().min(1_000_000_000).max(4_102_444_800), end: z.number().int().min(1_000_000_000).max(4_102_444_800), stage: z.enum(['wake', 'light', 'deep', 'rem']) })).max(2000).default([]),
+      samples: z.array(z.object({ timestamp: unixSeconds, heartRate: z.number().min(20).max(250) })).max(2000).default([]),
+      breathingRates: referenceSamples('breathing_rate'),
+      hrvSdnn: referenceSamples('hrv_sdnn'),
+      segments: z.array(z.object({ start: unixSeconds, end: unixSeconds, stage: z.enum(['wake', 'light', 'deep', 'rem']) })).max(2000).default([]),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, async ({ side: sleeper, samples, segments }) => runTool(async () => {
-    if (!samples.length && !segments.length) throw new Error('Provide samples or segments. Timestamps are Unix seconds.')
+  }, async ({ side: sleeper, samples, breathingRates, hrvSdnn, segments }) => runTool(async () => {
+    if (!samples.length && !breathingRates.length && !hrvSdnn.length && !segments.length) {
+      throw new Error('Provide samples, breathingRates, hrvSdnn or segments. Timestamps are Unix seconds.')
+    }
     const caller = getCaller()
     const vitals = samples.length ? await caller.biometrics.importReferenceVitals({ side: sleeper, source: 'apple_watch', samples }) : { written: 0 }
+    const breathing = breathingRates.length
+      ? await caller.biometrics.importReferenceSamples({ side: sleeper, source: 'apple_watch', metric: 'breathing_rate', samples: breathingRates })
+      : { written: 0 }
+    const hrv = hrvSdnn.length
+      ? await caller.biometrics.importReferenceSamples({ side: sleeper, source: 'apple_watch', metric: 'hrv_sdnn', samples: hrvSdnn })
+      : { written: 0 }
     let stages = 0
     let stageError: string | null = null
     if (segments.length) {
@@ -69,7 +88,7 @@ export function registerSleepTools(server: McpServer) {
           : 'Stage import failed; stored stages were preserved. Check segment bounds/overlaps before retrying. See the vitals count for imported heart-rate samples.'
       }
     }
-    return jsonResult({ vitals: vitals.written, stages, stageError })
+    return jsonResult({ vitals: vitals.written, breathing: breathing.written, hrv: hrv.written, stages, stageError })
   }))
 
   server.registerTool('get_sleep_summary', {

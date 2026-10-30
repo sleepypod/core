@@ -1,0 +1,116 @@
+blueprint:
+  name: SleepyPod — Apple Home climate export
+  description: >-
+    Receive one HomePod's temperature and humidity from an Apple Home automation.
+    Publish only cached observations to a fixed bedroom MQTT topic. This cannot
+    authorize Pod commands or qualify a measurement as fresh. Create a separate
+    instance and private webhook ID for each HomePod. No owner key is required.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Enable sensor reporting
+      default: false
+      selector:
+        boolean: {}
+    webhook_id:
+      name: Private webhook ID
+      description: Generate a new random value of at least 32 characters. Keep it private, like a password.
+      selector:
+        text:
+          type: password
+    report_topic:
+      name: Pod bedroom report topic
+      description: Copy the exact bedroom/report topic from the authenticated Pod status. No wildcards.
+      selector:
+        text: {}
+    configuration_revision:
+      name: Bedroom configuration revision
+      description: Use the Pod's current revision. Update after changing the source configuration.
+      selector:
+        number:
+          min: 1
+          max: 2147483647
+          mode: box
+          step: 1
+    temperature_source:
+      name: Temperature source ID
+      selector:
+        text: {}
+    temperature_unit:
+      name: Configured temperature source unit
+      description: Match the Pod source configuration. Incoming values carry their own explicit unit.
+      default: °C
+      selector:
+        select:
+          options: [°C, °F]
+    humidity_source:
+      name: Humidity source ID
+      selector:
+        text: {}
+mode: single
+max_exceeded: silent
+trace:
+  stored_traces: 0
+variables:
+  allow_actions: !input allow_actions
+  private_webhook: !input webhook_id
+  report_topic: !input report_topic
+  configuration_revision: !input configuration_revision
+  temperature_source: !input temperature_source
+  temperature_unit: !input temperature_unit
+  humidity_source: !input humidity_source
+triggers:
+  - trigger: webhook
+    webhook_id: !input webhook_id
+    allowed_methods: [POST]
+    local_only: true
+conditions: []
+actions:
+  # Keep guards inside the actions so a manual run cannot fabricate a report.
+  - condition: template
+    value_template: >-
+      {{ allow_actions is sameas true and trigger is defined and
+         trigger.platform == 'webhook' and trigger.json is mapping and
+         private_webhook is string and private_webhook | length >= 32 and
+         report_topic is string and report_topic | regex_match('^[A-Za-z0-9_/-]{1,200}/bedroom/report$') and
+         configuration_revision is number and configuration_revision is not boolean and
+         1 <= configuration_revision <= 2147483647 and configuration_revision == configuration_revision | int and
+         temperature_source is string and temperature_source | regex_match('^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$') and
+         humidity_source is string and humidity_source | regex_match('^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$') and
+         temperature_source != humidity_source and temperature_unit in ['°C', '°F'] and
+         trigger.json | list | sort == ['humidity', 'schemaVersion', 'temperature', 'temperatureUnit'] and
+         trigger.json.schemaVersion is integer and trigger.json.schemaVersion == 1 and
+         trigger.json.temperatureUnit in ['°C', '°F'] }}
+  - variables:
+      reported_at: '{{ (as_timestamp(now()) * 1000) | int }}'
+      temperature_c: >-
+        {% set value = trigger.json.temperature %}
+        {% if value is number and value is not boolean %}
+          {% set celsius = (value - 32) * 5 / 9 if trigger.json.temperatureUnit == '°F' else value %}
+          {{ celsius if -40 <= celsius <= 60 else none }}
+        {% else %}{{ none }}{% endif %}
+      relative_humidity: >-
+        {% set value = trigger.json.humidity %}
+        {{ value if value is number and value is not boolean and 0 <= value <= 100 else none }}
+  - repeat:
+      for_each:
+        - source: '{{ temperature_source }}'
+          value: '{{ temperature_c * 9 / 5 + 32 if temperature_c is number and temperature_unit == "°F" else temperature_c }}'
+        - source: '{{ humidity_source }}'
+          value: '{{ relative_humidity }}'
+      sequence:
+        - action: mqtt.publish
+          data:
+            topic: '{{ report_topic }}'
+            qos: 0
+            retain: false
+            payload: >-
+              {{ {'schemaVersion': 1, 'revision': configuration_revision | int,
+                  'sourceId': repeat.item.source, 'available': repeat.item.value is number,
+                  'value': repeat.item.value, 'observedAt': reported_at,
+                  'measuredAt': none, 'timeBasis': 'cached'} | to_json }}
+  # Suppress overlapping/repeated shortcuts; the Pod independently enforces per-source limits.
+  - delay:
+      seconds: 5
