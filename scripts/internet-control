@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat << EOF
-Usage: $(basename "$0") {block|unblock|restore|hosts-block|hosts-unblock|dns-block|dns-unblock|status}
+Usage: $(basename "$0") {block|unblock|restore|hosts-unblock|dns-block|dns-unblock|status}
 
 Control internet access for SleepyPod device.
 
@@ -11,26 +11,23 @@ Commands:
   block         - Block all internet access via iptables (keep local network only)
   unblock       - Restore full internet access via iptables
   restore       - Re-apply the internet access choice saved by the app (boot)
-  hosts-block   - Null-route Eight Sleep telemetry domains in /etc/hosts
-  hosts-unblock - Remove Eight Sleep null routes from /etc/hosts
-  dns-block     - Blackhole every *.8slp.net name with a local dnsmasq (127.0.0.1)
+  hosts-unblock - Remove the old Eight Sleep 0.0.0.0 entries from /etc/hosts
+  dns-block     - Make every *.8slp.net name NXDOMAIN with a local dnsmasq (127.0.0.1)
   dns-unblock   - Remove the dnsmasq blackhole and restore /etc/resolv.conf
   status        - Show current blocking status (iptables, names, services)
 
 The pod uses two layers of outbound blocking:
   1. iptables: DROP all non-LAN outbound traffic (primary)
-  2. Name blocking (defense-in-depth): a dnsmasq wildcard for every
-     *.8slp.net name where dnsmasq exists (sleepypod-dns.service), plus
-     /etc/hosts null routes for the known names everywhere
+  2. Name blocking (defense-in-depth): where dnsmasq exists
+     (sleepypod-dns.service), every *.8slp.net name is NXDOMAIN
 
 Layer 2 prevents data exfiltration when iptables are temporarily
 opened for sp-update or other maintenance.
 
 Examples:
   sudo $(basename "$0") block          # iptables block
-  sudo $(basename "$0") hosts-block    # add /etc/hosts null routes
-  sudo $(basename "$0") hosts-unblock  # remove /etc/hosts null routes
-  sudo $(basename "$0") dns-block      # add the dnsmasq wildcard blackhole
+  sudo $(basename "$0") hosts-unblock  # remove old /etc/hosts entries
+  sudo $(basename "$0") dns-block      # add the dnsmasq NXDOMAIN blackhole
   sudo $(basename "$0") status         # check every layer
 EOF
   exit 1
@@ -74,29 +71,21 @@ if [ -z "$IP6TABLES" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# /etc/hosts management for Eight Sleep telemetry blocking
+# Old /etc/hosts block (removal only)
 # ---------------------------------------------------------------------------
+# Earlier releases mapped Eight Sleep names to 0.0.0.0 here. On Linux 0.0.0.0
+# reaches the local host, so frank connected to the pod itself, got EPIPE and
+# retried every few ms until syslog filled RAM. /etc/hosts can't say NXDOMAIN,
+# so names are blocked only by the dnsmasq layer below; this block is removed.
 
 # Marker comments used to find our block in /etc/hosts
 HOSTS_MARKER_BEGIN="# BEGIN sleepypod-telemetry-block"
 HOSTS_MARKER_END="# END sleepypod-telemetry-block"
 
-# Known Eight Sleep cloud domains, plus the AWS endpoint the stock vector
-# service ships the journal to (not an 8slp.net name, but Eight Sleep's).
-EIGHTSLEEP_DOMAINS=(
-  "raw-api-upload.8slp.net"   # frankenfirmware raw sensor data upload
-  "device-api-ws.8slp.net"    # Capybara WebSocket device API hub
-  "update-api.8slp.net"       # swupdate OTA endpoint (/etc/swupdate.cfg)
-  "device-api.8slp.net"       # /home/dac/app/config/default.json
-  "api.8slp.net"              # general API
-  "app-api.8slp.net"          # mobile app API
-  "client-api.8slp.net"       # client API
-  "kinesis.us-east-1.amazonaws.com"  # stock vector journal shipper
-)
-
-# Zones the dnsmasq layer answers with 0.0.0.0 / :: for the zone and every
-# subdomain. /etc/hosts cannot match wildcards, so this catches names the
-# list above has not found yet.
+# Zones the dnsmasq layer answers with NXDOMAIN, for the zone and every
+# subdomain. Known names: raw-api-upload (frank), device-api-ws (Capybara),
+# update-api (swupdate), device-api, api, app-api, client-api; the AWS
+# endpoint is where the stock vector service ships the journal.
 DNS_BLOCK_ZONES=(
   "8slp.net"                          # every Eight Sleep cloud name
   "kinesis.us-east-1.amazonaws.com"   # stock vector journal shipper
@@ -121,62 +110,6 @@ hosts_has_markers() {
   grep -Fq "$HOSTS_MARKER_BEGIN" "$HOSTS_FILE" 2>/dev/null
 }
 
-hosts_block_content() {
-  echo "$HOSTS_MARKER_BEGIN"
-  echo "# Null-route Eight Sleep telemetry domains so the stock firmware"
-  echo "# (frankenfirmware + Capybara) cannot phone home, even when"
-  echo "# iptables are temporarily opened for sp-update."
-  echo "# Managed by: scripts/internet-control hosts-block|hosts-unblock"
-  for domain in "${EIGHTSLEEP_DOMAINS[@]}"; do
-    echo "0.0.0.0 $domain"
-  done
-  echo "$HOSTS_MARKER_END"
-}
-
-add_hosts_block() {
-  local block current tmp
-  block="$(hosts_block_content)"
-
-  if hosts_is_blocked; then
-    current="$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" "$HOSTS_FILE")"
-    if [ "$current" = "$block" ]; then
-      echo "Eight Sleep hosts block already up to date"
-      return 0
-    fi
-  fi
-
-  if hosts_markers_malformed; then
-    echo "Warning: malformed hosts markers found, cleaning up first" >&2
-    sed -i "/$HOSTS_MARKER_BEGIN/d;/$HOSTS_MARKER_END/d" "$HOSTS_FILE"
-  fi
-
-  # Backup before modifying
-  cp "$HOSTS_FILE" "$HOSTS_FILE.bak.sleepypod"
-
-  if hosts_has_markers; then
-    # Rewrite the managed block in place so pods that already have one pick
-    # up domains added since. Duplicate blocks collapse into one. cat keeps
-    # the file's inode, owner and mode.
-    tmp=$(mktemp)
-    SP_HOSTS_BLOCK="$block" awk -v begin="$HOSTS_MARKER_BEGIN" -v end="$HOSTS_MARKER_END" '
-      index($0, begin) { if (!printed) print ENVIRON["SP_HOSTS_BLOCK"]; printed = 1; skip = 1; next }
-      skip && index($0, end) { skip = 0; next }
-      !skip { print }
-    ' "$HOSTS_FILE" > "$tmp"
-    cat "$tmp" > "$HOSTS_FILE"
-    rm -f "$tmp"
-    echo "Updated /etc/hosts null route to ${#EIGHTSLEEP_DOMAINS[@]} Eight Sleep domains"
-    return 0
-  fi
-
-  {
-    echo ""
-    printf '%s\n' "$block"
-  } >> "$HOSTS_FILE"
-
-  echo "Added ${#EIGHTSLEEP_DOMAINS[@]} Eight Sleep domains to /etc/hosts null route"
-}
-
 remove_hosts_block() {
   if hosts_markers_malformed; then
     echo "Error: malformed sleepypod hosts markers in /etc/hosts; refusing destructive edit" >&2
@@ -192,11 +125,19 @@ remove_hosts_block() {
   # Backup before modifying
   cp "$HOSTS_FILE" "$HOSTS_FILE.bak.sleepypod"
 
-  # Remove everything between (and including) the markers
-  sed -i "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/d" "$HOSTS_FILE"
-
-  # Clean up any trailing blank lines at end of file
-  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$HOSTS_FILE"
+  # Remove everything between (and including) the markers and any trailing
+  # blank lines. awk + cat instead of sed -i: portable, and cat keeps the
+  # file's inode, owner and mode.
+  local tmp
+  tmp=$(mktemp)
+  awk -v begin="$HOSTS_MARKER_BEGIN" -v end="$HOSTS_MARKER_END" '
+    index($0, begin) { skip = 1; next }
+    skip { if (index($0, end)) skip = 0; next }
+    /^$/ { blank = blank "\n"; next }
+    { printf "%s", blank; blank = ""; print }
+  ' "$HOSTS_FILE" > "$tmp"
+  cat "$tmp" > "$HOSTS_FILE"
+  rm -f "$tmp"
 
   echo "Removed Eight Sleep domains from /etc/hosts"
 }
@@ -204,9 +145,9 @@ remove_hosts_block() {
 # ---------------------------------------------------------------------------
 # dnsmasq wildcard blackhole (standalone sleepypod-dns.service)
 # ---------------------------------------------------------------------------
-# /etc/hosts only matches exact names. Where dnsmasq is installed, run our own
-# dnsmasq on 127.0.0.1:53 that answers every name under DNS_BLOCK_ZONES with
-# 0.0.0.0 / :: and forwards the rest to the upstream NetworkManager learned
+# Where dnsmasq is installed, run our own dnsmasq on 127.0.0.1:53 that answers
+# every name under DNS_BLOCK_ZONES with NXDOMAIN (never an address: 0.0.0.0
+# reaches the pod itself) and forwards the rest to the upstream NetworkManager learned
 # from DHCP. NetworkManager's config is never touched and it is never
 # restarted (its dns=dnsmasq mode needs a DBus-enabled dnsmasq, and a restart
 # drops Wi-Fi). /etc/resolv.conf moves to 127.0.0.1 only after dnsmasq
@@ -229,9 +170,11 @@ LEGACY_NM_FILES=(
   "/etc/NetworkManager/conf.d/sleepypod-dns.conf"
   "/etc/NetworkManager/dnsmasq.d/sleepypod-block.conf"
 )
-# A name under the first zone that is in no hosts file, so only dnsmasq
-# can answer it with 0.0.0.0.
+# A name under the first zone that dnsmasq must answer with NXDOMAIN.
 DNS_PROBE_NAME="sleepypod-probe.${DNS_BLOCK_ZONES[0]}"
+# frank's upload name: after the swap it must get no address through the
+# system resolver, which reads /etc/hosts before DNS.
+DNS_FRANK_NAME="raw-api-upload.${DNS_BLOCK_ZONES[0]}"
 DNS_KNOWN_GOOD="github.com"
 DNS_VERIFY_ATTEMPTS=15
 DNS_RECOVERY_SECONDS=60
@@ -278,9 +221,9 @@ dnsmasq_conf_content() {
   echo "port=53"
   echo "resolv-file=$NM_UPSTREAM_RESOLV"
   echo "cache-size=1000"
+  # No address: dnsmasq answers NXDOMAIN for the zone and every subdomain.
   for zone in "${DNS_BLOCK_ZONES[@]}"; do
-    echo "address=/$zone/0.0.0.0"
-    echo "address=/$zone/::"
+    echo "address=/$zone/"
   done
 }
 
@@ -307,8 +250,10 @@ EOF
 }
 
 # Run by the unit around dnsmasq (busybox sh). "up" repoints resolv.conf once
-# dnsmasq blackholes the probe and forwards the known-good name; "down" puts
-# the original symlink back if resolv.conf still points at ours.
+# dnsmasq forwards the known-good name and gives the probe no address, then
+# undoes it if frank's name still resolves through the system resolver (an
+# /etc/hosts entry beats NXDOMAIN); "down" puts the original symlink back if
+# resolv.conf still points at ours.
 dns_hook_content() {
   cat << EOF
 #!/bin/sh
@@ -317,14 +262,26 @@ ROOT="\${INTERNET_CONTROL_ROOT:-}"
 answer() {
   nslookup "\$1" 127.0.0.1 2>/dev/null | awk '/^Name:/ { found = 1; next } found && /^Address/ { sub(/^Address[^:]*:[ \\t]*/, ""); split(\$0, a, /[ \\t]/); print a[1]; exit }'
 }
+restore() {
+  target=\$(cat "\$ROOT$DNS_ORIG_TARGET" 2>/dev/null || true)
+  if [ -n "\$target" ] && [ "\$(readlink "\$ROOT$RESOLV_CONF" 2>/dev/null)" = $DNS_RESOLV ]; then
+    ln -sfn "\$target" "\$ROOT$RESOLV_CONF"
+  fi
+}
 case "\$1" in
   up)
     i=0
     while [ "\$i" -lt 10 ]; do
-      probe=\$(answer $DNS_PROBE_NAME)
       good=\$(answer $DNS_KNOWN_GOOD)
-      if { [ "\$probe" = 0.0.0.0 ] || [ "\$probe" = :: ]; } && [ -n "\$good" ] && [ "\$good" != 0.0.0.0 ] && [ "\$good" != :: ]; then
+      probe=\$(answer $DNS_PROBE_NAME)
+      if [ -n "\$good" ] && [ "\$good" != 0.0.0.0 ] && [ "\$good" != :: ] && [ -z "\$probe" ]; then
         ln -sfn $DNS_RESOLV "\$ROOT$RESOLV_CONF"
+        # ping resolves like frank (/etc/hosts first) and prints the address before sending.
+        if command -v ping >/dev/null 2>&1 && ping -c 1 -W 1 $DNS_FRANK_NAME 2>/dev/null | grep -q '^PING'; then
+          restore
+          echo "$DNS_FRANK_NAME still resolves through the system resolver (check /etc/hosts); /etc/resolv.conf left on the original resolver" >&2
+          exit 1
+        fi
         exit 0
       fi
       i=\$((i + 1))
@@ -334,10 +291,7 @@ case "\$1" in
     exit 1
     ;;
   down)
-    target=\$(cat "\$ROOT$DNS_ORIG_TARGET" 2>/dev/null || true)
-    if [ -n "\$target" ] && [ "\$(readlink "\$ROOT$RESOLV_CONF" 2>/dev/null)" = $DNS_RESOLV ]; then
-      ln -sfn "\$target" "\$ROOT$RESOLV_CONF"
-    fi
+    restore
     exit 0
     ;;
 esac
@@ -375,9 +329,14 @@ known_good_resolves() {
   [ -n "$addr" ] && ! is_null_address "$addr"
 }
 
-# Both the blackhole and forwarding work through server $1 (or the system resolver).
+# Through server $1 (or the system resolver): the known-good name resolves,
+# which proves the server answers and forwards, and the probe gets no address
+# at all (NXDOMAIN). Any address for the probe, 0.0.0.0 included, fails.
+# Through the system resolver, frank's name must get no address either: it
+# reads /etc/hosts first, so an entry there would beat the NXDOMAIN.
 dns_blackhole_answers() {
-  is_null_address "$(resolve_name "$DNS_PROBE_NAME" "${1:-}")" && known_good_resolves "${1:-}"
+  known_good_resolves "${1:-}" && [ -z "$(resolve_name "$DNS_PROBE_NAME" "${1:-}")" ] \
+    && { [ -n "${1:-}" ] || [ -z "$(resolve_name "$DNS_FRANK_NAME")" ]; }
 }
 
 dns_blackhole_verified() {
@@ -449,16 +408,25 @@ add_dns_block() {
   local dnsmasq_bin changed=false target
   remove_legacy_nm_dns
 
+  # Resolvers read /etc/hosts before DNS (and dnsmasq serves it too), so a
+  # leftover 0.0.0.0 block would beat the NXDOMAIN answer: remove it first.
+  if ! remove_hosts_block; then
+    echo "Error: the old /etc/hosts block can't be removed, and it would override the NXDOMAIN blackhole." >&2
+    echo "  Rolling back: restoring $RESOLV_CONF and stopping $DNS_UNIT..." >&2
+    remove_dns_layer
+    return 1
+  fi
+
   if ! dnsmasq_bin=$(find_dnsmasq); then
-    echo "dnsmasq not found — /etc/hosts fallback in use"
+    echo "dnsmasq not found — no name blocking"
     return 0
   fi
   if [ ! -f "$ROOT$NM_UPSTREAM_RESOLV" ]; then
-    echo "$NM_UPSTREAM_RESOLV not found (no NetworkManager upstream to forward to) — /etc/hosts fallback in use"
+    echo "$NM_UPSTREAM_RESOLV not found (no NetworkManager upstream to forward to) — no name blocking"
     return 0
   fi
   if [ ! -L "$ROOT$RESOLV_CONF" ]; then
-    echo "$RESOLV_CONF is not a symlink, so it can't be swapped and restored safely — /etc/hosts fallback in use"
+    echo "$RESOLV_CONF is not a symlink, so it can't be swapped and restored safely — no name blocking"
     return 0
   fi
   # A previous run that lost its dnsmasq (power cut without the stop hook)
@@ -467,7 +435,7 @@ add_dns_block() {
     restore_original_resolv
   fi
   if ! dns_unit_active && port_53_in_use; then
-    echo "Something already listens on port 53 — /etc/hosts fallback in use"
+    echo "Something already listens on port 53 — no name blocking"
     return 0
   fi
 
@@ -485,7 +453,7 @@ add_dns_block() {
   # resolver that was already down, so start nothing.
   if ! known_good_resolves; then
     echo "Error: $DNS_KNOWN_GOOD does not resolve now, so the dnsmasq blackhole can't be verified." >&2
-    echo "  Left DNS unchanged; /etc/hosts fallback in use. Retry when DNS works." >&2
+    echo "  Left DNS unchanged; no name blocking. Retry when DNS works." >&2
     remove_dns_layer
     return 1
   fi
@@ -510,11 +478,11 @@ add_dns_block() {
     fi
   fi
 
-  echo "Error: dnsmasq check failed ($DNS_PROBE_NAME must be 0.0.0.0 and $DNS_KNOWN_GOOD must resolve)." >&2
+  echo "Error: dnsmasq check failed ($DNS_PROBE_NAME must be NXDOMAIN, $DNS_FRANK_NAME must not resolve through the system resolver, and $DNS_KNOWN_GOOD must resolve)." >&2
   echo "  Rolling back: restoring $RESOLV_CONF and stopping $DNS_UNIT..." >&2
   remove_dns_layer
   wait_for_dns || true
-  echo "  /etc/hosts fallback in use." >&2
+  echo "  No Eight Sleep name blocking in use." >&2
   return 1
 }
 
@@ -687,14 +655,12 @@ case "$COMMAND" in
       fi
     fi
 
-    # Also install /etc/hosts telemetry block as defense-in-depth
-    echo "Installing /etc/hosts telemetry block..."
-    add_hosts_block
+    # Drop the old 0.0.0.0 /etc/hosts block (frank retry storm)
+    remove_hosts_block || true
 
     echo ""
     echo "✓ Internet access blocked!"
     echo "  Layer 1: iptables DROP on all non-LAN outbound"
-    echo "  Layer 2: /etc/hosts null routes for *.8slp.net"
     echo "  Local network ($LOCAL_SUBNET) is still accessible"
     if command -v "$IP6TABLES" &>/dev/null; then
       echo "  IPv6 is also blocked"
@@ -786,18 +752,12 @@ case "$COMMAND" in
     ;;
 
   hosts-block)
-    echo "========================================"
-    echo "  Block Eight Sleep Telemetry (hosts)"
-    echo "========================================"
-    echo ""
-    add_hosts_block
-    echo ""
-    echo "✓ Eight Sleep telemetry domains null-routed in /etc/hosts"
-    echo "  frank (raw-api-upload.8slp.net) and Capybara (device-api-ws.8slp.net)"
-    echo "  will resolve to 0.0.0.0 even when iptables are open"
-    echo ""
-    echo "To remove: sudo $(basename "$0") hosts-unblock"
-    echo ""
+    echo "Error: hosts-block was removed and no longer writes /etc/hosts." >&2
+    echo "  /etc/hosts can only map Eight Sleep names to an address, and 0.0.0.0 is the pod" >&2
+    echo "  itself: frank connects to it, fails and retries every few ms, flooding syslog" >&2
+    echo "  until memory runs out (frank retry storm). Blocked names must be NXDOMAIN:" >&2
+    echo "  use 'sudo $(basename "$0") dns-block'. To remove an old block: 'sudo $(basename "$0") hosts-unblock'." >&2
+    exit 1
     ;;
 
   hosts-unblock)
@@ -807,7 +767,7 @@ case "$COMMAND" in
     echo ""
     remove_hosts_block
     echo ""
-    echo "✓ /etc/hosts restored — Eight Sleep domains will resolve normally"
+    echo "✓ /etc/hosts has no sleepypod Eight Sleep entries"
     echo "  Backup at /etc/hosts.bak.sleepypod"
     echo ""
     ;;
@@ -849,19 +809,16 @@ case "$COMMAND" in
       echo "  Layer 1 (iptables):  INACTIVE — no DROP rule found"
     fi
 
-    # Layer 2: name blocking — dnsmasq wildcard and/or /etc/hosts
-    DOMAIN_COUNT=0
-    if hosts_is_blocked; then
-      DOMAIN_COUNT=$(sed -n "/$HOSTS_MARKER_BEGIN/,/$HOSTS_MARKER_END/p" "$HOSTS_FILE" | grep -c "^0.0.0.0" || true)
-    fi
-    if dns_layer_active && [ "$DOMAIN_COUNT" -gt 0 ]; then
-      echo "  Layer 2 (names):     ACTIVE — dnsmasq wildcard (${DNS_BLOCK_ZONES[*]}) + /etc/hosts ($DOMAIN_COUNT domains)"
-    elif dns_layer_active; then
-      echo "  Layer 2 (names):     ACTIVE — dnsmasq wildcard (${DNS_BLOCK_ZONES[*]}); /etc/hosts block missing"
-    elif [ "$DOMAIN_COUNT" -gt 0 ]; then
-      echo "  Layer 2 (names):     ACTIVE — /etc/hosts only ($DOMAIN_COUNT domains null-routed)"
+    # Layer 2: name blocking — dnsmasq NXDOMAIN only
+    if dns_layer_active; then
+      echo "  Layer 2 (names):     dnsmasq NXDOMAIN (${DNS_BLOCK_ZONES[*]} and every subdomain)"
     else
-      echo "  Layer 2 (names):     INACTIVE — no Eight Sleep name blocking"
+      echo "  Layer 2 (names):     none — no Eight Sleep name blocking"
+    fi
+    if hosts_has_markers; then
+      echo "  Warning: /etc/hosts still has the old sleepypod-telemetry-block (0.0.0.0 entries)."
+      echo "    It can make frank retry against the pod itself every few ms and flood syslog"
+      echo "    (frank retry storm). Remove it: sudo $(basename "$0") hosts-unblock"
     fi
     if [ -e "$ROOT$DNS_UNIT_FILE" ] && ! dns_layer_active; then
       echo "  dnsmasq layer:       configured but not in use ($DNS_UNIT $(systemctl is-active "$DNS_UNIT" 2>/dev/null || true); $RESOLV_CONF -> $(readlink "$ROOT$RESOLV_CONF" 2>/dev/null || echo '?'))"

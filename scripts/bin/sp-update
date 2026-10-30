@@ -267,14 +267,16 @@ done
 # Name blocking and the stock log shipper don't depend on iptables: a pod
 # whose internet is open needs them most. Apply them from the installed copy
 # before anything opens WAN, and again from the new code once it's in place.
-# Trees from before scripts/lib/telemetry-helpers only have the hosts block.
+# That pass removes the old hosts block and turns on the dnsmasq NXDOMAIN
+# layer. Trees from before scripts/lib/telemetry-helpers can only remove the
+# old hosts block.
 block_stock_telemetry_from() {
   local tree="$1"
   if [ -f "$tree/scripts/lib/telemetry-helpers" ]; then
     source "$tree/scripts/lib/telemetry-helpers"
     block_stock_telemetry "$tree"
   elif [ -f "$tree/scripts/internet-control" ]; then
-    bash "$tree/scripts/internet-control" hosts-block 2>/dev/null || true
+    bash "$tree/scripts/internet-control" hosts-unblock 2>/dev/null || true
   else
     return 1
   fi
@@ -727,8 +729,9 @@ if [ -f "$INSTALL_DIR/scripts/lib/journald-helpers" ]; then
   install_journald_config
 fi
 
-# dnsmasq wildcard blackhole, now that every download has finished: it swaps
-# /etc/resolv.conf, and a DNS problem must never abort the update.
+# dnsmasq NXDOMAIN blackhole again from the new code, after every download, so
+# its config is applied (a no-op when unchanged); block_stock_telemetry already
+# turned it on before WAN opened. A DNS problem must never abort the update.
 if [ -f "$INSTALL_DIR/scripts/lib/telemetry-helpers" ]; then
   source "$INSTALL_DIR/scripts/lib/telemetry-helpers"
   apply_dns_blackhole "$INSTALL_DIR" || true
