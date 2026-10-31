@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activeSleeperSides, singleScheduleSideFor, mirrorSideFor, scheduleSourceSide, singleSleeperSideFor } from '../singleSleeper'
+import { activeSleeperSides, alarmPartnerSide, singleScheduleSideFor, mirrorSideFor, scheduleSourceSide, singleSleeperSideFor } from '../singleSleeper'
 
 describe('singleSleeperSideFor', () => {
   it.each([
@@ -65,5 +65,22 @@ describe('explicit solo setup and independent zones', () => {
     expect(scheduleSourceSide('right', { ...state, unusedZoneMode: 'independent' })).toBe('right')
     expect(singleScheduleSideFor({ ...state, unusedZoneMode: 'independent' })).toBeNull()
     expect(singleSleeperSideFor({ ...state, unusedZoneMode: 'independent' })).toBe('left')
+  })
+})
+
+describe('alarmPartnerSide', () => {
+  it.each([
+    // Solo bed: the sleeper's alarm also rings the unused side, whatever its zone policy.
+    ['left', { bedMode: 'solo-left' as const, unusedZoneMode: 'off' as const }, 'right'],
+    ['right', { bedMode: 'solo-right' as const, unusedZoneMode: 'follow' as const }, 'left'],
+    // Partner away: same.
+    ['left', { left: { awayMode: false }, right: { awayMode: true } }, 'right'],
+    // The unused side's own alarm has no partner (and doesn't run).
+    ['right', { bedMode: 'solo-left' as const }, null],
+    // Two sleepers: each alarm stays on its own side.
+    ['left', { bedMode: 'two' as const }, null],
+    ['left', undefined, null],
+  ] as const)('%s with %j → %s', (side, modes, expected) => {
+    expect(alarmPartnerSide(side, modes)).toBe(expected)
   })
 })

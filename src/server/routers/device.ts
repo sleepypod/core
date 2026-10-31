@@ -7,7 +7,8 @@ import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/help
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
-import { markAlarmEnded, markAlarmStarted } from '@/src/hardware/alarmState'
+import { getActiveAlarmConfig, markAlarmEnded, markAlarmStarted } from '@/src/hardware/alarmState'
+import { stopLinked } from '@/src/hardware/linkedAlarm'
 import { HardwareCommand } from '@/src/hardware/types'
 import type { Side } from '@/src/hardware/types'
 import { getSharedHardwareClient } from '@/src/hardware/sharedClient'
@@ -537,9 +538,13 @@ export const deviceRouter = router({
     .mutation(async ({ input }) => {
       markSideMutated(input.side)
       return withHardwareClient(async (client) => {
+        // A single sleeper's alarm rings on both sides: stop both.
+        const active = getActiveAlarmConfig(input.side)
         await client.clearAlarm(input.side)
         cancelSnooze(input.side)
         await markAlarmEnded(input.side)
+        await stopLinked(client, input.side, active)
+        if (active?.linkedSide) cancelSnooze(active.linkedSide)
         return { success: true }
       }, 'Failed to clear alarm')
     }),
@@ -561,14 +566,18 @@ export const deviceRouter = router({
     .output(z.object({ success: z.boolean(), snoozeUntil: z.number() }))
     .mutation(async ({ input }) => {
       return withHardwareClient(async (client) => {
+        // A linked alarm (single sleeper) stops on both sides and comes back on both.
+        const active = getActiveAlarmConfig(input.side)
         await client.clearAlarm(input.side)
 
         const snoozeUntil = snoozeAlarm(input.side, input.duration, {
           vibrationIntensity: input.vibrationIntensity,
           vibrationPattern: input.vibrationPattern,
           duration: input.alarmDuration,
+          ...(active?.linkedSide ? { linkedSide: active.linkedSide, ownerSide: active.ownerSide } : {}),
         })
         await markAlarmEnded(input.side)
+        await stopLinked(client, input.side, active)
         return { success: true, snoozeUntil: Math.floor(snoozeUntil.getTime() / 1000) }
       }, 'Failed to snooze alarm')
     }),
