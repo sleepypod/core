@@ -28,10 +28,10 @@ The web UI brings temperature, schedules, Autopilot, sleep, and system diagnosti
 <p align="center">
   <a href="https://sleepypod.github.io/ios/"><img src="docs/images/ios-temperature.png" width="220" alt="sleepypod iOS app temperature control" /></a>
   &nbsp;&nbsp;
-  <a href="https://sleepypod.github.io/dial/"><img src="docs/images/dial-cooling.png" width="220" alt="sleepypod rotary dial showing a cooling target" /></a>
+  <a href="https://sleepypod.github.io/dial/"><img src="docs/images/dial-heating.png" width="220" alt="sleepypod rotary dial heating toward its target" /></a>
 </p>
 
-<sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/d3b4e86e0153944fba3c92fe96f04aca34db7165/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
+<sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/40c02fa5b76f522f4dff24129ca7df2472e2a3dd/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
 
 <p align="center">
   <a href="https://sleepypod.vercel.app">Live demo</a> · <a href="https://sleepypod.github.io/getting-started/">Get started</a> · <a href="https://sleepypod.github.io/core/">User guide</a> · <a href="https://sleepypod.github.io/developers/">Developer docs</a> · <a href="https://sleepypod.github.io/troubleshooting/">Troubleshooting</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a>
