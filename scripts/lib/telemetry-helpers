@@ -12,10 +12,16 @@
 # defibrillator reboots the pod after about 5 minutes without internet, so a
 # blocked pod would reboot over and over. None is needed to run the pod.
 #
-# Never touch frankenfirmware, dac, Capybara, burrow or swupdate-usb@ (USB
+# dac is the stock Eight Sleep app (/home/dac/app). sleepypod replaces it and
+# serves dac.sock itself, so a running stock app would take frank's socket.
+# The jailbreak steps mask it, but a pod that skipped them crash-loops it on
+# our Node 24 (its config 3.3.7 calls util.isRegExp, gone since Node 23).
+#
+# Never touch frankenfirmware, Capybara, burrow or swupdate-usb@ (USB
 # recovery) here: frank drives the hardware. Never edit /etc/swupdate.cfg:
 # Eight's scripts manage it.
 STOCK_TELEMETRY_UNITS=(vector.service telegraf.service)
+STOCK_APP_UNITS=(dac.service)
 # Unmasked again only by `internet-control firmware-updates allow`, which
 # keeps the same list. Socket first, so socket activation can't restart the
 # service once it is stopped.
@@ -55,7 +61,7 @@ mask_stock_units() {
 
 disable_stock_telemetry() {
   local state
-  mask_stock_units "${STOCK_TELEMETRY_UNITS[@]}"
+  mask_stock_units "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_APP_UNITS[@]}"
   if firmware_updates_allowed; then
     echo "Stock firmware updates allowed by the owner ($FIRMWARE_UPDATES_CHOICE); leaving swupdate and defibrillator unmasked"
   else

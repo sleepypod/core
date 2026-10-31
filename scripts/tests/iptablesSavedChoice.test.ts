@@ -98,6 +98,9 @@ describe('internet-control restore', () => {
     for (const cidr of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']) {
       expect(rules).toContain(`-A SLEEPYPOD-BLOCK -d ${cidr} -j ACCEPT`)
     }
+    // Same match as install and the app, so a kernel without xt_state can't
+    // stop the boot restore before the DROP.
+    expect(rules).toContain('-A SLEEPYPOD-BLOCK -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT')
     // The firewall check's required allows sit in front of the final DROP.
     expect(rules).toContain('-A SLEEPYPOD-BLOCK -p udp --dport 123 -j ACCEPT')
     expect(rules).toContain('-A SLEEPYPOD-BLOCK -d 224.0.0.251/32 -p udp --dport 5353 -j ACCEPT')
