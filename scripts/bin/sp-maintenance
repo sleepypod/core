@@ -109,6 +109,7 @@ STOCK_HOSTS_BEGIN="# BEGIN sleepypod-telemetry-block"
 STOCK_HOSTS_END="# END sleepypod-telemetry-block"
 # Keep in sync with scripts/lib/telemetry-helpers (a test checks).
 STOCK_TELEMETRY_UNITS=(vector.service telegraf.service)
+STOCK_APP_UNITS=(dac.service)
 STOCK_FIRMWARE_UPDATE_UNITS=(swupdate.socket swupdate.service swupdate-progress.service defibrillator.service)
 STOCK_KERNEL_UNITS=(eight-kernel.service)
 FIRMWARE_UPDATES_CHOICE="$STOCK_ROOT/etc/sleepypod/firmware-updates"
@@ -192,9 +193,9 @@ mask_stock_units_fast() {
 guard_stock_firmware() {
   remove_stock_hosts_block || true
   if [ -f "$FIRMWARE_UPDATES_CHOICE" ] && [ "$(head -c 16 "$FIRMWARE_UPDATES_CHOICE" 2>/dev/null | head -n 1)" = allow ]; then
-    mask_stock_units_fast "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"
+    mask_stock_units_fast "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_APP_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"
   else
-    mask_stock_units_fast "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_FIRMWARE_UPDATE_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"
+    mask_stock_units_fast "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_APP_UNITS[@]}" "${STOCK_FIRMWARE_UPDATE_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"
   fi
 }
 ( guard_stock_firmware ) || echo "WARNING: stock firmware guard failed (continuing)" >&2

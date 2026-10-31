@@ -426,7 +426,7 @@ describe('stock telemetry services', () => {
     })
   }
 
-  it('disables, stops and masks vector and telegraf once, then clears the vector buffer', () => {
+  it('disables, stops and masks vector, telegraf and the stock dac app once, then clears the vector buffer', () => {
     for (const unit of ['vector.service', 'telegraf.service', 'frankenfirmware.service', 'dac.service']) {
       writeFileSync(join(root, 'units', unit), 'enabled')
       writeFileSync(join(root, 'units', `${unit}.active`), '')
@@ -441,10 +441,13 @@ describe('stock telemetry services', () => {
     expect(first).toContain('disable --now vector.service')
     expect(first).toContain('mask vector.service')
     expect(first).toContain('mask telegraf.service')
+    expect(first).toContain('disable --now dac.service')
+    expect(first).toContain('mask dac.service')
     expect(second).not.toMatch(/disable|mask|stop/)
-    expect(systemctlLog()).not.toMatch(/frankenfirmware|dac|capybara|burrow|swupdate-usb/i)
+    expect(systemctlLog()).not.toMatch(/frankenfirmware|capybara|burrow|swupdate-usb/i)
     expect(readFileSync(join(root, 'units', 'vector.service'), 'utf8').trim()).toBe('masked')
     expect(existsSync(join(root, 'units', 'vector.service.active'))).toBe(false)
+    expect(existsSync(join(root, 'units', 'dac.service.active'))).toBe(false)
     expect(existsSync(join(root, 'units', 'frankenfirmware.service.active'))).toBe(true)
     expect(readdirSync(vectorDir)).toEqual([])
   })
@@ -466,8 +469,8 @@ describe('stock telemetry services', () => {
 
 describe('stock firmware updater and watchdog', () => {
   const FIRMWARE_UNITS = ['swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service']
-  const ALL_UNITS = ['vector.service', 'telegraf.service', ...FIRMWARE_UNITS, 'eight-kernel.service']
-  const NEVER_TOUCHED = ['swupdate-usb@sda1.service', 'frankenfirmware.service', 'capybara.service', 'dac.service', 'burrow.service']
+  const ALL_UNITS = ['vector.service', 'telegraf.service', 'dac.service', ...FIRMWARE_UNITS, 'eight-kernel.service']
+  const NEVER_TOUCHED = ['swupdate-usb@sda1.service', 'frankenfirmware.service', 'capybara.service', 'burrow.service']
   const unitState = (unit: string) => readFileSync(join(root, 'units', unit), 'utf8').trim()
   const running = (unit: string) => existsSync(join(root, 'units', `${unit}.active`))
   const choice = () => join(root, 'etc', 'sleepypod', 'firmware-updates')
@@ -507,7 +510,7 @@ describe('stock firmware updater and watchdog', () => {
       expect(systemctlLog()).not.toContain(unit)
       expect(running(unit)).toBe(true)
     }
-    expect(systemctlLog()).not.toMatch(/frankenfirmware|capybara|dac\.service|burrow|swupdate-usb/)
+    expect(systemctlLog()).not.toMatch(/frankenfirmware|capybara|burrow|swupdate-usb/)
   })
 
   it('is idempotent: a second pass only checks state', () => {
@@ -561,7 +564,7 @@ describe('stock firmware updater and watchdog', () => {
       expect(unitState(unit)).toBe('enabled')
       expect(running(unit)).toBe(true)
     }
-    for (const unit of ['vector.service', 'telegraf.service', 'eight-kernel.service']) expect(unitState(unit)).toBe('masked')
+    for (const unit of ['vector.service', 'telegraf.service', 'dac.service', 'eight-kernel.service']) expect(unitState(unit)).toBe('masked')
   })
 
   it.each(['block\n', 'allowed\n', 'ALLOW\n', 'allow please\n', ' allow\n', ''])('masks the updater when the saved choice is %j', (content) => {
@@ -595,7 +598,7 @@ describe('stock firmware updater and watchdog', () => {
   it('internet-control keeps the same unit lists and order as the helpers', () => {
     const arrays = (source: string) => [...source.matchAll(/^(STOCK_[A-Z_]+_UNITS)=\((.*)\)$/gm)].map(m => `${m[1]}=${m[2]}`)
     expect(arrays(readFileSync(controlScript, 'utf8'))).toEqual(arrays(readFileSync(helpers, 'utf8')))
-    expect(arrays(readFileSync(helpers, 'utf8'))).toHaveLength(3)
+    expect(arrays(readFileSync(helpers, 'utf8'))).toHaveLength(4)
   })
 
   describe('internet-control firmware-updates', () => {
@@ -620,7 +623,7 @@ describe('stock firmware updater and watchdog', () => {
       }
       const at = (line: string) => lines().indexOf(line)
       expect(at('start swupdate.service')).toBeLessThan(at('start swupdate.socket'))
-      for (const unit of ['vector.service', 'telegraf.service', 'eight-kernel.service']) expect(unitState(unit)).toBe('masked')
+      for (const unit of ['vector.service', 'telegraf.service', 'dac.service', 'eight-kernel.service']) expect(unitState(unit)).toBe('masked')
       expect(systemctlLog()).not.toContain('swupdate-usb')
       expect(readFileSync(sp('dnsmasq.conf'), 'utf8')).toBe('keep\n')
     })
@@ -668,8 +671,10 @@ describe('stock firmware updater and watchdog', () => {
     addUnit('swupdate.socket', 'masked')
     addUnit('swupdate.service', 'enabled')
     addUnit('defibrillator.service', 'masked', false)
+    addUnit('dac.service', 'enabled')
     const out = run('status').stdout
     expect(out).toContain('Stock services (masked by install/sp-update):')
+    expect(out).toMatch(/dac\.service +NOT masked \(enabled, running\)\n/)
     expect(out).toMatch(/swupdate\.socket +masked, running\n/)
     expect(out).toMatch(/swupdate\.service +NOT masked \(enabled, running\)\n/)
     expect(out).toMatch(/swupdate-progress\.service +not installed\n/)

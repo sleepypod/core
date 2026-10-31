@@ -72,7 +72,7 @@ describe('maintenance startup separation', () => {
 describe('maintenance stock firmware guard', () => {
   const BEGIN = '# BEGIN sleepypod-telemetry-block'
   const END = '# END sleepypod-telemetry-block'
-  const ALL_UNITS = ['vector.service', 'telegraf.service', 'swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service', 'eight-kernel.service']
+  const ALL_UNITS = ['vector.service', 'telegraf.service', 'dac.service', 'swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service', 'eight-kernel.service']
   const FIRMWARE_UNITS = ['swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service']
 
   /** sp-maintenance with a stub systemctl that logs and masks inside $SLEEPYPOD_ROOT. */
@@ -168,7 +168,7 @@ exit 0`)
       expect(isMasked(unit)).toBe(true)
     }
     expect(log().indexOf('mask swupdate.socket')).toBeLessThan(log().indexOf('disable --now --no-block swupdate.service'))
-    expect(log().join('\n')).not.toMatch(/telegraf|swupdate-usb|frankenfirmware|capybara|dac|burrow/)
+    expect(log().join('\n')).not.toMatch(/telegraf|swupdate-usb|frankenfirmware|capybara|burrow/)
   })
 
   it('pays one systemctl call once everything is masked, and stops a masked unit that still runs', () => {
@@ -193,7 +193,7 @@ exit 0`)
       expect(log().join('\n')).not.toContain(unit)
       expect(isMasked(unit)).toBe(false)
     }
-    for (const unit of ['vector.service', 'telegraf.service', 'eight-kernel.service']) expect(isMasked(unit)).toBe(true)
+    for (const unit of ['vector.service', 'telegraf.service', 'dac.service', 'eight-kernel.service']) expect(isMasked(unit)).toBe(true)
     writeFileSync(join(root, 'etc/sleepypod/firmware-updates'), 'allowed\n')
     expect(run().status).toBe(0)
     for (const unit of FIRMWARE_UNITS) expect(isMasked(unit)).toBe(true)
@@ -221,7 +221,7 @@ exit 0`)
   it('keeps its unit lists equal to scripts/lib/telemetry-helpers and never sources the install tree', () => {
     const arrays = (source: string) => [...source.matchAll(/^(STOCK_[A-Z_]+_UNITS)=\((.*)\)$/gm)].map(m => `${m[1]}=${m[2]}`)
     const helpers = arrays(readFileSync('scripts/lib/telemetry-helpers', 'utf8'))
-    expect(helpers).toHaveLength(3)
+    expect(helpers).toHaveLength(4)
     expect(arrays(script)).toEqual(helpers)
     expect(script).not.toMatch(/^\s*(source|\.) /m)
     const code = script.split('\n').filter(line => !line.trimStart().startsWith('#')).join('\n')

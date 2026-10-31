@@ -520,7 +520,7 @@ block_ipv4_outbound() {
   "$IPTABLES" -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
 
   # Allow established/related connections
-  "$IPTABLES" -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
+  "$IPTABLES" -A SLEEPYPOD-BLOCK -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
   # Allow local network
   for dest in "$@"; do
@@ -591,6 +591,7 @@ saved_internet_access() {
 # scripts/lib/telemetry-helpers. This script is installed on its own as
 # /usr/local/bin/sp-internet-control, so it can't source that file.
 STOCK_TELEMETRY_UNITS=(vector.service telegraf.service)
+STOCK_APP_UNITS=(dac.service)
 STOCK_FIRMWARE_UPDATE_UNITS=(swupdate.socket swupdate.service swupdate-progress.service defibrillator.service)
 STOCK_KERNEL_UNITS=(eight-kernel.service)
 # One word; only "allow" keeps install, sp-update and maintenance from
@@ -627,7 +628,7 @@ save_firmware_updates_choice() {
 
 print_stock_services() {
   local unit
-  for unit in "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_FIRMWARE_UPDATE_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"; do
+  for unit in "${STOCK_TELEMETRY_UNITS[@]}" "${STOCK_APP_UNITS[@]}" "${STOCK_FIRMWARE_UPDATE_UNITS[@]}" "${STOCK_KERNEL_UNITS[@]}"; do
     printf '    %-28s %s\n' "$unit" "$(stock_service_state "$unit")"
   done
 }
@@ -747,7 +748,7 @@ case "$COMMAND" in
       "$IP6TABLES" -I OUTPUT -j SLEEPYPOD-BLOCK
 
       "$IP6TABLES" -A SLEEPYPOD-BLOCK -o lo -j ACCEPT
-      "$IP6TABLES" -A SLEEPYPOD-BLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT
+      "$IP6TABLES" -A SLEEPYPOD-BLOCK -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
       "$IP6TABLES" -A SLEEPYPOD-BLOCK -d fe80::/10 -j ACCEPT
       "$IP6TABLES" -A SLEEPYPOD-BLOCK -j DROP
 
