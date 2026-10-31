@@ -38,7 +38,8 @@ just set, disable `frankenfirmware` and `dac` via `systemctl disable --now` +
 the pod is reachable over LAN. The installer, `sp-update` and the
 maintenance hook mask the stock updater and watchdog (`swupdate.socket`,
 `swupdate.service`, `swupdate-progress.service`, `defibrillator.service`,
-`eight-kernel.service`) and telemetry (`vector`, `telegraf`) themselves; if
+`eight-kernel.service`), telemetry (`vector`, `telegraf`) and the stock
+Eight Sleep app (`dac`, which sleepypod replaces) themselves; if
 you mask them by hand before installing, do the socket before the service.
 Stock firmware updates stay off until you opt in with
 `sudo sp-internet-control firmware-updates allow` (see
