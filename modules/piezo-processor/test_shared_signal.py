@@ -100,3 +100,26 @@ def test_minimum_peak_score_abstains_on_weak_windows_only():
 def test_minimum_peak_score_range_is_validated(value):
     with pytest.raises(ValueError):
         parameters("heart_rate.minimumPeakScore", value)
+
+
+def test_tracker_level_goes_stale_after_the_bed_was_empty(monkeypatch):
+    """A level from an evening sit must not steer the night that follows."""
+    rates = iter([110.0, 57.0, 57.5])
+    monkeypatch.setattr(core, "subharmonic_summation_hr", lambda *a, **k: (next(rates), 0.9))
+    estimator = core.WindowEstimator()
+    window = np.zeros(15000)
+    assert estimator.estimate(1000, window, window, window).heart_rate == 110.0
+    later = 1000 + 5 * 3600
+    assert estimator.estimate(later, window, window, window).heart_rate == 57.0
+    assert estimator.estimate(later + 60, window, window, window).heart_rate == 57.5
+    assert list(estimator.hr_tracker.history) == [57.0, 57.5]
+
+
+def test_tracker_level_survives_short_gaps(monkeypatch):
+    rates = iter([60.0, 61.0])
+    monkeypatch.setattr(core, "subharmonic_summation_hr", lambda *a, **k: (next(rates), 0.9))
+    estimator = core.WindowEstimator()
+    window = np.zeros(15000)
+    estimator.estimate(1000, window, window, window)
+    estimator.estimate(1000 + core.WindowEstimator.HR_STALE_AFTER_S, window, window, window)
+    assert list(estimator.hr_tracker.history) == [60.0, 61.0]
