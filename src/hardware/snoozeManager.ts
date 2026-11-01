@@ -14,6 +14,7 @@
 import { getSharedHardwareClient } from './dacMonitor.instance'
 import { loadAlarmState, updateAlarmState, type AlarmConfig } from './alarmPersistence'
 import { markAlarmStarted } from './alarmState'
+import { ringLinked } from './linkedAlarm'
 export { MIN_SNOOZE_SECONDS, nextSnoozeSeconds } from './snoozeLength'
 import type { Side } from './types'
 
@@ -54,6 +55,8 @@ function schedule(side: Side, snoozeUntil: Date, config: AlarmConfig, now: numbe
       const client = getSharedHardwareClient()
       await client.setAlarm(side, config)
       await markAlarmStarted(side, config)
+      // A single sleeper's alarm comes back on both sides, as it rang.
+      await ringLinked(client, side, config)
     }
     catch (err) {
       console.error(`[Snooze] Failed to restart alarm for ${side}:`, err)
@@ -68,7 +71,7 @@ export function snoozeAlarm(
   config: AlarmConfig,
 ): Date {
   // Cancel any existing snooze for this side
-  cancelSnooze(side)
+  cancel(side)
 
   durationSeconds = Math.min(durationSeconds, Math.floor(MAX_DELAY_MS / 1000))
   const now = Date.now()
@@ -82,7 +85,19 @@ export function snoozeAlarm(
   return snoozeUntil
 }
 
+/**
+ * Cancel the snooze on `side`, and a single sleeper's snooze on the other
+ * side linked to it: a linked alarm's snooze is recorded only on the side
+ * that was tapped, so stopping it from either side must cancel it.
+ */
 export function cancelSnooze(side: Side): void {
+  const other = side === 'left' ? 'right' : 'left'
+  const linked = getActiveSnoozes().get(other)?.config.linkedSide === side
+  cancel(side)
+  if (linked) cancel(other)
+}
+
+function cancel(side: Side): void {
   const map = getActiveSnoozes()
   const existing = map.get(side)
   if (existing) {
