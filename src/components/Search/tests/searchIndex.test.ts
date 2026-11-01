@@ -79,6 +79,7 @@ describe('docs snapshot', () => {
     ['another origin', { ...valid, base: 'https://example.com' }],
     ['no pages', { ...valid, pages: [] }],
     ['a protocol-relative path', { ...valid, pages: [{ ...page, path: '//example.com/' }] }],
+    ['a backslash path that leaves the docs origin', { ...valid, pages: [{ ...page, path: '/\\example.com/' }] }],
     ['a page without a title', { ...valid, pages: [{ ...page, title: ' ' }] }],
     ['a malformed heading', { ...valid, pages: [{ ...page, headings: [{ title: 'x' }] }] }],
     ['a non-string section', { ...valid, pages: [{ ...page, section: 3 }] }],

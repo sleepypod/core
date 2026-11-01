@@ -2,7 +2,7 @@
 // Refreshes the docs search snapshot bundled with the command palette.
 // Pods often have internet blocked, so the palette searches this copy and
 // only swaps in the live index when the browser can reach the docs site.
-import { writeFileSync } from 'node:fs'
+import { renameSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { DOCS_INDEX_URL, isDocsIndex } from '../src/components/Search/docsIndex.ts'
 
@@ -19,5 +19,8 @@ if (!isDocsIndex(index)) {
   process.exit(1)
 }
 
-writeFileSync(out, `${JSON.stringify(index, null, 2)}\n`)
+// Same-directory temp file + rename, so an interrupted run never leaves a truncated snapshot.
+const tmp = `${out}.tmp`
+writeFileSync(tmp, `${JSON.stringify(index, null, 2)}\n`)
+renameSync(tmp, out)
 console.log(`Wrote ${index.pages.length} docs pages (generated ${index.generatedAt}) to ${out}`)

@@ -36,13 +36,24 @@ const MAX_HEADINGS = 200
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isText = (v: unknown, max = 2000): v is string => typeof v === 'string' && v.length <= max
 
+/** A site path that still resolves on the docs origin ('/\evil.example/' would not). */
+function isDocsPath(v: unknown): v is string {
+  if (!isText(v, 500) || !v.startsWith('/')) return false
+  try {
+    return new URL(v, DOCS_BASE).origin === DOCS_BASE
+  }
+  catch {
+    return false
+  }
+}
+
 function isHeading(v: unknown): v is DocsHeading {
   return isObject(v) && isText(v.title, 300) && v.title.trim() !== '' && isText(v.anchor, 300)
 }
 
 function isPage(v: unknown): v is DocsPage {
   return isObject(v)
-    && isText(v.path, 500) && v.path.startsWith('/') && !v.path.startsWith('//')
+    && isDocsPath(v.path)
     && isText(v.title, 300) && v.title.trim() !== ''
     && (v.section === null || isText(v.section, 300))
     && isText(v.description)
