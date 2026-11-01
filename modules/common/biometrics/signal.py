@@ -201,6 +201,9 @@ class HRTracker:
         self.max_delta = max_delta
         self.history_len = history_len
         self._fallback_streak = 0
+        # Whether the last update() joined the tracked level; a lone fallback
+        # reading is returned but does not.
+        self.stored = False
 
     def reset(self) -> None:
         """Forget the tracked level, so the next reading seeds a new one."""
@@ -209,11 +212,13 @@ class HRTracker:
 
     def update(self, hr_candidate: Optional[float],
                score: float) -> Optional[float]:
+        self.stored = False
         if hr_candidate is None:
             return None
 
         if not self.history:
             self.history.append(hr_candidate)
+            self.stored = True
             return hr_candidate
 
         recent = float(np.median(list(self.history)))
@@ -224,6 +229,7 @@ class HRTracker:
         if consistency > 0.3:
             self._fallback_streak = 0
             self.history.append(hr_candidate)
+            self.stored = True
             return hr_candidate
 
         # Try half (harmonic correction)
@@ -234,6 +240,7 @@ class HRTracker:
             if half_consistency > 0.3:
                 self._fallback_streak = 0
                 self.history.append(half_hr)
+                self.stored = True
                 return half_hr
 
         # Try double (sub-harmonic correction)
@@ -245,6 +252,7 @@ class HRTracker:
             if double_consistency > 0.3:
                 self._fallback_streak = 0
                 self.history.append(double_hr)
+                self.stored = True
                 return double_hr
 
         # Accept anyway but keep a lone outlier out of history. A sustained
@@ -256,6 +264,7 @@ class HRTracker:
             self.history.clear()
             self.history.append(hr_candidate)
             self._fallback_streak = 0
+            self.stored = True
         return hr_candidate
 
 # ---------------------------------------------------------------------------
@@ -509,7 +518,7 @@ class WindowEstimator:
                 and timestamp_s - self._last_hr_s > self.HR_STALE_AFTER_S):
             self.hr_tracker.reset()
         hr = self.hr_tracker.update(hr_raw, hr_score)
-        if hr is not None:
+        if hr is not None and self.hr_tracker.stored:
             self._last_hr_s = timestamp_s
         br = compute_breathing_rate(breathing_samples, fs, self.parameters)
         hrv = (compute_hrv(hrv_samples, fs, self.parameters)

@@ -123,3 +123,16 @@ def test_tracker_level_survives_short_gaps(monkeypatch):
     estimator.estimate(1000, window, window, window)
     estimator.estimate(1000 + core.WindowEstimator.HR_STALE_AFTER_S, window, window, window)
     assert list(estimator.hr_tracker.history) == [60.0, 61.0]
+
+
+def test_unstored_fallback_readings_do_not_keep_a_level_fresh(monkeypatch):
+    """An outlier the tracker returns but does not store must not extend the
+    tracked level's life: 80 at 590 s would otherwise keep 110 fresh at 1180 s
+    and let 48 be doubled to 96."""
+    rates = iter([110.0, 80.0, 48.0])
+    monkeypatch.setattr(core, "subharmonic_summation_hr", lambda *a, **k: (next(rates), 0.9))
+    estimator = core.WindowEstimator()
+    window = np.zeros(15000)
+    assert estimator.estimate(0, window, window, window).heart_rate == 110.0
+    assert estimator.estimate(590, window, window, window).heart_rate == 80.0
+    assert estimator.estimate(1180, window, window, window).heart_rate == 48.0
