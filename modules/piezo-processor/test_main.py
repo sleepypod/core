@@ -690,6 +690,27 @@ class TestHRTracker:
 
         assert 200.0 not in tracker.history
 
+    def test_stale_high_level_never_doubles_a_resting_rate(self):
+        """Night of 2026-10-30: a 110 bpm seed doubled every true ~57 reading
+        to ~114 all night, because "half of the tracked level" always fit."""
+        tracker = HRTracker()
+        for hr in [110.0, 111.5, 110.3, 112.4, 113.2]:
+            tracker.update(hr, 0.5)
+
+        results = [tracker.update(57.0, 0.5) for _ in range(HRTracker.FALLBACK_RESET_STREAK)]
+
+        assert results == [57.0] * HRTracker.FALLBACK_RESET_STREAK
+        assert list(tracker.history) == [57.0]
+        assert tracker.update(58.0, 0.5) == 58.0
+
+    def test_reset_forgets_the_tracked_level(self):
+        tracker = HRTracker()
+        for hr in [110.0, 111.0, 112.0]:
+            tracker.update(hr, 0.5)
+        tracker.reset()
+        assert tracker.update(57.0, 0.5) == 57.0
+        assert list(tracker.history) == [57.0]
+
 
 class TestInt32Samples:
     """_int32_samples must tolerate truncated buffers (#4.7) — a RAW record
