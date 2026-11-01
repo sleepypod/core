@@ -5,9 +5,12 @@
 # sleepypod — local-first Pod mattress controller
 
 [![CI](https://github.com/sleepypod/core/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/sleepypod/core/actions/workflows/test.yml)
+[![Python modules](https://github.com/sleepypod/core/actions/workflows/python-modules.yml/badge.svg?branch=dev)](https://github.com/sleepypod/core/actions/workflows/python-modules.yml)
 [![codecov](https://codecov.io/gh/sleepypod/core/branch/dev/graph/badge.svg)](https://codecov.io/gh/sleepypod/core)
 [![Release](https://img.shields.io/github/v/release/sleepypod/core?sort=semver)](https://github.com/sleepypod/core/releases/latest)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-sleepypod.github.io-blue)](https://sleepypod.github.io/)
+[![Live demo](https://img.shields.io/badge/live_demo-sleepypod.vercel.app-brightgreen)](https://sleepypod.vercel.app)
 [![Discord](https://img.shields.io/discord/1450213183653679205?logo=discord&logoColor=white&label=discord)](https://discord.gg/UMmv5R6MXa)
 
 Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Linux — replaces the cloud-bound controller with a local web UI, scheduler, on-device biometrics, and opt-in integrations for Home Assistant (MQTT), Apple Home (HomeKit), and AI assistants (MCP).
@@ -15,6 +18,8 @@ Self-hosted control app for Pod 3, 4, and 5. Runs on the Pod's stock embedded Li
 **Documentation lives at [sleepypod.github.io](https://sleepypod.github.io/getting-started/).** This README covers installing and working on the code; the docs site covers everything else.
 
 **No Pod? [Try the live demo](https://sleepypod.vercel.app).** It runs the real web UI against simulated Pod data in your browser, so you can change temperatures, edit schedules, and browse sleep history without hardware.
+
+**Sibling project:** [seedypod](https://github.com/seedypod/core) applies the same local-first approach to Gardyn hydroponic towers.
 
 <p align="center">
   <a href="https://sleepypod.github.io/core/"><img src="docs/images/core-temperature.png" width="1000" alt="sleepypod core web UI with per-side temperature controls, sidebar navigation, and the schedule and sleep timeline" /></a>
@@ -25,10 +30,10 @@ The web UI brings temperature, schedules, Autopilot, sleep, and system diagnosti
 <p align="center">
   <a href="https://sleepypod.github.io/ios/"><img src="docs/images/ios-temperature.png" width="220" alt="sleepypod iOS app temperature control" /></a>
   &nbsp;&nbsp;
-  <a href="https://sleepypod.github.io/dial/"><img src="docs/images/dial-cooling.png" width="220" alt="sleepypod rotary dial showing a cooling target" /></a>
+  <a href="https://sleepypod.github.io/dial/"><img src="docs/images/dial-heating.png" width="220" alt="sleepypod rotary dial heating toward its target" /></a>
 </p>
 
-<sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/d3b4e86e0153944fba3c92fe96f04aca34db7165/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
+<sub>Real product captures from the [documentation site](https://github.com/sleepypod/sleepypod.github.io/blob/40c02fa5b76f522f4dff24129ca7df2472e2a3dd/capture/manifest.json). The web UI capture uses disposable demo data. See [asset provenance](docs/images/README.md).</sub>
 
 <p align="center">
   <a href="https://sleepypod.vercel.app">Live demo</a> · <a href="https://sleepypod.github.io/getting-started/">Get started</a> · <a href="https://sleepypod.github.io/core/">User guide</a> · <a href="https://sleepypod.github.io/developers/">Developer docs</a> · <a href="https://sleepypod.github.io/troubleshooting/">Troubleshooting</a> · <a href="https://github.com/sleepypod/core/issues">Issues</a>

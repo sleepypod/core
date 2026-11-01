@@ -280,3 +280,6 @@ the engine — so shipping it in P0 is premature surface.
 - Vitals baseline (z-score source): `getVitalsBaseline`.
 - UI: `app/[lang]/autopilot/`, `src/components/Autopilot/`,
   `src/components/diagnostics/DiagnosticsConsole.tsx`.
+- Ported to seedypod as [its ADR 0020](https://github.com/seedypod/core/blob/dev/docs/adr/0020-autopilot-reactive-automations.md).
+  The evaluator, expressions and windows are near-verbatim copies, so a fix
+  to one likely applies to the other.

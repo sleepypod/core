@@ -22,6 +22,7 @@
     "db:reset:schedules": "sqlite3 sleepypod.dev.db \"BEGIN; DELETE FROM temperature_schedules; DELETE FROM power_schedules; DELETE FROM alarm_schedules; DELETE FROM run_once_sessions; COMMIT;\"",
     "db:reset:settings": "sqlite3 sleepypod.dev.db \"BEGIN; DELETE FROM device_settings; DELETE FROM side_settings; DELETE FROM tap_gestures; COMMIT;\"",
     "db:reset:state": "sqlite3 sleepypod.dev.db \"BEGIN; DELETE FROM device_state; DELETE FROM system_health; COMMIT;\"",
+    "docs:sync-index": "node scripts/sync-docs-index.mjs",
     "lingui:extract": "lingui extract --clean",
     "lint:fix": "eslint . --fix",
     "lint": "eslint .",
