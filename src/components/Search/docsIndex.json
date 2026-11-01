@@ -1,0 +1,2013 @@
+{
+  "version": 1,
+  "generatedAt": "2026-11-01T03:06:36.763Z",
+  "base": "https://sleepypod.github.io",
+  "pages": [
+    {
+      "path": "/about/",
+      "title": "About sleepypod",
+      "section": null,
+      "description": "sleepypod is an independent, community-built ecosystem for local control of Pod hardware. Core, the native iOS app, and the sleepypod Dial share a local connection so you can choose the interface that…",
+      "headings": [
+        {
+          "title": "Open source",
+          "anchor": "open-source"
+        },
+        {
+          "title": "About these guides",
+          "anchor": "about-these-guides"
+        },
+        {
+          "title": "Contribute",
+          "anchor": "contribute"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/",
+      "title": "sleepypod Core",
+      "section": "Core",
+      "description": "The foundation of the system. Core runs on the Pod's embedded Linux and provides a local web app, hardware control, scheduling, biometrics processing, and an API for your other controls.",
+      "headings": [
+        {
+          "title": "See what’s new",
+          "anchor": "see-whats-new"
+        },
+        {
+          "title": "What you can do",
+          "anchor": "what-you-can-do"
+        },
+        {
+          "title": "The web interface",
+          "anchor": "the-web-interface"
+        },
+        {
+          "title": "Guides",
+          "anchor": "guides"
+        },
+        {
+          "title": "How the pieces connect",
+          "anchor": "how-the-pieces-connect"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/autopilot-engine/",
+      "title": "Autopilot engine",
+      "section": "Core",
+      "description": "How Autopilot rules evaluate, continuous policies versus one-shots, who controls the temperature, and how backtests replay.",
+      "headings": [
+        {
+          "title": "Evaluation",
+          "anchor": "evaluation"
+        },
+        {
+          "title": "Which signals are live",
+          "anchor": "which-signals-are-live"
+        },
+        {
+          "title": "Continuous policies and one-shots",
+          "anchor": "continuous-policies-and-one-shots"
+        },
+        {
+          "title": "Follow the room overnight",
+          "anchor": "follow-the-room-overnight"
+        },
+        {
+          "title": "Make a temporary adjustment",
+          "anchor": "make-a-temporary-adjustment"
+        },
+        {
+          "title": "Who controls the temperature",
+          "anchor": "who-controls-the-temperature"
+        },
+        {
+          "title": "How backtests replay",
+          "anchor": "how-backtests-replay"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/autopilot/",
+      "title": "Autopilot",
+      "section": "Core",
+      "description": "Create rules that react to the bed and the Pod, try them in dry run, backtest them, and check why they fired.",
+      "headings": [
+        {
+          "title": "Read a rule as a sentence",
+          "anchor": "read-a-rule-as-a-sentence"
+        },
+        {
+          "title": "Automations",
+          "anchor": "automations"
+        },
+        {
+          "title": "Build a rule",
+          "anchor": "build-a-rule"
+        },
+        {
+          "title": "Backtest before you trust it",
+          "anchor": "backtest-before-you-trust-it"
+        },
+        {
+          "title": "Diagnostics",
+          "anchor": "diagnostics"
+        },
+        {
+          "title": "Why did nothing change?",
+          "anchor": "why-did-nothing-change"
+        },
+        {
+          "title": "Stop a rule",
+          "anchor": "stop-a-rule"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/base/",
+      "title": "Base (experimental)",
+      "section": "Core",
+      "description": "Preview and control adjustable-base positions, understand the experimental limits, and schedule movements.",
+      "headings": [
+        {
+          "title": "Choose a position",
+          "anchor": "choose-a-position"
+        },
+        {
+          "title": "Schedule a position",
+          "anchor": "schedule-a-position"
+        },
+        {
+          "title": "Connection and demo",
+          "anchor": "connection-and-demo"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/biometrics/",
+      "title": "Sleep",
+      "section": "Core",
+      "description": "Review nights, sleep stages, and vitals by night, week, or month, and export your data.",
+      "headings": [
+        {
+          "title": "Nights",
+          "anchor": "nights"
+        },
+        {
+          "title": "Night",
+          "anchor": "night"
+        },
+        {
+          "title": "Week",
+          "anchor": "week"
+        },
+        {
+          "title": "Month",
+          "anchor": "month"
+        },
+        {
+          "title": "Export your data",
+          "anchor": "export-your-data"
+        },
+        {
+          "title": "Biometrics",
+          "anchor": "biometrics"
+        },
+        {
+          "title": "Explore vitals and import Watch data",
+          "anchor": "explore-vitals-and-import-watch-data"
+        },
+        {
+          "title": "When readings are missing",
+          "anchor": "when-readings-are-missing"
+        },
+        {
+          "title": "Understand the limits",
+          "anchor": "understand-the-limits"
+        },
+        {
+          "title": "Where data lives",
+          "anchor": "where-data-lives"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/data-flow/",
+      "title": "Follow your data",
+      "section": "Core",
+      "description": "A sensor reading takes a few steps before it becomes something you can explore. This is the simplified path for biometrics: sensing, local processing, storage, then the app.",
+      "headings": [
+        {
+          "title": "See the real system at work",
+          "anchor": "see-the-real-system-at-work"
+        },
+        {
+          "title": "1. The Pod senses",
+          "anchor": "1-the-pod-senses"
+        },
+        {
+          "title": "2. Local modules make sense of the signals",
+          "anchor": "2-local-modules-make-sense-of-the-signals"
+        },
+        {
+          "title": "3. The app gives you a view",
+          "anchor": "3-the-app-gives-you-a-view"
+        },
+        {
+          "title": "Where does Autopilot fit?",
+          "anchor": "where-does-autopilot-fit"
+        },
+        {
+          "title": "Follow a gap upstream",
+          "anchor": "follow-a-gap-upstream"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/firmware-updates/",
+      "title": "Stock firmware",
+      "section": "Core",
+      "description": "Choose a firmware guide by hub platform, hardware revision, and cover generation.",
+      "headings": [
+        {
+          "title": "Stock updates are off",
+          "anchor": "stock-updates-are-off"
+        },
+        {
+          "title": "When an update is needed",
+          "anchor": "when-an-update-is-needed"
+        },
+        {
+          "title": "Choose your hardware",
+          "anchor": "choose-your-hardware"
+        },
+        {
+          "title": "Firmware guides",
+          "anchor": "firmware-guides"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/firmware-updates/backup-slot/",
+      "title": "Synchronize Slot B",
+      "section": "Core",
+      "description": "Optional backup partition synchronization for the verified Slot A eMMC boot layout.",
+      "headings": [],
+      "keywords": ""
+    },
+    {
+      "path": "/core/firmware-updates/compatibility/",
+      "title": "Compatibility and releases",
+      "section": "Core",
+      "description": "Verified hub and cover pairing, firmware artifacts, and platform architecture.",
+      "headings": [
+        {
+          "title": "Platform architecture: MediaTek MT8365 vs. NXP i.MX 8M Mini",
+          "anchor": "platform-architecture-mediatek-mt8365-vs-nxp-imx-8m-mini"
+        },
+        {
+          "title": "Choosing artifacts: Pod 3 releases vs. latest firmware",
+          "anchor": "choosing-artifacts-pod-3-releases-vs-latest-firmware"
+        },
+        {
+          "title": "Sources and verification scope",
+          "anchor": "sources-and-verification-scope"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/firmware-updates/factory-reset/",
+      "title": "Return to stock with official OTA",
+      "section": "Core",
+      "description": "Factory reset and official OTA limitations for matched hub and cover hardware.",
+      "headings": [],
+      "keywords": ""
+    },
+    {
+      "path": "/core/firmware-updates/manual-update/",
+      "title": "Pod 3 hub + Pod 4 cover update",
+      "section": "Core",
+      "description": "Manually update subsystems on the verified MediaTek Pod 3 hub and STM32G0 Pod 4 cover.",
+      "headings": [
+        {
+          "title": "Step 1: Back up the existing pod state",
+          "anchor": "step-1-back-up-the-existing-pod-state"
+        },
+        {
+          "title": "Step 2: Acquire the update archive",
+          "anchor": "step-2-acquire-the-update-archive"
+        },
+        {
+          "title": "Step 3: Extract artifacts on your computer",
+          "anchor": "step-3-extract-artifacts-on-your-computer"
+        },
+        {
+          "title": "Locating libnats.so.3.11.0",
+          "anchor": "locating-libnatsso3110"
+        },
+        {
+          "title": "Pre-flight artifact validation",
+          "anchor": "pre-flight-artifact-validation"
+        },
+        {
+          "title": "Step 4: Transfer artifacts to the Pod",
+          "anchor": "step-4-transfer-artifacts-to-the-pod"
+        },
+        {
+          "title": "Step 5: Install and start NATS JetStream",
+          "anchor": "step-5-install-and-start-nats-jetstream"
+        },
+        {
+          "title": "Step 6: Configure UART mapping, metadata stubs, and stage cover firmware (Pod 3 hub + Pod 4 cover)",
+          "anchor": "step-6-configure-uart-mapping-metadata-stubs-and-stage-cover-firmware-pod-3-hub--pod-4-cover"
+        },
+        {
+          "title": "Step 7: Deploy updated frankenfirmware and trigger flash",
+          "anchor": "step-7-deploy-updated-frankenfirmware-and-trigger-flash"
+        },
+        {
+          "title": "Step 8: Restart sleepypod biometrics services",
+          "anchor": "step-8-restart-sleepypod-biometrics-services"
+        },
+        {
+          "title": "Next: verify the update",
+          "anchor": "next-verify-the-update"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/firmware-updates/rollback/",
+      "title": "Roll back subsystem files",
+      "section": "Core",
+      "description": "Restore backed-up firmware daemon files, configuration, and service metadata.",
+      "headings": [],
+      "keywords": ""
+    },
+    {
+      "path": "/core/firmware-updates/verification/",
+      "title": "Verification and troubleshooting",
+      "section": "Core",
+      "description": "Check the firmware update, NATS telemetry, UART mapping, and hardware health.",
+      "headings": [
+        {
+          "title": "Troubleshooting subsystem errors",
+          "anchor": "troubleshooting-subsystem-errors"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/installation/",
+      "title": "Install and update Core",
+      "section": "Core",
+      "description": "Use a supported Pod 3, 4, or 5 running stock embedded Linux. New to a stock Pod? Start with Open your Pod and get root access for the parts list, teardown photos, Tag-Connect wiring, and first…",
+      "headings": [
+        {
+          "title": "Before you begin",
+          "anchor": "before-you-begin"
+        },
+        {
+          "title": "Install on the Pod",
+          "anchor": "install-on-the-pod"
+        },
+        {
+          "title": "Verify the installation",
+          "anchor": "verify-the-installation"
+        },
+        {
+          "title": "Update",
+          "anchor": "update"
+        },
+        {
+          "title": "Useful commands",
+          "anchor": "useful-commands"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/integrations/",
+      "title": "HomeKit and MQTT reference",
+      "section": "Core",
+      "description": "Both bridges are off by default. Enable only the integration you use. For step-by-step setup in the app, see Settings → HomeKit and Settings → MQTT; this page covers what each bridge exposes. To…",
+      "headings": [
+        {
+          "title": "Apple Home / HomeKit",
+          "anchor": "apple-home--homekit"
+        },
+        {
+          "title": "Home Assistant / MQTT",
+          "anchor": "home-assistant--mqtt"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/mcp/",
+      "title": "MCP for agents",
+      "section": "Core",
+      "description": "Core includes a Model Context Protocol (MCP) server. Any MCP host, such as Claude Desktop, Claude Code, Codex, Cursor, or a Home Assistant agent, can connect to it and read or control the Pod in plain…",
+      "headings": [
+        {
+          "title": "Connect a host",
+          "anchor": "connect-a-host"
+        },
+        {
+          "title": "What the assistant can do",
+          "anchor": "what-the-assistant-can-do"
+        },
+        {
+          "title": "Sleep-stage rules",
+          "anchor": "sleep-stage-rules"
+        },
+        {
+          "title": "Biometric calibration",
+          "anchor": "biometric-calibration"
+        },
+        {
+          "title": "Saved curves",
+          "anchor": "saved-curves"
+        },
+        {
+          "title": "Resources and prompts",
+          "anchor": "resources-and-prompts"
+        },
+        {
+          "title": "Approvals and safety",
+          "anchor": "approvals-and-safety"
+        },
+        {
+          "title": "Deliberately not exposed",
+          "anchor": "deliberately-not-exposed"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/migrating-from-free-sleep/",
+      "title": "Migrating from free-sleep",
+      "section": "Core",
+      "description": "Move a Pod from free-sleep to sleepypod Core: get past the firewall it leaves behind, remove it with --purge-free-sleep or by hand, and check the install.",
+      "headings": [
+        {
+          "title": "What you keep",
+          "anchor": "what-you-keep"
+        },
+        {
+          "title": "Why the installer refuses",
+          "anchor": "why-the-installer-refuses"
+        },
+        {
+          "title": "Get the Pod back online",
+          "anchor": "get-the-pod-back-online"
+        },
+        {
+          "title": "Option A: let the installer remove free-sleep",
+          "anchor": "option-a-let-the-installer-remove-free-sleep"
+        },
+        {
+          "title": "Option B: remove free-sleep by hand",
+          "anchor": "option-b-remove-free-sleep-by-hand"
+        },
+        {
+          "title": "Check the install",
+          "anchor": "check-the-install"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/navigation/",
+      "title": "Find your way around",
+      "section": "Core",
+      "description": "The sections of the Core web app, where each screen lives, and which guide covers it.",
+      "headings": [
+        {
+          "title": "On a computer",
+          "anchor": "on-a-computer"
+        },
+        {
+          "title": "On a phone",
+          "anchor": "on-a-phone"
+        },
+        {
+          "title": "Every screen and its guide",
+          "anchor": "every-screen-and-its-guide"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/personal-stage-models/",
+      "title": "Personal stage models",
+      "section": "Core",
+      "description": "Train a sleep-stage model from your own nights with the Apple Watch as the label, store it on the Pod, and score it beside the rules.",
+      "headings": [
+        {
+          "title": "Explore models in the training workspace",
+          "anchor": "explore-models-in-the-training-workspace"
+        },
+        {
+          "title": "What gets trained",
+          "anchor": "what-gets-trained"
+        },
+        {
+          "title": "Train on a Mac (recommended)",
+          "anchor": "train-on-a-mac-recommended"
+        },
+        {
+          "title": "What the Pod does with it",
+          "anchor": "what-the-pod-does-with-it"
+        },
+        {
+          "title": "On the iPhone",
+          "anchor": "on-the-iphone"
+        },
+        {
+          "title": "What the numbers mean",
+          "anchor": "what-the-numbers-mean"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/root-access/",
+      "title": "Open your Pod and get root access",
+      "section": "Core",
+      "description": "Start here if you have a stock Pod and have never opened a shell on it. Root is the administrator account on the Pod's Linux computer. You first reach it over a temporary USB-to-serial connection…",
+      "headings": [
+        {
+          "title": "1. Identify your hardware",
+          "anchor": "1-identify-your-hardware"
+        },
+        {
+          "title": "2. Gather the parts",
+          "anchor": "2-gather-the-parts"
+        },
+        {
+          "title": "3. Open the enclosure",
+          "anchor": "3-open-the-enclosure"
+        },
+        {
+          "title": "Pod 3 without an SD card",
+          "anchor": "pod-3-without-an-sd-card"
+        },
+        {
+          "title": "Pod 4",
+          "anchor": "pod-4"
+        },
+        {
+          "title": "Pod 5",
+          "anchor": "pod-5"
+        },
+        {
+          "title": "4. Wire the serial connection",
+          "anchor": "4-wire-the-serial-connection"
+        },
+        {
+          "title": "5. Open the terminal on your computer",
+          "anchor": "5-open-the-terminal-on-your-computer"
+        },
+        {
+          "title": "6. Boot a temporary administrator shell",
+          "anchor": "6-boot-a-temporary-administrator-shell"
+        },
+        {
+          "title": "7. Verify normal login and prevent firmware updates",
+          "anchor": "7-verify-normal-login-and-prevent-firmware-updates"
+        },
+        {
+          "title": "8. Join Wi-Fi and install sleepypod",
+          "anchor": "8-join-wi-fi-and-install-sleepypod"
+        },
+        {
+          "title": "9. Disconnect and reassemble",
+          "anchor": "9-disconnect-and-reassemble"
+        },
+        {
+          "title": "If the console does not work",
+          "anchor": "if-the-console-does-not-work"
+        },
+        {
+          "title": "Sources and photo credits",
+          "anchor": "sources-and-photo-credits"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/schedules/",
+      "title": "Schedule",
+      "section": "Core",
+      "description": "Build nightly temperature curves, set vibration alarms, and check what runs tonight.",
+      "headings": [
+        {
+          "title": "Read the page",
+          "anchor": "read-the-page"
+        },
+        {
+          "title": "Build a nightly curve",
+          "anchor": "build-a-nightly-curve"
+        },
+        {
+          "title": "What happens at the end",
+          "anchor": "what-happens-at-the-end"
+        },
+        {
+          "title": "Custom AI curve",
+          "anchor": "custom-ai-curve"
+        },
+        {
+          "title": "Saved curves and notes",
+          "anchor": "saved-curves-and-notes"
+        },
+        {
+          "title": "Vibration alarms",
+          "anchor": "vibration-alarms"
+        },
+        {
+          "title": "Temporary changes",
+          "anchor": "temporary-changes"
+        },
+        {
+          "title": "Check the timezone",
+          "anchor": "check-the-timezone"
+        },
+        {
+          "title": "iOS curve editor",
+          "anchor": "ios-curve-editor"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/",
+      "title": "Settings",
+      "section": "Core",
+      "description": "Everything you configure in the Core web app, section by section.",
+      "headings": [
+        {
+          "title": "Backups and maintenance",
+          "anchor": "backups-and-maintenance"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/appearance/",
+      "title": "Appearance",
+      "section": "Core",
+      "description": "Choose the temperature control style, how temperatures are shown, the theme, and the units.",
+      "headings": [
+        {
+          "title": "Temperature control",
+          "anchor": "temperature-control"
+        },
+        {
+          "title": "Show as",
+          "anchor": "show-as"
+        },
+        {
+          "title": "3D stage",
+          "anchor": "3d-stage"
+        },
+        {
+          "title": "Display",
+          "anchor": "display"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/backup/",
+      "title": "Backup",
+      "section": "Core",
+      "description": "Copy sensor archives and sleep data to a computer you control every night over SSH.",
+      "headings": [
+        {
+          "title": "Set up the nightly copy",
+          "anchor": "set-up-the-nightly-copy"
+        },
+        {
+          "title": "If the test fails",
+          "anchor": "if-the-test-fails"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/biometric-calibration/",
+      "title": "Biometric calibration",
+      "section": "Core",
+      "description": "Import references, compare biometric profiles on retained inputs, and review processor adoption.",
+      "headings": [
+        {
+          "title": "Review before applying",
+          "anchor": "review-before-applying"
+        },
+        {
+          "title": "Sleep-stage rules",
+          "anchor": "sleep-stage-rules"
+        },
+        {
+          "title": "Connected agents",
+          "anchor": "connected-agents"
+        },
+        {
+          "title": "Source references",
+          "anchor": "source-references"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/device/",
+      "title": "Device",
+      "section": "Core",
+      "description": "Timezone, units, the auto power-off cap, pump protection, the sensor data source, daily maintenance, and the LED.",
+      "headings": [
+        {
+          "title": "Clock and schedule defaults",
+          "anchor": "clock-and-schedule-defaults"
+        },
+        {
+          "title": "Pod",
+          "anchor": "pod"
+        },
+        {
+          "title": "Power",
+          "anchor": "power"
+        },
+        {
+          "title": "Pump protection",
+          "anchor": "pump-protection"
+        },
+        {
+          "title": "Reconnect and Restart service",
+          "anchor": "reconnect-and-restart-service"
+        },
+        {
+          "title": "Sensor data source",
+          "anchor": "sensor-data-source"
+        },
+        {
+          "title": "Daily maintenance",
+          "anchor": "daily-maintenance"
+        },
+        {
+          "title": "LED",
+          "anchor": "led"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/gestures/",
+      "title": "Gestures",
+      "section": "Core",
+      "description": "Choose what double, triple, and quad taps on the cover do, including while an alarm is ringing.",
+      "headings": [
+        {
+          "title": "The two cards",
+          "anchor": "the-two-cards"
+        },
+        {
+          "title": "Set a gesture",
+          "anchor": "set-a-gesture"
+        },
+        {
+          "title": "Check it on the bed",
+          "anchor": "check-it-on-the-bed"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/homekit/",
+      "title": "HomeKit",
+      "section": "Core",
+      "description": "Add the Pod to Apple Home, find the setup code, and reset pairing.",
+      "headings": [
+        {
+          "title": "Pair with Apple Home",
+          "anchor": "pair-with-apple-home"
+        },
+        {
+          "title": "Reset pairing",
+          "anchor": "reset-pairing"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/mqtt/",
+      "title": "MQTT",
+      "section": "Core",
+      "description": "Connect the Pod to an MQTT broker for Home Assistant and other home hubs.",
+      "headings": [
+        {
+          "title": "Connect to your broker",
+          "anchor": "connect-to-your-broker"
+        },
+        {
+          "title": "Topic prefix and badges",
+          "anchor": "topic-prefix-and-badges"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/network/",
+      "title": "Network",
+      "section": "Core",
+      "description": "Choose whether the Pod can reach the internet or stays on your local network only.",
+      "headings": [
+        {
+          "title": "Change internet access",
+          "anchor": "change-internet-access"
+        },
+        {
+          "title": "When the Pod needs the internet",
+          "anchor": "when-the-pod-needs-the-internet"
+        },
+        {
+          "title": "How the firewall works",
+          "anchor": "how-the-firewall-works"
+        },
+        {
+          "title": "1. Firewall rules",
+          "anchor": "1-firewall-rules"
+        },
+        {
+          "title": "2. Blocked Eight Sleep domains",
+          "anchor": "2-blocked-eight-sleep-domains"
+        },
+        {
+          "title": "3. Stock services turned off",
+          "anchor": "3-stock-services-turned-off"
+        },
+        {
+          "title": "Why your DNS server still sees Eight Sleep lookups",
+          "anchor": "why-your-dns-server-still-sees-eight-sleep-lookups"
+        },
+        {
+          "title": "Check the firewall on your Pod",
+          "anchor": "check-the-firewall-on-your-pod"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/sides/",
+      "title": "Sides",
+      "section": "Core",
+      "description": "Name each side and set Away mode, Auto-off after leaving the bed, and Always on.",
+      "headings": [
+        {
+          "title": "Bed setup",
+          "anchor": "bed-setup"
+        },
+        {
+          "title": "Profile",
+          "anchor": "profile"
+        },
+        {
+          "title": "Away mode",
+          "anchor": "away-mode"
+        },
+        {
+          "title": "Auto-off",
+          "anchor": "auto-off"
+        },
+        {
+          "title": "Always on",
+          "anchor": "always-on"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/sleep-stages/",
+      "title": "Sleep stages",
+      "section": "Core",
+      "description": "Inspect sleep-stage rules, preview changes against recent nights, and track saved changes.",
+      "headings": [
+        {
+          "title": "Read the rules",
+          "anchor": "read-the-rules"
+        },
+        {
+          "title": "Preview before saving",
+          "anchor": "preview-before-saving"
+        },
+        {
+          "title": "Saved versus applied",
+          "anchor": "saved-versus-applied"
+        },
+        {
+          "title": "Connected agents",
+          "anchor": "connected-agents"
+        },
+        {
+          "title": "Source references",
+          "anchor": "source-references"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/settings/updates/",
+      "title": "Updates",
+      "section": "Core",
+      "description": "See the installed version, choose an update channel, update Core, and check disk use.",
+      "headings": [
+        {
+          "title": "Software",
+          "anchor": "software"
+        },
+        {
+          "title": "Update Core",
+          "anchor": "update-core"
+        },
+        {
+          "title": "Disk",
+          "anchor": "disk"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/",
+      "title": "System",
+      "section": "Core",
+      "description": "Check how the Pod is doing: the Dashboard and every System page.",
+      "headings": [
+        {
+          "title": "The System pages",
+          "anchor": "the-system-pages"
+        },
+        {
+          "title": "The live stream bar",
+          "anchor": "the-live-stream-bar"
+        },
+        {
+          "title": "Dashboard",
+          "anchor": "dashboard"
+        },
+        {
+          "title": "Status line",
+          "anchor": "status-line"
+        },
+        {
+          "title": "Attention card",
+          "anchor": "attention-card"
+        },
+        {
+          "title": "Pump alerts",
+          "anchor": "pump-alerts"
+        },
+        {
+          "title": "Tonight",
+          "anchor": "tonight"
+        },
+        {
+          "title": "Side cards",
+          "anchor": "side-cards"
+        },
+        {
+          "title": "Report a problem",
+          "anchor": "report-a-problem"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/calibration/",
+      "title": "Calibration",
+      "section": "Core",
+      "description": "Check each sensor calibration against live readings and recalibrate when needed.",
+      "headings": [
+        {
+          "title": "The three sensors",
+          "anchor": "the-three-sensors"
+        },
+        {
+          "title": "Recalibrate",
+          "anchor": "recalibrate"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/databases/",
+      "title": "Databases",
+      "section": "Core",
+      "description": "Check database health, see what grows, browse rows, and download a full backup.",
+      "headings": [
+        {
+          "title": "Download a full backup",
+          "anchor": "download-a-full-backup"
+        },
+        {
+          "title": "Read the page",
+          "anchor": "read-the-page"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/hardware/",
+      "title": "Hardware",
+      "section": "Core",
+      "description": "Test the cover vibration on one side.",
+      "headings": [
+        {
+          "title": "Test vibration",
+          "anchor": "test-vibration"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/health/",
+      "title": "Health",
+      "section": "Core",
+      "description": "Follow sensor data from the bed through each service to the app, and find when it stopped.",
+      "headings": [
+        {
+          "title": "Verdict",
+          "anchor": "verdict"
+        },
+        {
+          "title": "Data path",
+          "anchor": "data-path"
+        },
+        {
+          "title": "Last 24 hours and incidents",
+          "anchor": "last-24-hours-and-incidents"
+        },
+        {
+          "title": "Trace missing sleep data",
+          "anchor": "trace-missing-sleep-data"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/logs/",
+      "title": "Logs",
+      "section": "Core",
+      "description": "Read messages from each Core service and the Pod firmware.",
+      "headings": [
+        {
+          "title": "Read a service’s log",
+          "anchor": "read-a-services-log"
+        },
+        {
+          "title": "Enable detailed app logs",
+          "anchor": "enable-detailed-app-logs"
+        },
+        {
+          "title": "Firmware console",
+          "anchor": "firmware-console"
+        },
+        {
+          "title": "Collect a CLI support bundle",
+          "anchor": "collect-a-cli-support-bundle"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/scheduler/",
+      "title": "Scheduler",
+      "section": "Core",
+      "description": "See every scheduled job, when it runs next, and whether the scheduler is in sync.",
+      "headings": [
+        {
+          "title": "Read the page",
+          "anchor": "read-the-page"
+        },
+        {
+          "title": "Jobs at the wrong time",
+          "anchor": "jobs-at-the-wrong-time"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/sensors/",
+      "title": "Sensors",
+      "section": "Core",
+      "description": "Watch live presence, bed temperature, freezer, humidity, piezo, and flow readings.",
+      "headings": [
+        {
+          "title": "Live sweep and temperature regions",
+          "anchor": "live-sweep-and-temperature-regions"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/storage/",
+      "title": "Storage",
+      "section": "Core",
+      "description": "Monitor flash writes, choose what data to record, and safely free up leftover files.",
+      "headings": [
+        {
+          "title": "What uses space",
+          "anchor": "what-uses-space"
+        },
+        {
+          "title": "Flash endurance",
+          "anchor": "flash-endurance"
+        },
+        {
+          "title": "Data recording",
+          "anchor": "data-recording"
+        },
+        {
+          "title": "Free up space",
+          "anchor": "free-up-space"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/system/thermal/",
+      "title": "Thermal",
+      "section": "Core",
+      "description": "Check whether each side is actually heating or cooling: targets, water temperature, and pump speed.",
+      "headings": [
+        {
+          "title": "Read the charts",
+          "anchor": "read-the-charts"
+        },
+        {
+          "title": "Side cards",
+          "anchor": "side-cards"
+        },
+        {
+          "title": "A side is not heating or cooling",
+          "anchor": "a-side-is-not-heating-or-cooling"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/temperature/",
+      "title": "Temp",
+      "section": "Core",
+      "description": "Change each side’s temperature and power, use holds and Resume, and read the Temp screen.",
+      "headings": [
+        {
+          "title": "Explore the temperature Stage",
+          "anchor": "explore-the-temperature-stage"
+        },
+        {
+          "title": "Read the thermal bed",
+          "anchor": "read-the-thermal-bed"
+        },
+        {
+          "title": "Choose your controls",
+          "anchor": "choose-your-controls"
+        },
+        {
+          "title": "Now, Night, and Dawn",
+          "anchor": "now-night-and-dawn"
+        },
+        {
+          "title": "Manual holds and Resume",
+          "anchor": "manual-holds-and-resume"
+        },
+        {
+          "title": "Power",
+          "anchor": "power"
+        },
+        {
+          "title": "The rest of the Cards layout",
+          "anchor": "the-rest-of-the-cards-layout"
+        },
+        {
+          "title": "Banners",
+          "anchor": "banners"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/tour/",
+      "title": "A tour of the new interfaces",
+      "section": "Core",
+      "description": "Watch the new temperature Stage, experimental Base, schedule editor, sleep view and health map in action.",
+      "headings": [
+        {
+          "title": "Transcript and chapters",
+          "anchor": "transcript-and-chapters"
+        },
+        {
+          "title": "More changes to explore",
+          "anchor": "more-changes-to-explore"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/core/water-care/",
+      "title": "Water care and maintenance liquid",
+      "section": "Core",
+      "description": "Maintain the water circuit with dilute liquid BZK, measured dosing, and precautions for seals and tubing.",
+      "headings": [
+        {
+          "title": "Product and measured dose",
+          "anchor": "product-and-measured-dose"
+        },
+        {
+          "title": "Cost: insert versus liquid",
+          "anchor": "cost-insert-versus-liquid"
+        },
+        {
+          "title": "Active amount and delivery",
+          "anchor": "active-amount-and-delivery"
+        },
+        {
+          "title": "Get treatment into the circulating water",
+          "anchor": "get-treatment-into-the-circulating-water"
+        },
+        {
+          "title": "Reservoir size is not circuit volume",
+          "anchor": "reservoir-size-is-not-circuit-volume"
+        },
+        {
+          "title": "How long does BZK last?",
+          "anchor": "how-long-does-bzk-last"
+        },
+        {
+          "title": "Do not use peroxide or other additives",
+          "anchor": "do-not-use-peroxide-or-other-additives"
+        },
+        {
+          "title": "Footnotes",
+          "anchor": "footnote-label"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/",
+      "title": "Build on sleepypod",
+      "section": "Developers",
+      "description": "sleepypod is three cooperating projects. The public site is a separate static Nextra application.",
+      "headings": [
+        {
+          "title": "Pick a starting point",
+          "anchor": "pick-a-starting-point"
+        },
+        {
+          "title": "Current core references",
+          "anchor": "current-core-references"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/api/",
+      "title": "Core API reference",
+      "section": "Developers",
+      "description": "Core exposes its generated OpenAPI document at:",
+      "headings": [
+        {
+          "title": "Inspect the installed contract",
+          "anchor": "inspect-the-installed-contract"
+        },
+        {
+          "title": "Read device status",
+          "anchor": "read-device-status"
+        },
+        {
+          "title": "Change a target",
+          "anchor": "change-a-target"
+        },
+        {
+          "title": "Device routes",
+          "anchor": "device-routes"
+        },
+        {
+          "title": "Streaming and integration",
+          "anchor": "streaming-and-integration"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/architecture/",
+      "title": "System architecture",
+      "section": "Developers",
+      "description": "Hardware writes use per-side locking. The DAC protocol has no correlation IDs, so commands are strictly sequential and each response belongs to the command just sent. Shared singletons live on…",
+      "headings": [
+        {
+          "title": "Control plane",
+          "anchor": "control-plane"
+        },
+        {
+          "title": "Read path",
+          "anchor": "read-path"
+        },
+        {
+          "title": "Biometrics pipeline",
+          "anchor": "biometrics-pipeline"
+        },
+        {
+          "title": "Two databases",
+          "anchor": "two-databases"
+        },
+        {
+          "title": "Network boundaries",
+          "anchor": "network-boundaries"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/core/",
+      "title": "Core development",
+      "section": "Developers",
+      "description": "Clone the repository and use the Node.js major in .node-version and pnpm version in package.json. Start with AGENTS.md and docs/wiki/INDEX.md.",
+      "headings": [
+        {
+          "title": "Work locally",
+          "anchor": "work-locally"
+        },
+        {
+          "title": "Validate a change",
+          "anchor": "validate-a-change"
+        },
+        {
+          "title": "Deploy a local build",
+          "anchor": "deploy-a-local-build"
+        },
+        {
+          "title": "Never build on the Pod",
+          "anchor": "never-build-on-the-pod"
+        },
+        {
+          "title": "Key directories",
+          "anchor": "key-directories"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/dial/",
+      "title": "Dial development",
+      "section": "Developers",
+      "description": "The firmware targets an ESP32-S3 M5Stack Dial using PlatformIO. Follow setup for credentials and flashing.",
+      "headings": [
+        {
+          "title": "Build and test",
+          "anchor": "build-and-test"
+        },
+        {
+          "title": "Runtime structure",
+          "anchor": "runtime-structure"
+        },
+        {
+          "title": "Capture real device output",
+          "anchor": "capture-real-device-output"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/hardware/",
+      "title": "Hardware protocol and safety",
+      "section": "Developers",
+      "description": "Core owns the DAC Unix socket and frankenfirmware connects to it. All consumers share one transport and sequential command queue. The protocol has no correlation IDs: read the response for the command…",
+      "headings": [
+        {
+          "title": "One transport, sequential commands",
+          "anchor": "one-transport-sequential-commands"
+        },
+        {
+          "title": "Wire format",
+          "anchor": "wire-format"
+        },
+        {
+          "title": "Alarms and cover differences",
+          "anchor": "alarms-and-cover-differences"
+        },
+        {
+          "title": "Pump protection and recovery",
+          "anchor": "pump-protection-and-recovery"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/ios/",
+      "title": "iOS development",
+      "section": "Developers",
+      "description": "SleepypodProtocol is the shared backend interface. SleepypodCoreClient implements the Core tRPC API; FreeSleepClient implements the legacy REST backend. Managers handle device state, schedules…",
+      "headings": [
+        {
+          "title": "App structure",
+          "anchor": "app-structure"
+        },
+        {
+          "title": "Lint and test",
+          "anchor": "lint-and-test"
+        },
+        {
+          "title": "Refresh the API snapshot",
+          "anchor": "refresh-the-api-snapshot"
+        },
+        {
+          "title": "Where to look",
+          "anchor": "where-to-look"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/media/",
+      "title": "Repeatable media capture",
+      "section": "Developers",
+      "description": "Product media should show the actual product. This site follows the noctune-docs approach: capture real interfaces, keep deterministic test data where possible, put browser/device framing in…",
+      "headings": [
+        {
+          "title": "Published assets and provenance",
+          "anchor": "published-assets-and-provenance"
+        },
+        {
+          "title": "Fresh Core browser capture",
+          "anchor": "fresh-core-browser-capture"
+        },
+        {
+          "title": "Fresh iOS capture",
+          "anchor": "fresh-ios-capture"
+        },
+        {
+          "title": "Fresh Dial capture",
+          "anchor": "fresh-dial-capture"
+        },
+        {
+          "title": "Review and promote",
+          "anchor": "review-and-promote"
+        },
+        {
+          "title": "New-interface tour",
+          "anchor": "new-interface-tour"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/sensor-pipeline/",
+      "title": "Sensor pipeline and calibration",
+      "section": "Developers",
+      "description": "Firmware can emit CBOR RAW files or publish sensor records through local NATS. Do not infer transport or channel format solely from the Pod generation: new Pod 5 firmware has been observed publishing…",
+      "headings": [
+        {
+          "title": "Two transports, one processing contract",
+          "anchor": "two-transports-one-processing-contract"
+        },
+        {
+          "title": "Processing stages",
+          "anchor": "processing-stages"
+        },
+        {
+          "title": "Sensor dialects and missing data",
+          "anchor": "sensor-dialects-and-missing-data"
+        },
+        {
+          "title": "Calibration workflow",
+          "anchor": "calibration-workflow"
+        },
+        {
+          "title": "Diagnose a silent pipeline",
+          "anchor": "diagnose-a-silent-pipeline"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/source-library/",
+      "title": "Technical source library",
+      "section": "Developers",
+      "description": "The guides below condense the operational contracts from core into navigable documentation. This inventory also keeps specialist design notes and historical investigations discoverable without…",
+      "headings": [
+        {
+          "title": "Operations",
+          "anchor": "operations"
+        },
+        {
+          "title": "Privacy",
+          "anchor": "privacy"
+        },
+        {
+          "title": "Architecture decisions",
+          "anchor": "architecture-decisions"
+        },
+        {
+          "title": "Historical investigations",
+          "anchor": "historical-investigations"
+        },
+        {
+          "title": "Hardware",
+          "anchor": "hardware"
+        },
+        {
+          "title": "Sensors and calibration",
+          "anchor": "sensors-and-calibration"
+        },
+        {
+          "title": "Media",
+          "anchor": "media"
+        },
+        {
+          "title": "Temperature control",
+          "anchor": "temperature-control"
+        },
+        {
+          "title": "API and architecture",
+          "anchor": "api-and-architecture"
+        },
+        {
+          "title": "Generated wiki",
+          "anchor": "generated-wiki"
+        },
+        {
+          "title": "Biometrics and sleep-stage sources",
+          "anchor": "biometrics-and-sleep-stage-sources"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/temperature-control/",
+      "title": "Temperature controller contract",
+      "section": "Developers",
+      "description": "Every ordinary writer—web, REST, HomeKit, gestures, schedules, run-once sessions, and Autopilot—uses a shared per-side controller. It resolves ownership before serializing writes through withSideLock…",
+      "headings": [
+        {
+          "title": "Set and release a manual hold",
+          "anchor": "set-and-release-a-manual-hold"
+        },
+        {
+          "title": "Read ownership",
+          "anchor": "read-ownership"
+        },
+        {
+          "title": "Resolve competing requests",
+          "anchor": "resolve-competing-requests"
+        },
+        {
+          "title": "Duration is a separate clock",
+          "anchor": "duration-is-a-separate-clock"
+        },
+        {
+          "title": "Writer invariants",
+          "anchor": "writer-invariants"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/training/",
+      "title": "ML training workspace",
+      "section": "Developers",
+      "description": "Watch sleep-stage training, compare models and sleep timelines, and save local candidates with the sleepypod training app.",
+      "headings": [
+        {
+          "title": "Set up and train",
+          "anchor": "set-up-and-train"
+        },
+        {
+          "title": "Explore a run",
+          "anchor": "explore-a-run"
+        },
+        {
+          "title": "Training overview",
+          "anchor": "training-overview"
+        },
+        {
+          "title": "Compare the same night",
+          "anchor": "compare-the-same-night"
+        },
+        {
+          "title": "Reopen results and save models",
+          "anchor": "reopen-results-and-save-models"
+        },
+        {
+          "title": "Put a model on the pod",
+          "anchor": "put-a-model-on-the-pod"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/developers/workflows/",
+      "title": "Build, test, and release workflows",
+      "section": "Developers",
+      "description": "Use the Node major in .node-version and the pnpm version in package.json. Install locked dependencies, then run the checks relevant to the change:",
+      "headings": [
+        {
+          "title": "Local development and checks",
+          "anchor": "local-development-and-checks"
+        },
+        {
+          "title": "GitHub Actions inventory",
+          "anchor": "github-actions-inventory"
+        },
+        {
+          "title": "Review a CI failure",
+          "anchor": "review-a-ci-failure"
+        },
+        {
+          "title": "Release and deploy",
+          "anchor": "release-and-deploy"
+        },
+        {
+          "title": "Train a personal stage model",
+          "anchor": "train-a-personal-stage-model"
+        },
+        {
+          "title": "Documentation site workflow",
+          "anchor": "documentation-site-workflow"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/dial/",
+      "title": "sleepypod Dial",
+      "section": "sleepypod Dial",
+      "description": "A small bedside controller for the M5Stack Dial. Turn to adjust your side of the bed, click to turn it off, and let the screen fade into the background.",
+      "headings": [
+        {
+          "title": "Controls",
+          "anchor": "controls"
+        },
+        {
+          "title": "The full walkthrough",
+          "anchor": "the-full-walkthrough"
+        },
+        {
+          "title": "Watch it work",
+          "anchor": "watch-it-work"
+        },
+        {
+          "title": "Print a bedside enclosure",
+          "anchor": "print-a-bedside-enclosure"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/dial/controls/",
+      "title": "Controls and night mode",
+      "section": "sleepypod Dial",
+      "description": "The solid part represents the mattress temperature. The dim span toward the target shows the gap remaining. A shimmer communicates progress while the mattress is catching up.",
+      "headings": [
+        {
+          "title": "Read the arc",
+          "anchor": "read-the-arc"
+        },
+        {
+          "title": "Turn and click",
+          "anchor": "turn-and-click"
+        },
+        {
+          "title": "Hold for settings",
+          "anchor": "hold-for-settings"
+        },
+        {
+          "title": "Manual holds and Resume",
+          "anchor": "manual-holds-and-resume"
+        },
+        {
+          "title": "Connection feedback",
+          "anchor": "connection-feedback"
+        },
+        {
+          "title": "At night",
+          "anchor": "at-night"
+        },
+        {
+          "title": "If the display looks wrong",
+          "anchor": "if-the-display-looks-wrong"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/dial/enclosure/",
+      "title": "Print the Dial enclosure",
+      "section": "sleepypod Dial",
+      "description": "A two-part bedside stand for the M5Stack Dial v1.1: a base that holds the Dial at an angle, and a faceplate that closes the front. Turn the model below to see both parts.",
+      "headings": [
+        {
+          "title": "Get the files",
+          "anchor": "get-the-files"
+        },
+        {
+          "title": "Orientation",
+          "anchor": "orientation"
+        },
+        {
+          "title": "Settings used",
+          "anchor": "settings-used"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/dial/setup/",
+      "title": "Build and connect the Dial",
+      "section": "sleepypod Dial",
+      "description": "Install PlatformIO through its VS Code extension or CLI, then clone the firmware:",
+      "headings": [
+        {
+          "title": "What you need",
+          "anchor": "what-you-need"
+        },
+        {
+          "title": "Configure and flash",
+          "anchor": "configure-and-flash"
+        },
+        {
+          "title": "Find the Pod",
+          "anchor": "find-the-pod"
+        },
+        {
+          "title": "Verify",
+          "anchor": "verify"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/getting-started/",
+      "title": "Find your setup",
+      "section": null,
+      "description": "sleepypod gives you local control of an Eight Sleep Pod. Core runs on the Pod; the web interface, iOS app, and sleepypod Dial connect to it over your home network.",
+      "headings": [
+        {
+          "title": "Start with Core",
+          "anchor": "start-with-core"
+        },
+        {
+          "title": "Choose your controls",
+          "anchor": "choose-your-controls"
+        },
+        {
+          "title": "Keep the connection local",
+          "anchor": "keep-the-connection-local"
+        },
+        {
+          "title": "Get help",
+          "anchor": "get-help"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/ios/",
+      "title": "sleepypod for iOS",
+      "section": "iOS app",
+      "description": "A native companion for your Pod: temperature control, schedules, sleep stages and vitals analyzed on your iPhone, Apple Health sync, and a side-by-side check against your Apple Watch.",
+      "headings": [
+        {
+          "title": "Made for everyday control",
+          "anchor": "made-for-everyday-control"
+        },
+        {
+          "title": "Requirements and availability",
+          "anchor": "requirements-and-availability"
+        },
+        {
+          "title": "What runs where",
+          "anchor": "what-runs-where"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/ios/setup/",
+      "title": "Build and connect iOS",
+      "section": "iOS app",
+      "description": "On a Mac with Xcode 26+ and Node/npm available:",
+      "headings": [
+        {
+          "title": "Build from source",
+          "anchor": "build-from-source"
+        },
+        {
+          "title": "Connect to Core",
+          "anchor": "connect-to-core"
+        },
+        {
+          "title": "Keep versions compatible",
+          "anchor": "keep-versions-compatible"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/ios/using-the-app/",
+      "title": "Using the iOS app",
+      "section": "iOS app",
+      "description": "Choose left or right, then drag the radial dial or use the step controls. Link mode lets you apply changes to both sides. The app distinguishes current temperature from the requested target; the glow…",
+      "headings": [
+        {
+          "title": "Temperature",
+          "anchor": "temperature"
+        },
+        {
+          "title": "Schedule",
+          "anchor": "schedule"
+        },
+        {
+          "title": "Sleep",
+          "anchor": "sleep"
+        },
+        {
+          "title": "Apple Health and Apple Watch",
+          "anchor": "apple-health-and-apple-watch"
+        },
+        {
+          "title": "Sensors and status",
+          "anchor": "sensors-and-status"
+        },
+        {
+          "title": "Troubleshooting the app",
+          "anchor": "troubleshooting-the-app"
+        },
+        {
+          "title": "Newer build controls",
+          "anchor": "newer-build-controls"
+        },
+        {
+          "title": "Development preview: Health rebuild and Watch charts",
+          "anchor": "development-preview-health-rebuild-and-watch-charts"
+        },
+        {
+          "title": "Sync or rebuild Apple Health",
+          "anchor": "sync-or-rebuild-apple-health"
+        },
+        {
+          "title": "Read the Watch comparison",
+          "anchor": "read-the-watch-comparison"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/privacy/",
+      "title": "Privacy policy",
+      "section": null,
+      "description": "sleepypod does not collect, store, or share your personal information.",
+      "headings": [
+        {
+          "title": "What we collect",
+          "anchor": "what-we-collect"
+        },
+        {
+          "title": "Where your data lives",
+          "anchor": "where-your-data-lives"
+        },
+        {
+          "title": "Third-party services",
+          "anchor": "third-party-services"
+        },
+        {
+          "title": "Children",
+          "anchor": "children"
+        },
+        {
+          "title": "Changes",
+          "anchor": "changes"
+        },
+        {
+          "title": "Contact",
+          "anchor": "contact"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/troubleshooting/",
+      "title": "Troubleshooting",
+      "section": "Troubleshooting",
+      "description": "Start with the smallest check that separates a client problem from a Pod problem.",
+      "headings": [
+        {
+          "title": "Report a useful issue",
+          "anchor": "report-a-useful-issue"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/troubleshooting/connection/",
+      "title": "Connection and discovery",
+      "section": "Troubleshooting",
+      "description": "From a computer or phone on the same network, open http://POD_IP:3000. Use the current LAN address from your router, not an old address saved in a client.",
+      "headings": [
+        {
+          "title": "1. Test Core directly",
+          "anchor": "1-test-core-directly"
+        },
+        {
+          "title": "2. Check network isolation",
+          "anchor": "2-check-network-isolation"
+        },
+        {
+          "title": "3. Check iOS permissions",
+          "anchor": "3-check-ios-permissions"
+        },
+        {
+          "title": "4. Check the Dial",
+          "anchor": "4-check-the-dial"
+        },
+        {
+          "title": "5. Separate discovery from stale state",
+          "anchor": "5-separate-discovery-from-stale-state"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/troubleshooting/core/",
+      "title": "Core and biometrics troubleshooting",
+      "section": "Troubleshooting",
+      "description": "For Pod 3 sensor or scheduler incidents after a reset, start with Pod 3 sensor and scheduler errors, including the web and CLI evidence to collect.",
+      "headings": [
+        {
+          "title": "Core will not start",
+          "anchor": "core-will-not-start"
+        },
+        {
+          "title": "App logs are quiet or missing",
+          "anchor": "app-logs-are-quiet-or-missing"
+        },
+        {
+          "title": "Web UI down, service restarting in a loop",
+          "anchor": "web-ui-down-service-restarting-in-a-loop"
+        },
+        {
+          "title": "Biometrics are empty",
+          "anchor": "biometrics-are-empty"
+        },
+        {
+          "title": "RAW archives are empty",
+          "anchor": "raw-archives-are-empty"
+        },
+        {
+          "title": "Powered, but not heating or cooling",
+          "anchor": "powered-but-not-heating-or-cooling"
+        },
+        {
+          "title": "Schedules do not run",
+          "anchor": "schedules-do-not-run"
+        }
+      ],
+      "keywords": ""
+    },
+    {
+      "path": "/troubleshooting/pod-3/",
+      "title": "Pod 3 sensor and scheduler errors",
+      "section": "Troubleshooting",
+      "description": "Collect logs and narrow down missing sensor frames or unloaded schedules on Pod 3.",
+      "headings": [
+        {
+          "title": "Collect the evidence first",
+          "anchor": "collect-the-evidence-first"
+        },
+        {
+          "title": "Piezo and Capacitance stalled",
+          "anchor": "piezo-and-capacitance-stalled"
+        },
+        {
+          "title": "Scheduler stalled",
+          "anchor": "scheduler-stalled"
+        },
+        {
+          "title": "Share a useful report",
+          "anchor": "share-a-useful-report"
+        }
+      ],
+      "keywords": ""
+    }
+  ]
+}

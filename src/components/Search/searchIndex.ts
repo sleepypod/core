@@ -2,7 +2,7 @@ import type { I18n, MessageDescriptor } from '@lingui/core'
 import { msg } from '@lingui/core/macro'
 import type { LucideIcon } from 'lucide-react'
 import {
-  Activity, CalendarClock, Cpu, Database, HardDrive, HeartPulse, LayoutDashboard, ListChecks,
+  Activity, BookOpen, CalendarClock, Cpu, Database, HardDrive, HeartPulse, LayoutDashboard, ListChecks,
   Moon, ScrollText, SlidersHorizontal, Stethoscope, Thermometer,
 } from 'lucide-react'
 import { NAV_ITEMS, type NavId } from '@/src/components/AppShell/navItems'
@@ -11,6 +11,7 @@ import { SECTIONS, type SectionId } from '@/src/components/Settings/sections'
 import { SLEEP_SECTIONS, type SleepSection } from '@/src/components/Sleep/sleepViews'
 import { SYSTEM_TABS, type SystemTab } from '@/src/components/System/systemTabs'
 import { createBm25Index, tokenize } from '@/src/lib/bm25'
+import { DOCS_BASE, type DocsIndex } from './docsIndex'
 
 export interface SearchEntry {
   id: string
@@ -20,8 +21,10 @@ export interface SearchEntry {
   description: string
   /** Space-separated synonyms. Searched, never shown. */
   keywords: string
-  /** App path without the /[lang] prefix. */
+  /** App path without the /[lang] prefix, or an absolute URL when `external`. */
   href: string
+  /** Opens `href` in a new tab instead of navigating the app. */
+  external?: boolean
   icon: LucideIcon
   /** Static rank multiplier; diagnostic views sit just below settings on equal matches. */
   boost?: number
@@ -38,6 +41,8 @@ export const SEARCH_FIELDS = {
 } as const
 
 const DIAGNOSTIC_BOOST = 0.75
+/** Below diagnostics: an app page or setting wins an equal match against its docs page. */
+const DOCS_BOOST = 0.6
 
 const NAV_META: Record<NavId, { description: MessageDescriptor, keywords: string }> = {
   temp: { description: msg`Set each side’s temperature`, keywords: 'temperature heat cool warm thermostat home now' },
@@ -236,6 +241,26 @@ export function buildSearchEntries(i18n: I18n, { hasBase }: { hasBase: boolean }
   }
 
   return entries
+}
+
+/**
+ * One entry per docs page. Headings feed the keywords rather than becoming
+ * entries of their own: they outnumber app entries about 3:1 and would bury
+ * them. Docs content stays English; only the 'Docs' crumb is translated.
+ */
+export function buildDocsEntries(i18n: I18n, index: DocsIndex): SearchEntry[] {
+  const docs = i18n._(msg`Docs`)
+  return index.pages.map(page => ({
+    id: `docs:${page.path}`,
+    title: page.title,
+    crumbs: page.section ? [docs, page.section] : [docs],
+    description: page.description,
+    keywords: [...page.headings.map(h => h.title), page.keywords].join(' '),
+    href: new URL(page.path, DOCS_BASE).href,
+    external: true,
+    icon: BookOpen,
+    boost: DOCS_BOOST,
+  }))
 }
 
 /**

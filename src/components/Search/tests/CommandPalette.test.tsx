@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { setupI18n } from '@lingui/core'
 import { I18nProvider } from '@lingui/react'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Modal } from '@/src/components/ds'
 import { SidebarSearch } from '../CommandPalette'
+import { DOCS_BASE, DOCS_INDEX_URL, resetLiveDocsIndex } from '../docsIndex'
 
 const router = vi.hoisted(() => ({ push: vi.fn() }))
 vi.mock('next/navigation', () => ({ useRouter: () => router }))
@@ -20,9 +21,23 @@ function view(props: { lang?: string, hasBase?: boolean } = {}) {
 const input = () => screen.getByRole('combobox', { name: 'Search pages and settings' })
 const selected = () => screen.getAllByRole('option').find(o => o.getAttribute('aria-selected') === 'true')
 
+const fetchMock = vi.fn<typeof fetch>()
+
 beforeEach(() => {
   router.push.mockClear()
+  resetLiveDocsIndex()
+  fetchMock.mockReset().mockRejectedValue(new TypeError('offline'))
+  vi.stubGlobal('fetch', fetchMock)
+  return () => vi.unstubAllGlobals()
 })
+
+const docsPage = (title: string) => ({ path: '/live/', title, section: 'Core', description: '', headings: [], keywords: '' })
+const respond = (body: unknown) => fetchMock.mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+
+function openPalette(query?: string) {
+  fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+  if (query !== undefined) fireEvent.change(input(), { target: { value: query } })
+}
 
 describe('SidebarSearch', () => {
   it('shows the search box with a Ctrl K hint off Apple platforms', () => {
@@ -166,5 +181,71 @@ describe('SidebarSearch', () => {
     expect(document.activeElement).toBe(close)
     fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(input())
+  })
+
+  it('searches the bundled docs snapshot offline, with an external-link indicator', async () => {
+    view()
+    openPalette('troubleshooting')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    const docs = screen.getAllByRole('option').filter(o => o.textContent?.includes('Docs › Troubleshooting'))
+    expect(docs.length).toBeGreaterThan(0)
+    expect(within(docs[0]).getByText('Opens the docs in a new tab')).toBeTruthy()
+    expect(docs[0].querySelectorAll('svg')).toHaveLength(2)
+  })
+
+  it('fetches the live index without credentials and only once per page load', async () => {
+    view()
+    openPalette()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    expect(fetchMock.mock.calls[0][0]).toBe(DOCS_INDEX_URL)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'omit' })
+    fireEvent.keyDown(input(), { key: 'Escape' })
+    openPalette()
+    await Promise.resolve()
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('leaves docs out of the empty-query page list', () => {
+    view()
+    openPalette()
+    expect(screen.getAllByRole('option').some(o => o.textContent?.includes('Docs'))).toBe(false)
+  })
+
+  it('ranks an exact setting name above its docs page', () => {
+    view()
+    openPalette('Away mode')
+    expect(screen.getAllByRole('option')[0].textContent).toBe('Away modeSettings › Sides')
+  })
+
+  it('uses a valid live index for the session', async () => {
+    respond({ version: 1, generatedAt: '2026-10-31T00:00:00Z', base: DOCS_BASE, pages: [docsPage('Zeppelin mooring')] })
+    view()
+    openPalette('zeppelin')
+    expect(await screen.findByRole('option', { name: /Zeppelin mooring/ })).toBeTruthy()
+  })
+
+  it('keeps the snapshot when the live payload breaks the contract', async () => {
+    respond({ version: 2, generatedAt: '2026-10-31T00:00:00Z', base: DOCS_BASE, pages: [docsPage('Zeppelin mooring')] })
+    view()
+    openPalette('zeppelin')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(screen.queryByRole('option')).toBeNull()
+    fireEvent.change(input(), { target: { value: 'troubleshooting' } })
+    expect(screen.getAllByRole('option').some(o => o.textContent?.includes('Docs › Troubleshooting'))).toBe(true)
+  })
+
+  it.each(['Enter', 'click'])('opens a docs result in a new tab on %s without navigating the app', (how) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    view()
+    openPalette('troubleshooting')
+    const option = screen.getAllByRole('option')[0]
+    expect(option.textContent).toContain('Docs')
+    if (how === 'Enter') fireEvent.keyDown(input(), { key: 'Enter' })
+    else fireEvent.click(option)
+    expect(open).toHaveBeenCalledWith(`${DOCS_BASE}/troubleshooting/`, '_blank', 'noopener,noreferrer')
+    expect(router.push).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    open.mockRestore()
   })
 })
