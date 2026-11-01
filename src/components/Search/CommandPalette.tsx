@@ -1,14 +1,19 @@
 'use client'
 
 import { useLingui } from '@lingui/react/macro'
-import { Search } from 'lucide-react'
+import { ExternalLink, Search } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { Modal } from '@/src/components/ds'
-import { buildSearchEntries, createSearch, type SearchEntry } from './searchIndex'
+import { loadLiveDocsIndex, type DocsIndex } from './docsIndex'
+import docsSnapshot from './docsIndex.json'
+import { buildDocsEntries, buildSearchEntries, createSearch, type SearchEntry } from './searchIndex'
 
 const MAX_RESULTS = 12
+
+/** Bundled copy of the docs index; `pnpm docs:sync-index` refreshes it. */
+const DOCS_SNAPSHOT = docsSnapshot as DocsIndex
 
 const noopSubscribe = () => () => {}
 const isMacSnapshot = () => /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent)
@@ -97,11 +102,26 @@ function PaletteBody({ lang, hasBase, onClose }: { lang: string, hasBase: boolea
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
+  const [docsIndex, setDocsIndex] = useState(DOCS_SNAPSHOT)
+
+  // Prefer the live docs index when the browser can reach the docs site; keep the snapshot otherwise.
+  useEffect(() => {
+    let alive = true
+    void loadLiveDocsIndex().then((index) => {
+      if (alive && index) setDocsIndex(index)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const { pages, search } = useMemo(() => {
     const entries = buildSearchEntries(i18n, { hasBase })
-    return { pages: entries.filter(e => e.crumbs.length === 0), search: createSearch(entries) }
-  }, [i18n, hasBase])
+    return {
+      pages: entries.filter(e => e.crumbs.length === 0),
+      search: createSearch([...entries, ...buildDocsEntries(i18n, docsIndex)]),
+    }
+  }, [i18n, hasBase, docsIndex])
 
   const q = query.trim()
   const results = useMemo(() => (q ? search(q, MAX_RESULTS) : pages), [q, search, pages])
@@ -135,6 +155,10 @@ function PaletteBody({ lang, hasBase, onClose }: { lang: string, hasBase: boolea
 
   const go = (entry: SearchEntry) => {
     onClose()
+    if (entry.external) {
+      window.open(entry.href, '_blank', 'noopener,noreferrer')
+      return
+    }
     router.push(`/${lang}${entry.href === '/' ? '' : entry.href}`)
   }
 
@@ -200,6 +224,12 @@ function PaletteBody({ lang, hasBase, onClose }: { lang: string, hasBase: boolea
               <span className="truncate text-sm text-fg">{r.title}</span>
               <span className="truncate text-xs text-fg-3">{r.crumbs.length > 0 ? r.crumbs.join(' › ') : r.description}</span>
             </span>
+            {r.external && (
+              <>
+                <ExternalLink size={14} className="ml-auto shrink-0 text-fg-3" aria-hidden />
+                <span className="sr-only">{t`Opens the docs in a new tab`}</span>
+              </>
+            )}
           </li>
         ))}
       </ul>
