@@ -92,11 +92,14 @@ normalization uses future information and must stay retrospective.
 2. **Fit the local feedback model.** Preserve both unsuccessful and successful
    validation outcomes. Train explicitly; never fill missing examples with an
    LLM or manufacture warm/cold labels from HR, stages or sleep duration.
-3. **Learn the thermal response.** Add a causal forecast using current water,
-   target, room and preceding-only windows. Split all samples by night, fit
-   normalization on training nights only, compare with persistence and a simple
-   physical response model, and evaluate 15/30-minute error and interval coverage.
-   Exclude alarms, priming, vibration, base motion and missing presence.
+3. **Learn the thermal response.** The implemented
+   [water-response forecast](WATER_RESPONSE_FORECAST.md) uses current water,
+   target, room and preceding-only windows. It splits complete nights into fit,
+   calibration and evaluation groups and compares 15/30-minute forecasts with
+   persistence and a simple target-response baseline. It abstains on failed
+   comparisons or unsupported conditions. This conditional forecast under steady
+   targets does not establish the causal effect of changing a target. Its software
+   implementation is separate from fitting and validation on real personal nights.
 4. **Combine only validated components.** A bounded optimizer may propose a
    target within the owner's range using forecast response and predicted comfort.
    The single temperature authority retains freshness, water, occupancy, alarm,

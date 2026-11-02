@@ -19,8 +19,14 @@ const MAXIMUM_EDGE_GAP_MS = 30 * 60_000
 
 export interface ThermalDatasetAudit {
   nights: ThermalNight[]
+  recordings: ThermalRecording[]
   proofs: { date: string, reportId: string, digest: string, reviewId: number, configuration: string }[]
   collection: { feedbackNights: number, excluded: { date: string, reason: string }[], policy: 'complete-reviewed-nights-v1' }
+}
+
+export interface ThermalRecording {
+  date: string
+  samples: { at: number, context: ThermalContext }[]
 }
 
 export function thermalConfiguration(evidence: PreviewEvidence, bedroomConfiguration: string | null): string {
@@ -91,6 +97,7 @@ export function thermalDatasetAudit(database: Database.Database, side: Side, now
   }
   const excluded: ThermalDatasetAudit['collection']['excluded'] = []
   const proofs: ThermalDatasetAudit['proofs'] = []
+  const recordings: ThermalRecording[] = []
   const accepted = reports.flatMap((feedback): ThermalNight[] => {
     const reject = (reason: string): ThermalNight[] => {
       excluded.push({ date: feedback.date, reason })
@@ -121,11 +128,12 @@ export function thermalDatasetAudit(database: Database.Database, side: Side, now
     const review = currentNightReview(database, side, night.id, now)
     if (!review) return reject('Review this night and confirm it was an actual overnight session before training.')
     proofs.push({ date: feedback.date, reportId: night.id, configuration: night.configuration, ...review })
+    recordings.push({ date: feedback.date, samples })
     return [{ date: feedback.date, correction: feedback.comfort === 'warm' ? -1 : feedback.comfort === 'cold' ? 1 : 0,
       targetF: median(targets), waterF: median(contexts.map(context => context.waterF)),
       roomF: median(contexts.map(context => context.roomF)), humidity: median(contexts.map(context => context.humidity)) }]
   })
-  return { nights: accepted, proofs, collection: { feedbackNights: reports.length, excluded, policy: 'complete-reviewed-nights-v1' } }
+  return { nights: accepted, recordings, proofs, collection: { feedbackNights: reports.length, excluded, policy: 'complete-reviewed-nights-v1' } }
 }
 
 export function thermalDataset(database: Database.Database, side: Side, now: number): ThermalNight[] {

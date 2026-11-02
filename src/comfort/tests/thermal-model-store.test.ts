@@ -9,6 +9,7 @@ const databases: ReturnType<typeof migratedComfortDatabase>[] = []
 afterEach(() => databases.splice(0).forEach(database => database.close()))
 beforeEach(() => {
   source.audit = {
+    recordings: [],
     nights: Array.from({ length: 24 }, (_, index) => ({ date: `2026-10-${String(index + 1).padStart(2, '0')}`,
       targetF: 70, waterF: 71, humidity: 45, roomF: index % 2 ? 76 : 68, correction: index % 2 ? -1 : 1 })),
     proofs: Array.from({ length: 24 }, (_, index) => ({ date: `2026-10-${String(index + 1).padStart(2, '0')}`,
