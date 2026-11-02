@@ -198,7 +198,8 @@ it('cooperatively interrupts a running lease before shutdown completes', async (
   }
 })
 
-it('inspects actual archives through the isolated coordinator and persists only admitted evidence', async () => {
+// Needs the locked piezo-processor venv, which Stryker's sandbox doesn't carry.
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('inspects actual archives through the isolated coordinator and persists only admitted evidence', async () => {
   const archiveDirectory = join(directory, 'archive')
   await mkdir(archiveDirectory)
   const pythonPath = resolve('modules/piezo-processor/.venv/bin/python')

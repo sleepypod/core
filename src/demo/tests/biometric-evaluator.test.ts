@@ -26,7 +26,8 @@ it('preserves the seeded whole-night uncertainty stream across browser and nativ
   expect(browser(nights, policy)).toEqual(nightUncertainty(nights, policy))
   expect(browser(nights, policy).interval?.lower).toBeCloseTo(-0.22520833333333334, 14)
 })
-it('bundles a self-contained browser worker without database or hardware dependencies', async () => {
+// Stryker bundles its instrumented sandbox copy, so the pinned build hash can't match there.
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('bundles a self-contained browser worker without database or hardware dependencies', async () => {
   const bundle = await build({ entryPoints: ['src/demo/biometrics/worker.ts'], bundle: true, write: false, platform: 'browser', format: 'esm', metafile: true })
   expect(Object.keys(bundle.metafile.inputs).filter(path => /src\/(hardware|db|automation|scheduler|homekit|streaming)\/|better-sqlite3|drizzle-orm/.test(path))).toEqual([])
   expect(createHash('sha256').update(bundle.outputFiles[0].contents).digest('hex')).toBe(workerBuild.buildHash)
