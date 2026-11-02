@@ -31,9 +31,37 @@ import { createThermalModels } from './thermal-model-store'
 import { capturePreviewEvidence } from './report-evidence'
 import { thermalObservation } from './thermal-observation'
 import { thermalConfiguration } from './thermal-dataset'
+import { createThermalForecasts } from './thermal-forecast-store'
+import { previousForecastInput } from './thermal-forecast-input'
 
 export function getThermalModels() {
   return createThermalModels(sqlite)
+}
+
+export function getThermalForecasts() {
+  return createThermalForecasts(sqlite)
+}
+
+/** Read a guarded current observation and its actual five-minute predecessor; never send a command. */
+export function previewWaterForecast(side: Side) {
+  const state = createComfortStore(sqlite).read(side), now = Date.now()
+  const { context, timezone } = readComfortContext(side, state, now, false)
+  const evidence = capturePreviewEvidence(state, context, context.window?.baselineF ?? null, timezone,
+    '00000000-0000-4000-8000-000000000001', previewOrigin())
+  const receipt = thermalObservation(state, context, evidence)
+  if (!evidence || !receipt || !context.thermalContext) return { predictions: [], reason: 'Waiting for fresh, occupied, quiet pre-alarm bed and room readings.' }
+  const configuration = thermalConfiguration(evidence, receipt.bedroomConfiguration)
+  const row = sqlite.prepare(`SELECT observed_at AS at, event FROM comfort_events WHERE side = ? AND observed_at >= ?
+    AND observed_at <= ? AND json_extract(event, '$.thermalContext') IS NOT NULL ORDER BY observed_at DESC LIMIT 1`)
+    .get(side, now - 330_000, now - 270_000) as { at: number, event: string } | undefined
+  let previous: unknown = null
+  try {
+    previous = row ? JSON.parse(row.event) : null
+  }
+  catch { /* A malformed source cannot provide a preceding measurement. */ }
+  const input = previousForecastInput(previous, { at: now, session: evidence.session, configuration, context: context.thermalContext }, row?.at ?? null)
+  if (!input) return { predictions: [], reason: 'Waiting for an actual five-minute predecessor from this same quiet session and target.' }
+  return getThermalForecasts().preview(side, input, configuration)
 }
 
 /** A model preview uses the same fresh, quiet, occupied thermal observations as collection. */

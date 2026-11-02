@@ -13,6 +13,7 @@ import { ComfortSignals } from './ComfortSignals'
 import { ComfortOwnerReview } from './ComfortOwnerReview'
 import { PreviewNightReports } from './PreviewNightReports'
 import { ThermalModelCard } from './ThermalModelCard'
+import { WaterForecastCard } from './WaterForecastCard'
 
 const fieldClass = 'rounded-ctl border border-line bg-surface px-3 py-2 text-sm text-fg'
 
@@ -60,6 +61,7 @@ export function PersonalComfortCard() {
       )}
       {(configuration.error || mode.error || feedback.error) && <p className="mt-4 text-sm text-danger" role="alert">{configuration.error?.message ?? mode.error?.message ?? feedback.error?.message}</p>}
       {query.data?.features.modelTraining && <ThermalModelCard key={`model:${side}`} side={side} />}
+      {query.data?.features.modelTraining && <WaterForecastCard key={`forecast:${side}`} side={side} />}
       {query.data?.features.nightReports && <PreviewNightReports key={side} side={side} />}
       {query.data?.features.ownerActivation && <ComfortOwnerReview key={`owner:${side}:${JSON.stringify(query.data.state?.config)}`} side={side} />}
       {feedback.isSuccess && <p className="mt-3 text-sm text-fg-2" role="status">Check-in saved.</p>}

@@ -3,7 +3,9 @@ import { PreviewReportError } from '@/src/comfort/report-summary'
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { comfortConfigSchema, comfortFeedbackSchema, comfortStatusSchema } from '@/src/comfort/contract'
-import { getComfortOwner, getComfortRuntime, getPreviewReports, getThermalModels, previewThermalModel } from '@/src/comfort/instance'
+import { getComfortOwner, getComfortRuntime, getPreviewReports, getThermalModels, previewThermalModel, getThermalForecasts, previewWaterForecast } from '@/src/comfort/instance'
+import { forecastStatusSchema } from '@/src/comfort/thermal-forecast-store'
+import { thermalForecastPredictionSchema } from '@/src/comfort/thermal-forecast'
 import { thermalModelStatusSchema } from '@/src/comfort/thermal-model-store'
 import { thermalPredictionSchema } from '@/src/comfort/thermal-model'
 import { ownerConfirmSchema, ownerPrepareSchema, ownerReviewSchema, ownerStatusSchema, qualificationKindSchema } from '@/src/comfort/owner-contract'
@@ -22,6 +24,18 @@ async function reportResult<Result>(work: () => Promise<Result>): Promise<Result
 }
 
 export const comfortRouter = router({
+  waterForecast: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/comfort/forecast', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(forecastStatusSchema)
+    .query(({ input }) => getThermalForecasts().status(input.side)),
+  waterForecastPreview: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/comfort/forecast/preview', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(thermalForecastPredictionSchema)
+    .query(({ input }) => previewWaterForecast(input.side)),
+  trainWaterForecast: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/v1/comfort/forecast/train', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema, expectedDatasetHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).output(forecastStatusSchema)
+    .mutation(({ input }) => reportResult(async () => getThermalForecasts().train(input.side, input.expectedDatasetHash))),
   thermalModelPreview: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/v1/comfort/model/preview', tags: ['Autopilot'] } })
     .input(z.object({ side: sideSchema }).strict()).output(thermalPredictionSchema)

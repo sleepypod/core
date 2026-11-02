@@ -485,7 +485,7 @@ describe('db schema definitions', () => {
     expect(actualTableExports).toEqual([...Object.keys(expectedTables),
       'alarmOverrides', 'alarmOccurrences', 'journalEntries', 'bedtimeRoutines', 'controlReceipts', 'biometricProfileRevisions', 'biometricProfileBindings', 'sideStageModels', 'stageModelLibrary',
       'biometricActivationEvents', 'biometricConfigOutbox',
-      'comfortEvents', 'comfortFeedback', 'comfortStates', 'comfortReviews', 'comfortModels',
+      'comfortEvents', 'comfortFeedback', 'comfortStates', 'comfortReviews', 'comfortModels', 'thermalForecasts',
       'comfortActivations', 'comfortOwnerReviews', 'comfortQualifications', 'comfortResolutions',
       'notificationInbox', 'temperatureApplications',
       'roomContextSettings', 'roomContextLatest', 'roomContextHistory',

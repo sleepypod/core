@@ -9,6 +9,10 @@ function rejectDemoWrite(): never {
 }
 
 export const comfort: DemoHandlers<'comfort'> = {
+  waterForecast: ({ side }) => ({ apiVersion: 1, generatedAt: Date.now(), side, requiredNights: 20,
+    completeNights: 0, datasetHash: '0'.repeat(64), canTrain: false, excluded: [], model: null, reason: unavailable }),
+  waterForecastPreview: () => ({ predictions: [], reason: unavailable }),
+  trainWaterForecast: rejectDemoWrite,
   thermalModel: ({ side }) => ({ apiVersion: 1, generatedAt: Date.now(), side, requiredNights: 20,
     completeNights: 0, feedbackNights: 0, datasetHash: '0'.repeat(64), canTrain: false,
     excluded: [], model: null, reason: unavailable }),

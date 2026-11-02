@@ -415,6 +415,14 @@ export const comfortModels = sqliteTable('comfort_models', {
   record: text('record', { mode: 'json' }).notNull(),
 }, table => [index('idx_comfort_models_side_created').on(table.side, table.createdAt)])
 
+/** Water-response forecasts have a separate registry from morning comfort classifiers. */
+export const thermalForecasts = sqliteTable('thermal_forecasts', {
+  id: text('id').primaryKey(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  createdAt: integer('created_at').notNull(),
+  record: text('record', { mode: 'json' }).notNull(),
+}, table => [index('idx_thermal_forecasts_side_created').on(table.side, table.createdAt)])
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
