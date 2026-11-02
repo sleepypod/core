@@ -45,7 +45,8 @@ connection.close()
   return JSON.parse(output) as { enabled: boolean, problem: string | null, leftTolerance: number, rightTolerance: number }
 }
 
-it('acknowledges exact API intent through Python and stage consumers, restart, and rollback', async () => {
+// Needs the locked piezo-processor venv, which Stryker's sandbox doesn't carry.
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('acknowledges exact API intent through Python and stage consumers, restart, and rollback', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'biometric-runtime-integration-'))
   const configRaw = new Database(join(directory, 'config.db'))
   const bioPath = join(directory, 'biometrics.db')

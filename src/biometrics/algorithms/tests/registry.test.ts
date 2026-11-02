@@ -27,7 +27,8 @@ const fixtures = [
 ]
 
 describe('versioned biometric contract', () => {
-  it('pins the actual numerical source and locked dependency files', () => {
+  // Stryker hashes its instrumented sandbox copy, so pinned source hashes can't match there.
+  it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('pins the actual numerical source and locked dependency files', () => {
     for (const [path, hash] of Object.entries({ ...biometricManifest.sourceHashes, ...biometricManifest.dependencyHashes })) {
       expect(createHash('sha256').update(readFileSync(path)).digest('hex'), path).toBe(hash)
     }

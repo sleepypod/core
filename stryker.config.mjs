@@ -60,6 +60,10 @@ const config = {
   timeoutMS: 15000,
   timeoutFactor: 2,
 
+  // The hardware-lib shard's dry run covers nearly the whole suite
+  // (src/lib is imported everywhere) and outgrew the 5 min default.
+  dryRunTimeoutMinutes: 20,
+
   // Cache passed mutants across runs so reruns are fast. Stored under
   // reports/mutation/ so local .gitignore already covers it.
   incremental: true,
