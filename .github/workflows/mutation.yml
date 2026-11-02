@@ -84,10 +84,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The dry run executes the whole unit suite, and the biometrics
+      # Each shard's dry run reaches the biometrics
       # runtime tests spawn modules/piezo-processor/.venv/bin/python.
-      # Mirror test.yml's setup. Stryker runs --inPlace below because its
-      # sandbox copy fails on the venv's directory symlinks (EISDIR).
+      # Mirror test.yml's setup. Stryker copies the venv into its sandbox,
+      # but its copier can't follow the lib64 -> lib directory symlink
+      # (EISDIR), so drop that alias; site-packages resolves through lib/.
       - name: Setup Python for runtime integration
         uses: actions/setup-python@v6
         with:
@@ -100,7 +101,9 @@ jobs:
 
       - name: Install locked runtime integration dependencies
         working-directory: modules/piezo-processor
-        run: uv sync --locked --no-install-project
+        run: |
+          uv sync --locked --no-install-project
+          rm -f .venv/lib64
 
       # Incremental cache, keyed per-shard so the two shards don't stomp
       # on each other. `restore-keys` lets us fall back to older branch
@@ -118,7 +121,7 @@ jobs:
         run: |
           SCOPE="${{ inputs.scope }}"
           SCOPE="${SCOPE:-${{ matrix.shard.mutate }}}"
-          pnpm stryker run --mutate "$SCOPE" --incremental --inPlace
+          pnpm stryker run --mutate "$SCOPE" --incremental
 
       - name: Save mutation-incremental cache
         if: always()
