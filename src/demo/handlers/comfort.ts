@@ -9,6 +9,11 @@ function rejectDemoWrite(): never {
 }
 
 export const comfort: DemoHandlers<'comfort'> = {
+  thermalModel: ({ side }) => ({ apiVersion: 1, generatedAt: Date.now(), side, requiredNights: 20,
+    completeNights: 0, feedbackNights: 0, datasetHash: '0'.repeat(64), canTrain: false,
+    excluded: [], model: null, reason: unavailable }),
+  thermalModelPreview: () => ({ offsetF: null, rawDirection: null, reason: unavailable }),
+  trainThermalModel: rejectDemoWrite,
   owner: ({ side }) => ({ apiVersion: 1, generatedAt: Date.now(), side, identity: null, qualifications: [], nights: [],
     reasons: [unavailable], active: false, canActivate: false, application: null }),
   prepareOwnerReview: rejectDemoWrite,
@@ -30,7 +35,7 @@ export const comfort: DemoHandlers<'comfort'> = {
     history: [],
     runtime: 'stopped',
     activation: { available: false, reason: COMFORT_ACTIVATION_REASON },
-    features: { sensorAware: false, followBedtime: false, nightReports: false, modeOnly: false, ownerActivation: false },
+    features: { sensorAware: false, followBedtime: false, nightReports: false, modeOnly: false, ownerActivation: false, modelTraining: true },
   }),
   configure: rejectDemoWrite,
   mode: rejectDemoWrite,

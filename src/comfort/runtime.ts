@@ -94,7 +94,7 @@ export class ComfortRuntime {
       decision,
       runtime: this.running ? 'running' : 'stopped',
       activation: { available: false, current: active, reason: active ? 'Owner activation is current. Every adjustment still rechecks live guards.' : COMFORT_ACTIVATION_REASON },
-      features: { roomAware: true, sensorAware: true, followBedtime: true, nightReports: true, modeOnly: true, ...(this.deps.activation ? { ownerActivation: true } : {}) },
+      features: { roomAware: true, sensorAware: true, followBedtime: true, nightReports: true, modeOnly: true, modelTraining: true, ...(this.deps.activation ? { ownerActivation: true } : {}) },
       timing: fault || signalExpired || observation?.stateKey !== JSON.stringify(state) ? null : observation?.timing ?? null,
       signals: fault || signalExpired || observation?.stateKey !== JSON.stringify(state) ? null : signals ?? null,
       bedroom: fault || observation?.stateKey !== JSON.stringify(state) ? null : observation?.bedroom ?? null,

@@ -406,6 +406,15 @@ export const comfortStates = sqliteTable('comfort_states', {
   state: text('state', { mode: 'json' }).notNull(),
 })
 
+/** Fitted local comfort models retain their training provenance and held-out evaluation. */
+export const comfortModels = sqliteTable('comfort_models', {
+  id: text('id').primaryKey(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  createdAt: integer('created_at').notNull(),
+  datasetHash: text('dataset_hash').notNull(),
+  record: text('record', { mode: 'json' }).notNull(),
+}, table => [index('idx_comfort_models_side_created').on(table.side, table.createdAt)])
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

@@ -27,7 +27,8 @@ function fixture() {
 describe('thermal research admission stays independent from actuator admission', () => {
   it('admits observed thermal context without using HR or inferred body temperature', () => {
     const { state, context, capture } = fixture()
-    expect(thermalObservation(state, context, capture())).toEqual({ version: 1, purpose: 'comfort_research', bedroomConfiguration: 'c'.repeat(64) })
+    expect(thermalObservation(state, context, capture())).toEqual({ version: 1, purpose: 'comfort_research',
+      bedroomConfiguration: 'c'.repeat(64), sleepWindowEnd: context.now + 4.5 * 3600000 })
   })
   it.each([
     ['off', (state: ComfortState) => { state.config.mode = 'off' }],

@@ -27,6 +27,26 @@ import { createComfortStore } from './store'
 import { ComfortSignalReader } from './signal-reader'
 import { getBedroom } from '@/src/bedroom/instance'
 import { thermalContextSchema } from './thermal-learning'
+import { createThermalModels } from './thermal-model-store'
+import { capturePreviewEvidence } from './report-evidence'
+import { thermalObservation } from './thermal-observation'
+import { thermalConfiguration } from './thermal-dataset'
+
+export function getThermalModels() {
+  return createThermalModels(sqlite)
+}
+
+/** A model preview uses the same fresh, quiet, occupied thermal observations as collection. */
+export function previewThermalModel(side: Side) {
+  const state = createComfortStore(sqlite).read(side)
+  const now = Date.now()
+  const { context, timezone } = readComfortContext(side, state, now, false)
+  const evidence = capturePreviewEvidence(state, context, context.window?.baselineF ?? null, timezone,
+    '00000000-0000-4000-8000-000000000001', previewOrigin())
+  const receipt = thermalObservation(state, context, evidence)
+  const configuration = evidence && receipt ? thermalConfiguration(evidence, receipt.bedroomConfiguration) : null
+  return getThermalModels().preview(side, receipt ? context.thermalContext ?? null : null, configuration)
+}
 
 const globals = globalThis as typeof globalThis & { __sp_comfortRuntime?: ComfortRuntime, __sp_comfortSignals?: ComfortSignalReader, __sp_comfortOwner?: ReturnType<typeof createComfortOwner>, __sp_comfortApplication?: ComfortApplicationAdapter }
 function signalsReader() {

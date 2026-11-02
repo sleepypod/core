@@ -64,20 +64,24 @@ bedroom temperature and humidity. Measurements must originate from production
 Preview observations with build and hardware identity, fresh device state,
 occupied calibrated presence and no mechanical/manual safety exclusions.
 
-One sample is retained per five-minute interval. At least twelve intervals from
-one completed session are needed. Multiple sessions for the same date and target
+One sample is retained per five-minute interval. A completed 6–12 hour window
+needs at least 72 distinct intervals, six hours between actual first/last samples,
+90% integrated coverage, no interior gap over ten minutes, and no edge gap over
+30 minutes. The owner must confirm the exact report as an actual overnight
+session; source edits invalidate that review. Wake warming is excluded using the
+captured pre-alarm boundary. Multiple sessions for the same date and target
 curves varying by more than 2°F are excluded: a single morning label cannot
 reliably attribute discomfort to one of several materially different targets.
 Sparse research observations expire after 90 days and are separately bounded;
 ordinary diagnostic events retain their existing 30-day window.
 
-Warm/comfortable/cold become engineering proxy labels -1/0/+1°F. These are
+Warm/comfortable/cold become engineering proxy labels -1/0/+1. These are
 **requested correction directions**, not measured ideal temperatures. The
 20-night minimum is an engineering gate, not a scientifically validated sample
 size. The newest quarter (at least five nights) is held out chronologically.
 The model uses up to seven nearby contexts and needs at least three neighbors.
 It must beat both holding temperature and predicting the training-set average
-feedback, by at least 10% and 0.05°F in proxy-label mean absolute error.
+feedback, by at least 10% and 0.05 in proxy-label mean absolute error.
 
 The app reports the matched-night counts, validation result and reason for
 withholding a suggestion. Missing or unfamiliar conditions produce no proposal.
@@ -100,6 +104,16 @@ flowchart LR
 ```
 
 ## Model choice and remaining evidence
+
+The persistent `comfort-ridge-v1` model now fits five regularized coefficients
+on the Pod. Its registry stores the exact dataset/review hashes, configuration,
+training/held-out dates and baseline comparisons. It keeps the newest quarter
+out of the final fit as well as evaluation. Readiness never starts training;
+the authenticated Train action requires the current dataset hash. Changed
+reviews, source pruning, configuration mismatches and future model timestamps
+withhold inference. It is a whole-night comfort-direction research model, not
+a proven minute-by-minute controller. See [the training plan](AUTOPILOT_MODEL_PLAN.md)
+for the distinction and remaining release gates.
 
 A local tabular model is appropriate for this small, structured dataset: it is
 cheap to evaluate, does not upload health data and can be checked against simple

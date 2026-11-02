@@ -88,7 +88,7 @@ export const comfortStatusSchema = z.object({
     current: z.boolean().optional(),
     reason: z.string(),
   }),
-  features: z.object({ roomAware: z.boolean().optional(), sensorAware: z.boolean(), followBedtime: z.boolean(), nightReports: z.boolean().optional(), modeOnly: z.boolean().optional(), ownerActivation: z.boolean().optional() }),
+  features: z.object({ roomAware: z.boolean().optional(), sensorAware: z.boolean(), followBedtime: z.boolean(), nightReports: z.boolean().optional(), modeOnly: z.boolean().optional(), ownerActivation: z.boolean().optional(), modelTraining: z.boolean().optional() }),
   signals: comfortSignalsSchema.nullable().optional(),
   bedroom: bedroomGuidanceSchema.nullable().optional(),
   timing: bedtimeStatusSchema.nullable().optional(),

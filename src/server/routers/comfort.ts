@@ -3,7 +3,9 @@ import { PreviewReportError } from '@/src/comfort/report-summary'
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { comfortConfigSchema, comfortFeedbackSchema, comfortStatusSchema } from '@/src/comfort/contract'
-import { getComfortOwner, getComfortRuntime, getPreviewReports } from '@/src/comfort/instance'
+import { getComfortOwner, getComfortRuntime, getPreviewReports, getThermalModels, previewThermalModel } from '@/src/comfort/instance'
+import { thermalModelStatusSchema } from '@/src/comfort/thermal-model-store'
+import { thermalPredictionSchema } from '@/src/comfort/thermal-model'
 import { ownerConfirmSchema, ownerPrepareSchema, ownerReviewSchema, ownerStatusSchema, qualificationKindSchema } from '@/src/comfort/owner-contract'
 import { ComfortInputError } from '@/src/comfort/runtime'
 import { publicProcedure, router } from '../trpc'
@@ -20,6 +22,19 @@ async function reportResult<Result>(work: () => Promise<Result>): Promise<Result
 }
 
 export const comfortRouter = router({
+  thermalModelPreview: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/comfort/model/preview', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(thermalPredictionSchema)
+    .query(({ input }) => previewThermalModel(input.side)),
+  thermalModel: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/comfort/model', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(thermalModelStatusSchema)
+    .query(({ input }) => getThermalModels().status(input.side)),
+  trainThermalModel: publicProcedure
+    .meta({ openapi: { method: 'POST', path: '/v1/comfort/model/train', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema, expectedDatasetHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict())
+    .output(thermalModelStatusSchema)
+    .mutation(({ input }) => reportResult(async () => getThermalModels().train(input.side, input.expectedDatasetHash))),
   owner: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/v1/comfort/owner', tags: ['Autopilot'] } })
     .input(z.object({ side: sideSchema }).strict()).output(ownerStatusSchema)

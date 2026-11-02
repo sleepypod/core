@@ -12,6 +12,7 @@ import { Card } from './primitives'
 import { ComfortSignals } from './ComfortSignals'
 import { ComfortOwnerReview } from './ComfortOwnerReview'
 import { PreviewNightReports } from './PreviewNightReports'
+import { ThermalModelCard } from './ThermalModelCard'
 
 const fieldClass = 'rounded-ctl border border-line bg-surface px-3 py-2 text-sm text-fg'
 
@@ -58,6 +59,7 @@ export function PersonalComfortCard() {
         />
       )}
       {(configuration.error || mode.error || feedback.error) && <p className="mt-4 text-sm text-danger" role="alert">{configuration.error?.message ?? mode.error?.message ?? feedback.error?.message}</p>}
+      {query.data?.features.modelTraining && <ThermalModelCard key={`model:${side}`} side={side} />}
       {query.data?.features.nightReports && <PreviewNightReports key={side} side={side} />}
       {query.data?.features.ownerActivation && <ComfortOwnerReview key={`owner:${side}:${JSON.stringify(query.data.state?.config)}`} side={side} />}
       {feedback.isSuccess && <p className="mt-3 text-sm text-fg-2" role="status">Check-in saved.</p>}
@@ -100,7 +102,7 @@ export function PersonalComfortDetails({ data, pending, onConfigure, onMode, onF
         )}
         {data.runtime === 'stopped' && <p className="mt-2 text-fg-2">The Preview service is stopped.</p>}
       </div>
-      {data.learning && (
+      {data.learning && !data.features.modelTraining && (
         <div className="rounded-ctl border border-line p-4 text-sm">
           <h3 className="font-medium">Learning from similar nights</h3>
           <p className="mt-2 text-fg-2">{data.learning.reason}</p>

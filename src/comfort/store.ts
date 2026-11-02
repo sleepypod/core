@@ -6,8 +6,8 @@ import type { Side } from '@/src/hardware/types'
 import { comfortEventSchema, comfortFeedbackSchema, comfortStateSchema, type ComfortEvent } from './contract'
 import { defaultComfortState, type ComfortFeedback, type ComfortState } from './policy'
 import { comfortLocalDate } from './policy'
-import { thermalDataset } from './thermal-dataset'
-import { evaluateThermalLearning, type ThermalContext, type ThermalLearning, type ThermalNight } from './thermal-learning'
+import { thermalDatasetAudit, type ThermalDatasetAudit } from './thermal-dataset'
+import { evaluateThermalLearning, type ThermalContext, type ThermalLearning } from './thermal-learning'
 
 export interface ComfortStore {
   read(side: Side): ComfortState
@@ -21,15 +21,15 @@ export interface ComfortStore {
 
 /** Missing rows default OFF; malformed persisted data must fail closed, never reset silently. */
 export function createComfortStore(database: Database.Database): ComfortStore {
-  const datasetCache: Partial<Record<Side, { at: number, nights: ThermalNight[] }>> = {}
+  const datasetCache: Partial<Record<Side, { at: number, audit: ThermalDatasetAudit }>> = {}
   return {
     learning(side, context, timezone, now) {
       let cached = datasetCache[side]
       if (!cached || now < cached.at || now - cached.at >= 300000) {
-        cached = { at: now, nights: thermalDataset(database, side, now) }
+        cached = { at: now, audit: thermalDatasetAudit(database, side, now) }
         datasetCache[side] = cached
       }
-      return evaluateThermalLearning(cached.nights, context, comfortLocalDate(now, timezone))
+      return { ...evaluateThermalLearning(cached.audit.nights, context, comfortLocalDate(now, timezone)), collection: cached.audit.collection }
     },
     read(side) {
       const row = database.prepare('SELECT state FROM comfort_states WHERE side = ?').get(side) as { state: string } | undefined

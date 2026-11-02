@@ -6,12 +6,18 @@ export const thermalContextSchema = z.object({
 }).strict()
 export type ThermalContext = z.infer<typeof thermalContextSchema>
 export interface ThermalNight extends ThermalContext { date: string, correction: -1 | 0 | 1 }
+export const thermalCollectionSchema = z.object({
+  feedbackNights: z.number().int().nonnegative(),
+  excluded: z.array(z.object({ date: z.string(), reason: z.string() })),
+  policy: z.literal('complete-reviewed-nights-v1'),
+})
 export const thermalLearningSchema = z.object({
   model: z.literal('context-neighbors-v1'), mode: z.literal('research_preview'),
   nights: z.number().int().nonnegative(), requiredNights: z.literal(20),
   trainingNights: z.number().int().nonnegative(), validationNights: z.number().int().nonnegative(),
   modelErrorF: z.number().nullable(), baselineErrorF: z.number().nullable(),
   suggestedOffsetF: z.number().min(-1).max(1).nullable(), reason: z.string(),
+  collection: thermalCollectionSchema.optional(),
 })
 export type ThermalLearning = z.infer<typeof thermalLearningSchema>
 
@@ -46,7 +52,7 @@ export function evaluateThermalLearning(input: ThermalNight[], context: ThermalC
     .sort((first, second) => first.date.localeCompare(second.date))
   const report: ThermalLearning = { model: 'context-neighbors-v1', mode: 'research_preview', nights: nights.length,
     requiredNights: 20, trainingNights: 0, validationNights: 0, modelErrorF: null, baselineErrorF: null,
-    suggestedOffsetF: null, reason: 'Learning from room conditions, reported water temperature and your morning comfort check-ins. Each matched night needs quiet, occupied observations spanning at least four hours without large gaps. At least 20 separate nights are required; this research does not activate temperature changes.' }
+    suggestedOffsetF: null, reason: 'Learning from complete, reviewed nights with room readings, reported water temperature and a morning check-in. Each night needs at least six hours and 90% coverage of its overnight window. At least 20 matched nights are required; collecting data does not activate temperature changes.' }
   if (nights.length < 20) return report
   const validationCount = Math.max(5, Math.ceil(nights.length / 4))
   const training = nights.slice(0, -validationCount), validation = nights.slice(-validationCount)

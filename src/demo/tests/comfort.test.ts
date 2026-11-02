@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ownerStatusSchema } from '@/src/comfort/owner-contract'
 import { comfortStatusSchema } from '@/src/comfort/contract'
+import { thermalModelStatusSchema } from '@/src/comfort/thermal-model-store'
 import { resolveDemoCall } from '../handlers'
 
 describe('personal comfort in the demo', () => {
@@ -13,6 +14,9 @@ describe('personal comfort in the demo', () => {
     expect(status.fault).toContain('requires a live, authenticated Pod')
     const owner = ownerStatusSchema.parse(await resolveDemoCall('comfort.owner', { side }))
     expect(owner).toMatchObject({ identity: null, qualifications: [], nights: [], canActivate: false, active: false })
+    const model = thermalModelStatusSchema.parse(await resolveDemoCall('comfort.thermalModel', { side }))
+    expect(model).toMatchObject({ side, completeNights: 0, canTrain: false, model: null })
+    expect(await resolveDemoCall('comfort.thermalModelPreview', { side })).toMatchObject({ offsetF: null, rawDirection: null })
   })
 
   it.each([
@@ -22,6 +26,7 @@ describe('personal comfort in the demo', () => {
     ['comfort.configure', { side: 'left', config: { mode: 'preview', minimumF: 70, maximumF: 95 } }],
     ['comfort.mode', { side: 'left', mode: 'preview' }],
     ['comfort.feedback', { side: 'left', feedback: { date: '2026-10-25', comfort: 'warm' } }],
+    ['comfort.trainThermalModel', { side: 'left', expectedDatasetHash: '0'.repeat(64) }],
   ] as const)('rejects %s without claiming a successful save', async (route, input) => {
     await expect(resolveDemoCall(route, input)).rejects.toThrow('requires a live, authenticated Pod')
     const status = comfortStatusSchema.parse(await resolveDemoCall('comfort.get', { side: 'left' }))
