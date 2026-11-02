@@ -25,7 +25,8 @@ type Input = z.infer<typeof retainedWaveformInputSchema>
 const python = resolve('modules/piezo-processor/.venv/bin/python')
 const environment: NodeJS.ProcessEnv = { PYTHONPATH: resolve('modules'), OPENBLAS_NUM_THREADS: '1', LANG: 'C.UTF-8', TZ: 'UTC', NODE_ENV: 'test' }
 
-it('publishes, verifies, replays, releases and collects a retained waveform dataset without changing observations', async () => {
+// Needs the locked piezo-processor venv, which Stryker's sandbox doesn't carry.
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('publishes, verifies, replays, releases and collects a retained waveform dataset without changing observations', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'waveform-publication-integration-'))
   const database = join(directory, 'biometrics.db')
   const archive = join(directory, 'archive')

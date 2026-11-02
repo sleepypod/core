@@ -10,7 +10,8 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'waveform-build-'))
 })
 afterEach(() => rm(directory, { recursive: true, force: true }))
-it('verifies a real Python identity and binds both shipped Node bundles', async () => {
+// Needs the locked piezo-processor venv, which Stryker's sandbox doesn't carry.
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('verifies a real Python identity and binds both shipped Node bundles', async () => {
   const coordinator = join(directory, 'coordinator.cjs'), worker = join(directory, 'worker.cjs')
   await writeFile(coordinator, 'orchestration-v1')
   await writeFile(worker, 'scoring-v1')
@@ -25,7 +26,7 @@ it('verifies a real Python identity and binds both shipped Node bundles', async 
   await writeFile(worker, 'scoring-v2')
   expect((await waveformEvaluatorBuildIdentity(coordinator, worker, location)).hash).not.toBe(second.hash)
 })
-it('rejects missing interpreters, invalid output and forged build hashes', async () => {
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('rejects missing interpreters, invalid output and forged build hashes', async () => {
   await expect(probeWaveformBuild({ ...location, pythonPath: join(directory, 'missing') })).rejects.toThrow('unavailable')
   const fixture = join(directory, 'fixture')
   await writeFile(fixture, `#!${process.execPath}\nprocess.stdout.write('{}');`, { mode: 0o700 })

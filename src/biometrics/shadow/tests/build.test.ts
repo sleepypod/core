@@ -6,7 +6,8 @@ import { expect, it } from 'vitest'
 import { configHash } from '../../algorithms/canonical'
 import { probeShadowBuild } from '../build'
 const location = { pythonPath: resolve('modules/piezo-processor/.venv/bin/python'), modulesPath: resolve('modules') }
-it('probes the exact locked interpreter and requires shadow sources and intact identity', async () => {
+// Needs the locked piezo-processor venv, which Stryker's sandbox doesn't carry.
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('probes the exact locked interpreter and requires shadow sources and intact identity', async () => {
   const build = await probeShadowBuild(location)
   expect(build).toEqual(await probeShadowBuild(location))
   expect(build.identity.version).toBe('shadow-python-build-v1')
@@ -30,7 +31,7 @@ it('probes the exact locked interpreter and requires shadow sources and intact i
   }
   finally { await rm(directory, { recursive: true, force: true }) }
 })
-it('packages the host without live service imports and binds its exact bytes', async () => {
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('packages the host without live service imports and binds its exact bytes', async () => {
   const { execFile } = await import('node:child_process')
   const { promisify } = await import('node:util')
   const { loadInstalledShadowHost, inspectInstalledShadowHost } = await import('../installed-host')
