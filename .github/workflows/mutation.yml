@@ -84,6 +84,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The dry run executes the whole unit suite, and the biometrics
+      # runtime tests spawn modules/piezo-processor/.venv/bin/python.
+      # Stryker copies the venv into its sandbox; mirror test.yml's setup.
+      - name: Setup Python for runtime integration
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Setup uv for runtime integration
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install locked runtime integration dependencies
+        working-directory: modules/piezo-processor
+        run: uv sync --locked --no-install-project
+
       # Incremental cache, keyed per-shard so the two shards don't stomp
       # on each other. `restore-keys` lets us fall back to older branch
       # baselines or the trunk baseline when the current commit is new.
