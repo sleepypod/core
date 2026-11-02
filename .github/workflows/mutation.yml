@@ -86,7 +86,8 @@ jobs:
 
       # The dry run executes the whole unit suite, and the biometrics
       # runtime tests spawn modules/piezo-processor/.venv/bin/python.
-      # Stryker copies the venv into its sandbox; mirror test.yml's setup.
+      # Mirror test.yml's setup. Stryker runs --inPlace below because its
+      # sandbox copy fails on the venv's directory symlinks (EISDIR).
       - name: Setup Python for runtime integration
         uses: actions/setup-python@v6
         with:
@@ -117,7 +118,7 @@ jobs:
         run: |
           SCOPE="${{ inputs.scope }}"
           SCOPE="${SCOPE:-${{ matrix.shard.mutate }}}"
-          pnpm stryker run --mutate "$SCOPE" --incremental
+          pnpm stryker run --mutate "$SCOPE" --incremental --inPlace
 
       - name: Save mutation-incremental cache
         if: always()
