@@ -21,10 +21,23 @@ import type { SleepEpoch, SleepStage, SleepStageBlock } from './sleep-stages'
 export const STAGE_MODEL_EPOCH_SECONDS = 300
 const WINDOW_HALF_SECONDS = 450
 
-/** Column names of the two feature contracts, in the order models expect them. */
+/** Column names of the feature contracts, in the order models expect them. */
 export const CHALLENGER_CONTRACT = ['hrZ', 'hrStdZ', 'motionZ', 'nightFraction'] as const
 export const POD_NATIVE_CONTRACT = [...CHALLENGER_CONTRACT, 'hrvRel', 'hrv15Rel', 'hr15StdRel', 'br15Std', 'motion15', 'minutesSinceBed'] as const
-export const STAGE_MODEL_CONTRACTS = { challenger: CHALLENGER_CONTRACT, podNative: POD_NATIVE_CONTRACT } as const
+/**
+ * podNative plus temporal context, movement bouts and arousal features (sleepypod/training
+ * scripts/feature-ablation.py): neighbouring and 30-minute values (Radha 2019, Fonseca 2020),
+ * still bouts from per-minute movement (Kortelainen 2010, van Hees 2015), and heart-rate rise
+ * with breathing variability (Willemen 2014). Retrospective, like podNative.
+ */
+export const POD_CONTEXT_CONTRACT = [
+  ...POD_NATIVE_CONTRACT,
+  'hrZPrev', 'hrZNext', 'hrZMean30', 'hrStdZPrev', 'hrStdZNext', 'hrStdZMean30',
+  'motionZPrev', 'motionZNext', 'motionZMean30', 'hrvRelPrev', 'hrvRelNext', 'hrvRelMean30', 'minutesToExit',
+  'activeMinutes', 'peakMinuteZ', 'minutesFromMove', 'stillBoutMinutes', 'active15',
+  'hrRise', 'hrMaxZ', 'brStdEpoch', 'brRel', 'moveHrCoupling',
+] as const
+export const STAGE_MODEL_CONTRACTS = { challenger: CHALLENGER_CONTRACT, podNative: POD_NATIVE_CONTRACT, podContext: POD_CONTEXT_CONTRACT } as const
 export type StageModelContract = keyof typeof STAGE_MODEL_CONTRACTS
 
 const number = z.number().finite()
@@ -55,7 +68,7 @@ export const stageModelSchema = z.object({
   kind: z.enum(['forest', 'logistic']),
   /** Class order of every vote, score and `expected`: always the four stages in StageScore order. */
   classes: z.tuple([z.literal('wake'), z.literal('light'), z.literal('deep'), z.literal('rem')]),
-  featureContract: z.array(z.string().min(1)).min(1).max(32),
+  featureContract: z.array(z.string().min(1)).min(1).max(64),
   epochSeconds: z.literal(STAGE_MODEL_EPOCH_SECONDS).default(STAGE_MODEL_EPOCH_SECONDS),
   /** Forest: trees over feature indices into `featureContract`. */
   trees: z.array(treeSchema).max(1000).optional(),
@@ -202,6 +215,12 @@ function median(values: number[]): number {
   const mid = sorted.length >> 1
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
 }
+/** Median-centred, scaled by 1.4826 × MAD; all zeros when the MAD is zero. */
+function robustZScores(values: number[]): number[] {
+  const m = median(values)
+  const mad = median(values.map(v => Math.abs(v - m))) * 1.4826
+  return values.map(v => (mad > 0 ? (v - m) / mad : 0))
+}
 
 /**
  * The contract's rows for a night: 5-minute epochs from bed entry (a trailing
@@ -263,6 +282,60 @@ export function stageModelFeatures(contract: StageModelContract, enteredBed: Dat
     row.values.motion15 = Math.log(1 + motion15)
     row.values.minutesSinceBed = (row.start - entered) / 60
   }
+  if (contract === 'podNative') return out
+
+  // Context: neighbours by time, so a skipped epoch falls back to the epoch's own value.
+  const byStart = new Map(out.map(row => [row.start, row]))
+  const contextColumns = ['hrZ', 'hrStdZ', 'motionZ', 'hrvRel'] as const
+  for (const row of out) {
+    for (const column of contextColumns) {
+      row.values[`${column}Prev`] = (byStart.get(row.start - STAGE_MODEL_EPOCH_SECONDS) ?? row).values[column]
+      row.values[`${column}Next`] = (byStart.get(row.start + STAGE_MODEL_EPOCH_SECONDS) ?? row).values[column]
+      row.values[`${column}Mean30`] = mean(out.filter(r => Math.abs(r.start - row.start) <= 3 * STAGE_MODEL_EPOCH_SECONDS).map(r => r.values[column]))
+    }
+    row.values.minutesToExit = (left - row.start) / 60
+  }
+
+  // Movement: minutes clearly above the night's own floor, and the still bout around each epoch.
+  const movementZ = robustZScores(mv.map(s => Math.log1p(s.v)))
+  const active = mv.filter((_, i) => movementZ[i] > 3).map(s => s.t)
+  const nightBRMedian = median(br.map(s => s.v))
+  const peaks: number[] = []
+  const hrMax: number[] = []
+  for (const row of out) {
+    const start = row.start
+    const end = start + STAGE_MODEL_EPOCH_SECONDS
+    const mid = start + STAGE_MODEL_EPOCH_SECONDS / 2
+    const inside = mv.filter(s => s.t >= start && s.t < end).map(s => s.v)
+    const before = active.filter(t => t <= mid)
+    const after = active.filter(t => t > mid)
+    const last = before.length ? before[before.length - 1] : null
+    const next = after.length ? after[0] : null
+    const distances = [last, next].filter((t): t is number => t !== null).map(t => Math.abs(mid - t))
+    const boutStart = last ?? (mv.length ? mv[0].t : start)
+    const boutEnd = next ?? (mv.length ? mv[mv.length - 1].t : end)
+    row.values.activeMinutes = active.filter(t => t >= start && t < end).length
+    peaks.push(inside.length ? Math.log1p(Math.max(...inside)) : 0)
+    row.values.minutesFromMove = distances.length ? Math.min(...distances) / 60 : 720
+    row.values.stillBoutMinutes = Math.max(boutEnd - boutStart, 0) / 60
+    row.values.active15 = active.filter(t => Math.abs(t - mid) <= 900).length
+
+    // Arousal: heart-rate rise against the preceding 15 minutes, breathing within the epoch.
+    const beats = hr.filter(s => s.t >= start && s.t < end).map(s => s.v)
+    const prior = hr.filter(s => s.t >= start - 900 && s.t < start).map(s => s.v)
+    const breaths = br.filter(s => s.t >= start && s.t < end).map(s => s.v)
+    row.values.hrRise = beats.length && prior.length && nightHRStd > 0 ? (Math.max(...beats) - median(prior)) / nightHRStd : 0
+    hrMax.push(Math.max(...beats))
+    row.values.brStdEpoch = breaths.length > 1 ? populationStd(breaths) : 0
+    row.values.brRel = breaths.length && nightBRMedian > 0 ? mean(breaths) / nightBRMedian : 0
+  }
+  const peakZ = robustZScores(peaks)
+  const hrMaxZ = zScores(hrMax)
+  out.forEach((row, i) => {
+    row.values.peakMinuteZ = peakZ[i]
+    row.values.hrMaxZ = hrMaxZ[i]
+    row.values.moveHrCoupling = row.values.activeMinutes * Math.max(row.values.hrRise, 0)
+  })
   return out
 }
 
