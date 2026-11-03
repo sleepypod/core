@@ -335,6 +335,28 @@ export const referenceSamples = sqliteTable('reference_samples', {
   uniqueIndex('uq_reference_samples_side_metric_timestamp_source').on(t.side, t.metric, t.timestamp, t.source),
 ])
 
+/**
+ * Apple Watch wrist-movement recordings (watch-motion-v1/v2 files sent by the
+ * iOS app), one row per night holding the trimmed canonical file. A movement
+ * label for comparison and off-pod training only: never read by the stage
+ * classifier, movement scoring or any hardware control. A resend of the same
+ * night (side, recorded_from) replaces the stored file in place.
+ */
+export const watchMotionCaptures = sqliteTable('watch_motion_captures', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  version: text('version', { enum: ['watch-motion-v1', 'watch-motion-v2'] }).notNull(),
+  recordedFrom: integer('recorded_from', { mode: 'timestamp_ms' }).notNull(),
+  recordedTo: integer('recorded_to', { mode: 'timestamp_ms' }).notNull(),
+  bins: integer('bins').notNull(),
+  trimmedBins: integer('trimmed_bins').notNull(),
+  sha256: text('sha256').notNull(),
+  file: text('file').notNull(), // canonical JSON (sorted keys), served byte-for-byte
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, t => [
+  uniqueIndex('uq_watch_motion_captures_side_recorded_from').on(t.side, t.recordedFrom),
+])
+
 // ── Calibration tables ──
 
 export const calibrationProfiles = sqliteTable('calibration_profiles', {

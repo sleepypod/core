@@ -15,6 +15,7 @@ import {
   vitals,
   vitalsQuality,
   waterLevelReadings,
+  watchMotionCaptures,
 } from './biometrics-schema'
 
 /**
@@ -30,6 +31,9 @@ import {
  *   ambient_light, water_level_readings, pump_alerts, vitals_quality,
  *   thermal_state, health_runs, flash_write_samples,
  *   heartbeats (~150 KB per side per night of beat times)
+ *   watch_motion_captures (Apple Watch movement labels, ~0.5 MB per night
+ *     as canonical JSON — far heavier than the other reference tables, so
+ *     pruned by recorded_to; the iPhone keeps the original files)
  *
  * vitals_quality shares vitals' timestamp cutoff so each quality row dies
  * with its paired vitals row (vitals_id is a logical, unenforced reference —
@@ -58,6 +62,7 @@ const RETENTION_TABLES = [
   { table: thermalState, column: thermalState.timestamp, name: 'thermal_state' },
   { table: healthRuns, column: healthRuns.lastSeenAt, name: 'health_runs' },
   { table: flashWriteSamples, column: flashWriteSamples.timestamp, name: 'flash_write_samples' },
+  { table: watchMotionCaptures, column: watchMotionCaptures.recordedTo, name: 'watch_motion_captures' },
 ] as const
 
 /** Tables the daily retention pass prunes, for System → Databases. */
