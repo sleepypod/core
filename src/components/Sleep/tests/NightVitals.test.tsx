@@ -3,10 +3,11 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { NightVitals } from '../NightVitals'
 import { Hypnogram } from '@/src/components/ds'
 
-const mock = vi.hoisted(() => ({ query: vi.fn(), chart: vi.fn() }))
+const mock = vi.hoisted(() => ({ query: vi.fn(), watch: vi.fn(() => ({ data: [] as unknown[] })), chart: vi.fn() }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: { biometrics: {
   getVitals: { useQuery: mock.query }, getReferenceVitals: { useQuery: mock.query },
   getReferenceSamples: { useQuery: mock.query }, getMovementBuckets: { useQuery: mock.query },
+  getWatchMotionSeries: { useQuery: mock.watch },
 } } }))
 vi.mock('@/src/components/biometrics/VitalsExplorer', () => ({ VitalsExplorer: (props: unknown) => {
   mock.chart(props)
@@ -53,6 +54,20 @@ it('waits for blood oxygen before drawing the night', () => {
   render(<NightVitals side="left" start={0} end={10000} />)
   expect(mock.chart).not.toHaveBeenCalled()
   expect(screen.queryByText('No recorded vitals for this night.')).toBeNull()
+})
+it('passes the night’s Watch movement to the chart and legend, and draws nothing extra without it', () => {
+  mock.query.mockImplementation(input => ({ data: input.limit === 100000
+    ? [{ timestamp: new Date(60_000), heartRate: 60, hrv: 40, breathingRate: 15 }, { timestamp: new Date(120_000), heartRate: 61, hrv: 40, breathingRate: 15 }]
+    : [] }))
+  render(<NightVitals side="left" start={0} end={600_000} />)
+  expect(mock.watch).toHaveBeenCalledWith({ side: 'left', startDate: new Date(0), endDate: new Date(600_000) }, expect.objectContaining({ enabled: true }))
+  expect(mock.chart).toHaveBeenLastCalledWith(expect.objectContaining({ watchMovement: [] }))
+  expect(screen.queryByTestId('legend-watch-movement')).toBeNull()
+  cleanup()
+  mock.watch.mockReturnValue({ data: [{ timestamp: new Date(60_000), movingSamples: 7 }] })
+  render(<NightVitals side="left" start={0} end={600_000} />)
+  expect(mock.chart).toHaveBeenLastCalledWith(expect.objectContaining({ watchMovement: [{ t: 60_000, moving: 7 }] }))
+  expect(screen.getByTestId('legend-watch-movement')).toBeTruthy()
 })
 it('reports a failed recorded-vitals request', () => {
   mock.query.mockReturnValue({ error: new Error('offline') })

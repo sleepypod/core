@@ -59,6 +59,7 @@ vi.mock('@/src/utils/trpc', () => ({
       getFileCount: { useQuery: () => ({ data: { rawFiles: { left: 4, right: 4 }, totalSizeMB: 8.45 } }) },
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
       getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : input.metric === 'hrv_rmssd' ? state.referenceRmssd : input.metric === 'blood_oxygen' ? state.referenceOxygen : [] }) },
+      getWatchMotionSeries: { useQuery: () => ({ data: [] }) },
       getReferenceVitals: {
         useQuery: (_input: unknown, opts: Record<string, unknown>) => {
           state.referenceOpts = opts

@@ -5,6 +5,7 @@ import { Card, InlineError, SectionLabel, Skeleton } from '@/src/components/ds'
 import { VitalsExplorer } from '@/src/components/biometrics/VitalsExplorer'
 import { VitalsLegend } from '@/src/components/biometrics/VitalsChart'
 import { baselineBand, readingsInSessions, splitSessions } from '@/src/components/biometrics/biometricsLogic'
+import { WATCH_MOTION_MAX_SERIES_MS, watchInWindows } from '@/src/lib/watchMovement'
 
 /** Nights and Biometrics use the same recorded data, chart, colors and navigation. */
 export function NightVitals({ side, start, end }: { side: 'left' | 'right', start: number, end: number }) {
@@ -16,6 +17,7 @@ export function NightVitals({ side, start, end }: { side: 'left' | 'right', star
   const br = trpc.biometrics.getReferenceSamples.useQuery({ ...range, metric: 'breathing_rate', limit: 20000 })
   const oxygen = trpc.biometrics.getReferenceSamples.useQuery({ ...range, metric: 'blood_oxygen', limit: 20000 })
   const movement = trpc.biometrics.getMovementBuckets.useQuery({ ...range, bucketSeconds: 300, limit: 10000 })
+  const watch = trpc.biometrics.getWatchMotionSeries.useQuery(range, { enabled: end - start <= WATCH_MOTION_MAX_SERIES_MS })
   const points = (vitals.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate, hrv: r.hrv, br: r.breathingRate,
     provenanceKey: r.provenance?.processingRunId ?? r.processingRunId ?? 'legacy_unknown', hrvMetricId: r.provenance?.hrvMetricId ?? null }))
   const reference = (hr.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate })).sort((a, b) => a.t - b.t)
@@ -23,6 +25,7 @@ export function NightVitals({ side, start, end }: { side: 'left' | 'right', star
   const referenceRmssd = (rmssd.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
   const referenceBr = (br.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
   const referenceOxygen = (oxygen.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
+  const watchMovement = (watch.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), moving: r.movingSamples }))
   const sessionPoints = points.length
     ? points
     : [...new Set([...reference, ...referenceHrv, ...referenceRmssd, ...referenceBr, ...referenceOxygen].map(r => r.t))]
@@ -36,9 +39,9 @@ export function NightVitals({ side, start, end }: { side: 'left' | 'right', star
       {vitals.isLoading || hr.isLoading || hrv.isLoading || rmssd.isLoading || br.isLoading || oxygen.isLoading
         ? <Skeleton className="h-80" />
         : sessionPoints.length > 0
-          ? <VitalsExplorer key={`${side}-${start}-${end}`} sessions={sessions} stall={null} bands={{ hr: baselineBand(points, 'hr'), hrv: baselineBand(points, 'hrv'), br: baselineBand(points, 'br') }} reference={reference} referenceRmssd={referenceRmssd} referenceHrv={referenceHrv} referenceBr={referenceBr} referenceOxygen={referenceOxygen} movement={movement.data ?? []} />
+          ? <VitalsExplorer key={`${side}-${start}-${end}`} sessions={sessions} stall={null} bands={{ hr: baselineBand(points, 'hr'), hrv: baselineBand(points, 'hrv'), br: baselineBand(points, 'br') }} reference={reference} referenceRmssd={referenceRmssd} referenceHrv={referenceHrv} referenceBr={referenceBr} referenceOxygen={referenceOxygen} movement={movement.data ?? []} watchMovement={watchMovement} />
           : <p className="py-6 text-center text-sm text-fg-2">No recorded vitals for this night.</p>}
-      <VitalsLegend bandLabel="middle 50% of the night" stalled={false} reference={reference.length > 0} referenceRmssd={referenceRmssd.length > 0} referenceHrv={referenceHrv.length > 0} referenceBr={referenceBr.length > 0} referenceOxygen={readingsInSessions(referenceOxygen, sessions).length > 0} />
+      <VitalsLegend bandLabel="middle 50% of the night" stalled={false} reference={reference.length > 0} referenceRmssd={referenceRmssd.length > 0} referenceHrv={referenceHrv.length > 0} referenceBr={referenceBr.length > 0} referenceOxygen={readingsInSessions(referenceOxygen, sessions).length > 0} watchMovement={watchInWindows(watchMovement, sessions).length > 0} />
       {(referenceHrv.length > 0 || referenceRmssd.length > 0) && <p className="text-xs text-fg-3">Watch SDNN, Watch RMSSD and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values.</p>}
     </Card>
   )
