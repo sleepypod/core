@@ -234,6 +234,21 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       .slice(-(input.limit ?? 5000))
   },
 
+  // Apple Watch wrist movement per minute, loosely following the pod's own
+  // movement score, so the night chart shows the Watch overlay.
+  getWatchMotionSeries: (input) => {
+    const start = input.startDate.getTime()
+    const end = input.endDate.getTime()
+    if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    return demoMovement(input.side, start, end).map(m => ({
+      timestamp: new Date(Math.floor(m.t / MINUTE) * MINUTE),
+      movingSamples: Math.round(m.score / 12),
+      maxJerk: Math.round(m.score / 40 * 100) / 100,
+      meanVariance: m.score * 1e-6,
+      samples: 3000,
+    }))
+  },
+
   getReferenceStages: (input) => {
     const start = input.startDate.getTime()
     const end = input.endDate.getTime()

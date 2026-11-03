@@ -27,6 +27,7 @@ import {
 } from '@/src/lib/movement'
 import { recordLegacyReferenceImport } from '@/src/biometrics/references/legacy'
 import { REFERENCE_SAMPLE_METRICS, referenceAlgorithmSchema, referenceCapabilities, referenceDeviceSchema, referenceSampleMetricSchema } from '@/src/biometrics/references/contracts'
+import { WATCH_MOTION_MAX_SERIES_DAYS, watchMotionSeries } from '@/src/biometrics/references/watch-motion'
 import {
   compareNightsToWatch,
   deviationNightSchema,
@@ -1366,6 +1367,26 @@ export const biometricsRouter = router({
       metrics: z.array(z.object({ metric: referenceSampleMetricSchema, unit: z.string(), min: z.number(), max: z.number() })),
     }))
     .query(() => referenceCapabilities()),
+
+  /**
+   * Apple Watch wrist movement per minute for a side in [startDate, endDate]
+   * (at most 31 days), oldest first, from the watch-motion captures the iOS
+   * app posted. Minutes without Watch bins are absent: no data is not
+   * stillness. A comparison label only, never an input to staging or scoring.
+   */
+  getWatchMotionSeries: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/watch-motion-series', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({ side: sideSchema, startDate: z.date(), endDate: z.date() }).strict())
+    .output(z.array(z.object({ timestamp: z.date(), movingSamples: z.number(), maxJerk: z.number(), meanVariance: z.number(), samples: z.number() })))
+    .query(({ input }) => {
+      if (!validateDateRange(input.startDate, input.endDate)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+      }
+      if (input.endDate.getTime() - input.startDate.getTime() > WATCH_MOTION_MAX_SERIES_DAYS * DAY_MS) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Select at most ${WATCH_MOTION_MAX_SERIES_DAYS} days` })
+      }
+      return watchMotionSeries(biometricsDb, input.side, input.startDate, input.endDate)
+    }),
 
   getReferenceVitals: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/reference-vitals', protect: false, tags: ['Biometrics'] } })
