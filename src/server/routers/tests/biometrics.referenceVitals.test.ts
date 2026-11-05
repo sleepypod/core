@@ -160,6 +160,50 @@ describe('biometrics reference vitals', () => {
       expect(await post('hrv_sdnn', T0, 250)).toEqual({ written: 1 })
     })
 
+    it('keeps a window, its device and its algorithm, in the table and the provenance', async () => {
+      const windowed = { timestamp: T0, endTimestamp: T0 + 5 * MIN, value: 19, device: 'Watch8,2', algorithm: '3' }
+      expect(await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_rmssd', samples: [windowed] })).toEqual({ written: 1 })
+      expect(await caller.getReferenceSamples({ side: 'left', metric: 'hrv_rmssd', startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([
+        { timestamp: new Date(T0 * 1000), endTimestamp: new Date((T0 + 5 * MIN) * 1000), value: 19, device: 'Watch8,2', algorithm: '3' },
+      ])
+      expect(raw.prepare('SELECT temporal_kind AS kind, unit, start_ms AS startMs, end_ms AS endMs FROM reference_measurements').get())
+        .toEqual({ kind: 'interval', unit: 'ms', startMs: T0 * 1000, endMs: (T0 + 5 * MIN) * 1000 })
+      expect(raw.prepare(`SELECT json_extract(original, '$.device') AS device, json_extract(original, '$.algorithm') AS algorithm FROM reference_measurements`).get())
+        .toEqual({ device: 'Watch8,2', algorithm: '3' })
+    })
+
+    it('leaves a bare sample without a window or device', async () => {
+      await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: [breathing[0]] })
+      expect(await caller.getReferenceSamples({ side: 'left', metric: 'breathing_rate', startDate: new Date(T0 * 1000), endDate: new Date(T0 * 1000) })).toEqual([
+        { timestamp: new Date(T0 * 1000), endTimestamp: null, value: 14.5, device: null, algorithm: null },
+      ])
+    })
+
+    it('stores every optional metric in its own unit and refuses it out of range', async () => {
+      const cases = [['blood_oxygen', 94, '%', 40], ['resting_heart_rate', 52, 'bpm', 300], ['skin_temperature', 35.2, 'degC', 60], ['breathing_disturbances', 3, 'events/h', 500]] as const
+      for (const [metric, value, unit, implausible] of cases) {
+        expect(await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric, samples: [{ timestamp: T0, value }] })).toEqual({ written: 1 })
+        expect(raw.prepare('SELECT unit, value FROM reference_measurements WHERE metric = ?').get(metric)).toEqual({ unit, value })
+        await expect(caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric, samples: [{ timestamp: T0 + MIN, value: implausible }] })).rejects.toThrow()
+      }
+    })
+
+    it('refuses a window that ends before it starts or runs past a day', async () => {
+      const post = (endTimestamp: number) => caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_rmssd', samples: [{ timestamp: T0, endTimestamp, value: 20 }] })
+      await expect(post(T0)).rejects.toThrow()
+      await expect(post(T0 - MIN)).rejects.toThrow()
+      await expect(post(T0 + 86401)).rejects.toThrow()
+      expect(await post(T0 + 86400)).toEqual({ written: 1 })
+    })
+
+    it('publishes what it accepts so clients need not assume', async () => {
+      const capabilities = await caller.getReferenceCapabilities({})
+      expect(capabilities.sampleFields).toEqual(['endTimestamp', 'device', 'algorithm'])
+      expect(capabilities.metrics).toContainEqual({ metric: 'hrv_rmssd', unit: 'ms', min: 1, max: 500 })
+      expect(capabilities.metrics).toContainEqual({ metric: 'blood_oxygen', unit: '%', min: 50, max: 100 })
+      expect(capabilities.metrics.map(m => m.metric)).toEqual(expect.arrayContaining(['breathing_rate', 'hrv_sdnn']))
+    })
+
     it('deletes the samples with their reference import', async () => {
       await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'hrv_sdnn', samples: [{ timestamp: T0, value: 48 }] })
       const importId = db.select().from(referenceSamples).get()?.importId
@@ -190,7 +234,7 @@ describe('biometrics reference vitals', () => {
         ] })
       }
       await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: [{ timestamp: T0, value: 15 }] })
-      expect(await caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([{ timestamp: new Date(T0 * 1000), value: 48 }])
+      expect(await caller.getReferenceSamples({ side: 'left', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([{ timestamp: new Date(T0 * 1000), endTimestamp: null, value: 48, device: null, algorithm: null }])
       expect((await caller.getReferenceSamples({ side: 'right', metric: 'hrv_sdnn', startDate: new Date(T0 * 1000), endDate: new Date((T0 + 3 * MIN) * 1000) })).map(r => r.value)).toEqual([48, 52])
     })
     it('rejects reversed ranges', async () => {

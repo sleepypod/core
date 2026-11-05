@@ -1,6 +1,6 @@
 import { canonicalJson } from '../algorithms/canonical-json'
 const utf8 = new TextEncoder()
-import { REFERENCE_ADAPTER_VERSION, REFERENCE_LIMITS, referenceImportSchema, referenceRowSchema, type NormalizedMeasurement, type PreviewSummary, type ReferenceImportInput } from './contracts'
+import { REFERENCE_ADAPTER_VERSION, REFERENCE_LIMITS, REFERENCE_UNITS, referenceImportSchema, referenceRowSchema, type NormalizedMeasurement, type PreviewSummary, type ReferenceImportInput } from './contracts'
 import { ReferenceInputError, timestampResolver } from './time'
 
 /** Validate size/depth before copying, hashing or parsing untrusted exports. */
@@ -61,15 +61,12 @@ function normalizeRow(raw: unknown, subjectId: string, resolveTime: (value: stri
   }
   else {
     if (typeof row.value !== 'number') throw new ReferenceInputError('INCOMPATIBLE_METRIC', 'Vital measurements require numeric values')
-    const units: Record<string, number> = row.metric === 'heart_rate'
-      ? { 'bpm': 1, 'beats/min': 1, 'Hz': 60 }
-      : row.metric === 'breathing_rate'
-        ? { 'breaths/min': 1, 'br/min': 1, 'Hz': 60 }
-        : { ms: 1, s: 1000 }
+    const { unit: storedUnit, accepted } = REFERENCE_UNITS[row.metric]
+    const units: Record<string, number> = accepted
     if (!Object.hasOwn(units, row.unit)) throw new ReferenceInputError('UNSUPPORTED_UNIT', `Unsupported unit for ${row.metric}`)
     value = row.value * units[row.unit]
     if (!Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) throw new ReferenceInputError('INVALID_VALUE', 'Measurements must be finite, nonnegative and within the safe numeric range after conversion')
-    unit = row.metric === 'heart_rate' ? 'bpm' : row.metric === 'breathing_rate' ? 'breaths/min' : 'ms'
+    unit = storedUnit
     if (row.metric === 'hrv_unknown') exclusions.push('unknown_hrv_definition')
     if (row.metric === 'window_ibi_variability_v1' && (row.windowMs !== 300000 || aggregation !== 'window_index')) exclusions.push('incompatible_hrv_window')
   }

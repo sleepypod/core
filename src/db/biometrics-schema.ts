@@ -322,9 +322,13 @@ export const referenceSamples = sqliteTable('reference_samples', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
   source: text('source', { enum: ['apple_watch'] }).notNull(),
-  metric: text('metric', { enum: ['breathing_rate', 'hrv_sdnn'] }).notNull(),
+  metric: text('metric', { enum: ['breathing_rate', 'hrv_sdnn', 'hrv_rmssd', 'blood_oxygen', 'resting_heart_rate', 'skin_temperature', 'breathing_disturbances'] }).notNull(),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  // Set when the reading covers a window; a spot reading has none.
+  endTimestamp: integer('end_timestamp', { mode: 'timestamp' }),
   value: real('value').notNull(),
+  device: text('device'), // hardware that measured it, e.g. Watch8,2; null for rows from older clients
+  algorithm: text('algorithm'), // the vendor's algorithm version, when it reports one
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   importId: text('import_id'), // set in the inserting transaction, like reference_vitals
 }, t => [

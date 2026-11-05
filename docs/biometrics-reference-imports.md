@@ -205,3 +205,36 @@ Biometric calibration draws the nights as a trend with these as markers once
 any night in the last 31 days pairs with Watch data.
 HRV is not like-for-like: the pod stores a window IBI variability index, not
 SDNN, which the response's `hrvNote` repeats.
+
+## Devices
+
+Wearables differ: an Apple Watch reports SDNN and, from iOS 27, RMSSD; other
+devices report one, the other or neither, and each has its own stage labels.
+Every value below is optional. A device sends what it has and a missing metric
+stays missing, never zero.
+
+`GET /api/biometrics/reference-capabilities` lists the metrics this pod accepts
+with their unit and bounds, and the optional sample fields. `/reference-samples`
+rejects unknown metrics and fields, so a client reads this first. A 404 means
+older software: keep to `breathing_rate` and `hrv_sdnn` with bare
+`{ timestamp, value }` samples.
+
+| Metric | Unit | Notes |
+| --- | --- | --- |
+| `breathing_rate` | breaths/min | |
+| `hrv_sdnn` | ms | |
+| `hrv_rmssd` | ms | Not comparable with the pod's `window_ibi_variability_v1` index |
+| `blood_oxygen` | % | 0 to 100, not a fraction |
+| `resting_heart_rate` | bpm | |
+| `skin_temperature` | degC | Absolute. A device reporting only a deviation from baseline must not use this metric |
+| `breathing_disturbances` | events/h | |
+
+A sample may add `endTimestamp` when it covers a window, `device` for the
+hardware (`Watch8,2`) and `algorithm` for the vendor's version. The same metric
+can change meaning between hardware or algorithm versions, so keep these whenever
+the source reports them. Normalized rows accept the same `device` and `algorithm`.
+
+`/reference-samples`, `/reference-stages` and `/reference-vitals` remain
+`apple_watch` only, because the Watch charts and the deviation report read those
+tables across sources. Any other device, such as a ring or an Android watch, uses
+the preview and commit import above with its own `source`.
