@@ -8,7 +8,7 @@ import { getCaller, jsonResult, runTool, type Caller } from '@/src/mcp/caller'
 import { days, isoDate, optionalSide, side } from '@/src/mcp/schemas'
 import { STAGE_RULESET_PRESETS, stageRulesetSchema, type StageClassifier, type StageRule, type StageRuleset } from '@/src/lib/sleep-stage-rules'
 import { scoreAgainstReference, type SleepStage, type StageAgreement } from '@/src/lib/sleep-stages'
-import { REFERENCE_SAMPLE_RANGE } from '@/src/server/routers/biometrics'
+import { REFERENCE_SAMPLE_METRICS } from '@/src/biometrics/references/contracts'
 import { nearestWithin, WATCH_PAIRING_WINDOW_MS } from '@/src/biometrics/references/watch-deviation'
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -28,9 +28,9 @@ const IMPORT_HINT = `No sleep records overlapping reference stages in the last $
 const UNCOVERED_HINT = 'Reference stages exist for these nights but cover none of the classified epochs, so agreement is null. Check the imported segment times.'
 
 const unixSeconds = z.number().int().min(1_000_000_000).max(4_102_444_800)
-const referenceSamples = (metric: keyof typeof REFERENCE_SAMPLE_RANGE) => z.array(z.object({
+const referenceSamples = (metric: keyof typeof REFERENCE_SAMPLE_METRICS) => z.array(z.object({
   timestamp: unixSeconds,
-  value: z.number().min(REFERENCE_SAMPLE_RANGE[metric][0]).max(REFERENCE_SAMPLE_RANGE[metric][1]),
+  value: z.number().min(REFERENCE_SAMPLE_METRICS[metric].range[0]).max(REFERENCE_SAMPLE_METRICS[metric].range[1]),
 })).max(2000).default([])
 
 const presetId = z.enum(PRESET_IDS).optional()

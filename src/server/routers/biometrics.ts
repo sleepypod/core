@@ -26,6 +26,7 @@ import {
   pickMinBucketNonStillEpochs,
 } from '@/src/lib/movement'
 import { recordLegacyReferenceImport } from '@/src/biometrics/references/legacy'
+import { REFERENCE_SAMPLE_METRICS, referenceAlgorithmSchema, referenceCapabilities, referenceDeviceSchema, referenceSampleMetricSchema } from '@/src/biometrics/references/contracts'
 import {
   compareNightsToWatch,
   deviationNightSchema,
@@ -89,7 +90,6 @@ function batchOverlaps(segments: StageSegment[]): string[] {
 }
 
 /** Plausible Apple Watch values per reference_samples metric, in breaths/min and ms. */
-export const REFERENCE_SAMPLE_RANGE = { breathing_rate: [4, 60], hrv_sdnn: [1, 500] } as const
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const WATCH_DEVIATION_DEFAULT_DAYS = 14
@@ -1265,10 +1265,14 @@ export const biometricsRouter = router({
     }),
 
   /**
-   * Import externally measured breathing rate (breaths/min) or HRV SDNN (ms)
-   * samples, one metric per call (Apple Watch via a Health export). Stored in
-   * `reference_samples`, never in `vitals`, under the same first-write-wins
-   * rule as importReferenceVitals (unique on side, metric, timestamp, source).
+   * Import externally measured samples, one metric per call (Apple Watch via a
+   * Health export or the iOS app). Stored in `reference_samples`, never in
+   * `vitals`, under the same first-write-wins rule as importReferenceVitals
+   * (unique on side, metric, timestamp, source). `endTimestamp` marks a reading
+   * that covers a window; `device` and `algorithm` say what produced it.
+   * Unknown fields and metrics are rejected, so clients read
+   * getReferenceCapabilities before sending anything beyond the first two
+   * metrics and the bare sample shape.
    */
   importReferenceSamples: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/biometrics/reference-samples', protect: false, tags: ['Biometrics'] } })
@@ -1276,18 +1280,23 @@ export const biometricsRouter = router({
       z.object({
         side: sideSchema,
         source: z.enum(['apple_watch']),
-        metric: z.enum(['breathing_rate', 'hrv_sdnn']),
+        metric: referenceSampleMetricSchema,
         samples: z.array(
           z.object({
             // Unix seconds in 2001..2100, as importReferenceVitals.
             timestamp: z.number().int().min(1_000_000_000).max(4_102_444_800),
+            endTimestamp: z.number().int().min(1_000_000_000).max(4_102_444_800).optional(),
             value: z.number().finite(),
+            device: referenceDeviceSchema.optional(),
+            algorithm: referenceAlgorithmSchema.optional(),
           }).strict()
         ).min(1).max(2000),
       }).strict().superRefine((input, ctx) => {
-        const [lo, hi] = REFERENCE_SAMPLE_RANGE[input.metric]
+        const [lo, hi] = REFERENCE_SAMPLE_METRICS[input.metric].range
         const index = input.samples.findIndex(s => s.value < lo || s.value > hi)
         if (index >= 0) ctx.addIssue({ code: 'custom', path: ['samples', index, 'value'], message: `${input.metric} must be within ${lo}..${hi}` })
+        const window = input.samples.findIndex(s => s.endTimestamp !== undefined && (s.endTimestamp <= s.timestamp || s.endTimestamp - s.timestamp > 86400))
+        if (window >= 0) ctx.addIssue({ code: 'custom', path: ['samples', window, 'endTimestamp'], message: 'endTimestamp must be after timestamp and within 24 hours of it' })
       })
     )
     .output(z.object({ written: z.number() }))
@@ -1298,7 +1307,10 @@ export const biometricsRouter = router({
           source: input.source,
           metric: input.metric,
           timestamp: new Date(s.timestamp * 1000),
+          endTimestamp: s.endTimestamp === undefined ? null : new Date(s.endTimestamp * 1000),
           value: s.value,
+          device: s.device ?? null,
+          algorithm: s.algorithm ?? null,
         }))
         const inserted = biometricsDb.transaction((tx) => {
           const accepted = tx.insert(referenceSamples).values(rows).onConflictDoNothing().returning().all()
@@ -1325,21 +1337,35 @@ export const biometricsRouter = router({
   getReferenceSamples: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/reference-samples', protect: false, tags: ['Biometrics'] } })
     .input(z.object({ side: sideSchema, startDate: z.date(), endDate: z.date(),
-      metric: z.enum(['breathing_rate', 'hrv_sdnn']),
+      metric: referenceSampleMetricSchema,
       limit: z.number().int().min(1).max(20000).default(5000),
     }).strict())
-    .output(z.array(z.object({ timestamp: z.date(), value: z.number() })))
+    .output(z.array(z.object({ timestamp: z.date(), endTimestamp: z.date().nullable(), value: z.number(), device: z.string().nullable(), algorithm: z.string().nullable() })))
     .query(async ({ input }) => {
       if (!validateDateRange(input.startDate, input.endDate)) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
       }
-      const rows = await biometricsDb.select({ timestamp: referenceSamples.timestamp, value: referenceSamples.value })
+      const rows = await biometricsDb.select({ timestamp: referenceSamples.timestamp, endTimestamp: referenceSamples.endTimestamp, value: referenceSamples.value,
+        device: referenceSamples.device, algorithm: referenceSamples.algorithm })
         .from(referenceSamples)
         .where(and(eq(referenceSamples.side, input.side), eq(referenceSamples.metric, input.metric),
           gte(referenceSamples.timestamp, input.startDate), lte(referenceSamples.timestamp, input.endDate)))
         .orderBy(desc(referenceSamples.timestamp)).limit(input.limit)
       return rows.reverse()
     }),
+
+  /**
+   * What this pod accepts from a wearable. Absent on older software, where a
+   * client must keep to breathing_rate and hrv_sdnn with bare samples.
+   */
+  getReferenceCapabilities: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/biometrics/reference-capabilities', protect: false, tags: ['Biometrics'] } })
+    .input(z.object({}).strict())
+    .output(z.object({
+      sampleFields: z.array(z.string()),
+      metrics: z.array(z.object({ metric: referenceSampleMetricSchema, unit: z.string(), min: z.number(), max: z.number() })),
+    }))
+    .query(() => referenceCapabilities()),
 
   getReferenceVitals: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/biometrics/reference-vitals', protect: false, tags: ['Biometrics'] } })
