@@ -109,16 +109,30 @@ describe('reference helpers', () => {
 describe('VitalsLegend', () => {
   it('lists the Watch series only when present', () => {
     const { rerender } = render(<VitalsLegend bandLabel="middle 50%" stalled={false} />)
-    expect(screen.queryByText('Apple Watch heart rate')).toBeNull()
+    expect(screen.queryByText('Apple Watch')).toBeNull()
     rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} reference />)
-    expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
+    expect(screen.getByText('Apple Watch')).toBeTruthy()
+  })
+
+  it('keeps each series under the device that measured it', () => {
+    render(<VitalsLegend bandLabel="middle 50%" stalled reference referenceHrv referenceRmssd referenceBr />)
+    const pod = screen.getByText('Pod').nextElementSibling?.textContent
+    const watch = screen.getByText('Apple Watch').nextElementSibling?.textContent
+    for (const series of ['9-min average', 'per minute', 'middle 50%', 'in bed, no vitals']) {
+      expect(pod).toContain(series)
+      expect(watch).not.toContain(series)
+    }
+    for (const series of ['heart rate', 'HRV · SDNN', 'HRV · RMSSD', 'breathing']) {
+      expect(watch).toContain(series)
+      expect(pod).not.toContain(series)
+    }
   })
 
   it('names RMSSD only when it is overlaid', () => {
     const { rerender } = render(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceHrv />)
-    expect(screen.queryByText('Apple Watch HRV · RMSSD')).toBeNull()
+    expect(screen.queryByText('HRV · RMSSD')).toBeNull()
     rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceRmssd />)
-    expect(screen.getByText('Apple Watch HRV · RMSSD')).toBeTruthy()
+    expect(screen.getByText('HRV · RMSSD')).toBeTruthy()
   })
 })
 

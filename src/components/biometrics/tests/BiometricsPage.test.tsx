@@ -187,7 +187,7 @@ describe('BiometricsPage', () => {
       vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, toJSON: () => ({}) })
       render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
       expect(screen.getAllByTestId('vitals-reference')).toHaveLength(1)
-      expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
+      expect(screen.getByText('Apple Watch').nextElementSibling?.textContent).toContain('heart rate')
     }
     finally {
       state.reference = []
@@ -320,7 +320,7 @@ it('draws a Watch-only night and names RMSSD when the pod recorded nothing', () 
   state.referenceRmssd = [{ timestamp: new Date(LAST_VITAL), value: 32 }]
   render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
   expect(screen.queryByText('No vitals in this range')).toBeNull()
-  expect(screen.getByText('Apple Watch HRV · RMSSD')).toBeTruthy()
+  expect(screen.getByText('HRV · RMSSD')).toBeTruthy()
   expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
 })
 
@@ -328,5 +328,5 @@ it('keeps the pod chart while Watch RMSSD has not loaded', () => {
   state.referenceRmssd = undefined
   render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
   expect(screen.queryByText('No vitals in this range')).toBeNull()
-  expect(screen.queryByText('Apple Watch HRV · RMSSD')).toBeNull()
+  expect(screen.queryByText('HRV · RMSSD')).toBeNull()
 })

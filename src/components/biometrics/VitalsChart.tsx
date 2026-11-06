@@ -14,7 +14,7 @@
 
 import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
-import { useEffect, useId, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import {
   axisTicks, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, rollingMean, sessionHeader,
   type MetricKey, type RangeWindow, type Session,
@@ -408,51 +408,67 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   )
 }
 
-export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceRmssd = false, referenceBr = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceRmssd?: boolean, referenceHrv?: boolean, referenceBr?: boolean }) {
+/** One device's marks: a legend row per device, so a line always reads as whose it is. */
+function LegendGroup({ device, children }: { device: string, children: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-fg-2">
-      <span className="flex items-center gap-2">
-        <span className="h-0.5 w-4 rounded bg-fg-2" />
-        9-min average
-      </span>
-      {referenceHrv && (
-        <span className="inline-flex items-center gap-1.5">
-          <span className="size-1 rounded-full border border-fg/80" />
-          Apple Watch HRV · SDNN
-        </span>
-      )}
-      {referenceRmssd && (
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-0 w-4 border-t border-dashed border-warn" />
-          Apple Watch HRV · RMSSD
-        </span>
-      )}
-      {referenceBr && (
-        <span className="inline-flex items-center gap-1.5">
-          <span className="size-1 rounded-full border border-fg/80" />
-          Apple Watch breathing
-        </span>
-      )}
-      {reference && (
+    <>
+      <dt className="text-fg-3">{device}</dt>
+      <dd className="flex flex-wrap items-center gap-x-5 gap-y-1.5">{children}</dd>
+    </>
+  )
+}
+
+export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceRmssd = false, referenceBr = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean, referenceRmssd?: boolean, referenceBr?: boolean }) {
+  return (
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-1.5 font-mono text-[11px] text-fg-2">
+      <LegendGroup device="Pod">
         <span className="flex items-center gap-2">
-          <span className="h-0 w-4 border-t border-dashed border-fg" />
-          Apple Watch heart rate
+          <span className="h-0.5 w-4 rounded bg-fg-2" />
+          9-min average
         </span>
-      )}
-      <span className="flex items-center gap-2">
-        <span className="h-px w-4 bg-fg-3" />
-        per minute
-      </span>
-      <span className="flex items-center gap-2">
-        <span className="h-2.5 w-4 rounded-[2px] bg-fg-3/25" />
-        {bandLabel}
-      </span>
-      {stalled && (
         <span className="flex items-center gap-2">
-          <span className="h-2.5 w-4 rounded-[2px] border-l border-warn" style={{ backgroundImage: 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--status-warn) 45%, transparent) 0 1px, transparent 1px 5px)' }} />
-          in bed, no vitals
+          <span className="h-px w-4 bg-fg-3" />
+          per minute
         </span>
+        <span className="flex items-center gap-2">
+          <span className="h-2.5 w-4 rounded-[2px] bg-fg-3/25" />
+          {bandLabel}
+        </span>
+        {stalled && (
+          <span className="flex items-center gap-2">
+            <span className="h-2.5 w-4 rounded-[2px] border-l border-warn" style={{ backgroundImage: 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--status-warn) 45%, transparent) 0 1px, transparent 1px 5px)' }} />
+            in bed, no vitals
+          </span>
+        )}
+      </LegendGroup>
+      {(reference || referenceHrv || referenceRmssd || referenceBr) && (
+        <LegendGroup device="Apple Watch">
+          {reference && (
+            <span className="flex items-center gap-2">
+              <span className="h-0 w-4 border-t border-dashed border-fg" />
+              heart rate
+            </span>
+          )}
+          {referenceHrv && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1 rounded-full border border-fg/80" />
+              HRV · SDNN
+            </span>
+          )}
+          {referenceRmssd && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-0 w-4 border-t border-dashed border-warn" />
+              HRV · RMSSD
+            </span>
+          )}
+          {referenceBr && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1 rounded-full border border-fg/80" />
+              breathing
+            </span>
+          )}
+        </LegendGroup>
       )}
-    </div>
+    </dl>
   )
 }
