@@ -32,8 +32,8 @@ it('uploads for the named sleeper, reports partial conflicts, and refreshes char
     xhr.onload?.()
   })
   await waitFor(() => expect(invalidate).toHaveBeenCalled())
-  expect(screen.getByText(/Imported 12 new heart-rate, 5 new breathing-rate and 2 new HRV samples/)).toBeTruthy()
-  expect(screen.getByText(/Found 14 heart-rate, 6 breathing-rate and 2 HRV samples/)).toBeTruthy()
+  expect(screen.getByText(/Imported 12 new heart-rate, 5 new breathing-rate and 2 new SDNN and 0 new RMSSD samples/)).toBeTruthy()
+  expect(screen.getByText(/Found 14 heart-rate, 6 breathing-rate and 2 SDNN and 0 RMSSD samples/)).toBeTruthy()
   expect(screen.getByText(/stage batches conflicted/)).toBeTruthy()
 })
 

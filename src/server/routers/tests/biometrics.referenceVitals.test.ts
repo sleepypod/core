@@ -143,7 +143,7 @@ describe('biometrics reference vitals', () => {
         const input = { side: 'left' as const, source: 'apple_watch' as const, metric, samples: [{ timestamp: T0, value }] }
         expect(await caller.importReferenceSamples(input)).toEqual({ written: 1 })
         expect(await caller.importReferenceSamples(input)).toEqual({ written: 0 })
-        expect(await caller.getReferenceSamples({ side: 'left', metric, startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([{ timestamp: new Date(T0 * 1000), value }])
+        expect(await caller.getReferenceSamples({ side: 'left', metric, startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([{ timestamp: new Date(T0 * 1000), endTimestamp: null, value, device: null, algorithm: null }])
       }
       expect(raw.prepare('SELECT metric, unit, value FROM reference_measurements WHERE metric = \'hrv_rmssd\'').all()).toEqual([{ metric: 'hrv_rmssd', unit: 'ms', value: 32 }])
     })

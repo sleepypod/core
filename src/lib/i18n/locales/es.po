@@ -3804,7 +3804,7 @@ msgid "Wake"
 msgstr "Vigilia"
 
 #: src/components/biometrics/BiometricsPage.tsx:280
-msgid "Watch SDNN and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values."
+msgid "Watch SDNN, Watch RMSSD and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values."
 msgstr ""
 
 #: src/components/biometrics/Calibration/WaveformDatasetBuilder.tsx:133
