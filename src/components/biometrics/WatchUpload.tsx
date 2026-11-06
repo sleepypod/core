@@ -75,7 +75,7 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
           </p>
           <section className="space-y-2 text-sm text-fg-2" aria-label="What this imports">
             <h3 className="font-medium text-fg">What this does</h3>
-            <p>Imports Apple Watch heart rate, breathing rate, HRV and sleep stages for the selected period. Watch heart rate, breathing rate and HRV appear alongside the pod’s readings in Vitals. SDNN and RMSSD are separate overlays, shown only when available; sleep stages are saved as reference data.</p>
+            <p>Imports Apple Watch heart rate, breathing rate, HRV, blood oxygen and sleep stages for the selected period. Watch heart rate, breathing rate and HRV appear alongside the pod’s readings in Vitals, and blood oxygen gets its own row. SDNN and RMSSD are separate overlays, shown only when available; sleep stages are saved as reference data.</p>
             <p>This is a one-time import. Upload a fresh export whenever you want to add recent data. Previously imported records are skipped, and the pod’s own readings are preserved.</p>
           </section>
           <section className="space-y-2 text-sm text-fg-2" aria-label="How to get your export">
@@ -88,7 +88,7 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
             </ol>
             <a href="https://support.apple.com/guide/iphone/share-your-health-data-iph5ede58c3d/ios" target="_blank" rel="noreferrer" className="inline-block text-link underline">Apple’s export guide</a>
           </section>
-          <p className="text-xs text-fg-2">The full export is sent to your pod, which imports only Watch heart rate, breathing rate, HRV and sleep stages and removes the uploaded file after processing. ZIP or extracted export.xml, up to 512 MiB.</p>
+          <p className="text-xs text-fg-2">The full export is sent to your pod, which imports only Watch heart rate, breathing rate, HRV, blood oxygen and sleep stages and removes the uploaded file after processing. ZIP or extracted export.xml, up to 512 MiB.</p>
           <div className="flex flex-col gap-2 text-sm">
             Health export
             {/* Hidden native picker; the Choose file button opens it and is the keyboard and screen-reader target. */}

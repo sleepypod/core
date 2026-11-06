@@ -69,6 +69,7 @@ describe('demo reference samples and stages', () => {
   it('keeps demo blood oxygen inside the row', async () => {
     const night = demoNights('left')[0]
     const rows = await required(biometrics.getReferenceSamples)({ side: 'left', startDate: night.enteredBedAt, endDate: (night.leftBedAt ?? new Date()), metric: 'blood_oxygen' })
+    expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) {
       expect(row.value).toBeGreaterThanOrEqual(90)
       expect(row.value).toBeLessThanOrEqual(100)
