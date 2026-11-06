@@ -23,6 +23,8 @@ _spec.loader.exec_module(iw)
 TZ = timezone(timedelta(hours=-7))
 T0 = datetime(2026, 10, 9, 2, 0, tzinfo=TZ)
 WATCH = "Jon&#8217;s Apple Watch"
+WATCH_HARDWARE = '&lt;&lt;HKDevice: 0x1&gt;, name:Apple Watch, manufacturer:Apple Inc., model:Watch, hardware:Watch8,2&gt;'
+PHONE_HARDWARE = '&lt;&lt;HKDevice: 0x2&gt;, name:iPhone, manufacturer:Apple Inc., model:iPhone, hardware:iPhone17,1&gt;'
 
 
 def hk_time(dt):
@@ -40,8 +42,8 @@ def hr_record(at, bpm, source=WATCH):
             f'startDate="{hk_time(at)}" endDate="{hk_time(at)}" value="{bpm}"/>\n')
 
 
-def quantity_record(kind, at, value, unit, source=WATCH):
-    return (f' <Record type="HKQuantityTypeIdentifier{kind}" sourceName="{source}" unit="{unit}" '
+def quantity_record(kind, at, value, unit, source=WATCH, device=''):
+    return (f' <Record type="HKQuantityTypeIdentifier{kind}" sourceName="{source}" device="{device}" unit="{unit}" '
             f'startDate="{hk_time(at)}" endDate="{hk_time(at)}" value="{value}"/>\n')
 
 
@@ -185,6 +187,32 @@ class ImportWatchHealthTest(unittest.TestCase):
             pass
         post, _, _ = self.run_import(source_pattern='Nope')
         self.assertEqual(post.calls, [])
+
+    def test_a_watch_is_found_by_its_device_whatever_the_source_is_named(self):
+        at = T0 + timedelta(minutes=2)
+        write_export(self.export, [], [], extra=(
+            quantity_record('OxygenSaturation', at, 0.97, '%', source='nPhone', device=WATCH_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=1), 0.96, '%', source='Blood Oxygen', device=WATCH_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=2), 0.95, '%', source='nPhone', device=PHONE_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=3), 0.94, '%', source='nPhone')
+            + sleep_record(at, at + timedelta(minutes=20), 'AsleepCore', source='nPhone')))
+        post, _, _ = self.run_import()
+        self.assertEqual([u for u, _ in post.calls], ['http://192.168.1.88:3000/api/biometrics/reference-samples'])
+        self.assertEqual([s['value'] for s in post.calls[0][1]['samples']], [97.0, 96.0])
+
+    def test_sleepypod_is_never_a_reference_even_on_a_watch_device(self):
+        at = T0 + timedelta(minutes=2)
+        write_export(self.export, [], [], extra=quantity_record('OxygenSaturation', at, 0.97, '%', source='sleepypod', device=WATCH_HARDWARE))
+        post, _, _ = self.run_import()
+        self.assertEqual(post.calls, [])
+
+    def test_a_chosen_source_is_the_only_filter(self):
+        at = T0 + timedelta(minutes=2)
+        write_export(self.export, [], [], extra=(
+            quantity_record('OxygenSaturation', at, 0.97, '%', source='nPhone', device=WATCH_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=1), 0.96, '%', source='Blood Oxygen', device=WATCH_HARDWARE)))
+        post, _, _ = self.run_import(source_pattern='^Blood Oxygen$')
+        self.assertEqual([s['value'] for s in post.calls[0][1]['samples']], [96.0])
 
     def test_posts_breathing_rate_and_hrv_per_metric(self):
         write_export(self.export, [], [(1, 58)], rr=[(2, 14.5), (7, 15), (8, 2), (9, 90)], hrv=[(3, 48), (4, 0), (5, 900)])

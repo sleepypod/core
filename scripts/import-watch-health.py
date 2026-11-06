@@ -5,9 +5,9 @@ Import Apple Watch sleep stages, heart rate, breathing rate, HRV and blood oxyge
     scripts/import-watch-health.py ~/Desktop/apple_health_export --pod 192.168.1.88 --side left
 
 Reads export.xml (or the unzipped apple_health_export/ directory) with the same
-parser as sleep-stage-dataset.py, keeps samples whose sourceName matches
---source (default: Watch) and was not written by sleepypod itself, and posts
-them to the pod's REST API:
+parser as sleep-stage-dataset.py, keeps samples an Apple Watch recorded (by
+sourceName or device; --source narrows this to a sourceName pattern alone) that
+sleepypod did not write itself, and posts them to the pod's REST API:
 
   POST /api/biometrics/reference-stages   SleepAnalysis segments (wake/light/deep/rem)
   POST /api/biometrics/reference-vitals   HeartRate samples
@@ -65,6 +65,12 @@ SAMPLE_UNITS = {HK_RR: {'count/min': 1, 'count/s': 60, 'Hz': 60}, HK_HRV: {'ms':
 # back into Health (sourceName "sleepypod", "sleepypod design"). Those are never
 # a reference, whatever --source says.
 POD_SOURCE = '(?i)sleepypod'
+# A sourceName is whatever the owner named the device or app ("nPhone", "Blood
+# Oxygen"), so a Watch's readings can arrive under a name without "Watch" in it.
+# The device attribute still says what recorded them. Sleep stages carry no device
+# and stay matched on sourceName, which also keeps iPhone sleep out.
+WATCH_SOURCE = 'Watch'
+WATCH_DEVICE = r'\bmodel:Watch\b'
 
 # The API caps both endpoints at 2000 items per call.
 BATCH = 2000
@@ -149,14 +155,15 @@ def export_stream(export):
         yield export
 
 
-def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
+def run(export, pod, side, source_pattern=None, days=30, dry_run=False,
         stages=True, hr=True, extra=True, oxygen=True, post=post_json, now=None, report=False):
     now = time.time() if now is None else now
     cutoff = now - days * 86400 if days > 0 else float('-inf')
     quantities = {hk: [] for _, hk, _, _ in SAMPLE_METRICS}
     with export_stream(export) as xml:
-        segments, hr_samples = parse_export(xml, source_pattern, cutoff=cutoff, quantities=quantities,
-                                            exclude_pattern=POD_SOURCE, units=SAMPLE_UNITS)
+        segments, hr_samples = parse_export(xml, source_pattern or WATCH_SOURCE, cutoff=cutoff, quantities=quantities,
+                                            exclude_pattern=POD_SOURCE, units=SAMPLE_UNITS,
+                                            device_pattern=None if source_pattern else WATCH_DEVICE)
 
     segs = [s for s in dedupe_segments(segments) if s[1] >= cutoff] if stages else []
     samples = [(t, bpm) for t, bpm in hr_samples if t >= cutoff and 20 <= bpm <= 250] if hr else []
@@ -224,7 +231,7 @@ def main(argv=None):
     ap.add_argument('export', help='export.xml or the apple_health_export directory')
     ap.add_argument('--pod', required=True, help='pod host/IP (port 3000 assumed) or a full http(s) URL')
     ap.add_argument('--side', choices=('left', 'right'), required=True, help='the side the Watch wearer sleeps on')
-    ap.add_argument('--source', default='Watch', help='regex on export sourceName (default: Watch)')
+    ap.add_argument('--source', help='regex on export sourceName, instead of everything an Apple Watch recorded')
     ap.add_argument('--days', type=int, default=30, help='only the last N days (default 30; 0 = all)')
     ap.add_argument('--json', action='store_true', help='return import counts and partial stage conflicts as JSON')
     ap.add_argument('--dry-run', action='store_true', help='parse and count only')
