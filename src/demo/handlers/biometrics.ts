@@ -224,9 +224,12 @@ export const biometrics: DemoHandlers<'biometrics'> = {
     const start = input.startDate.getTime()
     const end = input.endDate.getTime()
     if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
-    if (input.metric !== 'hrv_sdnn' && input.metric !== 'breathing_rate') return []
+    if (input.metric !== 'hrv_sdnn' && input.metric !== 'breathing_rate' && input.metric !== 'blood_oxygen') return []
+    const reading = (v: ReturnType<typeof referenceGrid>[number]) => input.metric === 'blood_oxygen'
+      ? 94 + v.breathingRate % 5
+      : input.metric === 'hrv_sdnn' ? v.hrv * 0.7 : v.breathingRate - 0.8
     return referenceGrid(input.side, start, end)
-      .map(v => ({ timestamp: new Date(v.t), endTimestamp: null, device: null, algorithm: null, value: Math.round((input.metric === 'hrv_sdnn' ? v.hrv * 0.7 : v.breathingRate - 0.8) * 10) / 10 }))
+      .map(v => ({ timestamp: new Date(v.t), endTimestamp: null, device: null, algorithm: null, value: Math.round(reading(v) * 10) / 10 }))
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       .slice(-(input.limit ?? 5000))
   },

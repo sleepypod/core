@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   reference: [] as Array<{ timestamp: Date, heartRate: number }>,
   referenceHrv: [] as Array<{ timestamp: Date, value: number }>,
   referenceRmssd: [] as Array<{ timestamp: Date, value: number }> | undefined,
+  referenceOxygen: [] as Array<{ timestamp: Date, value: number }> | undefined,
   referenceOpts: undefined as Record<string, unknown> | undefined,
 }))
 
@@ -57,7 +58,7 @@ vi.mock('@/src/utils/trpc', () => ({
       },
       getFileCount: { useQuery: () => ({ data: { rawFiles: { left: 4, right: 4 }, totalSizeMB: 8.45 } }) },
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
-      getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : input.metric === 'hrv_rmssd' ? state.referenceRmssd : [] }) },
+      getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : input.metric === 'hrv_rmssd' ? state.referenceRmssd : input.metric === 'blood_oxygen' ? state.referenceOxygen : [] }) },
       getReferenceVitals: {
         useQuery: (_input: unknown, opts: Record<string, unknown>) => {
           state.referenceOpts = opts
@@ -87,6 +88,7 @@ beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
   state.referenceHrv = []
   state.referenceRmssd = []
+  state.referenceOxygen = []
   state.occupied = true
   state.timeFormat = '12h'
   state.dataPath = { occupancy: { left: 'occupied', right: 'empty' } }
@@ -322,6 +324,30 @@ it('draws a Watch-only night and names RMSSD when the pod recorded nothing', () 
   expect(screen.queryByText('No vitals in this range')).toBeNull()
   expect(screen.getByText('HRV · RMSSD')).toBeTruthy()
   expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
+})
+
+it('draws a Watch-only night from blood oxygen alone', () => {
+  state.vitals.mockReturnValue({ data: [], isLoading: false })
+  state.referenceOxygen = [{ timestamp: new Date(LAST_VITAL), value: 96 }]
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.getByText('blood oxygen')).toBeTruthy()
+})
+
+it('names blood oxygen only when a reading falls inside a session', () => {
+  state.referenceOxygen = [{ timestamp: new Date(LAST_VITAL + 3 * 60 * 60_000), value: 96 }]
+  const view = render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('blood oxygen')).toBeNull()
+  state.referenceOxygen = [{ timestamp: new Date(LAST_VITAL), value: 96 }]
+  view.rerender(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.getByText('blood oxygen')).toBeTruthy()
+})
+
+it('keeps the pod chart while Watch blood oxygen has not loaded', () => {
+  state.referenceOxygen = undefined
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.queryByText('blood oxygen')).toBeNull()
 })
 
 it('keeps the pod chart while Watch RMSSD has not loaded', () => {

@@ -6,7 +6,7 @@ import { Button, Modal } from '@/src/components/ds'
 import { trpc } from '@/src/utils/trpc'
 import { WATCH_REQUEST_TIMEOUT_MS } from '@/src/utils/watchUploadLimits'
 
-interface ImportResult { stages: number, vitals: number, breathing: number, hrv: number, rmssd?: number, rejectedStageBatches: number, matchedStages: number, matchedVitals: number, matchedBreathing: number, matchedHrv: number, matchedRmssd?: number }
+interface ImportResult { stages: number, vitals: number, breathing: number, hrv: number, rmssd?: number, oxygen?: number, rejectedStageBatches: number, matchedStages: number, matchedVitals: number, matchedBreathing: number, matchedHrv: number, matchedRmssd?: number, matchedOxygen?: number }
 
 export function WatchUpload({ side, name }: { side: 'left' | 'right', name: string }) {
   const [open, setOpen] = useState(false)
@@ -122,9 +122,9 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
           {progress !== null && <p role="status" className="text-sm">{progress < 100 ? `Uploading… ${progress}%` : 'Importing on the pod… Keep this window open.'}</p>}
           {result && (
             <div role="status" className="text-sm">
-              <p>{`Imported ${result.vitals} new heart-rate, ${result.breathing} new breathing-rate and ${result.hrv} new SDNN and ${result.rmssd ?? 0} new RMSSD samples, and ${result.stages} new sleep-stage segments.`}</p>
-              <p className="text-fg-2">{`Found ${result.matchedVitals} heart-rate, ${result.matchedBreathing} breathing-rate and ${result.matchedHrv} SDNN and ${result.matchedRmssd ?? 0} RMSSD samples and ${result.matchedStages} stages in this period. Previously imported records are skipped.`}</p>
-              {result.rejectedStageBatches > 0 && <p className="text-warn">{`${result.rejectedStageBatches} stage batches conflicted with stored stages and were skipped. Heart-rate, breathing-rate and HRV import completed.`}</p>}
+              <p>{`Imported ${result.vitals} new heart-rate, ${result.breathing} new breathing-rate, ${result.hrv} new SDNN, ${result.rmssd ?? 0} new RMSSD and ${result.oxygen ?? 0} new blood-oxygen samples, and ${result.stages} new sleep-stage segments.`}</p>
+              <p className="text-fg-2">{`Found ${result.matchedVitals} heart-rate, ${result.matchedBreathing} breathing-rate, ${result.matchedHrv} SDNN, ${result.matchedRmssd ?? 0} RMSSD and ${result.matchedOxygen ?? 0} blood-oxygen samples and ${result.matchedStages} stages in this period. Previously imported records are skipped.`}</p>
+              {result.rejectedStageBatches > 0 && <p className="text-warn">{`${result.rejectedStageBatches} stage batches conflicted with stored stages and were skipped. Heart-rate, breathing-rate, HRV and blood-oxygen import completed.`}</p>}
             </div>
           )}
           {error && <p role="alert" className="text-sm text-warn">{error}</p>}
