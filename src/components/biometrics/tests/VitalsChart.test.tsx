@@ -386,3 +386,45 @@ describe('blood oxygen row', () => {
     expect(screen.getByText('Apple Watch').nextElementSibling?.textContent).toContain('blood oxygen')
   })
 })
+
+describe('VitalsChart Apple Watch movement overlay', () => {
+  it('draws nothing extra without Watch movement', () => {
+    withWidth()
+    const { container: plain } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} />)
+    const { container: empty } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} watchMovement={[]} />)
+    // Same markup apart from the per-instance hatch pattern id.
+    const strip = (html: string) => html.replace(/_r_\w+_|«\w+»|:r\w+:/g, '')
+    expect(strip(empty.innerHTML)).toBe(strip(plain.innerHTML))
+    expect(screen.queryAllByTestId('watch-movement-line')).toHaveLength(0)
+  })
+
+  it('sums into the pod\'s 5-minute buckets, breaks the line at missing buckets, dots isolated ones and ignores minutes outside sessions', () => {
+    withWidth()
+    const watchMovement = [
+      // Before the first session: outside the night, never drawn or counted.
+      { t: START - 30 * MIN, moving: 500 },
+      { t: START, moving: 2 }, { t: START + MIN, moving: 4 }, { t: START + 6 * MIN, moving: 1 }, { t: START + 11 * MIN, moving: 20 },
+      // A bucket without bins: a new run, and this one stands alone.
+      { t: START + 20 * MIN, moving: 5 },
+      { t: START + 30 * MIN, moving: 3 }, { t: START + 35 * MIN, moving: 2 },
+      // Between sessions.
+      { t: START + 4 * 60 * MIN, moving: 50 },
+    ]
+    render(<VitalsChart sessions={sessions} stall={null} bands={bands} watchMovement={watchMovement} />)
+    const lines = screen.getAllByTestId('watch-movement-line')
+    expect(lines).toHaveLength(2)
+    expect(lines[0].getAttribute('d')?.match(/[ML]/g)).toEqual(['M', 'L', 'L'])
+    expect(lines[0].getAttribute('stroke')).toBe('var(--accent-cool)')
+    expect(screen.getAllByTestId('watch-movement-dot')).toHaveLength(1)
+    // Scaled to the in-session peak, so the out-of-session 500 does not flatten the night.
+    const ys = (lines[0].getAttribute('d') ?? '').split(/[ML]/).filter(Boolean).map(p => Number(p.split(' ')[1]))
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(20)
+  })
+
+  it('lists Watch movement in the legend only when shown', () => {
+    const { rerender } = render(<VitalsLegend bandLabel="band" stalled={false} />)
+    expect(screen.queryByTestId('legend-watch-movement')).toBeNull()
+    rerender(<VitalsLegend bandLabel="band" stalled={false} watchMovement />)
+    expect(screen.getByTestId('legend-watch-movement').textContent).toBe('movement · scaled per night')
+  })
+})

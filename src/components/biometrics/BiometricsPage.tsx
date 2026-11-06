@@ -28,6 +28,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { OccupancyCheck } from '@/src/components/diagnostics/OccupancyCheck'
 import { RawDataButton } from './RawDataButton'
 import { referenceInSession, type ReferencePoint, VitalsLegend } from './VitalsChart'
+import { WATCH_MOTION_MAX_SERIES_MS, watchInWindows } from '@/src/lib/watchMovement'
 import { WatchUpload } from './WatchUpload'
 import { VitalsExplorer } from './VitalsExplorer'
 import {
@@ -89,6 +90,9 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   const referenceHrv = (watchHrvQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
   const referenceRmssd = (watchRmssdQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
   const referenceOxygen = (watchOxygenQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
+  const watchMovementQ = trpc.biometrics.getWatchMotionSeries.useQuery({ side, startDate, endDate },
+    { enabled: win.end - win.start <= WATCH_MOTION_MAX_SERIES_MS, refetchInterval: 5 * 60_000 })
+  const watchMovement = (watchMovementQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), moving: r.movingSamples }))
 
   const rows = (vitalsQ.data ?? []) as VitalRow[]
   const points: VitalPoint[] = rows.map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate, hrv: r.hrv, br: r.breathingRate,
@@ -282,10 +286,10 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
           : sessions.length === 0 && !stall
             ? <div className="grid h-[200px] place-items-center text-[13px] text-fg-3">No vitals in this range</div>
             : (
-                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={referenceHrv} referenceBr={referenceBr} referenceOxygen={referenceOxygen} reference={reference} movement={movementQ.data ?? []} />
+                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={referenceHrv} referenceBr={referenceBr} referenceOxygen={referenceOxygen} reference={reference} movement={movementQ.data ?? []} watchMovement={watchMovement} />
               )}
         {(referenceHrv.length > 0 || referenceRmssd.length > 0) && <p className="text-xs text-fg-3"><Trans>Watch SDNN, Watch RMSSD and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values.</Trans></p>}
-        <VitalsLegend referenceOxygen={readingsInSessions(referenceOxygen, sessions).length > 0} referenceBr={referenceBr.length > 0} referenceRmssd={referenceRmssd.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
+        <VitalsLegend referenceOxygen={readingsInSessions(referenceOxygen, sessions).length > 0} referenceBr={referenceBr.length > 0} referenceRmssd={referenceRmssd.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} watchMovement={watchInWindows(watchMovement, sessions).length > 0} />
       </div>
 
       <SidesCard occupancy={occupancyQ.data} sideName={sideName} />

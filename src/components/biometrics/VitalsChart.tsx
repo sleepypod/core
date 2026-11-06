@@ -11,6 +11,9 @@
  * the heart-rate row so the two sensors can be compared night by night.
  * Watch blood oxygen has no pod counterpart, so it gets a fourth row of its own,
  * drawn only when a reading falls inside a session.
+ * Apple Watch wrist movement (`watchMovement`) is drawn as a line over the
+ * movement bars in the same 5-minute buckets, scaled to each night's own peak
+ * and broken at gaps.
  */
 'use client'
 
@@ -21,6 +24,7 @@ import {
   axisTicks, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, OXYGEN_ROW, readingsInSessions, rollingMean, sessionHeader,
   type MetricKey, type RangeWindow, type Session,
 } from './biometricsLogic'
+import { splitRuns, WATCH_MAX_SCALE, watchBuckets, type WatchMinute } from '@/src/lib/watchMovement'
 
 const LABEL_W = 130
 const GUTTER = 34
@@ -100,8 +104,12 @@ export function referenceRuns<T extends { t: number }>(points: T[], gapMs = REFE
 
 const REFERENCE_TOL_MS = 5 * 60_000
 const REFERENCE_STROKE = 'var(--text-1)'
+const WATCH_MOVEMENT_STROKE = 'var(--accent-cool)'
+const MOVEMENT_H = 48
+/** The pod's movement bars span this long; the Watch line uses the same buckets so the two compare like for like. */
+const MOVEMENT_BUCKET_MS = 300_000
 
-export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceRmssd = [], referenceBr = [], referenceOxygen = [], movement = [], onSelectWindow }: {
+export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceRmssd = [], referenceBr = [], referenceOxygen = [], movement = [], watchMovement = [], onSelectWindow }: {
   sessions: Session[]
   /** In bed with no vitals: from the last reading to now. */
   stall: { start: number, end: number } | null
@@ -113,6 +121,8 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   referenceBr?: Array<{ t: number, value: number }>
   referenceOxygen?: Array<{ t: number, value: number }>
   movement?: Array<{ bucketStart: Date, eventCount: number }>
+  /** Apple Watch moving readings per minute, by minute start. */
+  watchMovement?: WatchMinute[]
   onSelectWindow?: (window: RangeWindow) => void
 }) {
   const rows = readingsInSessions(referenceOxygen, sessions).length > 0 ? ROWS : METRICS
@@ -136,6 +146,8 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   const ticks = axisTicks(axis, timeFormat)
   const multiNight = sessions.length > 1 && (sessions.at(-1)?.end ?? 0) - sessions[0].start > 24 * 60 * 60_000
   const maxMovement = Math.max(1, ...movement.map(b => b.eventCount))
+  // Only minutes inside a session shown are drawn or count toward a night's peak.
+  const watchScaled = useMemo(() => [...watchBuckets(watchMovement, sessions, MOVEMENT_BUCKET_MS)].map(([t, bucket]) => ({ t, ...bucket })).sort((a, b) => a.t - b.t), [watchMovement, sessions])
 
   const onMove = (e: PointerEvent<SVGRectElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
@@ -311,6 +323,14 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
               const h = b.eventCount / maxMovement * 48
               return <rect key={`${seg.index}-${t}`} data-testid="movement-bar" x={x} y={HEAD_H + PLOT_H - h} width={Math.max(1, axis.xOf(seg, t + 300_000) - x)} height={h} fill="var(--text-3)"><title>{`${clock(t, timeFormat)} · ${b.eventCount} position changes`}</title></rect>
             }))}
+            {axis.segments.filter(s => s.kind === 'session').flatMap(seg => splitRuns(watchScaled.filter(m => m.t + MOVEMENT_BUCKET_MS > seg.start && m.t <= seg.end), MOVEMENT_BUCKET_MS).map((run) => {
+              const xs = run.map(m => axis.xOf(seg, clampTo(m.t + MOVEMENT_BUCKET_MS / 2, [seg.start, seg.end])))
+              const ys = run.map(m => HEAD_H + PLOT_H - m.scaled / WATCH_MAX_SCALE * MOVEMENT_H)
+              const label = `Apple Watch movement · ${clock(run[0].t, timeFormat)}–${clock(run[run.length - 1].t + MOVEMENT_BUCKET_MS, timeFormat)}`
+              return run.length > 1
+                ? <path key={`w${seg.index}-${run[0].t}`} data-testid="watch-movement-line" d={pathOf(xs, ys)} fill="none" stroke={WATCH_MOVEMENT_STROKE} strokeWidth={1.25} strokeLinejoin="round" pointerEvents="none"><title>{label}</title></path>
+                : <circle key={`w${seg.index}-${run[0].t}`} data-testid="watch-movement-dot" cx={xs[0]} cy={ys[0]} r={1.5} fill={WATCH_MOVEMENT_STROKE} pointerEvents="none"><title>{`${label} · ${run[0].moving} moving`}</title></circle>
+            }))}
 
             {/* Globally spaced date labels for multiple nights, clock labels for one night. */}
             {ticks.map(tick => (
@@ -426,7 +446,7 @@ function LegendGroup({ device, children }: { device: string, children: ReactNode
   )
 }
 
-export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceRmssd = false, referenceBr = false, referenceOxygen = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean, referenceRmssd?: boolean, referenceBr?: boolean, referenceOxygen?: boolean }) {
+export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceRmssd = false, referenceBr = false, referenceOxygen = false, watchMovement = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean, referenceRmssd?: boolean, referenceBr?: boolean, referenceOxygen?: boolean, watchMovement?: boolean }) {
   return (
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-1.5 font-mono text-[11px] text-fg-2">
       <LegendGroup device="Pod">
@@ -449,7 +469,7 @@ export function VitalsLegend({ bandLabel, stalled, reference = false, referenceH
           </span>
         )}
       </LegendGroup>
-      {(reference || referenceHrv || referenceRmssd || referenceBr || referenceOxygen) && (
+      {(reference || referenceHrv || referenceRmssd || referenceBr || referenceOxygen || watchMovement) && (
         <LegendGroup device="Apple Watch">
           {reference && (
             <span className="flex items-center gap-2">
@@ -479,6 +499,12 @@ export function VitalsLegend({ bandLabel, stalled, reference = false, referenceH
             <span className="inline-flex items-center gap-1.5">
               <span className="size-1 rounded-full border border-fg/80" />
               blood oxygen
+            </span>
+          )}
+          {watchMovement && (
+            <span className="flex items-center gap-2" data-testid="legend-watch-movement">
+              <span className="h-0.5 w-4 rounded bg-cool" />
+              movement · scaled per night
             </span>
           )}
         </LegendGroup>

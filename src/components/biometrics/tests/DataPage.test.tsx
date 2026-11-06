@@ -31,6 +31,7 @@ vi.mock('@/src/utils/trpc', () => ({
       getReferenceVitals: { useQuery: () => ({ data: [] }) },
       getMovementBuckets: { useQuery: () => ({ data: [] }) },
       getReferenceSamples: { useQuery: () => ({ data: [] }) },
+      getWatchMotionSeries: { useQuery: () => ({ data: [] }) },
       getSleepRecords: { useQuery: state.sleep },
       getSleepStages: { useQuery: state.stages },
       getVitals: { useQuery: state.vitals },

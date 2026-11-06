@@ -1,14 +1,15 @@
 import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { render, screen } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
-import { MovementChart } from '../MovementChart'
+import { MovementChart, withWatchMovement } from '../MovementChart'
 import { HumidityChart } from '@/src/components/Environment/HumidityChart'
-const mock = vi.hoisted(() => ({ buckets: [] as unknown[], summary: undefined as unknown, sleep: undefined as unknown, days: 1, loading: false, error: null as Error | null, chart: vi.fn() }))
+const mock = vi.hoisted(() => ({ buckets: [] as unknown[], summary: undefined as unknown, sleep: undefined as unknown, watch: [] as unknown[], days: 1, loading: false, error: null as Error | null, chart: vi.fn() }))
 vi.mock('@/src/hooks/useBiometricsSide', () => ({ useBiometricsSide: () => ({ side: 'left' }) }))
 vi.mock('@/src/hooks/useWeekNavigator', () => ({ useWeekNavigator: () => ({ weekStart: new Date(0), weekEnd: new Date(mock.days * 86400000) }) }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: { biometrics: {
   getMovementBuckets: { useQuery: () => ({ data: mock.buckets, isLoading: mock.loading, error: mock.error }) },
   getMovementSummary: { useQuery: () => ({ data: mock.summary }) }, getSleepRecords: { useQuery: () => ({ data: mock.sleep }) },
+  getWatchMotionSeries: { useQuery: () => ({ data: mock.watch }) },
 } } }))
 vi.mock('recharts', () => {
   const container = ({ children }: { children: ReactNode }) => <div>{children}</div>
@@ -17,7 +18,7 @@ vi.mock('recharts', () => {
     return <div>{children}</div>
   }
   return {
-    ResponsiveContainer: container, BarChart: chart, AreaChart: chart, Bar: () => null, Area: () => null, CartesianGrid: () => null, YAxis: () => null,
+    ResponsiveContainer: container, BarChart: chart, ComposedChart: chart, AreaChart: chart, Bar: () => null, Area: () => null, Line: () => <span data-testid="watch-line" />, CartesianGrid: () => null, YAxis: () => null,
     XAxis: ({ tickFormatter }: { tickFormatter?: (v: string) => string }) => <span>{tickFormatter?.('2026-09-28T22:00:00Z')}</span>,
     Tooltip: ({ content, formatter, labelFormatter }: { content?: ReactNode, formatter?: (v: number) => unknown, labelFormatter?: (v: number) => unknown }) => (
       <div>
@@ -39,7 +40,7 @@ vi.mock('recharts', () => {
   }
 })
 beforeEach(() => {
-  Object.assign(mock, { buckets: [], summary: undefined, sleep: undefined, days: 1, loading: false, error: null })
+  Object.assign(mock, { buckets: [], summary: undefined, sleep: undefined, watch: [], days: 1, loading: false, error: null })
   vi.clearAllMocks()
 })
 it('renders movement loading, empty and error states', () => {
@@ -64,6 +65,33 @@ it.each([1, 7])('normalizes movement buckets and summarizes %s days of sleep', (
   const points = mock.chart.mock.lastCall?.[0]
   expect(points[0].timestamp).toBeLessThan(points.at(-1).timestamp)
   expect(points[0].movement).toBeGreaterThan(0)
+})
+it('overlays Watch movement inside the nights only, with a legend', () => {
+  const M = 60_000
+  mock.buckets = [{ side: 'left', bucketStart: new Date(10 * M), eventCount: 2, totalMovement: 10, sampleCount: 1 }]
+  mock.sleep = [{ sleepDurationSeconds: 3600, enteredBedAt: new Date(5 * M), leftBedAt: new Date(60 * M) }]
+  mock.watch = [{ timestamp: new Date(2 * M), movingSamples: 99 }, { timestamp: new Date(11 * M), movingSamples: 4 }]
+  render(<MovementChart />)
+  expect(screen.getByTestId('movement-watch-legend').textContent).toContain('Apple Watch · scaled per night')
+  expect(screen.getByTestId('watch-line')).toBeTruthy()
+  const points = mock.chart.mock.lastCall?.[0]
+  expect(points.map((p: { watchMoving?: number }) => p.watchMoving)).toEqual([4])
+})
+it('leaves the chart untouched without Watch data in a night', () => {
+  mock.buckets = [{ side: 'left', bucketStart: new Date(0), eventCount: 2, totalMovement: 10, sampleCount: 1 }]
+  mock.watch = [{ timestamp: new Date(0), movingSamples: 3 }]
+  render(<MovementChart />)
+  expect(screen.queryByTestId('movement-watch-legend')).toBeNull()
+  expect(screen.queryByTestId('watch-line')).toBeNull()
+  expect(mock.chart.mock.lastCall?.[0]).toEqual([{ time: new Date(0).toISOString(), timestamp: 0, movement: 24 }])
+})
+it('adds Watch-only buckets and breaks the line between non-adjacent buckets', () => {
+  const B = 300_000
+  const pod = [0, 4 * B].map(t => ({ time: new Date(t).toISOString(), timestamp: t, movement: 5 }))
+  const minutes = [0, B, 4 * B].map(t => ({ t, moving: 10 }))
+  const merged = withWatchMovement(pod, minutes, [{ start: 0, end: 10 * B }], 300)
+  expect(merged.map(p => [p.timestamp / B, p.movement, p.watch])).toEqual([[0, 5, 1], [1, null, 1], [2, null, null], [4, 5, 1]])
+  expect(withWatchMovement(pod, [], [{ start: 0, end: 10 * B }], 300)).toBe(pod)
 })
 it('derives humidity statistics, samples dense data and formats the tooltip', () => {
   const { rerender } = render(<HumidityChart data={[]} />)

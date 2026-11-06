@@ -151,9 +151,16 @@ describe('pruneOldBiometrics', () => {
       { timestamp: fresh, bootId: 'a', sectorsWritten: 2 },
     ]).run()
 
+    // Pruned by when the recording ended.
+    const capture = { version: 'watch-motion-v1' as const, bins: 1, trimmedBins: 0, sha256: 'x', file: '{}' }
+    db.insert(schema.watchMotionCaptures).values([
+      { ...capture, side: 'left', recordedFrom: new Date(old.getTime() - 3_600_000), recordedTo: old },
+      { ...capture, side: 'left', recordedFrom: old, recordedTo: fresh },
+    ]).run()
+
     const result = pruneOldBiometrics(cutoff, db)
 
-    expect(result.rowsDeleted).toBe(13)
+    expect(result.rowsDeleted).toBe(14)
     expect(result.perTable).toEqual({
       vitals: 1,
       vitals_quality: 1,
@@ -168,7 +175,9 @@ describe('pruneOldBiometrics', () => {
       thermal_state: 1,
       health_runs: 1,
       flash_write_samples: 1,
+      watch_motion_captures: 1,
     })
+    expect(db.select().from(schema.watchMotionCaptures).all().map(r => r.recordedTo)).toEqual([fresh])
 
     // Verify fresh rows remain
     expect(db.select().from(vitals).all()).toHaveLength(1)
@@ -278,6 +287,7 @@ describe('pruneOldBiometrics', () => {
       thermal_state: 0,
       health_runs: 0,
       flash_write_samples: 0,
+      watch_motion_captures: 0,
     })
   })
 

@@ -273,3 +273,32 @@ RMSSD read failure is reported while the other readings are sent. A newer app
 and core are needed for RMSSD sync. Neither deployment nor local training
 imports a Health export automatically; the user must initiate/authorize an
 import. No Watch is required for Pod-only charts or model inference.
+
+### Apple Watch wrist movement
+
+`POST /api/biometrics/watch-motion?side=left|right` stores one night's
+`watch-motion-v1` or `watch-motion-v2` file from the iOS app, sent as-is
+(format: sleepypod-ios `docs/watch-motion-format.md`). It is a movement label
+only: it never feeds sleep staging, movement scoring or hardware control.
+Bodies over 8 MiB are rejected (413), and so are files carrying `raw`
+readings (400). `binSeconds` must be 2, every `bins` column must match
+`startMs` in length, `startMs` must lie on the 2 s Unix grid and strictly
+increase, counts must be nonnegative integers, and v2 requires (v1 forbids)
+`meanX`/`meanY`/`meanZ`. Bins outside [`recordedFromMs`, `recordedToMs`) are
+leftovers of an earlier recording and are trimmed, not rejected; a bin
+overlapping the start edge stays. The response reports `trimmedBins`.
+
+One capture is kept per side and `recordedFromMs`. Resending identical
+trimmed content returns `status: "unchanged"`; different content for the same
+night replaces the stored file in place (`"replaced"`, same `id`). The stored
+file is the trimmed file as sorted-key compact JSON; `sha256` is its hash.
+`GET /api/biometrics/watch-motion?side=&startDate=&endDate=` lists capture
+metadata overlapping the window (dates as ISO 8601 or Unix ms), and
+`GET /api/biometrics/watch-motion/{id}` returns the stored file byte for byte
+for the training workspace. `biometrics.getWatchMotionSeries`
+(`GET /api/biometrics/watch-motion-series`) sums the bins per minute
+(`movingSamples`, max `maxJerk`, mean `magnitudeVariance`, `samples`) for at
+most 31 days; minutes without bins are absent rather than zero. The night
+chart draws it over the pod's movement, scaled to each night. Unlike the other
+reference tables, captures (~0.5 MB a night) are pruned with the biometrics
+retention window by `recordedToMs`; the iPhone keeps the original files.
