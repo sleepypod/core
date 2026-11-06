@@ -21,6 +21,7 @@ const state = vi.hoisted(() => ({
   shown: ['left', 'right'] as Array<'left' | 'right'>,
   reference: [] as Array<{ timestamp: Date, heartRate: number }>,
   referenceHrv: [] as Array<{ timestamp: Date, value: number }>,
+  referenceRmssd: [] as Array<{ timestamp: Date, value: number }>,
   referenceOpts: undefined as Record<string, unknown> | undefined,
 }))
 
@@ -56,7 +57,7 @@ vi.mock('@/src/utils/trpc', () => ({
       },
       getFileCount: { useQuery: () => ({ data: { rawFiles: { left: 4, right: 4 }, totalSizeMB: 8.45 } }) },
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
-      getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : [] }) },
+      getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : input.metric === 'hrv_rmssd' ? state.referenceRmssd : [] }) },
       getReferenceVitals: {
         useQuery: (_input: unknown, opts: Record<string, unknown>) => {
           state.referenceOpts = opts
@@ -85,6 +86,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
   state.referenceHrv = []
+  state.referenceRmssd = []
   state.occupied = true
   state.timeFormat = '12h'
   state.dataPath = { occupancy: { left: 'occupied', right: 'empty' } }
@@ -310,5 +312,14 @@ it('explains SDNN comparability only when Watch HRV is overlaid', () => {
   expect(screen.queryByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeNull()
   state.referenceHrv = [{ timestamp: new Date(LAST_VITAL), value: 30 }]
   view.rerender(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
+})
+
+it('draws a Watch-only night and names RMSSD when the pod recorded nothing', () => {
+  state.vitals.mockReturnValue({ data: [], isLoading: false })
+  state.referenceRmssd = [{ timestamp: new Date(LAST_VITAL), value: 32 }]
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.getByText('Apple Watch HRV · RMSSD')).toBeTruthy()
   expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
 })

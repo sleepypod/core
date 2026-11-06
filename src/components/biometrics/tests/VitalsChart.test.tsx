@@ -113,6 +113,13 @@ describe('VitalsLegend', () => {
     rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} reference />)
     expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
   })
+
+  it('names RMSSD only when it is overlaid', () => {
+    const { rerender } = render(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceHrv />)
+    expect(screen.queryByText('Apple Watch HRV · RMSSD')).toBeNull()
+    rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceRmssd />)
+    expect(screen.getByText('Apple Watch HRV · RMSSD')).toBeTruthy()
+  })
 })
 
 describe('movement alignment', () => {

@@ -57,6 +57,19 @@ it.each(['hr', 'hrv_sdnn', 'hrv_rmssd', 'breathing_rate'])('draws reference-only
   expect(mock.chart.mock.calls[0][0].sessions[0].points).toEqual([{ t: 2000, hr: null, hrv: null, br: null }])
 })
 
+it('names RMSSD and explains comparability when the Watch reported it', () => {
+  mock.query.mockImplementation(input => ({ data: input.metric === 'hrv_rmssd' ? [{ timestamp: new Date(2000), value: 32 }] : [] }))
+  render(<NightVitals side="left" start={0} end={10000} />)
+  expect(screen.getByText('Apple Watch HRV · RMSSD')).toBeTruthy()
+  expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
+})
+
+it('reports a failed RMSSD request', () => {
+  mock.query.mockImplementation(input => (input.metric === 'hrv_rmssd' ? { error: new Error('offline') } : { data: [] }))
+  render(<NightVitals side="left" start={0} end={10000} />)
+  expect(screen.getByText('Some Apple Watch readings could not be loaded.')).toBeTruthy()
+})
+
 it('omits the optional RMSSD legend when no Watch data exists', () => {
   mock.query.mockReturnValue({ data: [] })
   render(<NightVitals side="left" start={0} end={10000} />)
