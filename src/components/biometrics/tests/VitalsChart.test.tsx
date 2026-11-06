@@ -268,6 +268,17 @@ it.each(['referenceHrv', 'referenceBr'] as const)('joins nearby %s samples but l
   expect(screen.getAllByTestId(`vitals-watch-${key}`)).toHaveLength(4)
 })
 
+it('labels Watch RMSSD on the dot and on hover, apart from SDNN', () => {
+  withWidth()
+  const { container } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceRmssd={[{ t: START, value: 32 }]} referenceHrv={[{ t: START, value: 48 }]} />)
+  expect(screen.getByTestId('vitals-watch-rmssd').textContent).toBe('Apple Watch RMSSD · 32 ms')
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  fireEvent.pointerMove(overlay, { clientX: 2, clientY: 50 })
+  expect(screen.getByTestId('vitals-watch-rmssd-hover').textContent).toBe('Watch RMSSD 32 ms')
+  expect(screen.getByTestId('vitals-watch-hrv-hover').textContent).toBe('Watch SDNN 48 ms')
+})
+
 it('exposes Watch SDNN and breathing through the interaction overlay, without bridging gaps', () => {
   withWidth()
   const { container, rerender } = render(

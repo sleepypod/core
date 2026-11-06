@@ -21,7 +21,7 @@ const state = vi.hoisted(() => ({
   shown: ['left', 'right'] as Array<'left' | 'right'>,
   reference: [] as Array<{ timestamp: Date, heartRate: number }>,
   referenceHrv: [] as Array<{ timestamp: Date, value: number }>,
-  referenceRmssd: [] as Array<{ timestamp: Date, value: number }>,
+  referenceRmssd: [] as Array<{ timestamp: Date, value: number }> | undefined,
   referenceOpts: undefined as Record<string, unknown> | undefined,
 }))
 
@@ -322,4 +322,11 @@ it('draws a Watch-only night and names RMSSD when the pod recorded nothing', () 
   expect(screen.queryByText('No vitals in this range')).toBeNull()
   expect(screen.getByText('Apple Watch HRV · RMSSD')).toBeTruthy()
   expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
+})
+
+it('keeps the pod chart while Watch RMSSD has not loaded', () => {
+  state.referenceRmssd = undefined
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.queryByText('Apple Watch HRV · RMSSD')).toBeNull()
 })
