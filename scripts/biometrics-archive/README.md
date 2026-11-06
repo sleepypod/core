@@ -119,6 +119,7 @@ Rules (`TABLES` in `merge.ts`):
 | `reference_stages` | side, start, source | state: a corrected import replaces the label |
 | `reference_samples` | side, metric, timestamp, source | state (Watch breathing rate and HRV SDNN) |
 | `reference_vitals` | side, timestamp, source | state |
+| `watch_motion_captures` | side, recorded_from | state: a resent night replaces the file |
 | `reference_imports` | id (text) | state (deleted_at_ms) |
 | `biometric_processing_runs`, `biometric_experiments`, `biometric_backtest_jobs`, `biometric_raw_sources`, `biometric_shadow_runs`, `biometric_dataset_raw_artifacts` | id (text) | state |
 | `biometric_backtest_results` | job_id | state |

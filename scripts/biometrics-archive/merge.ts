@@ -56,6 +56,7 @@ export const TABLES: TableSpec[] = [
   { table: 'reference_stages', key: ['side', 'start', 'source'], mode: 'state' },
   { table: 'reference_samples', key: ['side', 'metric', 'timestamp', 'source'], mode: 'state' },
   { table: 'reference_vitals', key: ['side', 'timestamp', 'source'], mode: 'state' },
+  { table: 'watch_motion_captures', key: ['side', 'recorded_from'], mode: 'state' },
   { table: 'biometric_processing_runs', key: ['id'], mode: 'state' },
   { table: 'biometric_runtime_configs', key: ['side', 'generation'], mode: 'append' },
   { table: 'biometric_runtime_receipts', key: ['side', 'component', 'generation'], mode: 'state' },
