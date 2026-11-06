@@ -12,7 +12,8 @@
  * Watch blood oxygen has no pod counterpart, so it gets a fourth row of its own,
  * drawn only when a reading falls inside a session.
  * Apple Watch wrist movement (`watchMovement`) is drawn as a line over the
- * movement bars, scaled to each night's own peak and broken at gaps.
+ * movement bars in the same 5-minute buckets, scaled to each night's own peak
+ * and broken at gaps.
  */
 'use client'
 
@@ -23,7 +24,7 @@ import {
   axisTicks, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, OXYGEN_ROW, readingsInSessions, rollingMean, sessionHeader,
   type MetricKey, type RangeWindow, type Session,
 } from './biometricsLogic'
-import { scaleWatchByNight, splitRuns, WATCH_MAX_SCALE, watchInWindows, type WatchMinute } from '@/src/lib/watchMovement'
+import { splitRuns, WATCH_MAX_SCALE, watchBuckets, type WatchMinute } from '@/src/lib/watchMovement'
 
 const LABEL_W = 130
 const GUTTER = 34
@@ -105,6 +106,8 @@ const REFERENCE_TOL_MS = 5 * 60_000
 const REFERENCE_STROKE = 'var(--text-1)'
 const WATCH_MOVEMENT_STROKE = 'var(--accent-cool)'
 const MOVEMENT_H = 48
+/** The pod's movement bars span this long; the Watch line uses the same buckets so the two compare like for like. */
+const MOVEMENT_BUCKET_MS = 300_000
 
 export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceRmssd = [], referenceBr = [], referenceOxygen = [], movement = [], watchMovement = [], onSelectWindow }: {
   sessions: Session[]
@@ -144,7 +147,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   const multiNight = sessions.length > 1 && (sessions.at(-1)?.end ?? 0) - sessions[0].start > 24 * 60 * 60_000
   const maxMovement = Math.max(1, ...movement.map(b => b.eventCount))
   // Only minutes inside a session shown are drawn or count toward a night's peak.
-  const watchScaled = useMemo(() => scaleWatchByNight(watchInWindows(watchMovement, sessions)), [watchMovement, sessions])
+  const watchScaled = useMemo(() => [...watchBuckets(watchMovement, sessions, MOVEMENT_BUCKET_MS)].map(([t, bucket]) => ({ t, ...bucket })).sort((a, b) => a.t - b.t), [watchMovement, sessions])
 
   const onMove = (e: PointerEvent<SVGRectElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
@@ -320,10 +323,10 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
               const h = b.eventCount / maxMovement * 48
               return <rect key={`${seg.index}-${t}`} data-testid="movement-bar" x={x} y={HEAD_H + PLOT_H - h} width={Math.max(1, axis.xOf(seg, t + 300_000) - x)} height={h} fill="var(--text-3)"><title>{`${clock(t, timeFormat)} · ${b.eventCount} position changes`}</title></rect>
             }))}
-            {axis.segments.filter(s => s.kind === 'session').flatMap(seg => splitRuns(watchScaled.filter(m => m.t >= seg.start && m.t <= seg.end)).map((run) => {
-              const xs = run.map(m => axis.xOf(seg, Math.min(m.t + 30_000, seg.end)))
+            {axis.segments.filter(s => s.kind === 'session').flatMap(seg => splitRuns(watchScaled.filter(m => m.t + MOVEMENT_BUCKET_MS > seg.start && m.t <= seg.end), MOVEMENT_BUCKET_MS).map((run) => {
+              const xs = run.map(m => axis.xOf(seg, clampTo(m.t + MOVEMENT_BUCKET_MS / 2, [seg.start, seg.end])))
               const ys = run.map(m => HEAD_H + PLOT_H - m.scaled / WATCH_MAX_SCALE * MOVEMENT_H)
-              const label = `Apple Watch movement · ${clock(run[0].t, timeFormat)}–${clock(run[run.length - 1].t + 60_000, timeFormat)}`
+              const label = `Apple Watch movement · ${clock(run[0].t, timeFormat)}–${clock(run[run.length - 1].t + MOVEMENT_BUCKET_MS, timeFormat)}`
               return run.length > 1
                 ? <path key={`w${seg.index}-${run[0].t}`} data-testid="watch-movement-line" d={pathOf(xs, ys)} fill="none" stroke={WATCH_MOVEMENT_STROKE} strokeWidth={1.25} strokeLinejoin="round" pointerEvents="none"><title>{label}</title></path>
                 : <circle key={`w${seg.index}-${run[0].t}`} data-testid="watch-movement-dot" cx={xs[0]} cy={ys[0]} r={1.5} fill={WATCH_MOVEMENT_STROKE} pointerEvents="none"><title>{`${label} · ${run[0].moving} moving`}</title></circle>

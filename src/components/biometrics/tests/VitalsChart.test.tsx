@@ -398,15 +398,15 @@ describe('VitalsChart Apple Watch movement overlay', () => {
     expect(screen.queryAllByTestId('watch-movement-line')).toHaveLength(0)
   })
 
-  it('breaks the line at gaps over two minutes, dots isolated minutes and ignores minutes outside sessions', () => {
+  it('sums into the pod\'s 5-minute buckets, breaks the line at missing buckets, dots isolated ones and ignores minutes outside sessions', () => {
     withWidth()
     const watchMovement = [
       // Before the first session: outside the night, never drawn or counted.
       { t: START - 30 * MIN, moving: 500 },
-      { t: START, moving: 2 }, { t: START + MIN, moving: 4 }, { t: START + 3 * MIN, moving: 6 },
-      // Three minutes without bins: a new run.
-      { t: START + 6 * MIN, moving: 1 }, { t: START + 7 * MIN, moving: 3 },
+      { t: START, moving: 2 }, { t: START + MIN, moving: 4 }, { t: START + 6 * MIN, moving: 1 }, { t: START + 11 * MIN, moving: 20 },
+      // A bucket without bins: a new run, and this one stands alone.
       { t: START + 20 * MIN, moving: 5 },
+      { t: START + 30 * MIN, moving: 3 }, { t: START + 35 * MIN, moving: 2 },
       // Between sessions.
       { t: START + 4 * 60 * MIN, moving: 50 },
     ]
