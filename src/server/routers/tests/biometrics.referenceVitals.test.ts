@@ -138,6 +138,16 @@ describe('biometrics reference vitals', () => {
       expect(db.select().from(vitals).all()).toHaveLength(0)
     })
 
+    it('stores RMSSD independently of SDNN and breathing at the same timestamp', async () => {
+      for (const [metric, value] of [['hrv_rmssd', 32], ['hrv_sdnn', 48], ['breathing_rate', 14]] as const) {
+        const input = { side: 'left' as const, source: 'apple_watch' as const, metric, samples: [{ timestamp: T0, value }] }
+        expect(await caller.importReferenceSamples(input)).toEqual({ written: 1 })
+        expect(await caller.importReferenceSamples(input)).toEqual({ written: 0 })
+        expect(await caller.getReferenceSamples({ side: 'left', metric, startDate: new Date(T0 * 1000), endDate: new Date((T0 + MIN) * 1000) })).toEqual([{ timestamp: new Date(T0 * 1000), endTimestamp: null, value, device: null, algorithm: null }])
+      }
+      expect(raw.prepare('SELECT metric, unit, value FROM reference_measurements WHERE metric = \'hrv_rmssd\'').all()).toEqual([{ metric: 'hrv_rmssd', unit: 'ms', value: 32 }])
+    })
+
     it('is a no-op on repost and writes only new samples when a repost extends the night', async () => {
       await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: breathing })
       expect(await caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric: 'breathing_rate', samples: breathing })).toEqual({ written: 0 })
@@ -149,12 +159,14 @@ describe('biometrics reference vitals', () => {
     })
 
     it('rejects implausible values per metric, unknown metrics and millisecond timestamps', async () => {
-      const post = (metric: 'breathing_rate' | 'hrv_sdnn', timestamp: number, value: number) =>
+      const post = (metric: 'breathing_rate' | 'hrv_sdnn' | 'hrv_rmssd', timestamp: number, value: number) =>
         caller.importReferenceSamples({ side: 'left', source: 'apple_watch', metric, samples: [{ timestamp, value }] })
       await expect(post('breathing_rate', T0, 2)).rejects.toThrow()
       await expect(post('breathing_rate', T0, 80)).rejects.toThrow()
       await expect(post('hrv_sdnn', T0, 0)).rejects.toThrow()
       await expect(post('hrv_sdnn', T0, 600)).rejects.toThrow()
+      await expect(post('hrv_rmssd', T0, 0)).rejects.toThrow()
+      await expect(post('hrv_rmssd', T0, 600)).rejects.toThrow()
       await expect(post('hrv_sdnn', T0 * 1000, 40)).rejects.toThrow()
       await expect(post('heart_rate' as never, T0, 60)).rejects.toThrow()
       expect(await post('hrv_sdnn', T0, 250)).toEqual({ written: 1 })

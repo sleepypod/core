@@ -113,6 +113,13 @@ describe('VitalsLegend', () => {
     rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} reference />)
     expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
   })
+
+  it('names RMSSD only when it is overlaid', () => {
+    const { rerender } = render(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceHrv />)
+    expect(screen.queryByText('Apple Watch HRV · RMSSD')).toBeNull()
+    rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceRmssd />)
+    expect(screen.getByText('Apple Watch HRV · RMSSD')).toBeTruthy()
+  })
 })
 
 describe('movement alignment', () => {
@@ -261,6 +268,17 @@ it.each(['referenceHrv', 'referenceBr'] as const)('joins nearby %s samples but l
   expect(screen.getAllByTestId(`vitals-watch-${key}`)).toHaveLength(4)
 })
 
+it('labels Watch RMSSD on the dot and on hover, apart from SDNN', () => {
+  withWidth()
+  const { container } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceRmssd={[{ t: START, value: 32 }]} referenceHrv={[{ t: START, value: 48 }]} />)
+  expect(screen.getByTestId('vitals-watch-rmssd').textContent).toBe('Apple Watch RMSSD · 32 ms')
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  fireEvent.pointerMove(overlay, { clientX: 2, clientY: 50 })
+  expect(screen.getByTestId('vitals-watch-rmssd-hover').textContent).toBe('Watch RMSSD 32 ms')
+  expect(screen.getByTestId('vitals-watch-hrv-hover').textContent).toBe('Watch SDNN 48 ms')
+})
+
 it('exposes Watch SDNN and breathing through the interaction overlay, without bridging gaps', () => {
   withWidth()
   const { container, rerender } = render(
@@ -288,4 +306,15 @@ it('exposes Watch SDNN and breathing through the interaction overlay, without br
   )
   expect(screen.queryByTestId('vitals-watch-hrv-hover')).toBeNull()
   expect(screen.queryByTestId('vitals-watch-br-hover')).toBeNull()
+})
+
+it('overlays RMSSD separately while retaining SDNN and breathing and breaking gaps', () => {
+  withWidth()
+  const referenceRmssd = [{ t: START, value: 32 }, { t: START + MIN, value: 34 }, { t: START + 60 * MIN, value: 30 }]
+  render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={[{ t: START, value: 48 }]} referenceBr={[{ t: START, value: 14 }]} />)
+  expect(screen.getAllByTestId('vitals-watch-rmssd')).toHaveLength(3)
+  expect(screen.getAllByTestId('vitals-watch-rmssd-line')).toHaveLength(1)
+  expect(screen.getByTestId('vitals-watch-rmssd-line').getAttribute('stroke-dasharray')).toBe('6 3')
+  expect(screen.getByTestId('vitals-watch-hrv')).toBeTruthy()
+  expect(screen.getByTestId('vitals-watch-br')).toBeTruthy()
 })

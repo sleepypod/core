@@ -238,3 +238,27 @@ the source reports them. Normalized rows accept the same `device` and `algorithm
 `apple_watch` only, because the Watch charts and the deviation report read those
 tables across sources. Any other device, such as a ring or an Android watch, uses
 the preview and commit import above with its own `source`.
+
+### Optional Apple Watch RMSSD overlay
+
+The Health export importer and legacy `reference-samples` endpoints accept
+`hrv_rmssd` separately from `hrv_sdnn` and `breathing_rate`. Both HRV metrics use
+milliseconds and the same 1–500 ms ingestion guard; this is an input sanity
+bound, not a clinical validity claim. Export values in seconds are converted
+before validation. Records written by sleepypod are excluded from Watch imports.
+The unique key includes the metric, so SDNN, RMSSD and breathing can coexist at
+one timestamp; retrying an import preserves existing records.
+
+Nights and Biometrics show RMSSD only when samples exist, as a distinct labeled
+Watch overlay on the HRV row. Missing Watch data produces no RMSSD legend or
+placeholder. Sampling gaps remain gaps. Pod HRV is a window-based IBI variability
+index, not Watch RMSSD or SDNN; the overlay does not make them interchangeable.
+The existing deviation report continues using SDNN and does not silently
+substitute RMSSD. Breathing keeps its own series and units.
+
+The companion iOS app requests and reads HealthKit RMSSD only on iOS 27 or
+newer. Its optional read cannot block the existing breathing/SDNN upload; an
+RMSSD read failure is reported while the other readings are sent. A newer app
+and core are needed for RMSSD sync. Neither deployment nor local training
+imports a Health export automatically; the user must initiate/authorize an
+import. No Watch is required for Pod-only charts or model inference.
