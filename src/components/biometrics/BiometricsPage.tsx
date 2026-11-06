@@ -31,7 +31,7 @@ import { referenceInSession, type ReferencePoint, VitalsLegend } from './VitalsC
 import { WatchUpload } from './WatchUpload'
 import { VitalsExplorer } from './VitalsExplorer'
 import {
-  baselineBand, clock, dateInputValue, fmtDuration, formatRangeLabel, METRICS, metricStats, nightWindow, rangeWindow, SESSION_GAP_MS, splitSessions, STALE_MS,
+  baselineBand, clock, dateInputValue, fmtDuration, formatRangeLabel, METRICS, readingsInSessions, metricStats, nightWindow, rangeWindow, SESSION_GAP_MS, splitSessions, STALE_MS,
   type BiometricsRange, type MetricDef, type MetricKey, type RangeWindow, type Session, type VitalPoint,
 } from './biometricsLogic'
 
@@ -84,9 +84,11 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   const watchHrvQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'hrv_sdnn', limit: 20000 }, { refetchInterval: 5 * 60_000 })
   const watchRmssdQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'hrv_rmssd', limit: 20000 }, { refetchInterval: 5 * 60_000 })
   const watchBrQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'breathing_rate', limit: 20000 }, { refetchInterval: 5 * 60_000 })
+  const watchOxygenQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'blood_oxygen', limit: 20000 }, { refetchInterval: 5 * 60_000 })
   const referenceBr = (watchBrQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
   const referenceHrv = (watchHrvQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
   const referenceRmssd = (watchRmssdQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
+  const referenceOxygen = (watchOxygenQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
 
   const rows = (vitalsQ.data ?? []) as VitalRow[]
   const points: VitalPoint[] = rows.map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate, hrv: r.hrv, br: r.breathingRate,
@@ -96,7 +98,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
     .map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate })).sort((a, b) => a.t - b.t)
   const sessions = splitSessions(points.length
     ? points
-    : [...new Set([...reference, ...referenceHrv, ...referenceRmssd, ...referenceBr].map(r => r.t))]
+    : [...new Set([...reference, ...referenceHrv, ...referenceRmssd, ...referenceBr, ...referenceOxygen].map(r => r.t))]
         .sort((a, b) => a - b).map(t => ({ t, hr: null, hrv: null, br: null })))
 
   const lastVitalAt = latestQ.data?.[0] ? new Date(latestQ.data[0].timestamp).getTime() : null
@@ -280,10 +282,10 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
           : sessions.length === 0 && !stall
             ? <div className="grid h-[200px] place-items-center text-[13px] text-fg-3">No vitals in this range</div>
             : (
-                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={referenceHrv} referenceBr={referenceBr} reference={reference} movement={movementQ.data ?? []} />
+                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={referenceHrv} referenceBr={referenceBr} referenceOxygen={referenceOxygen} reference={reference} movement={movementQ.data ?? []} />
               )}
         {(referenceHrv.length > 0 || referenceRmssd.length > 0) && <p className="text-xs text-fg-3"><Trans>Watch SDNN, Watch RMSSD and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values.</Trans></p>}
-        <VitalsLegend referenceBr={referenceBr.length > 0} referenceRmssd={referenceRmssd.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
+        <VitalsLegend referenceOxygen={readingsInSessions(referenceOxygen, sessions).length > 0} referenceBr={referenceBr.length > 0} referenceRmssd={referenceRmssd.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
       </div>
 
       <SidesCard occupancy={occupancyQ.data} sideName={sideName} />

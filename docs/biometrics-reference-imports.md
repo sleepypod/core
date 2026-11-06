@@ -239,6 +239,17 @@ the source reports them. Normalized rows accept the same `device` and `algorithm
 tables across sources. Any other device, such as a ring or an Android watch, uses
 the preview and commit import above with its own `source`.
 
+### Apple Watch blood oxygen row
+
+The Health export importer and `/reference-samples` accept `blood_oxygen` as a
+percentage. Health exports write saturation as a fraction under unit `%` (`0.97`),
+so the importer multiplies by 100 before the 50–100 check. Nights and Biometrics
+draw it as a separate row, because the pod has no oxygen sensor to overlay it on.
+The row and its legend entry appear only when a reading falls inside a drawn
+session, so daytime spot checks alone add nothing. The row spans 80–100%; a lower
+reading sits on the bottom edge and its hover label keeps the real value.
+`scripts/import-watch-health.py --oxygen-only` imports this metric alone.
+
 ### Optional Apple Watch RMSSD overlay
 
 The Health export importer and legacy `reference-samples` endpoints accept

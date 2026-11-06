@@ -9,6 +9,8 @@
  * shows one crosshair through all rows, snapped to the nearest reading.
  * Imported Apple Watch heart rate (`reference`) is drawn as a dashed line over
  * the heart-rate row so the two sensors can be compared night by night.
+ * Watch blood oxygen has no pod counterpart, so it gets a fourth row of its own,
+ * drawn only when a reading falls inside a session.
  */
 'use client'
 
@@ -16,7 +18,7 @@ import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import {
-  axisTicks, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, rollingMean, sessionHeader,
+  axisTicks, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, OXYGEN_ROW, readingsInSessions, rollingMean, sessionHeader,
   type MetricKey, type RangeWindow, type Session,
 } from './biometricsLogic'
 
@@ -26,7 +28,8 @@ const ROW_H = 78
 const ROW_GAP = 18
 const HEAD_H = 24
 const AXIS_H = 26
-const VITALS_H = METRICS.length * ROW_H + (METRICS.length - 1) * ROW_GAP
+const ROWS = [...METRICS, OXYGEN_ROW]
+const OXYGEN_INDEX = METRICS.length
 
 type Band = { lo: number, hi: number } | null
 
@@ -61,8 +64,8 @@ function pathOf(xs: number[], ys: Array<number | null>): string {
 
 const rowTop = (i: number) => HEAD_H + i * (ROW_H + ROW_GAP)
 const yOf = (i: number, v: number) => {
-  const [lo, hi] = METRICS[i].domain
-  return rowTop(i) + ROW_H - ((clampTo(v, METRICS[i].domain) - lo) / (hi - lo)) * ROW_H
+  const [lo, hi] = ROWS[i].domain
+  return rowTop(i) + ROW_H - ((clampTo(v, ROWS[i].domain) - lo) / (hi - lo)) * ROW_H
 }
 
 export interface ReferencePoint { t: number, hr: number }
@@ -98,7 +101,7 @@ export function referenceRuns<T extends { t: number }>(points: T[], gapMs = REFE
 const REFERENCE_TOL_MS = 5 * 60_000
 const REFERENCE_STROKE = 'var(--text-1)'
 
-export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceRmssd = [], referenceBr = [], movement = [], onSelectWindow }: {
+export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceRmssd = [], referenceBr = [], referenceOxygen = [], movement = [], onSelectWindow }: {
   sessions: Session[]
   /** In bed with no vitals: from the last reading to now. */
   stall: { start: number, end: number } | null
@@ -108,10 +111,13 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   referenceHrv?: Array<{ t: number, value: number }>
   referenceRmssd?: Array<{ t: number, value: number }>
   referenceBr?: Array<{ t: number, value: number }>
+  referenceOxygen?: Array<{ t: number, value: number }>
   movement?: Array<{ bucketStart: Date, eventCount: number }>
   onSelectWindow?: (window: RangeWindow) => void
 }) {
-  const PLOT_H = VITALS_H + 76
+  const rows = readingsInSessions(referenceOxygen, sessions).length > 0 ? ROWS : METRICS
+  const vitalsH = rows.length * ROW_H + (rows.length - 1) * ROW_GAP
+  const PLOT_H = vitalsH + 76
   const timeFormat = useTimeFormat()
   const [wrapRef, wrapW] = useWidth<HTMLDivElement>()
   const hatchId = useId()
@@ -171,6 +177,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
           { key: 'rmssd', points: referenceRmssd, row: 1, title: (value: number) => `Apple Watch RMSSD · ${Math.round(value)} ms` },
           { key: 'hrv', points: referenceHrv, row: 1, title: (value: number) => `Apple Watch SDNN · ${Math.round(value)} ms` },
           { key: 'br', points: referenceBr, row: 2, title: (value: number) => `Apple Watch breathing · ${value.toFixed(1)} br/min` },
+          { key: 'oxygen', points: referenceOxygen, row: OXYGEN_INDEX, title: (value: number) => `Apple Watch blood oxygen · ${Math.round(value)}%` },
         ].map(({ key, points, row, title }) => (
           <g key={key}>
             {referenceRuns(points.filter(p => p.t >= session.start && p.t <= session.end)).map((run, r) => (
@@ -222,19 +229,19 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
         })()}
       </g>
     )
-  }), [axis, sessions, bands, smooth, referenceBySession, referenceHrv, referenceRmssd, referenceBr])
+  }), [axis, sessions, bands, smooth, referenceBySession, referenceHrv, referenceRmssd, referenceBr, referenceOxygen])
 
   return (
     <div ref={wrapRef} className="relative w-full" style={{ height: HEAD_H + PLOT_H + AXIS_H }} data-testid="vitals-chart">
       {/* Keep units and scales visible while the time axis pans underneath. */}
       <div className="sticky left-0 z-10 h-full bg-surface" style={{ width: LABEL_W + GUTTER }}>
-        {METRICS.flatMap((m, i) => m.ticks.map(v => (
+        {rows.flatMap((m, i) => m.ticks.map(v => (
           <span key={`${m.key}-${v}`} className="absolute right-2 font-mono text-[10px] text-fg-3" style={{ top: yOf(i, v) - 7 }}>{v}</span>
         )))}
         <span className="absolute right-2 font-mono text-[10px] text-fg-3" style={{ top: HEAD_H + PLOT_H - 10 }}>0</span>
-        <span className="absolute right-2 font-mono text-[10px] text-fg-3" style={{ top: HEAD_H + VITALS_H + 18 }}>{maxMovement}</span>
+        <span className="absolute right-2 font-mono text-[10px] text-fg-3" style={{ top: HEAD_H + vitalsH + 18 }}>{maxMovement}</span>
         {/* Row labels */}
-        {METRICS.map((m, i) => (
+        {rows.map((m, i) => (
           <div key={m.key} className="absolute left-0 flex flex-col" style={{ top: rowTop(i) + 8, width: LABEL_W }}>
             <span className="flex items-center gap-2 text-[13px]">
               <span className="h-0.5 w-2.5 rounded" style={{ background: m.color }} />
@@ -244,13 +251,13 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
           </div>
         ))}
 
-        <div className="absolute left-0 flex flex-col text-[13px]" style={{ top: HEAD_H + VITALS_H + 22, width: LABEL_W }}>
+        <div className="absolute left-0 flex flex-col text-[13px]" style={{ top: HEAD_H + vitalsH + 22, width: LABEL_W }}>
           <span>Movement</span>
           <span className="font-mono text-[11px] text-fg-2">changes / 5 min</span>
         </div>
       </div>
       {plotW > 0 && (
-        <svg className="absolute top-0 overflow-visible" style={{ left: LABEL_W }} width={plotW + GUTTER} height={HEAD_H + PLOT_H + AXIS_H} role="img" aria-label="Heart rate, HRV, breathing and movement per session">
+        <svg className="absolute top-0 overflow-visible" style={{ left: LABEL_W }} width={plotW + GUTTER} height={HEAD_H + PLOT_H + AXIS_H} role="img" aria-label={rows === ROWS ? 'Heart rate, HRV, breathing, blood oxygen and movement per session' : 'Heart rate, HRV, breathing and movement per session'}>
           <defs>
             <pattern id={hatchId} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
               <line x1="0" y1="0" x2="0" y2="6" stroke="var(--status-warn)" strokeOpacity="0.45" strokeWidth="1" />
@@ -258,7 +265,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
           </defs>
           <g transform={`translate(${GUTTER},0)`}>
             {/* Gridlines + tick labels */}
-            {METRICS.map((m, i) => m.ticks.map(v => (
+            {rows.map((m, i) => m.ticks.map(v => (
               <g key={`${m.key}-${v}`}>
                 <line x1={0} x2={plotW} y1={yOf(i, v)} y2={yOf(i, v)} stroke="var(--border-grid)" />
               </g>
@@ -351,6 +358,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
                   { key: 'rmssd', points: referenceRmssd, row: 1, label: (v: number) => `Watch RMSSD ${Math.round(v)} ms` },
                   { key: 'hrv', points: referenceHrv, row: 1, label: (v: number) => `Watch SDNN ${Math.round(v)} ms` },
                   { key: 'br', points: referenceBr, row: 2, label: (v: number) => `Watch breathing ${v.toFixed(1)} br/min` },
+                  { key: 'oxygen', points: referenceOxygen, row: OXYGEN_INDEX, label: (v: number) => `Watch blood oxygen ${Math.round(v)}%` },
                 ].map(({ key, points, row, label }) => {
                   const sample = nearestReference(points.filter(p => p.t >= hoverSeg.start && p.t <= hoverSeg.end), hovered.t)
                   if (!sample) return null
@@ -418,7 +426,7 @@ function LegendGroup({ device, children }: { device: string, children: ReactNode
   )
 }
 
-export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceRmssd = false, referenceBr = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean, referenceRmssd?: boolean, referenceBr?: boolean }) {
+export function VitalsLegend({ bandLabel, stalled, reference = false, referenceHrv = false, referenceRmssd = false, referenceBr = false, referenceOxygen = false }: { bandLabel: string, stalled: boolean, reference?: boolean, referenceHrv?: boolean, referenceRmssd?: boolean, referenceBr?: boolean, referenceOxygen?: boolean }) {
   return (
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-1.5 font-mono text-[11px] text-fg-2">
       <LegendGroup device="Pod">
@@ -441,7 +449,7 @@ export function VitalsLegend({ bandLabel, stalled, reference = false, referenceH
           </span>
         )}
       </LegendGroup>
-      {(reference || referenceHrv || referenceRmssd || referenceBr) && (
+      {(reference || referenceHrv || referenceRmssd || referenceBr || referenceOxygen) && (
         <LegendGroup device="Apple Watch">
           {reference && (
             <span className="flex items-center gap-2">
@@ -465,6 +473,12 @@ export function VitalsLegend({ bandLabel, stalled, reference = false, referenceH
             <span className="inline-flex items-center gap-1.5">
               <span className="size-1 rounded-full border border-fg/80" />
               breathing
+            </span>
+          )}
+          {referenceOxygen && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1 rounded-full border border-fg/80" />
+              blood oxygen
             </span>
           )}
         </LegendGroup>

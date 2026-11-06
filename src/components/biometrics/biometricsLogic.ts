@@ -31,6 +31,9 @@ export const METRICS: readonly MetricDef[] = [
   { key: 'br', label: 'Breathing', unit: 'br/min', domain: [10, 26], ticks: [12, 18, 24], color: 'var(--chart-vital-br)', digits: 1 },
 ]
 
+/** Watch-only: the pod has no oxygen sensor, so this row has no pod line and is drawn only when readings exist. */
+export const OXYGEN_ROW: Omit<MetricDef, 'key'> & { key: 'oxygen' } = { key: 'oxygen', label: 'Blood oxygen', unit: '%', domain: [80, 100], ticks: [80, 90, 100], color: 'var(--text-1)', digits: 0 }
+
 export interface VitalPoint { t: number, hr: number | null, hrv: number | null, br: number | null, provenanceKey?: string, hrvMetricId?: string | null }
 
 export interface Session {
@@ -104,6 +107,11 @@ export function splitSessions(points: VitalPoint[], gapMs = SESSION_GAP_MS): Ses
     }
   }
   return out
+}
+
+/** Readings the chart can draw: only sessions are on the axis, so anything between them has no place. */
+export function readingsInSessions<T extends { t: number }>(readings: T[], sessions: Array<{ start: number, end: number }>): T[] {
+  return readings.filter(r => sessions.some(s => r.t >= s.start && r.t <= s.end))
 }
 
 /**

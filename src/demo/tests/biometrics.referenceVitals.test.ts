@@ -57,7 +57,7 @@ describe('demo biometrics.getReferenceVitals', () => {
 })
 
 describe('demo reference samples and stages', () => {
-  it.each(['hrv_sdnn', 'breathing_rate'] as const)('returns chronological %s samples and keeps the newest when limited', async (metric) => {
+  it.each(['hrv_sdnn', 'breathing_rate', 'blood_oxygen'] as const)('returns chronological %s samples and keeps the newest when limited', async (metric) => {
     const night = demoNights('left')[0]
     const input = { side: 'left' as const, startDate: night.enteredBedAt, endDate: (night.leftBedAt ?? new Date()), metric }
     const all = await required(biometrics.getReferenceSamples)(input)
@@ -65,6 +65,15 @@ describe('demo reference samples and stages', () => {
     expect(all.map(r => r.timestamp.getTime())).toEqual(all.map(r => r.timestamp.getTime()).sort((a, b) => a - b))
     expect(await required(biometrics.getReferenceSamples)({ ...input, limit: 3 })).toEqual(all.slice(-3))
     await expect(async () => required(biometrics.getReferenceSamples)({ ...input, startDate: input.endDate, endDate: new Date(0) })).rejects.toThrow(/startDate/)
+  })
+  it('keeps demo blood oxygen inside the row', async () => {
+    const night = demoNights('left')[0]
+    const rows = await required(biometrics.getReferenceSamples)({ side: 'left', startDate: night.enteredBedAt, endDate: (night.leftBedAt ?? new Date()), metric: 'blood_oxygen' })
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      expect(row.value).toBeGreaterThanOrEqual(90)
+      expect(row.value).toBeLessThanOrEqual(100)
+    }
   })
   it('returns overlapping Watch stage blocks for the chosen side and honors the limit', async () => {
     const night = demoNights('right')[0]
