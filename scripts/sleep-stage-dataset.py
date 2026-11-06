@@ -82,9 +82,10 @@ def night_of(dt):
 
 # ── Health export ──────────────────────────────────────────────────────────
 
-def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exclude_pattern=None, units=None):
+def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exclude_pattern=None, units=None, device_pattern=None):
     """Stream export.xml and return (stage_segments, hr_samples) for sources
-    matching source_pattern and, when given, not matching exclude_pattern.
+    matching source_pattern (or a record's device matching device_pattern, when
+    given) and, when given, not matching exclude_pattern.
 
     stage_segments: [(start_dt, end_dt, stage)] in file order (aware datetimes)
     hr_samples:     [(unix_s, bpm)] sorted by time
@@ -98,6 +99,7 @@ def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exc
         path = os.path.join(path, 'export.xml')
     source_re = re.compile(source_pattern)
     exclude_re = re.compile(exclude_pattern) if exclude_pattern else None
+    device_re = re.compile(device_pattern) if device_pattern else None
     segments, hr = [], []
     quantities = quantities or {}
     units = units or {}
@@ -106,7 +108,8 @@ def parse_export(path, source_pattern='Watch', cutoff=None, quantities=None, exc
         kind = a.get('type')
         source = a.get('sourceName', '')
         if (kind not in (HK_SLEEP, HK_HR) and kind not in quantities) \
-                or not source_re.search(source) or (exclude_re and exclude_re.search(source)):
+                or not (source_re.search(source) or (device_re and device_re.search(a.get('device', '')))) \
+                or (exclude_re and exclude_re.search(source)):
             return
         try:
             start = datetime.strptime(a['startDate'], '%Y-%m-%d %H:%M:%S %z')

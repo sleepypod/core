@@ -144,8 +144,10 @@ follows the same contract for one `metric` per request, `breathing_rate`
 samples stored in `reference_samples` and first-write-wins on side, metric,
 time and source. The **Upload Apple Watch data** dialog
 (`POST /api/biometrics/watch-upload`) feeds all three from a Health export,
-using only Watch-sourced records: anything the sleepypod iOS app wrote back
-into Health is the pod's own data and is never imported as a reference.
+using only records an Apple Watch made, matched on `sourceName` or the record's
+`device`, since a source can carry any name the owner gave it. Sleep stages have
+no `device` and match on `sourceName` alone. Anything the sleepypod iOS app wrote
+back into Health is the pod's own data and is never imported as a reference.
 Newly accepted rows and normalized provenance commit atomically; if provenance
 cannot be saved, the legacy insert rolls back too.
 
