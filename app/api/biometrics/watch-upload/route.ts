@@ -9,8 +9,8 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 const MAX_BYTES = 512 * 1024 * 1024
 const options = z.object({ side: z.enum(['left', 'right']), days: z.coerce.number().int().min(1).max(90).default(30) })
-const resultSchema = z.object({ stages: z.number(), vitals: z.number(), breathing: z.number(), hrv: z.number(), rejectedStageBatches: z.number(),
-  matchedStages: z.number(), matchedVitals: z.number(), matchedBreathing: z.number(), matchedHrv: z.number() })
+const resultSchema = z.object({ stages: z.number(), vitals: z.number(), breathing: z.number(), hrv: z.number(), rmssd: z.number().default(0), rejectedStageBatches: z.number(),
+  matchedStages: z.number(), matchedVitals: z.number(), matchedBreathing: z.number(), matchedHrv: z.number(), matchedRmssd: z.number().default(0) })
 const shared = globalThis as typeof globalThis & { watchUploadBusy?: boolean }
 
 /**

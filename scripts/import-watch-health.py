@@ -12,7 +12,8 @@ them to the pod's REST API:
   POST /api/biometrics/reference-stages   SleepAnalysis segments (wake/light/deep/rem)
   POST /api/biometrics/reference-vitals   HeartRate samples
   POST /api/biometrics/reference-samples  RespiratoryRate (breathing_rate, breaths/min)
-                                          and HeartRateVariabilitySDNN (hrv_sdnn, ms)
+                                          HeartRateVariabilitySDNN (hrv_sdnn, ms)
+                                          and HeartRateVariabilityRMSSD (hrv_rmssd, ms)
 
 Heart rate, breathing rate and HRV are first-write-wins on side + time +
 source (+ metric), so re-running on a newer export only adds what is new. Stages are stricter: a batch is rejected
@@ -48,11 +49,12 @@ parse_export = _ds.parse_export
 
 HK_RR = 'HKQuantityTypeIdentifierRespiratoryRate'
 HK_HRV = 'HKQuantityTypeIdentifierHeartRateVariabilitySDNN'
+HK_RMSSD = 'HKQuantityTypeIdentifierHeartRateVariabilityRMSSD'
 # reference_samples metric, HK type, plausible range (the API enforces the same)
-SAMPLE_METRICS = (('breathing_rate', HK_RR, 4, 60), ('hrv_sdnn', HK_HRV, 1, 500))
+SAMPLE_METRICS = (('breathing_rate', HK_RR, 4, 60), ('hrv_sdnn', HK_HRV, 1, 500), ('hrv_rmssd', HK_RMSSD, 1, 500))
 # Factors into the canonical unit (breaths/min, ms). Health exports use
 # count/min and ms; anything unlisted is skipped instead of stored unconverted.
-SAMPLE_UNITS = {HK_RR: {'count/min': 1, 'count/s': 60, 'Hz': 60}, HK_HRV: {'ms': 1, 's': 1000}}
+SAMPLE_UNITS = {HK_RR: {'count/min': 1, 'count/s': 60, 'Hz': 60}, HK_HRV: {'ms': 1, 's': 1000}, HK_RMSSD: {'ms': 1, 's': 1000}}
 # The sleepypod iOS app writes the pod's own HR, breathing, HRV and sleep stages
 # back into Health (sourceName "sleepypod", "sleepypod design"). Those are never
 # a reference, whatever --source says.
@@ -164,13 +166,13 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
 
     print(f'{len(segs)} stage segments ({span([s[0] for s in segs])}), '
           f'{len(samples)} heart-rate samples ({span([t for t, _ in samples])}), '
-          f"{len(extras['breathing_rate'])} breathing-rate and {len(extras['hrv_sdnn'])} HRV samples for side {side}",
+          f"{len(extras['breathing_rate'])} breathing-rate and {len(extras['hrv_sdnn'])} HRV samples and {len(extras['hrv_rmssd'])} RMSSD samples for side {side}",
           file=sys.stderr)
     if dry_run:
-        return {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0}
+        return {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0, 'rmssd': 0}
 
     url = base_url(pod)
-    written = {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0}
+    written = {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0, 'rmssd': 0}
     rejected = 0
     for batch in chunks(segs):
         try:
@@ -191,7 +193,7 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
             'samples': [{'timestamp': t, 'heartRate': bpm} for t, bpm in batch],
         })
         written['vitals'] += int(out.get('written', 0))
-    for metric, key in (('breathing_rate', 'breathing'), ('hrv_sdnn', 'hrv')):
+    for metric, key in (('breathing_rate', 'breathing'), ('hrv_sdnn', 'hrv'), ('hrv_rmssd', 'rmssd')):
         for batch in chunks(extras[metric]):
             out = post(f'{url}/api/biometrics/reference-samples', {
                 'side': side, 'source': 'apple_watch', 'metric': metric,
@@ -199,11 +201,11 @@ def run(export, pod, side, source_pattern='Watch', days=30, dry_run=False,
             })
             written[key] += int(out.get('written', 0))
     print(f"wrote {written['stages']} new stage segments, {written['vitals']} new heart-rate, "
-          f"{written['breathing']} new breathing-rate and {written['hrv']} new HRV samples to {url}",
+          f"{written['breathing']} new breathing-rate and {written['hrv']} new HRV and {written['rmssd']} new RMSSD samples to {url}",
           file=sys.stderr)
     if report:
         return {**written, 'rejectedStageBatches': rejected, 'matchedStages': len(segs), 'matchedVitals': len(samples),
-                'matchedBreathing': len(extras['breathing_rate']), 'matchedHrv': len(extras['hrv_sdnn'])}
+                'matchedBreathing': len(extras['breathing_rate']), 'matchedHrv': len(extras['hrv_sdnn']), 'matchedRmssd': len(extras['hrv_rmssd'])}
     if rejected:
         raise SystemExit(f'error: {rejected} stage batch(es) rejected by the pod; vitals were still imported')
     return written

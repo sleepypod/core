@@ -307,8 +307,8 @@ it('clears session focus when switching people and ignores clearing the date fie
 
 it('explains SDNN comparability only when Watch HRV is overlaid', () => {
   const view = render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
-  expect(screen.queryByText(/Watch SDNN and sleepypod/)).toBeNull()
+  expect(screen.queryByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeNull()
   state.referenceHrv = [{ timestamp: new Date(LAST_VITAL), value: 30 }]
   view.rerender(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
-  expect(screen.getByText(/Watch SDNN and sleepypod/)).toBeTruthy()
+  expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
 })

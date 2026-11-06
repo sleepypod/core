@@ -45,7 +45,7 @@ it('connects adjacent stage transitions but never bridges missing Watch interval
   expect(paths[2].getAttribute('d')).toBe('M 40 39 V 39 H 50')
 })
 
-it.each(['hr', 'hrv_sdnn', 'breathing_rate'])('draws reference-only %s sessions with null pod metrics', (metric) => {
+it.each(['hr', 'hrv_sdnn', 'hrv_rmssd', 'breathing_rate'])('draws reference-only %s sessions with null pod metrics', (metric) => {
   mock.chart.mockClear()
   mock.query.mockImplementation(input => ({ data: input.metric === metric
     ? [{ timestamp: new Date(2000), value: 35 }]
@@ -55,4 +55,10 @@ it.each(['hr', 'hrv_sdnn', 'breathing_rate'])('draws reference-only %s sessions 
   render(<NightVitals side="left" start={0} end={10000} />)
   expect(screen.queryByText('No recorded vitals for this night.')).toBeNull()
   expect(mock.chart.mock.calls[0][0].sessions[0].points).toEqual([{ t: 2000, hr: null, hrv: null, br: null }])
+})
+
+it('omits the optional RMSSD legend when no Watch data exists', () => {
+  mock.query.mockReturnValue({ data: [] })
+  render(<NightVitals side="left" start={0} end={10000} />)
+  expect(screen.queryByText('Apple Watch HRV · RMSSD')).toBeNull()
 })

@@ -289,3 +289,14 @@ it('exposes Watch SDNN and breathing through the interaction overlay, without br
   expect(screen.queryByTestId('vitals-watch-hrv-hover')).toBeNull()
   expect(screen.queryByTestId('vitals-watch-br-hover')).toBeNull()
 })
+
+it('overlays RMSSD separately while retaining SDNN and breathing and breaking gaps', () => {
+  withWidth()
+  const referenceRmssd = [{ t: START, value: 32 }, { t: START + MIN, value: 34 }, { t: START + 60 * MIN, value: 30 }]
+  render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={[{ t: START, value: 48 }]} referenceBr={[{ t: START, value: 14 }]} />)
+  expect(screen.getAllByTestId('vitals-watch-rmssd')).toHaveLength(3)
+  expect(screen.getAllByTestId('vitals-watch-rmssd-line')).toHaveLength(1)
+  expect(screen.getByTestId('vitals-watch-rmssd-line').getAttribute('stroke-dasharray')).toBe('6 3')
+  expect(screen.getByTestId('vitals-watch-hrv')).toBeTruthy()
+  expect(screen.getByTestId('vitals-watch-br')).toBeTruthy()
+})

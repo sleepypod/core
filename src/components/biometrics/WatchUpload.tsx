@@ -6,7 +6,7 @@ import { Button, Modal } from '@/src/components/ds'
 import { trpc } from '@/src/utils/trpc'
 import { WATCH_REQUEST_TIMEOUT_MS } from '@/src/utils/watchUploadLimits'
 
-interface ImportResult { stages: number, vitals: number, breathing: number, hrv: number, rejectedStageBatches: number, matchedStages: number, matchedVitals: number, matchedBreathing: number, matchedHrv: number }
+interface ImportResult { stages: number, vitals: number, breathing: number, hrv: number, rmssd?: number, rejectedStageBatches: number, matchedStages: number, matchedVitals: number, matchedBreathing: number, matchedHrv: number, matchedRmssd?: number }
 
 export function WatchUpload({ side, name }: { side: 'left' | 'right', name: string }) {
   const [open, setOpen] = useState(false)
@@ -75,7 +75,7 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
           </p>
           <section className="space-y-2 text-sm text-fg-2" aria-label="What this imports">
             <h3 className="font-medium text-fg">What this does</h3>
-            <p>Imports Apple Watch heart rate, breathing rate, HRV and sleep stages for the selected period. Watch heart rate appears alongside the pod’s readings in Vitals so you can compare them; breathing rate, HRV and sleep stages are saved as reference data.</p>
+            <p>Imports Apple Watch heart rate, breathing rate, HRV and sleep stages for the selected period. Watch heart rate, breathing rate and HRV appear alongside the pod’s readings in Vitals. SDNN and RMSSD are separate overlays, shown only when available; sleep stages are saved as reference data.</p>
             <p>This is a one-time import. Upload a fresh export whenever you want to add recent data. Previously imported records are skipped, and the pod’s own readings are preserved.</p>
           </section>
           <section className="space-y-2 text-sm text-fg-2" aria-label="How to get your export">
@@ -122,8 +122,8 @@ export function WatchUpload({ side, name }: { side: 'left' | 'right', name: stri
           {progress !== null && <p role="status" className="text-sm">{progress < 100 ? `Uploading… ${progress}%` : 'Importing on the pod… Keep this window open.'}</p>}
           {result && (
             <div role="status" className="text-sm">
-              <p>{`Imported ${result.vitals} new heart-rate, ${result.breathing} new breathing-rate and ${result.hrv} new HRV samples, and ${result.stages} new sleep-stage segments.`}</p>
-              <p className="text-fg-2">{`Found ${result.matchedVitals} heart-rate, ${result.matchedBreathing} breathing-rate and ${result.matchedHrv} HRV samples and ${result.matchedStages} stages in this period. Previously imported records are skipped.`}</p>
+              <p>{`Imported ${result.vitals} new heart-rate, ${result.breathing} new breathing-rate and ${result.hrv} new SDNN and ${result.rmssd ?? 0} new RMSSD samples, and ${result.stages} new sleep-stage segments.`}</p>
+              <p className="text-fg-2">{`Found ${result.matchedVitals} heart-rate, ${result.matchedBreathing} breathing-rate and ${result.matchedHrv} SDNN and ${result.matchedRmssd ?? 0} RMSSD samples and ${result.matchedStages} stages in this period. Previously imported records are skipped.`}</p>
               {result.rejectedStageBatches > 0 && <p className="text-warn">{`${result.rejectedStageBatches} stage batches conflicted with stored stages and were skipped. Heart-rate, breathing-rate and HRV import completed.`}</p>}
             </div>
           )}

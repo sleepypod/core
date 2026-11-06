@@ -82,17 +82,22 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   const referenceQ = trpc.biometrics.getReferenceVitals.useQuery({ side, startDate, endDate, limit: 20000 }, { refetchInterval: 5 * 60_000 })
 
   const watchHrvQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'hrv_sdnn', limit: 20000 }, { refetchInterval: 5 * 60_000 })
+  const watchRmssdQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'hrv_rmssd', limit: 20000 }, { refetchInterval: 5 * 60_000 })
   const watchBrQ = trpc.biometrics.getReferenceSamples.useQuery({ side, startDate, endDate, metric: 'breathing_rate', limit: 20000 }, { refetchInterval: 5 * 60_000 })
   const referenceBr = (watchBrQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
   const referenceHrv = (watchHrvQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
+  const referenceRmssd = (watchRmssdQ.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), value: r.value }))
 
   const rows = (vitalsQ.data ?? []) as VitalRow[]
   const points: VitalPoint[] = rows.map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate, hrv: r.hrv, br: r.breathingRate,
     provenanceKey: r.provenance?.processingRunId ?? r.processingRunId ?? 'legacy_unknown', hrvMetricId: r.provenance?.hrvMetricId ?? null }))
-  const sessions = splitSessions(points)
   const bands = { hr: baselineBand(points, 'hr'), hrv: baselineBand(points, 'hrv'), br: baselineBand(points, 'br') }
   const reference = ((referenceQ.data ?? []) as Array<{ timestamp: Date | string, heartRate: number }>)
     .map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate })).sort((a, b) => a.t - b.t)
+  const sessions = splitSessions(points.length
+    ? points
+    : [...new Set([...reference, ...referenceHrv, ...referenceRmssd, ...referenceBr].map(r => r.t))]
+        .sort((a, b) => a - b).map(t => ({ t, hr: null, hrv: null, br: null })))
 
   const lastVitalAt = latestQ.data?.[0] ? new Date(latestQ.data[0].timestamp).getTime() : null
   const occupied = occupancyQ.data?.[side].occupied ?? false
@@ -275,10 +280,10 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
           : sessions.length === 0 && !stall
             ? <div className="grid h-[200px] place-items-center text-[13px] text-fg-3">No vitals in this range</div>
             : (
-                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceHrv={referenceHrv} referenceBr={referenceBr} reference={reference} movement={movementQ.data ?? []} />
+                <VitalsExplorer key={`${side}-${win.start}-${win.end}`} sessions={sessions} stall={stall} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={referenceHrv} referenceBr={referenceBr} reference={reference} movement={movementQ.data ?? []} />
               )}
-        {referenceHrv.length > 0 && <p className="text-xs text-fg-3"><Trans>Watch SDNN and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values.</Trans></p>}
-        <VitalsLegend referenceBr={referenceBr.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
+        {(referenceHrv.length > 0 || referenceRmssd.length > 0) && <p className="text-xs text-fg-3"><Trans>Watch SDNN, Watch RMSSD and sleepypod’s window-based IBI variability index use different calculations. They cannot be directly converted; compare their trends, not their absolute values.</Trans></p>}
+        <VitalsLegend referenceBr={referenceBr.length > 0} referenceRmssd={referenceRmssd.length > 0} referenceHrv={referenceHrv.length > 0} bandLabel={bandLabel} stalled={!!stall} reference={reference.length > 0} />
       </div>
 
       <SidesCard occupancy={occupancyQ.data} sideName={sideName} />
