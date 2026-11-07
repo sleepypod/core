@@ -119,6 +119,13 @@ it('shows live facts without the device serial or env secrets', () => {
   expect(result.stdout).not.toContain('secret-for-redaction-test')
 })
 
+it('keeps the disk bar on a full-size eMMC, where the sizes are at their widest', () => {
+  stub('df', 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/mmcblk0p8 15129544 11459508 2867220 81%% /persistent\\n"')
+  const result = run()
+  expect(result.stdout).toMatch(/disk\s+\[#{8}--\] 81% 10\.9G\/14\.4G/)
+  expect(widest(result.stdout)).toBeLessThanOrEqual(80)
+})
+
 it.each(['', 'not json', '{"sensorLabel":"unknown"}'])('degrades device facts to dashes for status %j', (status) => {
   env.MOCK_STATUS = status
   const result = run()

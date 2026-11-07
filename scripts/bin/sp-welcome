@@ -25,7 +25,7 @@ DIM_COLOUR=240
 ART_WIDTH=38
 ART_ROWS=20
 GAP=3
-PANEL_WIDTH=37 # below ART_WIDTH + GAP + PANEL_WIDTH the panel drops under the logo
+PANEL_WIDTH=38 # below ART_WIDTH + GAP + PANEL_WIDTH the panel drops under the logo
 LABEL_WIDTH=10
 BAR_WIDTH=10
 
