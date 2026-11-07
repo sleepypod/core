@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SleepScreen } from '../SleepScreen'
-import { DEFAULT_STAGE_RULESET } from '@/src/lib/sleep-stage-rules'
 
 const state = vi.hoisted(() => ({
   sleep: vi.fn(),
@@ -31,6 +30,7 @@ vi.mock('@/src/hooks/useWeekNavigator', () => ({
 }))
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
+    useQueries: (build: (query: unknown) => unknown[]) => build({ biometrics: { getSleepStages: state.stages } }),
     biometrics: {
       getSleepRecords: { useQuery: state.sleep },
       getSleepStages: { useQuery: state.stages },
@@ -154,7 +154,7 @@ describe('SleepScreen night view', () => {
   it('opens another night from the This week bars', () => {
     render(<SleepScreen />)
     fireEvent.click(screen.getByRole('button', { name: /^Mon, Sep 21/ }))
-    expect(state.stages).toHaveBeenLastCalledWith({ side: 'left', nightDate: '2026-09-21', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }, { enabled: true })
+    expect(state.stages).toHaveBeenCalledWith({ side: 'left', nightDate: '2026-09-21', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }, { enabled: true })
     expect(screen.getByText('Monday, Sep 21')).toBeTruthy()
     expect(screen.getByText('Bed exits').nextSibling?.textContent).toBe('3')
     expect((screen.getByRole('button', { name: /^Sun, Sep 20/ }) as HTMLButtonElement).disabled).toBe(true)
@@ -198,25 +198,62 @@ describe('SleepScreen week and month views', () => {
   it('shows the timeline, drill-in and week averages', () => {
     render(<SleepScreen />)
     pick('Week')
-    expect(screen.getByText('Sleep timeline')).toBeTruthy()
+    expect(screen.getByText('Includes awake and unstaged time. Select a night for estimated stages and unknown gaps.')).toBeTruthy()
     expect(screen.getByTestId('movement')).toBeTruthy()
     expect(screen.getByText('Tuesday, Sep 22')).toBeTruthy()
-    expect(screen.getByText('11:20 PM → 6:50 AM · 7h 30m · quality 78')).toBeTruthy()
+    expect(screen.getByText('11:20 PM → 6:50 AM · 7h 30m recorded · quality 78')).toBeTruthy()
     // (7.5 + 6) / 2 nights
     expect(screen.getByText('Week averages').parentElement?.textContent).toContain('6h 45m')
     fireEvent.click(screen.getByRole('button', { name: /Mon 21/ }))
     expect(screen.getByText('Monday, Sep 21')).toBeTruthy()
   })
 
-  it('classifies the week once the side\'s calibration and classifier are known', () => {
-    state.calibration.mockReturnValue({ data: { piezo: { qualityScore: 0.9 } }, isLoading: false })
-    state.classifier.mockReturnValue({ data: { classifier: { engine: 'rules', ruleset: DEFAULT_STAGE_RULESET } }, isLoading: false })
+  it('uses server whole-night scores without running a separate browser classifier', () => {
     render(<SleepScreen />)
     pick('Week')
-    expect(state.calibration).toHaveBeenCalledWith({ side: 'left' })
-    expect(state.classifier).toHaveBeenCalledWith({ side: 'left' })
-    expect(screen.getByText('Sleep timeline')).toBeTruthy()
-    expect(screen.getByText('11:20 PM → 6:50 AM · 7h 30m · quality 78')).toBeTruthy()
+    expect(state.calibration).not.toHaveBeenCalled()
+    expect(state.classifier).not.toHaveBeenCalled()
+    expect(state.stages).toHaveBeenCalledWith({ side: 'left', nightDate: '2026-09-22', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }, { staleTime: 30_000 })
+    expect(screen.getByText('11:20 PM → 6:50 AM · 7h 30m recorded · quality 78')).toBeTruthy()
+    expect(screen.getByText('Estimated sleep')).toBeTruthy()
+    expect(screen.queryByText('Asleep')).toBeNull()
+  })
+
+  it('keeps fragmented night bounds, server quality and unknown gaps when switching to Week', () => {
+    const fragments = [record(24, at(23, 6), 1), record(23, at(23, 2), 3), record(22, at(22, 22), 3)]
+    state.sleep.mockReturnValue({ data: fragments, isLoading: false })
+    const original = stagesFor(at(22, 22), 22)
+    const epochs = [original.epochs[0], { ...original.epochs[2], start: at(23, 6).getTime() }]
+    state.stages.mockReturnValue({ data: { ...original, qualityScore: 64, epochs,
+      enteredBedAt: at(22, 22).getTime(), leftBedAt: at(23, 7).getTime(), sleepRecordId: null,
+      blocks: epochs.map(epoch => ({ start: epoch.start, end: epoch.start + epoch.duration, stage: epoch.stage })),
+      recording: { nightDate: '2026-09-22', recordIds: [22, 23, 24], start: at(22, 22).getTime(), end: at(23, 7).getTime(), durationMs: 7 * 3_600_000, gapsMs: 2 * 3_600_000, exits: 0 },
+    }, isLoading: false })
+    render(<SleepScreen />)
+    expect(screen.getByText('Recorded bed time').nextSibling?.textContent).toBe('7h 0m')
+    expect(screen.getByText('Estimated sleep · recorded segments').nextSibling?.textContent).toBe('5m')
+    pick('Week')
+    const detail = screen.getByTestId('week-night-detail')
+    expect(within(detail).getByText('10:00 PM → 7:00 AM · 7h 0m recorded · quality 64')).toBeTruthy()
+    expect(within(detail).getByText(/3 recording segments · 2h 0m between segments/)).toBeTruthy()
+    expect(within(detail).getByText('Estimated sleep · recorded segments: 5m')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Tue 22.*Q 64/ })).toBeTruthy()
+    expect(state.stages.mock.calls.every(([input]) => input.sleepRecordId === undefined)).toBe(true)
+    const blocks = [...detail.querySelectorAll('span.absolute')].map(element => (element as HTMLElement).style.left)
+    expect(blocks).toEqual(['0%', `${8 / 9 * 100}%`])
+  })
+
+  it('does not invent quality or zero sleep when whole-night analysis is loading or fails', () => {
+    state.stages.mockReturnValue({ data: undefined, isLoading: true })
+    const { rerender } = render(<SleepScreen />)
+    pick('Week')
+    expect(screen.getByText('0 of 2 recorded nights have stage estimates. Missing estimates are not zero sleep.')).toBeTruthy()
+    expect(screen.queryByText(/^Q /)).toBeNull()
+    state.stages.mockReturnValue({ data: stagesFor(at(22, 23, 20), 12), isLoading: false, error: new Error('unavailable') })
+    rerender(<SleepScreen />)
+    expect(screen.getByText('Failed to load sleep stages')).toBeTruthy()
+    expect(screen.queryByText(/^Q /)).toBeNull()
+    expect(screen.queryByText(/quality 78/)).toBeNull()
   })
 
   it('shows the month calendar, stats and nights list', () => {

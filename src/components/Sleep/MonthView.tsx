@@ -98,7 +98,7 @@ export function MonthView({ side, month }: { side: Side, month: Date }) {
         {stats('hidden @min-[960px]:flex')}
 
         <Card>
-          <SectionLabel>Average by week</SectionLabel>
+          <SectionLabel>Average recorded time by week</SectionLabel>
           {weeks.map(w => (
             <div key={w.label} className="grid grid-cols-[104px_minmax(0,1fr)_56px] items-center gap-2.5">
               <span className="whitespace-nowrap font-mono text-[11px] text-fg-2">{w.label}</span>
@@ -111,7 +111,7 @@ export function MonthView({ side, month }: { side: Side, month: Date }) {
         </Card>
 
         <Card>
-          <SectionLabel>Nights</SectionLabel>
+          <SectionLabel>Recorded nights</SectionLabel>
           {nights.length === 0
             ? <EmptyNote className="py-4">{query.isLoading ? 'Loading…' : 'No nights recorded this month'}</EmptyNote>
             : (

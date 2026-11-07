@@ -12,7 +12,6 @@ import {
   Skeleton,
   StageBar,
   StageLegend,
-  STAGE_COLORS,
   KeyValue,
 } from '@/src/components/ds'
 import { trpc } from '@/src/utils/trpc'
@@ -28,7 +27,6 @@ import {
   keyToDate,
   mainRecord,
   recordingSummary,
-  sleepSplit,
   nightKey as toNightKey,
   stageDurations,
   toHypnoBlocks,
@@ -245,7 +243,7 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
   )
 
   return (
-    <Card className="gap-3.5 p-4 min-[900px]:gap-[18px] min-[900px]:p-5">
+    <Card data-testid="night-card" className="gap-3.5 p-4 min-[900px]:gap-[18px] min-[900px]:p-5">
       {/* Phone: ring + date/duration/times stacked. Desktop: one line, ring moves down. */}
       <div className="flex items-center gap-4 min-[900px]:gap-2.5">
         <div className="min-[900px]:hidden">{ring(76)}</div>
@@ -314,13 +312,12 @@ function ThisWeek({ nights, selectedKey, onSelect, loading }: {
   const maxHours = Math.max(9, ...nights.map(n => n.hours))
   return (
     <Card>
-      <SectionLabel right={avg != null && <span className="font-mono">{`avg ${formatDuration(avg * 3600)}`}</span>}>
-        This week
+      <SectionLabel right={avg != null && <span className="font-mono">{`avg recorded ${formatDuration(avg * 3600)}`}</span>}>
+        This week · recorded
       </SectionLabel>
       <div className={cn('grid h-[150px] grid-cols-7 gap-2', loading && 'animate-pulse')}>
         {nights.map((n) => {
           const on = n.key === selectedKey
-          const parts = sleepSplit(n.distribution) ?? { rem: 21, light: 54, deep: 25 }
           const h = n.hours / maxHours
           return (
             <button
@@ -335,11 +332,7 @@ function ThisWeek({ nights, selectedKey, onSelect, loading }: {
               <div className="flex w-full max-w-14 flex-1 flex-col justify-end gap-0.5" style={{ opacity: on ? 1 : 0.55 }}>
                 {n.hours > 0
                   ? (
-                      <>
-                        <span className="rounded-t-[2px]" style={{ height: `${h * parts.rem}%`, background: STAGE_COLORS.rem }} />
-                        <span style={{ height: `${h * parts.light}%`, background: STAGE_COLORS.light }} />
-                        <span className="rounded-b-[2px]" style={{ height: `${h * parts.deep}%`, background: STAGE_COLORS.deep }} />
-                      </>
+                      <span className="rounded-[2px] bg-cool" style={{ height: `${h * 100}%` }} />
                     )
                   : <span className="h-0.5 rounded-[1px] bg-line-2" />}
               </div>

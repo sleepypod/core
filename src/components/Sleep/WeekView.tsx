@@ -4,17 +4,16 @@ import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
 
 import { Card, CardHeader, InlineError, KeyValue, LineChart, SectionLabel, Skeleton, StageLegend, WeekBars } from '@/src/components/ds'
 import { MovementChart } from '@/src/components/MovementChart/MovementChart'
-import { trpc } from '@/src/utils/trpc'
 import {
   average,
   averageClock,
   formatDuration,
   formatNightLong,
+  nightWindow,
   toHypnoBlocks,
   toWeekNights,
   type NightSummary,
   type Side,
-  type SleepRecordRow,
 } from './sleepData'
 import { EmptyNote, NightHypnogram } from './parts'
 import { useWeekNights } from './useSleepData'
@@ -40,7 +39,8 @@ export function WeekView({ side, weekStart, nightKey, onSelectNight }: WeekViewP
     <div className="grid items-start gap-4 @min-[960px]:grid-cols-[minmax(0,1fr)_300px]">
       <div className="flex min-w-0 flex-col gap-3.5">
         <Card>
-          <CardHeader className="max-[899px]:hidden" title="Sleep timeline" right={<StageLegend />} />
+          <CardHeader title="Recorded bed time" />
+          <p className="text-xs text-fg-2">Includes awake and unstaged time. Select a night for estimated stages and unknown gaps.</p>
           {isLoading
             ? <div className="h-[230px] animate-pulse rounded-ctl bg-active" />
             : error
@@ -56,25 +56,24 @@ export function WeekView({ side, weekStart, nightKey, onSelectNight }: WeekViewP
                     {withData.length === 0 && <p className="text-center text-[13px] text-fg-2">No sleep recorded this week</p>}
                   </>
                 )}
-          <div className="min-[900px]:hidden">
-            <StageLegend />
-          </div>
         </Card>
 
-        {night?.record && <NightDrillIn side={side} night={night} record={night.record} />}
+        {night?.record && <NightDrillIn night={night} />}
 
-        <MovementChart />
+        <MovementChart showSleepStatistics={false} range={nightWindow(weekStart, 7)} />
       </div>
 
       <div className="flex min-w-0 flex-col gap-3.5">
         <Card>
           <SectionLabel>Week averages</SectionLabel>
           <div className="grid grid-cols-2 gap-3">
-            <KeyValue label="Asleep" value={formatDuration((average(withData.map(n => n.hours)) ?? 0) * 3600)} />
+            <KeyValue label="Recorded bed time" value={formatDuration((average(withData.map(n => n.hours)) ?? 0) * 3600)} />
+            <KeyValue label="Estimated sleep" value={formatEstimated(average(withData.map(n => n.asleepSeconds ?? null)))} />
             <KeyValue label="Quality" value={fmt(average(withData.map(n => n.quality)))} />
             <KeyValue label="Bedtime" value={formatClock(averageClock(withData.map(n => n.bedtime)))} />
             <KeyValue label="Wake" value={formatClock(averageClock(withData.map(n => n.wake)))} />
           </div>
+          <p className="text-xs text-fg-2">{`${withData.filter(night => night.asleepSeconds != null).length} of ${withData.length} recorded nights have stage estimates. Missing estimates are not zero sleep.`}</p>
         </Card>
 
         <Card>
@@ -113,30 +112,34 @@ function VitalsRow({ label, unit, color, nights, pick }: {
   )
 }
 
-function NightDrillIn({ side, night, record }: { side: Side, night: NightSummary, record: SleepRecordRow }) {
+const formatEstimated = (seconds: number | null) => seconds === 0 ? '0m' : formatDuration(seconds)
+
+function NightDrillIn({ night }: { night: NightSummary }) {
   const { formatClock } = useTimeFormatter()
-  const stages = trpc.biometrics.getSleepStages.useQuery({ side, sleepRecordId: record.id })
-  const start = new Date(record.enteredBedAt).getTime()
-  const end = record.leftBedAt ? new Date(record.leftBedAt).getTime() : start + record.sleepDurationSeconds * 1000
-  const quality = stages.data?.epochs.length ? stages.data.qualityScore : night.quality
+  const stages = night.analysis
+  const start = night.bedtime?.getTime()
+  const end = night.wake?.getTime()
+  const recording = stages?.recording
   const meta = [
     `${formatClock(start)} → ${formatClock(end)}`,
-    formatDuration(night.hours * 3600),
-    quality != null ? `quality ${quality}` : null,
+    `${formatDuration(night.hours * 3600)} recorded`,
+    night.quality != null ? `quality ${night.quality}` : null,
   ].filter(Boolean).join(' · ')
 
   return (
-    <Card>
+    <Card data-testid="week-night-detail">
       <div className="flex flex-wrap items-center gap-2.5">
         <span className="text-[15px] font-medium">{formatNightLong(night.date)}</span>
         <span className="font-mono text-xs text-fg-2">{meta}</span>
       </div>
-      {stages.isLoading
+      <p className="text-xs text-fg-2">{`Estimated sleep · recorded segments: ${formatEstimated(night.asleepSeconds ?? null)}`}</p>
+      {recording && <p className="text-xs text-fg-2">{`${recording.recordIds.length} recording segments · ${recording.gapsMs === 0 ? '0m' : formatDuration(recording.gapsMs / 1000)} between segments, not counted. Gaps remain unknown.`}</p>}
+      {night.analysisLoading
         ? <Skeleton className="h-[88px] rounded-ctl" />
-        : stages.error
+        : night.analysisError
           ? <InlineError>Failed to load sleep stages</InlineError>
-          : stages.data && stages.data.epochs.length > 0
-            ? <NightHypnogram blocks={toHypnoBlocks(stages.data.blocks, start, end)} lane={22} bar={14} labels={false} />
+          : stages && stages.epochs.length > 0 && start != null && end != null
+            ? <NightHypnogram blocks={toHypnoBlocks(stages.blocks, start, end)} lane={22} bar={14} labels={false} />
             : <EmptyNote className="py-6">Not enough vitals to classify stages for this night</EmptyNote>}
       <StageLegend />
     </Card>

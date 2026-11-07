@@ -26,6 +26,7 @@ vi.mock('@/src/hooks/useWeekNavigator', () => ({
 }))
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
+    useQueries: (build: (query: unknown) => unknown[]) => build({ biometrics: { getSleepStages: state.stages } }),
     biometrics: {
       getSleepRecords: { useQuery: state.sleep },
       getSleepStages: { useQuery: state.stages },
@@ -57,11 +58,13 @@ const sidesQueried = (fn: ReturnType<typeof vi.fn>) => new Set(fn.mock.calls.map
 describe('DataPage single-sleeper routing', () => {
   it.each(['left', 'right'] as const)('shows only the %s sleeper and hides the person switch', (home) => {
     state.singleSleeperSide = home
+    state.sleep.mockReturnValue({ data: [{ id: 1, enteredBedAt: new Date(2026, 8, 22, 22), leftBedAt: new Date(2026, 8, 23, 6), sleepDurationSeconds: 28800, timesExitedBed: 0 }], isLoading: false })
     render(<DataPage />)
     expect(screen.queryByRole('tablist', { name: 'Person' })).toBeNull()
     expect(sidesQueried(state.sleep)).toEqual(new Set([home]))
     expect(sidesQueried(state.stages)).toEqual(new Set([home]))
-    expect(sidesQueried(state.vitals)).toEqual(new Set([home]))
+    expect(state.stages).toHaveBeenCalledWith(expect.objectContaining({ side: home, nightDate: '2026-09-22' }), expect.anything())
+    expect(state.vitals).not.toHaveBeenCalled()
   })
 
   it.each(['left', 'right'] as const)('switches person from %s when neither side is away', (side) => {

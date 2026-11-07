@@ -235,7 +235,7 @@ export interface WeekNight {
   hours: number
   quality?: number | null
   /** Stage split in percent; defaults to 21/54/25 REM/Light/Deep. */
-  split?: { rem: number, light: number, deep: number }
+  split?: { rem: number, light: number, deep: number } | null
 }
 
 /** Stacked per-night bars. Tapping selects a night. */
@@ -269,13 +269,15 @@ export function WeekBars({ nights, selected, height = 140, detailed, onSelect, m
               className="flex w-full max-w-14 flex-col gap-0.5"
               style={{ height: Math.max(2, Math.round((Math.min(n.hours, maxHours) / maxHours) * height)), opacity: s ? 1 : 0.55 }}
             >
-              {n.hours > 0 && (
-                <>
-                  <span className="rounded-t-[3px]" style={{ flex: split.rem, background: STAGE_COLORS.rem }} />
-                  <span style={{ flex: split.light, background: STAGE_COLORS.light }} />
-                  <span className="rounded-b-[3px]" style={{ flex: split.deep, background: STAGE_COLORS.deep }} />
-                </>
-              )}
+              {n.hours > 0 && (n.split === null
+                ? <span className="flex-1 rounded-[3px] bg-cool" />
+                : (
+                    <>
+                      <span className="rounded-t-[3px]" style={{ flex: split.rem, background: STAGE_COLORS.rem }} />
+                      <span style={{ flex: split.light, background: STAGE_COLORS.light }} />
+                      <span className="rounded-b-[3px]" style={{ flex: split.deep, background: STAGE_COLORS.deep }} />
+                    </>
+                  ))}
             </div>
             <span className={cn('font-mono text-[11px]', s ? 'border-b border-fg text-fg' : 'text-fg-2')}>{n.label}</span>
             {detailed && n.quality != null && (

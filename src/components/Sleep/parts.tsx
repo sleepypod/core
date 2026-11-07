@@ -38,7 +38,7 @@ export function NightHypnogram({ blocks, ticks, lane = 26, bar = 18, labels = tr
   labels?: boolean
 }) {
   return (
-    <div className="flex flex-col">
+    <div data-testid="night-hypnogram" className="flex flex-col">
       <Hypnogram blocks={blocks} lane={lane} bar={bar} labels={labels} />
       {ticks && ticks.length > 0 && (
         <div className="grid gap-x-2.5" style={{ gridTemplateColumns: labels ? '48px minmax(0,1fr)' : 'minmax(0,1fr)' }}>

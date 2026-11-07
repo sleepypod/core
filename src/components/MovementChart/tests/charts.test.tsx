@@ -3,12 +3,21 @@ import { render, screen } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { MovementChart } from '../MovementChart'
 import { HumidityChart } from '@/src/components/Environment/HumidityChart'
-const mock = vi.hoisted(() => ({ buckets: [] as unknown[], summary: undefined as unknown, sleep: undefined as unknown, days: 1, loading: false, error: null as Error | null, chart: vi.fn() }))
+const mock = vi.hoisted(() => ({ buckets: [] as unknown[], summary: undefined as unknown, sleep: undefined as unknown, days: 1, loading: false, error: null as Error | null, chart: vi.fn(), bucketQuery: vi.fn(), summaryQuery: vi.fn(), recordsQuery: vi.fn() }))
 vi.mock('@/src/hooks/useBiometricsSide', () => ({ useBiometricsSide: () => ({ side: 'left' }) }))
 vi.mock('@/src/hooks/useWeekNavigator', () => ({ useWeekNavigator: () => ({ weekStart: new Date(0), weekEnd: new Date(mock.days * 86400000) }) }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: { biometrics: {
-  getMovementBuckets: { useQuery: () => ({ data: mock.buckets, isLoading: mock.loading, error: mock.error }) },
-  getMovementSummary: { useQuery: () => ({ data: mock.summary }) }, getSleepRecords: { useQuery: () => ({ data: mock.sleep }) },
+  getMovementBuckets: { useQuery: (...args: unknown[]) => {
+    mock.bucketQuery(...args)
+    return { data: mock.buckets, isLoading: mock.loading, error: mock.error }
+  } },
+  getMovementSummary: { useQuery: (...args: unknown[]) => {
+    mock.summaryQuery(...args)
+    return { data: mock.summary }
+  } }, getSleepRecords: { useQuery: (...args: unknown[]) => {
+    mock.recordsQuery(...args)
+    return { data: mock.sleep }
+  } },
 } } }))
 vi.mock('recharts', () => {
   const container = ({ children }: { children: ReactNode }) => <div>{children}</div>
@@ -73,4 +82,19 @@ it('derives humidity statistics, samples dense data and formats the tooltip', ()
   expect(screen.getByText('45%')).toBeTruthy()
   expect(screen.getByText(/45.3%,Humidity/)).toBeTruthy()
   expect(mock.chart.mock.lastCall?.[0]).toHaveLength(121)
+})
+
+it('uses the supplied night window and withholds unmatched sleep denominators in Week', () => {
+  mock.summary = { positionChanges: 100, restlessMinutes: 600, sampleCount: 700 }
+  mock.sleep = [{ sleepDurationSeconds: 3600 }]
+  const range = { startDate: new Date('2026-11-01T12:00:00Z'), endDate: new Date('2026-11-08T11:59:59.999Z') }
+  render(<MovementChart showSleepStatistics={false} range={range} />)
+  expect(mock.bucketQuery).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', ...range }), expect.anything())
+  expect(mock.summaryQuery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ enabled: false }))
+  expect(mock.recordsQuery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ enabled: false }))
+  expect(screen.getByText('Movement during recorded periods')).toBeTruthy()
+  expect(screen.getByText(/Missing bars do not establish stillness/)).toBeTruthy()
+  expect(screen.queryByText('Time still')).toBeNull()
+  expect(screen.queryByText('Restlessness')).toBeNull()
+  expect(screen.queryByText(/^Restless:/)).toBeNull()
 })

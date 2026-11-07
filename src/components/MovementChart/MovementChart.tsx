@@ -170,10 +170,12 @@ const AXIS_TICK = { fontSize: 10, fill: 'var(--text-3)', fontFamily: 'var(--font
  * aggregation so they're independent of the row-fetch cap. Bars come from
  * server-side bucketed sums so a week view fits in one query.
  */
-export function MovementChart() {
+export function MovementChart({ showSleepStatistics = true, range }: { showSleepStatistics?: boolean, range?: { startDate: Date, endDate: Date } } = {}) {
   const timeFormat = useTimeFormat()
   const { side } = useBiometricsSide()
-  const { weekStart, weekEnd } = useWeekNavigator()
+  const navigator = useWeekNavigator()
+  const weekStart = range?.startDate ?? navigator.weekStart
+  const weekEnd = range?.endDate ?? navigator.weekEnd
 
   const bucketSeconds = useMemo(
     () => pickMovementBucketSeconds(weekEnd.getTime() - weekStart.getTime()),
@@ -186,11 +188,11 @@ export function MovementChart() {
   )
   const summaryQuery = trpc.biometrics.getMovementSummary.useQuery(
     { side, startDate: weekStart, endDate: weekEnd },
-    { refetchOnWindowFocus: false },
+    { refetchOnWindowFocus: false, enabled: showSleepStatistics },
   )
   const { data: sleepData } = trpc.biometrics.getSleepRecords.useQuery(
     { side, startDate: weekStart, endDate: weekEnd, limit: 7 },
-    { refetchOnWindowFocus: false },
+    { refetchOnWindowFocus: false, enabled: showSleepStatistics },
   )
 
   const buckets = useMemo(() => (bucketsQuery.data ?? []) as BucketRecord[], [bucketsQuery.data])
@@ -216,20 +218,24 @@ export function MovementChart() {
     return Math.floor(chartData.length / 5) - 1
   }, [chartData.length, tickKeys])
 
-  const isLoading = bucketsQuery.isLoading || summaryQuery.isLoading
-  const hasError = Boolean(bucketsQuery.error || summaryQuery.error)
+  const isLoading = bucketsQuery.isLoading || (showSleepStatistics && summaryQuery.isLoading)
+  const hasError = Boolean(bucketsQuery.error || (showSleepStatistics && summaryQuery.error))
 
   return (
     <Card>
-      <SectionLabel right={<span className="font-mono">{formatRestlessChip(stats.restlessMinutes, nights)}</span>}>
-        Movement
+      <SectionLabel right={showSleepStatistics && <span className="font-mono">{formatRestlessChip(stats.restlessMinutes, nights)}</span>}>
+        {showSleepStatistics ? 'Movement' : 'Movement during recorded periods'}
       </SectionLabel>
 
-      <div className="grid grid-cols-3 gap-3">
-        <StatItem value={String(stats.positionChanges)} label="Position changes" />
-        <StatItem value={`${stats.timeStillPercent}%`} label="Time still" />
-        <StatItem value={stats.restlessnessLevel} label="Restlessness" valueClassName={RESTLESS_TONE[stats.restlessnessLevel]} />
-      </div>
+      {showSleepStatistics
+        ? (
+            <div className="grid grid-cols-3 gap-3">
+              <StatItem value={String(stats.positionChanges)} label="Position changes" />
+              <StatItem value={`${stats.timeStillPercent}%`} label="Time still" />
+              <StatItem value={stats.restlessnessLevel} label="Restlessness" valueClassName={RESTLESS_TONE[stats.restlessnessLevel]} />
+            </div>
+          )
+        : <p className="text-xs text-fg-2">Selected week’s night window; readings during recorded bed presence only. Missing bars do not establish stillness.</p>}
 
       {isLoading
         ? <div className="h-[140px] animate-pulse rounded-ctl bg-active" />

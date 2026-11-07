@@ -1,16 +1,9 @@
-import { recordingWindows } from '@/src/lib/sleep-recording'
-import { stagesWithinWindow } from '@/src/lib/stage-coverage'
 import { formatTick, type TimeFormat } from '@/src/lib/timeFormat'
 export { formatClock, formatTick } from '@/src/lib/timeFormat'
 import type { HypnoBlock, StageKey, WeekNight } from '@/src/components/ds'
-import {
-  calculateDistribution,
-  calculateQualityScore,
-  classifySleepStages,
-  type SleepStage,
-  type StageDistribution,
-} from '@/src/lib/sleep-stages'
-import { DEFAULT_STAGE_RULESET, type StageRuleset } from '@/src/lib/sleep-stage-rules'
+import type { SleepStage, StageDistribution } from '@/src/lib/sleep-stages'
+import type { inferRouterOutputs } from '@trpc/server'
+import type { AppRouter } from '@/src/server/routers/app'
 
 /* Pure data shaping for the Sleep screen (night grouping, formatting,
    hypnogram geometry, calendar math). Kept free of React so it is unit
@@ -18,6 +11,7 @@ import { DEFAULT_STAGE_RULESET, type StageRuleset } from '@/src/lib/sleep-stage-
 
 export type Side = 'left' | 'right'
 export type SleepView = 'night' | 'week' | 'month'
+export type NightAnalysis = inferRouterOutputs<AppRouter>['biometrics']['getSleepStages']
 
 export interface SleepRecordRow {
   id: number
@@ -25,18 +19,6 @@ export interface SleepRecordRow {
   leftBedAt: Date | null
   sleepDurationSeconds: number
   timesExitedBed: number
-}
-
-export interface VitalsRow {
-  timestamp: Date
-  heartRate: number | null
-  hrv: number | null
-  breathingRate: number | null
-}
-
-export interface MovementRow {
-  timestamp: Date
-  totalMovement: number
 }
 
 /** Sessions that start before this hour belong to the previous evening's night. */
@@ -227,88 +209,52 @@ export interface NightSummary {
   hr: number | null
   hrv: number | null
   br: number | null
+  analysis?: NightAnalysis
+  analysisLoading?: boolean
+  analysisError?: boolean
+  asleepSeconds?: number | null
 }
 
-/**
- * Build `days` consecutive nights starting at `from`, classifying each
- * night's stages client-side from the range's vitals + movement.
- *
- * `ruleset` null = the side's classifier is unknown (still loading or failed
- * to load), and `calibrationQuality` null = the side's calibration is unknown:
- * in either case vitals averages are kept but no stages or quality are
- * computed, rather than classifying with the defaults or at full quality.
- */
-export function buildNights(
-  from: Date,
-  days: number,
-  records: SleepRecordRow[],
-  vitals: VitalsRow[] = [],
-  movement: MovementRow[] = [],
-  calibrationQuality: number | null = 1.0,
-  ruleset: StageRuleset | null = DEFAULT_STAGE_RULESET,
-): NightSummary[] {
-  const byNight = groupByNight(records)
-  const sortedVitals = [...vitals].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-  const out: NightSummary[] = []
-  for (let i = 0; i < days; i++) {
-    const day = new Date(from)
-    day.setDate(day.getDate() + i)
-    const key = dayKey(day)
-    const recs = byNight.get(key) ?? []
-    const main = mainRecord(recs)
-    let distribution: StageDistribution | null = null
-    let quality: number | null = null
-    let hr: number | null = null
-    let hrv: number | null = null
-    let br: number | null = null
-    const windows = recordingWindows(recs)
-    if (windows.length) {
-      const inWindow = (timestamp: Date) => windows.some(window => new Date(timestamp) >= window.start && new Date(timestamp) < window.end)
-      const nightVitals = sortedVitals.filter(value => inWindow(value.timestamp)).map(value => ({ ...value, timestamp: new Date(value.timestamp) }))
-      if (nightVitals.length > 0) {
-        if (ruleset !== null && calibrationQuality !== null) {
-          // Keep per-segment classification and smoothing from crossing unknown gaps.
-          const epochs = windows.flatMap((window) => {
-            const inside = (timestamp: Date) => new Date(timestamp) >= window.start && new Date(timestamp) < window.end
-            const segmentVitals = nightVitals.filter(value => inside(value.timestamp))
-            const segmentMovement = movement.filter(value => inside(value.timestamp)).map(value => ({ ...value, timestamp: new Date(value.timestamp) }))
-            return stagesWithinWindow(classifySleepStages(segmentVitals, segmentMovement, calibrationQuality, ruleset), window)
-          })
-          if (epochs.length > 0) {
-            distribution = calculateDistribution(epochs)
-            quality = calculateQualityScore(distribution, calibrationQuality)
-          }
-        }
-        hr = average(nightVitals.map(value => value.heartRate))
-        hrv = average(nightVitals.map(value => value.hrv))
-        br = average(nightVitals.map(value => value.breathingRate))
-      }
-    }
-
-    out.push({
-      key,
-      date: keyToDate(key),
-      record: main,
-      hours: recordingSummary(recs).seconds / 3600,
-      exits: recs.reduce((sum, r) => sum + r.timesExitedBed, 0),
-      bedtime: windows[0]?.start ?? null,
-      wake: windows.at(-1)?.end ?? null,
-      distribution,
-      quality,
-      hr,
-      hrv,
-      br,
-    })
+/** Use the same persisted/model-aware whole-night result as Night; never reclassify it here. */
+export function withNightAnalysis(night: NightSummary, analysis?: NightAnalysis): NightSummary {
+  if (!analysis || (analysis.recording && analysis.recording.nightDate !== night.key)) return night
+  const epochs = analysis.epochs
+  const recording = analysis.recording
+  const durations = stageDurations(epochs)
+  return {
+    ...night,
+    analysis,
+    hours: recording ? recording.durationMs / HOUR_MS : night.hours,
+    bedtime: recording ? new Date(recording.start) : night.bedtime,
+    wake: recording ? new Date(recording.end) : night.wake,
+    exits: recording?.exits ?? night.exits,
+    distribution: epochs.length ? analysis.distribution : null,
+    quality: epochs.length ? analysis.qualityScore : null,
+    asleepSeconds: epochs.length ? (durations.light + durations.deep + durations.rem) / 1000 : null,
+    hr: average(epochs.map(epoch => epoch.heartRate)),
+    hrv: average(epochs.map(epoch => epoch.hrv)),
+    br: average(epochs.map(epoch => epoch.breathingRate)),
   }
-  return out
 }
 
-/** REM/Light/Deep split (percent of non-wake time) for WeekBars. */
-export function sleepSplit(d: StageDistribution | null): WeekNight['split'] {
-  if (!d) return undefined
-  const asleep = d.rem + d.light + d.deep
-  if (asleep <= 0) return undefined
-  return { rem: (d.rem / asleep) * 100, light: (d.light / asleep) * 100, deep: (d.deep / asleep) * 100 }
+/** Recorded coverage only. Analysis is supplied by the authoritative whole-night API. */
+export function buildNights(from: Date, days: number, records: SleepRecordRow[]): NightSummary[] {
+  const byNight = groupByNight(records)
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date(from)
+    date.setDate(date.getDate() + index)
+    const key = dayKey(date)
+    const sessions = byNight.get(key) ?? []
+    const recording = recordingSummary(sessions)
+    return {
+      key, date: keyToDate(key), record: mainRecord(sessions),
+      hours: recording.seconds / 3600,
+      exits: sessions.reduce((total, session) => total + session.timesExitedBed, 0),
+      bedtime: recording.start == null ? null : new Date(recording.start),
+      wake: recording.end == null ? null : new Date(recording.end),
+      distribution: null, quality: null, hr: null, hrv: null, br: null, asleepSeconds: null,
+    }
+  })
 }
 
 export function toWeekNights(nights: NightSummary[], detailed: boolean): WeekNight[] {
@@ -316,7 +262,9 @@ export function toWeekNights(nights: NightSummary[], detailed: boolean): WeekNig
     label: detailed ? `${DAY_NAMES[n.date.getDay()]} ${n.date.getDate()}` : DAY_NAMES[n.date.getDay()][0],
     hours: n.hours,
     quality: n.quality,
-    split: sleepSplit(n.distribution),
+    // Bar height is recorded bed time, which includes awake and unstaged intervals.
+    // Stage proportions belong in the full-night detail, not rescaled onto bed time.
+    split: null,
   }))
 }
 

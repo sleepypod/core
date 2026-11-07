@@ -15,12 +15,12 @@ import {
   monthWeeks,
   nightKey,
   nightWindow,
-  sleepSplit,
+  withNightAnalysis,
+  type NightAnalysis,
   stageDurations,
   toHypnoBlocks,
   toWeekNights,
 } from '../sleepData'
-import { MOVEMENT_ONLY_STAGE_RULESET } from '@/src/lib/sleep-stage-rules'
 
 const at = (d: number, h: number, m = 0) => new Date(2026, 8, d, h, m)
 const rec = (id: number, entered: Date, hours: number, exits = 0) => ({
@@ -128,92 +128,54 @@ describe('week nights', () => {
     expect(nights[1].quality).toBeNull()
   })
 
-  it('classifies stages and averages vitals inside each night', () => {
-    const r = rec(1, at(21, 23), 1)
-    const vitals = Array.from({ length: 12 }, (_, i) => ({
-      timestamp: new Date(at(21, 23).getTime() + i * 300_000),
-      heartRate: 60,
-      hrv: 40,
-      breathingRate: 14,
-    }))
-    const outside = { timestamp: at(21, 12), heartRate: 100, hrv: 1, breathingRate: 30 }
-    const [, night] = buildNights(new Date(2026, 8, 20), 2, [r], [...vitals, outside], [])
-    expect(night.hr).toBe(60)
-    expect(night.hrv).toBe(40)
-    expect(night.br).toBe(14)
-    expect(night.distribution).not.toBeNull()
-    expect(night.quality).toEqual(expect.any(Number))
+  const analysisFor = (nightDate = '2026-09-21'): NightAnalysis => ({
+    epochs: [
+      { start: at(21, 22).getTime(), duration: 300000, stage: 'wake', heartRate: 60, hrv: 40, breathingRate: 12, movement: 0 },
+      { start: at(22, 4).getTime(), duration: 300000, stage: 'deep', heartRate: 80, hrv: 60, breathingRate: 16, movement: 0 },
+    ],
+    blocks: [], distribution: { wake: 50, rem: 0, light: 0, deep: 50 }, qualityScore: 17,
+    totalSleepMs: 300000, totalStagedMs: 600000, sleepRecordId: null,
+    enteredBedAt: at(21, 22).getTime(), leftBedAt: at(22, 5).getTime(),
+    recording: { nightDate, recordIds: [1, 2, 3], start: at(21, 22).getTime(), end: at(22, 5).getTime(), durationMs: 3 * 3600000, gapsMs: 4 * 3600000, exits: 3 },
   })
 
-  it('classifies with the HR rules unless calibration quality is low', () => {
-    const r = rec(1, at(21, 23), 1)
-    const hrs = [70, 70, 70, 60, 60, 60, 60, 70, 70, 70, 70, 70]
-    const vitals = hrs.map((heartRate, i) => ({
-      timestamp: new Date(at(21, 23).getTime() + i * 300_000),
-      heartRate,
-      hrv: 40,
-      breathingRate: 14,
-    }))
-    const [, calibrated] = buildNights(new Date(2026, 8, 20), 2, [r], vitals, [])
-    const [, lowQuality] = buildNights(new Date(2026, 8, 20), 2, [r], vitals, [], 0.1)
-    expect(calibrated.distribution?.deep).toBeGreaterThan(0)
-    expect(lowQuality.distribution?.deep).toBe(0)
-    expect(lowQuality.quality).toBeLessThanOrEqual(50)
-    const [, movementOnly] = buildNights(new Date(2026, 8, 20), 2, [r], vitals, [], 1, MOVEMENT_ONLY_STAGE_RULESET)
-    expect(movementOnly.distribution?.deep).toBe(0)
-  })
-
-  it('includes every recorded segment in vitals and stages without filling gaps or double-counting overlaps', () => {
+  it('preserves whole-night server scores, epochs and coverage instead of classifying again', () => {
     const records = [rec(1, at(21, 22), 2, 1), rec(2, at(21, 23), 1), rec(3, at(22, 4), 1, 2)]
-    const values = (start: Date, heartRate: number, hrv: number, breathingRate: number) => Array.from({ length: 12 }, (_, index) => ({
-      timestamp: new Date(start.getTime() + index * 300000), heartRate, hrv, breathingRate,
-    }))
-    const firstVitals = values(at(21, 22), 60, 40, 12)
-    const lastVitals = values(at(22, 4), 80, 60, 16)
-    const gapVitals = values(at(22, 1), 200, 1, 50)
-    const [, night] = buildNights(at(20, 0), 2, records, [...firstVitals, ...lastVitals, ...gapVitals])
-    const [, withoutGap] = buildNights(at(20, 0), 2, records, [...firstVitals, ...lastVitals])
-    expect(night).toMatchObject({ hours: 3, exits: 3, bedtime: at(21, 22), wake: at(22, 5), hr: 70, hrv: 50, br: 14 })
-    expect(night.distribution).not.toBeNull()
-    expect(night.distribution).toEqual(withoutGap.distribution)
-    expect(night.quality).toEqual(withoutGap.quality)
+    const [, base] = buildNights(at(20, 0), 2, records)
+    const analysis = analysisFor()
+    const night = withNightAnalysis(base, analysis)
+    expect(night).toMatchObject({ hours: 3, exits: 3, bedtime: at(21, 22), wake: at(22, 5), hr: 70, hrv: 50, br: 14, asleepSeconds: 300, quality: 17 })
+    expect(night.analysis).toBe(analysis)
+    expect(night.distribution).toBe(analysis.distribution)
+    expect(toWeekNights([night], true)[0]).toMatchObject({ hours: 3, quality: 17, split: null })
   })
 
-  it('computes no stages or quality while the classifier is unknown, keeping vitals', () => {
-    const r = rec(1, at(21, 23), 1)
-    const vitals = [70, 60, 60, 70].map((heartRate, i) => ({
-      timestamp: new Date(at(21, 23).getTime() + i * 300_000),
-      heartRate,
-      hrv: 40,
-      breathingRate: 14,
-    }))
-    const [, night] = buildNights(new Date(2026, 8, 20), 2, [r], vitals, [], 1, null)
-    expect(night.distribution).toBeNull()
-    expect(night.quality).toBeNull()
-    expect(night.hr).toBe(65)
+  it('does not invent stages, scores or zero sleep without a server result', () => {
+    const [, base] = buildNights(at(20, 0), 2, [rec(1, at(21, 23), 1)])
+    expect(withNightAnalysis(base)).toEqual(base)
+    expect(base).toMatchObject({ quality: null, distribution: null, hr: null, asleepSeconds: null })
+    expect(toWeekNights([base], true)[0].split).toBeNull()
   })
 
-  it('keeps vitals but classifies nothing while calibration is unknown', () => {
-    const r = rec(1, at(21, 23), 1)
-    const vitals = [70, 60, 60, 70].map((heartRate, i) => ({
-      timestamp: new Date(at(21, 23).getTime() + i * 300_000),
-      heartRate,
-      hrv: 40,
-      breathingRate: 14,
-    }))
-    const [, night] = buildNights(new Date(2026, 8, 20), 2, [r], vitals, [], null)
-    expect(night.distribution).toBeNull()
-    expect(night.quality).toBeNull()
-    expect(night.hr).toBe(65)
+  it('does not apply a result for a different calendar night', () => {
+    const [, base] = buildNights(at(20, 0), 2, [rec(1, at(21, 23), 1)])
+    expect(withNightAnalysis(base, analysisFor('2026-09-20'))).toBe(base)
   })
 
-  it('normalizes the REM/Light/Deep split and labels bars', () => {
-    expect(sleepSplit({ wake: 10, rem: 18, light: 45, deep: 27 })).toEqual({ rem: 20, light: 50, deep: 30 })
-    expect(sleepSplit({ wake: 100, rem: 0, light: 0, deep: 0 })).toBeUndefined()
-    expect(sleepSplit(null)).toBeUndefined()
+  it('distinguishes zero estimated sleep from missing stages', () => {
+    const [, base] = buildNights(at(20, 0), 2, [rec(1, at(21, 23), 1)])
+    const analysis = analysisFor()
+    analysis.epochs = analysis.epochs.map(epoch => ({ ...epoch, stage: 'wake' }))
+    expect(withNightAnalysis(base, analysis).asleepSeconds).toBe(0)
+    analysis.epochs = []
+    expect(withNightAnalysis(base, analysis)).toMatchObject({ asleepSeconds: null, quality: null, distribution: null })
+  })
+
+  it('labels bars without fabricating REM/Light/Deep portions for recorded hours', () => {
     const nights = buildNights(new Date(2026, 8, 20), 2, [])
-    expect(toWeekNights(nights, true).map(n => n.label)).toEqual(['Sun 20', 'Mon 21'])
-    expect(toWeekNights(nights, false).map(n => n.label)).toEqual(['S', 'M'])
+    expect(toWeekNights(nights, true).map(night => night.label)).toEqual(['Sun 20', 'Mon 21'])
+    expect(toWeekNights(nights, false).map(night => night.label)).toEqual(['S', 'M'])
+    expect(toWeekNights(nights, false).every(night => night.split === null)).toBe(true)
   })
 
   it('averages clock times across midnight', () => {

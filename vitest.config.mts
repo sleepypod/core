@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const serverOnlyTestStub = '\0server-only-test-stub'
+const thermalForecastIntegration = 'src/comfort/tests/thermal-forecast-integration.test.ts'
 
 export default defineConfig({
   plugins: [{
@@ -46,7 +47,28 @@ export default defineConfig({
       include: ['src/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'instrumentation.ts', 'proxy.ts'],
       exclude: ['**/tests/**', '**/*.test.{ts,tsx}', '**/*.d.ts'],
     },
-    name: 'unit',
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          exclude: [thermalForecastIntegration],
+          sequence: { groupOrder: 0 },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'thermal-forecast-integration',
+          include: [thermalForecastIntegration],
+          // Full-night provenance audits need a worker without competing test files.
+          // Keep the existing fixture, timeout and assertions, with shared coverage.
+          sequence: { groupOrder: 1 },
+          fileParallelism: false,
+          maxWorkers: 1,
+        },
+      },
+    ],
     // Alarm/snooze state is persisted next to the database; keep tests that
     // exercise it without mocking from writing into the repo.
     env: {
