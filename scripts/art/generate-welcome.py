@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Embed a 38x40, 256-colour terminal raster from the iOS WelcomeLogo.png.
+"""Embed matching ASCII and 38x40, 256-colour terminal art from the iOS WelcomeLogo.png.
 
 Run with: uv run --with pillow scripts/art/generate-welcome.py /path/to/WelcomeLogo.png
 The generated data is embedded in sp-welcome; Pillow is never needed on the pod.
@@ -35,6 +35,23 @@ for y in range(40):
     rows.append(' '.join(row))
 path = Path(__file__).resolve().parents[1] / 'bin/sp-welcome'
 source = path.read_text()
-start = source.index("  cat <<'PIXELS'\n") + len("  cat <<'PIXELS'\n")
-end = source.index('PIXELS\n', start)
-path.write_text(source[:start] + '\n'.join(rows) + '\n' + source[end:])
+# The ASCII fallback uses exactly the same silhouette and orientation as the
+# coloured raster. Average only visible pixels, so the crescent edge stays clear.
+ascii_rows = []
+for y in range(0, 40, 2):
+    line = ""
+    for x in range(38):
+        visible = [image.getpixel((x, yy))[:3] for yy in (y, y + 1)
+                   if image.getpixel((x, yy))[3] >= 128]
+        if not visible:
+            line += " "
+            continue
+        brightness = sum(0.2126*r + 0.7152*g + 0.0722*b for r, g, b in visible) / len(visible)
+        ramp = ".:-=+*#%@"
+        line += ramp[min(len(ramp) - 1, int(brightness / 256 * len(ramp)))]
+    ascii_rows.append(line.rstrip())
+for tag, lines in (("ART", ascii_rows), ("PIXELS", rows)):
+    start = source.index("  cat <<'" + tag + "'\n") + len("  cat <<'" + tag + "'\n")
+    end = source.index(tag + "\n", start)
+    source = source[:start] + "\n".join(lines) + "\n" + source[end:]
+path.write_text(source)

@@ -59,16 +59,24 @@ it('renders the demo as plain ASCII within 80 columns when piped', () => {
   expect(result.stdout).toMatch(/firmware\s+ca35aafa/)
 })
 
-it('keeps logo and mask the same shape so colours land on the right cells', () => {
+it('keeps the ASCII and pixel silhouettes aligned with the reference moon', () => {
   const source = readFileSync(resolve('scripts/bin/sp-welcome'), 'utf8')
   const block = (tag: string) => source.split(`<<'${tag}'\n`)[1].split(`\n${tag}\n`)[0].split('\n')
   const art = block('ART')
-  const mask = block('MASK')
-  expect(mask).toHaveLength(art.length)
+  const pixels = block('PIXELS').map(row => row.split(' '))
+  expect(pixels).toHaveLength(art.length * 2)
   art.forEach((line, row) => {
-    expect(mask[row].length, `row ${row}`).toBe(line.length)
-    expect([...mask[row]].map(c => c === ' '), `row ${row}`).toEqual([...line].map(c => c === ' '))
+    for (let col = 0; col < 38; col++) {
+      const visible = pixels[row * 2][col] !== '-' || pixels[row * 2 + 1][col] !== '-'
+      expect((line[col] ?? ' ') !== ' ', `row ${row}, col ${col}`).toBe(visible)
+    }
   })
+  // The supplied logo has its higher moon tip on the left, with the curved
+  // illuminated lower edge beneath it. Guard against mirroring either axis.
+  expect(art[0].trim()).toBe('.')
+  expect(art[0].indexOf('.')).toBe(10)
+  expect(art[2].trim().length).toBeGreaterThan(art[0].trim().length)
+  expect(art[6].trim().length).toBeLessThan(art[4].trim().length)
 })
 
 it('keeps the animation geometry on the logo: every Z lands on an empty cell', () => {
