@@ -33,6 +33,14 @@ export function scheduleSourceSide(side: Side, sides: BedState | null | undefine
   return null
 }
 
+/**
+ * With one sleeper, their alarm also rings on the other side: they may have
+ * rolled over onto it. Null with two sleepers, or for the unused side.
+ */
+export function alarmPartnerSide(side: Side, sides: BedState | null | undefined): Side | null {
+  return singleSleeperSideFor(sides) === side ? (side === 'left' ? 'right' : 'left') : null
+}
+
 export function mirrorSideFor(side: Side, sides: BedState | null | undefined): Side | null {
   const other = side === 'left' ? 'right' : 'left'
   return scheduleSourceSide(other, sides) === side ? other : null

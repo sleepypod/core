@@ -337,6 +337,54 @@ describe('GestureActionHandler', () => {
     })
   })
 
+  describe('a single sleeper\'s alarm ringing on both sides', () => {
+    const linked = (ownerSide: 'left' | 'right', linkedSide: 'left' | 'right'): AlarmConfig => ({
+      vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, snoozeDuration: 120, snoozeTaper: 50, ownerSide, linkedSide,
+    })
+
+    test('a tap on the other side uses the sleeper\'s gestures and snoozes both sides', async () => {
+      // Tapped the unused right side; its own gesture would just stop the alarm.
+      const alarm = makeAlarmHooks(linked('left', 'left'))
+      const { deps, client } = makeDeps(null, { isAlarmVibrating: true }, makeMockClient(), alarm)
+      ;(deps.findGestureConfig as ReturnType<typeof vi.fn>).mockImplementation(async (side: string) =>
+        side === 'left' ? { actionType: 'alarm', alarmBehavior: 'snooze' } : { actionType: 'temperature', alarmBehavior: null })
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('right', 'doubleTap'))
+
+      expect(deps.findGestureConfig).toHaveBeenCalledWith('left', 'doubleTap')
+      expect((client.clearAlarm as ReturnType<typeof vi.fn>).mock.calls).toEqual([['right'], ['left']])
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+      expect(alarm.ended).toHaveBeenCalledWith('right')
+      // Snoozed once, on the tapped side; it comes back on both (snoozeManager).
+      expect(alarm.snooze).toHaveBeenCalledTimes(1)
+      expect(alarm.snooze).toHaveBeenCalledWith('right', 120, linked('left', 'left'))
+    })
+
+    test('stopping it on the sleeper\'s side stops the other side too', async () => {
+      const alarm = makeAlarmHooks(linked('left', 'right'))
+      const { deps, client } = makeDeps({ actionType: 'alarm', alarmBehavior: 'dismiss' }, { isAlarmVibrating: true }, makeMockClient(), alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+
+      expect((client.clearAlarm as ReturnType<typeof vi.fn>).mock.calls).toEqual([['left'], ['right']])
+      expect(alarm.cancelSnooze).toHaveBeenCalledWith('left')
+      expect(alarm.cancelSnooze).toHaveBeenCalledWith('right')
+      expect(alarm.ended).toHaveBeenCalledWith('right')
+      expect(alarm.snooze).not.toHaveBeenCalled()
+    })
+
+    test('a tap with no ringing action stops both sides', async () => {
+      const alarm = makeAlarmHooks(linked('left', 'right'))
+      const { deps, client } = makeDeps({ actionType: 'temperature', alarmBehavior: null }, { isAlarmVibrating: true }, makeMockClient(), alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'quadTap'))
+
+      expect(client.clearAlarm).toHaveBeenCalledWith('right')
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+      expect(alarm.ended).toHaveBeenCalledWith('right')
+    })
+  })
+
   describe('other gestures during a vibrating alarm', () => {
     test('a temperature gesture with no ringing action only records the alarm stopped', async () => {
       // While an alarm rings a tap is about the alarm, not the temperature.

@@ -94,14 +94,21 @@ export class GestureActionHandler {
   }
 
   private execute = async (event: GestureEvent): Promise<void> => {
-    const gesture = await this.deps.findGestureConfig(event.side, event.tapType)
     const state = await this.deps.findDeviceState(event.side)
     if (state?.isAlarmVibrating) {
-      if (gesture?.alarmBehavior) await this.handleRingingAction(event, gesture)
-      // The firmware already stopped the alarm on this tap.
-      else await this.deps.alarm.ended(event.side)
+      // A single sleeper's alarm rings on both sides: a tap on either uses
+      // the gestures of the side whose alarm it is, and acts on both.
+      const config = this.deps.alarm.activeConfig(event.side)
+      const ringing = await this.deps.findGestureConfig(config?.ownerSide ?? event.side, event.tapType)
+      if (ringing?.alarmBehavior) await this.handleRingingAction(event, ringing, config)
+      else {
+        // The firmware already stopped the alarm on this tap.
+        await this.stopLinked(event.side, config)
+        await this.deps.alarm.ended(event.side)
+      }
       return
     }
+    const gesture = await this.deps.findGestureConfig(event.side, event.tapType)
     if (!gesture) return
 
     if (gesture.actionType === 'temperature') {
@@ -139,10 +146,30 @@ export class GestureActionHandler {
     })
   }
 
-  /** A tap while an alarm is ringing: snooze or stop it. */
+  /** Stop the other side of a linked alarm (single sleeper) along with `side`. */
+  private stopLinked = async (side: GestureEvent['side'], config: AlarmConfig | null): Promise<void> => {
+    const linked = config?.linkedSide
+    if (!linked || linked === side) return
+    const client = this.deps.newHardwareClient(this.socketPath)
+    try {
+      await client.connect()
+      await client.clearAlarm(linked)
+    }
+    catch (error) {
+      console.error(`[gestureActionHandler] clearAlarm failed for linked ${linked}:`, error)
+    }
+    finally {
+      client.disconnect()
+    }
+    this.deps.alarm.cancelSnooze(linked)
+    await this.deps.alarm.ended(linked)
+  }
+
+  /** A tap while an alarm is ringing: snooze or stop it (on both sides when linked). */
   private handleRingingAction = async (
     event: GestureEvent,
-    gesture: TapGestureRow
+    gesture: TapGestureRow,
+    active: AlarmConfig | null,
   ): Promise<void> => {
     const client = this.deps.newHardwareClient(this.socketPath)
     // The firmware already stopped the vibration on the tap, so the clear only
@@ -160,14 +187,16 @@ export class GestureActionHandler {
     try {
       if (gesture.alarmBehavior === 'snooze') {
         // Read before ended() forgets it: the snoozed alarm comes back as it was.
-        const config = this.deps.alarm.activeConfig(event.side) ?? DEFAULT_SNOOZE_ALARM
+        const config = active ?? DEFAULT_SNOOZE_ALARM
         await clear()
+        await this.stopLinked(event.side, active)
         await this.deps.alarm.ended(event.side)
         // The alarm sets the snooze length (and how it tapers), not the tap.
         this.deps.alarm.snooze(event.side, nextSnoozeSeconds(config), config)
       }
       else {
         await clear()
+        await this.stopLinked(event.side, active)
         this.deps.alarm.cancelSnooze(event.side)
         await this.deps.alarm.ended(event.side)
       }

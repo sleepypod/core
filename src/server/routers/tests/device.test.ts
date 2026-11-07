@@ -756,6 +756,35 @@ describe('device.setAlarm / clearAlarm / snoozeAlarm', () => {
     expect(helpersMock.withHardwareClient.mock.calls[0]?.[1]).toBe('Failed to clear alarm')
   })
 
+  it('clearAlarm stops a single sleeper\'s alarm on both sides', async () => {
+    const { markAlarmStarted, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    try {
+      await markAlarmStarted('left', { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, linkedSide: 'right', ownerSide: 'left' })
+      await caller.clearAlarm({ side: 'left' })
+      expect(helpersMock.client.clearAlarm.mock.calls).toEqual([['left'], ['right']])
+      expect(snoozeMock.cancelSnooze).toHaveBeenCalledWith('left')
+      expect(snoozeMock.cancelSnooze).toHaveBeenCalledWith('right')
+      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: false })
+    }
+    finally {
+      suspendActiveAlarms()
+    }
+  })
+
+  it('snoozeAlarm keeps a single sleeper\'s alarm linked and stops the other side', async () => {
+    const { markAlarmStarted, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    snoozeMock.snoozeAlarm.mockReturnValue(new Date(1700000000000))
+    try {
+      await markAlarmStarted('left', { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, linkedSide: 'right', ownerSide: 'left' })
+      await caller.snoozeAlarm({ side: 'left', duration: 300 })
+      expect(snoozeMock.snoozeAlarm).toHaveBeenCalledWith('left', 300, expect.objectContaining({ linkedSide: 'right', ownerSide: 'left' }))
+      expect(helpersMock.client.clearAlarm.mock.calls).toEqual([['left'], ['right']])
+    }
+    finally {
+      suspendActiveAlarms()
+    }
+  })
+
   it('snoozeAlarm clears alarm + invokes snoozeManager and returns timestamp', async () => {
     const snoozeUntil = new Date(1700000000000)
     snoozeMock.snoozeAlarm.mockReturnValue(snoozeUntil)
