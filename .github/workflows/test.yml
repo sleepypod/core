@@ -17,7 +17,8 @@ concurrency:
 jobs:
   ci:
     name: ${{ matrix.task.name }}
-    runs-on: ubuntu-latest
+    # Locked Playwright 1.58.2 supports Ubuntu 24.04, not the newer latest image.
+    runs-on: ${{ matrix.task.name == 'Browser Tests' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: read
