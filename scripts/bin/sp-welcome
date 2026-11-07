@@ -37,8 +37,9 @@ ZZZ_DELAY=0.12
 ZZZ_COLOUR=183
 ZZZ_STEPS='13 31 z 15 33 z 17 35 Z'
 
-# fact key, label, style (text | state | bar). Row order is display order.
+# fact key, label, style (text | state | bar | temperature). Row order is display order.
 PANEL_ROWS='host host text
+web web text
 pod pod text
 app sleepypod text
 firmware firmware text
@@ -47,10 +48,11 @@ frank frank state
 dns dnsmasq state
 blocked blocked text
 pipeline pipeline text
-left left text
-right right text
+left left temperature
+right right temperature
 water water state
 disk disk bar
+writes writes text
 memory memory bar
 uptime uptime text'
 
@@ -250,8 +252,15 @@ side_summary() {
 }
 
 fact_device() {
+  port=$(api_port)
+  # SSH_CONNECTION identifies the address the user actually reached, including
+  # IPv6. Off SSH, prefer an available LAN address. Never guess a public URL.
+  address=$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $3}')
+  [ -n "$address" ] || address=$(lim 1 hostname -I 2>/dev/null | awk '{print $1}')
+  case "$address" in *:*) address="[$address]" ;; esac
+  [ -n "$address" ] && fact web "http://$address:$port"
   status=$(lim 3 curl --silent --fail --max-time 2 --noproxy '*' \
-    "http://127.0.0.1:$(api_port)/api/device/status" 2>/dev/null)
+    "http://127.0.0.1:$port/api/device/status" 2>/dev/null)
   [ -n "$status" ] || return 0
 
   # Same revision rule as sp-info. Only the revision is kept, never the serial.
@@ -317,6 +326,28 @@ fact_disk() {
   [ -n "$usage_line" ] && printf 'disk\t%s\n' "$usage_line"
 }
 
+# A one-second sample of the entire eMMC, including firmware and OS writes.
+# No cache files or database writes; unavailable/reset counters render a dash.
+fact_writes() {
+  rate=$(lim 3 python3 -c '
+import os, pathlib, time
+name = os.environ.get("SP_FLASH_DEVICE", "mmcblk0")
+if not name or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for c in name):
+    raise ValueError("invalid block device")
+path = pathlib.Path("/sys/block", name, "stat")
+start = int(path.read_text().split()[6])
+then = time.monotonic()
+time.sleep(1)
+end = int(path.read_text().split()[6])
+elapsed = time.monotonic() - then
+if start >= 0 and end >= start and elapsed > 0:
+    rate = (end - start) * 512 / elapsed
+    unit, divisor = ("MiB/s", 1048576) if rate >= 1048576 else ("KiB/s", 1024)
+    print("{:.1f} {} (1s)".format(rate / divisor, unit))
+' 2>/dev/null)
+  fact writes "$rate"
+}
+
 fact_memory() {
   lim 1 awk '
     function human(k) {
@@ -355,6 +386,7 @@ facts_live() {
   fact_device &
   fact_pipeline &
   fact_disk &
+  fact_writes &
   (fact service "$(unit_state sleepypod.service)") &
   (fact frank "$(unit_state frank.service)") &
   fact_dns &
@@ -363,6 +395,7 @@ facts_live() {
 
 facts_demo() {
   fact host demo-pod
+  fact web 'http://192.168.1.88:3000'
   fact pod 'Pod 5 (J55)'
   fact app '6179822 (dev)'
   fact firmware ca35aafa
@@ -374,6 +407,7 @@ facts_demo() {
   fact left '74F -> 68F'
   fact right '71F off'
   fact water ok
+  fact writes '240.0 KiB/s (1s)'
   fact disk 42 '2.6G/6.2G'
   fact memory 61 '1.2G/1.9G'
   fact uptime '3d 4h 12m'
@@ -465,17 +499,37 @@ render() {
       return warn
     }
 
-    function bar_colour(p) { return p >= 90 ? bad : p >= 80 ? warn : good }
-
-    function bar_value(k, room,   p, text, filled, c) {
+    function bar_value(k, room,   p, text, filled, c, out, i, step) {
       p = val[k] + 0
       text = p "% " detail[k]
-      c = bar_colour(p)
-      if (length(text) + bar_w + 3 > room) return tint(c, fit(text, room))
+      if (length(text) + bar_w + 3 > room) return fit(text, room)
       filled = int(p * bar_w / 100 + 0.5)
       if (filled < 0) filled = 0
       if (filled > bar_w) filled = bar_w
-      return "[" tint(c, repeat("#", filled)) tint(dim, repeat("-", bar_w - filled)) "] " text
+      if (!colour) return "[" repeat("#", filled) repeat("-", bar_w - filled) "] " text
+      out = ""
+      for (i = 1; i <= filled; i++) {
+        step = int((i - 1) * 3 / (filled > 1 ? filled - 1 : 1))
+        # Four related shades per state: mint, amber, or coral.
+        c = p >= 90 ? (step == 0 ? 167 : step == 1 ? 203 : step == 2 ? 209 : 216) : \
+            p >= 80 ? (step == 0 ? 172 : step == 1 ? 214 : step == 2 ? 220 : 222) : \
+                      (step == 0 ? 29 : step == 1 ? 35 : step == 2 ? 78 : 114)
+        out = out tint(c, "█")
+      }
+      return "[" out tint(dim, repeat("░", bar_w - filled)) "] " text
+    }
+
+    # Colour each Fahrenheit number independently; arrows stay neutral.
+    function temperature_value(v,   out, token, n) {
+      out = ""
+      while (match(v, /-?[0-9]+F|off/)) {
+        out = out substr(v, 1, RSTART - 1)
+        token = substr(v, RSTART, RLENGTH)
+        n = token + 0
+        out = out tint(token == "off" ? dim : n < 75 ? 117 : n <= 85 ? 183 : 209, token)
+        v = substr(v, RSTART + RLENGTH)
+      }
+      return out v
     }
 
     function fact_line(i, width,   k, room, head, v) {
@@ -487,6 +541,7 @@ render() {
       if (!(k in val)) return head tint(dim, "-")
       if (row_style[i] == "bar") return head bar_value(k, room)
       v = fit(val[k], room)
+      if (row_style[i] == "temperature") return head temperature_value(v)
       if (row_style[i] == "state") return head tint(state_colour(val[k]), v)
       return head v
     }

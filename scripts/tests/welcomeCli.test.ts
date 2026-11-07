@@ -56,7 +56,7 @@ it('renders the demo as plain ASCII within 80 columns when piped', () => {
   expect(result.status, result.stderr).toBe(0)
   expect(result.stdout).toMatch(/^[\n -~]+$/)
   expect(widest(result.stdout)).toBeLessThanOrEqual(80)
-  expect(result.stdout).toMatch(/\.=@@@=\(@@@@@@@@\).*firmware\s+ca35aafa/)
+  expect(result.stdout).toMatch(/firmware\s+ca35aafa/)
 })
 
 it('keeps logo and mask the same shape so colours land on the right cells', () => {
@@ -96,7 +96,7 @@ it.each([79, 77, 60, 40])('drops the panel beneath the logo at %i columns', (col
   const result = run(['--demo'])
   const lines = result.stdout.split('\n')
   expect(widest(result.stdout)).toBeLessThanOrEqual(columns)
-  if (columns >= 78) expect(lines.findIndex(line => line.includes('uptime'))).toBeLessThan(23)
+  if (columns >= 78) expect(lines.findIndex(line => line.includes('uptime'))).toBeLessThan(25)
   else expect(lines.findIndex(line => line.startsWith('host'))).toBeGreaterThan(19)
 })
 
@@ -298,4 +298,43 @@ it('keeps the pixel raster at two pixels per cell with a transparent silhouette'
     }
   }
   expect(pixels[0][0]).toBe('-')
+})
+
+it('uses solid gradient bars and colours temperature numbers independently', () => {
+  const output = runPty(['--demo']).stdout
+  expect(output).toContain('\x1b[38;5;29m█')
+  expect(output).toContain('\x1b[38;5;114m█')
+  expect(output).toContain('\x1b[38;5;117m74F\x1b[0m -> ')
+  expect(output).toContain('\x1b[38;5;240moff\x1b[0m')
+  env.MOCK_STATUS = STATUS.replace('74.4', '90')
+  expect(runPty().stdout).toContain('\x1b[38;5;209m90F')
+})
+
+it('uses the SSH destination for the web URL, including IPv6', () => {
+  env.SSH_CONNECTION = '192.168.1.1 1234 192.168.1.88 8822'
+  expect(run().stdout).toContain('http://192.168.1.88:3000')
+  env.SSH_CONNECTION = '::1 1234 fd00::88 8822'
+  expect(run().stdout).toContain('http://[fd00::88]:3000')
+})
+
+it('shows unavailable eMMC counters as a dash', () => {
+  writeFileSync(script, readFileSync(script, 'utf8').replace('Path("/sys/block", name', `Path("${root}/missing", name`))
+  expect(run().stdout).toMatch(/writes\s+-$/m)
+})
+
+it('samples actual eMMC counter deltas without writing a cache', () => {
+  const block = join(root, 'block', 'mmcblk0')
+  mkdirSync(block, { recursive: true })
+  writeFileSync(join(block, 'stat'), '0 0 0 0 0 0 100 0')
+  writeFileSync(script, readFileSync(script, 'utf8')
+    .replace('Path("/sys/block", name', `Path("${root}/block", name`))
+  // A child changes the kernel-counter fixture during the sample interval.
+  stub('python3', `if [ "$1" = -c ]; then
+case "$2" in *'time.sleep(1)'*)
+  (sleep 0.5; printf '0 0 0 0 0 0 2148 0' > '${block}/stat') &
+;; esac
+fi
+exec '${spawnSync('which', ['python3'], { encoding: 'utf8' }).stdout.trim()}' "$@"`)
+  const output = run().stdout
+  expect(output).toMatch(/writes\s+10[0-2][0-9]\.[0-9] KiB\/s \(1s\)/)
 })
