@@ -212,6 +212,12 @@ afterEach(() => {
 })
 
 describe('biometrics.getSleepRecords', () => {
+  it('allows a fragmented month without an unbounded response', async () => {
+    dbState.rowsQueue.push([])
+    await expect(caller.getSleepRecords({ side: 'left', limit: 1000 })).resolves.toEqual([])
+    await expect(caller.getSleepRecords({ limit: 1001 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
   it('returns rows', async () => {
     dbState.rowsQueue.push([
       {
@@ -258,6 +264,12 @@ describe('biometrics.getVitals', () => {
 })
 
 describe('biometrics.getMovement / getMovementBuckets / getMovementSummary', () => {
+  it('allows a full week of overnight minute epochs while bounding the response', async () => {
+    dbState.rowsQueue.push([])
+    await expect(caller.getMovement({ side: 'left', limit: 10000 })).resolves.toEqual([])
+    await expect(caller.getMovement({ limit: 10001 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
   it('getMovement returns rows', async () => {
     dbState.rowsQueue.push([{ id: 1, side: 'left', timestamp: new Date(0), totalMovement: 100 }])
     const out = await caller.getMovement({ limit: 10 })
@@ -595,7 +607,7 @@ describe('biometrics.getSleepStages', () => {
       sleepRecordId: 1,
       startDate: new Date('2025-01-01'),
       endDate: new Date('2025-01-02'),
-    })).rejects.toThrow(/Provide either sleepRecordId or startDate/)
+    })).rejects.toThrow(/Provide either sleepRecordId, nightDate or startDate/)
   })
 
   it('throws NOT_FOUND when sleepRecordId missing', async () => {
@@ -720,9 +732,8 @@ describe('biometrics.getSleepStages', () => {
     expect(out.qualityScore).toBe(0)
   })
 
-  it('falls back to longest record in last 24h when no overnight session matches', async () => {
-    // Two daytime naps within 24h — neither qualifies as "overnight" (8pm-4am local)
-    // and one is shorter than 3h. So overnightRecord = undefined, last24h reduce picks longest.
+  it('keeps all recorded segments in the latest noon-to-noon day', async () => {
+    // Both daytime fragments belong to the same noon-to-noon recording day.
     const noon = new Date()
     noon.setHours(12, 0, 0, 0)
     const shortNap = {
@@ -746,8 +757,8 @@ describe('biometrics.getSleepStages', () => {
     ])
 
     const out = await caller.getSleepStages({ side: 'left' })
-    // longerNap (2h) > shortNap (30min), so longerNap wins via reduce
-    expect(out.sleepRecordId).toBe(12)
+    expect(out.sleepRecordId).toBeNull()
+    expect(out.recording).toMatchObject({ recordIds: [11, 12], durationMs: 2.5 * 3600000 })
   })
 
   it('falls back to most recent record (>24h old) when no overnight or 24h record qualifies', async () => {
@@ -1164,7 +1175,7 @@ describe('biometrics BAD_REQUEST guards keep their code and message', () => {
       endDate: new Date('2025-01-02'),
     }))
     expect(error.code).toBe('BAD_REQUEST')
-    expect(error.message).toBe('Provide either sleepRecordId or startDate/endDate, not both')
+    expect(error.message).toBe('Provide either sleepRecordId, nightDate or startDate/endDate, not both')
   })
 
   it('getSleepStages rejects sleepRecordId combined with startDate alone', async () => {
@@ -1173,7 +1184,7 @@ describe('biometrics BAD_REQUEST guards keep their code and message', () => {
       sleepRecordId: 1,
       startDate: new Date('2025-01-01'),
     }))
-    expect(error.message).toBe('Provide either sleepRecordId or startDate/endDate, not both')
+    expect(error.message).toBe('Provide either sleepRecordId, nightDate or startDate/endDate, not both')
   })
 
   it('getSleepStages rejects sleepRecordId combined with endDate alone', async () => {
@@ -1182,7 +1193,7 @@ describe('biometrics BAD_REQUEST guards keep their code and message', () => {
       sleepRecordId: 1,
       endDate: new Date('2025-01-02'),
     }))
-    expect(error.message).toBe('Provide either sleepRecordId or startDate/endDate, not both')
+    expect(error.message).toBe('Provide either sleepRecordId, nightDate or startDate/endDate, not both')
   })
 
   it('getVitalsSummary reports the explicit-range failure, not the computed-range one', async () => {
@@ -1475,110 +1486,77 @@ describe('biometrics.updateSleepRecord duration recomputation', () => {
   })
 })
 
-describe('biometrics.getSleepStages last-night selection', () => {
-  const FAKE_NOW = new Date('2025-06-15T12:00:00.000Z')
-  const FAKE_NOW_SECONDS = FAKE_NOW.getTime() / 1000
-
-  function sleepRecordAt(id: number, enteredIso: string, durationSeconds: number) {
-    const entered = new Date(enteredIso)
-    return {
-      id,
-      side: 'left',
-      enteredBedAt: entered,
-      leftBedAt: new Date(entered.getTime() + durationSeconds * 1000),
-      sleepDurationSeconds: durationSeconds,
-      timesExitedBed: 0,
-      presentIntervals: null,
-      notPresentIntervals: null,
-      createdAt: entered,
-    }
-  }
-
-  /** Decoy that is never "overnight" (11:00 UTC) but is the longest record in
-   * the 24 h window, so it wins whenever the overnight rule rejects the
-   * candidate under test. */
-  const utcDecoy = () => sleepRecordAt(99, '2025-06-15T11:00:00.000Z', 20000)
-
-  /** Run the default (no-argument) branch over `records` and report which
-   * record the last-night heuristic settled on. */
-  async function selectedRecordId(records: unknown[]): Promise<number | null> {
-    dbState.rowsQueue.push(records)
-    dbState.rowsQueue.push([])
-    dbState.rowsQueue.push([])
-    const out = await caller.getSleepStages({ side: 'left' })
-    return out.sleepRecordId
-  }
-
+describe('biometrics.getSleepStages complete-night selection', () => {
+  const makeRecord = (id: number, start: string, end: string) => ({ id, side: 'left',
+    enteredBedAt: new Date(start), leftBedAt: new Date(end), timesExitedBed: 1,
+    sleepDurationSeconds: (Date.parse(end) - Date.parse(start)) / 1000 })
+  const older = makeRecord(1, '2026-06-03T22:00:00Z', '2026-06-04T06:00:00Z')
+  const first = makeRecord(2, '2026-06-04T22:00:00Z', '2026-06-05T00:00:00Z')
+  const second = makeRecord(3, '2026-06-05T01:00:00Z', '2026-06-05T03:00:00Z')
+  const third = makeRecord(4, '2026-06-05T04:00:00Z', '2026-06-05T06:30:00Z')
+  const epoch = (start: string, stage: 'wake' | 'light' = 'light', duration = 60000) => ({
+    start: Date.parse(start), duration, stage, heartRate: 60, hrv: 40, breathingRate: 15, movement: 0,
+  })
   beforeEach(() => {
     vi.useFakeTimers()
-    vi.setSystemTime(FAKE_NOW)
+    vi.setSystemTime(new Date('2026-06-05T10:00:00Z'))
     dbState.settingsRows = [{ timezone: 'UTC' }]
   })
 
-  it('searches sleep records back exactly seven days', async () => {
-    await selectedRecordId([])
-    const query = toQuery(dbState.whereArgs[0])
-    expect(query.sql).toBe('("sleep_records"."side" = ? and "sleep_records"."entered_bed_at" >= ?)')
-    expect(query.params).toEqual(['left', FAKE_NOW_SECONDS - 7 * 24 * 60 * 60])
+  it('classifies all newer fragments, never the older qualifying 8-hour record or the gaps', async () => {
+    dbState.rowsQueue.push([third, second, first, older], [], [], [])
+    sleepStagesMock.classifySleepStages.mockReturnValue([
+      epoch('2026-06-04T22:30:00Z'), epoch('2026-06-05T00:30:00Z'),
+      epoch('2026-06-05T01:30:00Z', 'wake'), epoch('2026-06-05T04:30:00Z'),
+    ])
+    const result = await caller.getSleepStages({ side: 'left' })
+    expect(result.recording).toMatchObject({ recordIds: [2, 3, 4], durationMs: 6.5 * 3600000, gapsMs: 2 * 3600000 })
+    expect(result.sleepRecordId).toBeNull()
+    expect(result.epochs.map(value => value.start)).toEqual([Date.parse('2026-06-04T22:30:00Z'), Date.parse('2026-06-05T01:30:00Z'), Date.parse('2026-06-05T04:30:00Z')])
+    expect(result.totalSleepMs).toBe(120000)
+    expect(result.totalStagedMs).toBe(180000)
+    expect(sleepStagesMock.classifySleepStages).toHaveBeenCalledTimes(3)
   })
 
-  it('prefers an overnight session entered at 22:00 local time', async () => {
-    const overnight = sleepRecordAt(1, '2025-06-14T22:00:00.000Z', 10800)
-    expect(await selectedRecordId([overnight, utcDecoy()])).toBe(1)
+  it('uses the requested Pod-local night and clips overlapping records before staging', async () => {
+    const overlapping = makeRecord(5, '2026-06-04T23:00:00Z', '2026-06-05T02:00:00Z')
+    dbState.rowsQueue.push([second, overlapping, first, older], [], [], [])
+    sleepStagesMock.classifySleepStages.mockReturnValue([epoch('2026-06-05T01:30:00Z')])
+    const result = await caller.getSleepStages({ side: 'left', nightDate: '2026-06-04' })
+    expect(result.recording?.durationMs).toBe(5 * 3600000)
+    expect(result.epochs).toHaveLength(1)
+    expect(sleepStagesMock.classifySleepStages).toHaveBeenCalledOnce()
   })
 
-  it('counts 20:00 local as inside the overnight window', async () => {
-    const atEight = sleepRecordAt(2, '2025-06-14T20:00:00.000Z', 10800)
-    expect(await selectedRecordId([atEight, utcDecoy()])).toBe(2)
-  })
-
-  it('counts 04:00 local as outside the overnight window', async () => {
-    const atFour = sleepRecordAt(3, '2025-06-15T04:00:00.000Z', 10800)
-    expect(await selectedRecordId([atFour, utcDecoy()])).toBe(99)
-  })
-
-  it('counts 02:00 local as inside the overnight window', async () => {
-    const atTwo = sleepRecordAt(4, '2025-06-15T02:00:00.000Z', 10800)
-    expect(await selectedRecordId([atTwo, utcDecoy()])).toBe(4)
-  })
-
-  it('rejects a long daytime session entered at 09:00 local time', async () => {
-    const daytime = sleepRecordAt(5, '2025-06-15T09:00:00.000Z', 10800)
-    expect(await selectedRecordId([daytime, utcDecoy()])).toBe(99)
-  })
-
-  it('requires at least three hours before an overnight session qualifies', async () => {
-    const justShort = sleepRecordAt(6, '2025-06-14T22:00:00.000Z', 10799)
-    expect(await selectedRecordId([justShort, utcDecoy()])).toBe(99)
-  })
-
-  it('classifies overnight against the configured device timezone', async () => {
+  it('uses device timezone and no minimum duration per fragment', async () => {
     dbState.settingsRows = [{ timezone: 'Asia/Tokyo' }]
-    // 13:00 UTC is 22:00 in Tokyo but only 06:00 in America/Los_Angeles.
-    const tokyoOvernight = sleepRecordAt(7, '2025-06-14T13:00:00.000Z', 10800)
-    // 02:00 UTC is daytime in both zones (11:00 Tokyo / 19:00 Los Angeles).
-    const decoy = sleepRecordAt(99, '2025-06-15T02:00:00.000Z', 20000)
-    expect(await selectedRecordId([tokyoOvernight, decoy])).toBe(7)
+    const japanEvening = makeRecord(10, '2026-06-04T13:00:00Z', '2026-06-04T14:00:00Z')
+    const japanMorning = makeRecord(11, '2026-06-04T20:00:00Z', '2026-06-04T21:00:00Z')
+    dbState.rowsQueue.push([japanMorning, japanEvening], [], [], [])
+    const result = await caller.getSleepStages({ side: 'left', nightDate: '2026-06-04' })
+    expect(result.recording).toMatchObject({ nightDate: '2026-06-04', recordIds: [10, 11], durationMs: 7200000 })
   })
 
-  it('falls back to America/Los_Angeles when device settings have no row', async () => {
-    dbState.settingsRows = []
-    // 05:00 UTC is 22:00 in America/Los_Angeles (PDT).
-    const laOvernight = sleepRecordAt(8, '2025-06-15T05:00:00.000Z', 10800)
-    const decoy = sleepRecordAt(99, '2025-06-15T02:00:00.000Z', 20000)
-    expect(await selectedRecordId([laOvernight, decoy])).toBe(8)
+  it('returns no fabricated coverage when the requested night has no recordings', async () => {
+    dbState.rowsQueue.push([older])
+    const result = await caller.getSleepStages({ side: 'left', nightDate: '2026-06-04' })
+    expect(result).toMatchObject({ recording: null, totalSleepMs: 0, totalStagedMs: 0, epochs: [] })
+    expect(sleepStagesMock.classifySleepStages).not.toHaveBeenCalled()
   })
 
-  it('includes a record sitting exactly on the 24-hour boundary in the fallback', async () => {
-    const older = sleepRecordAt(20, '2025-06-12T11:00:00.000Z', 200)
-    const onBoundary = sleepRecordAt(21, '2025-06-14T12:00:00.000Z', 100)
-    expect(await selectedRecordId([older, onBoundary])).toBe(21)
+  it('honors the calendar display zone when the browser is away from the Pod', async () => {
+    dbState.settingsRows = [{ timezone: 'America/Los_Angeles' }]
+    const morning = makeRecord(10, '2026-06-05T05:00:00Z', '2026-06-05T06:00:00Z')
+    dbState.rowsQueue.push([morning], [], [], [])
+    const result = await caller.getSleepStages({ side: 'left', nightDate: '2026-06-05', timeZone: 'Asia/Tokyo' })
+    expect(result.recording).toMatchObject({ nightDate: '2026-06-05', recordIds: [10], durationMs: 3600000 })
+    await expect(caller.getSleepStages({ side: 'left', timeZone: 'Invalid/Zone' })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 
-  it('keeps the first record when two 24-hour candidates tie on duration', async () => {
-    const first = sleepRecordAt(30, '2025-06-15T09:00:00.000Z', 500)
-    const second = sleepRecordAt(31, '2025-06-15T10:00:00.000Z', 500)
-    expect(await selectedRecordId([first, second])).toBe(30)
+  it('rejects mixing a night selection with a record or a range', async () => {
+    await expect(caller.getSleepStages({ side: 'left', nightDate: '2026-06-04', sleepRecordId: 1 })).rejects.toThrow(/not both/)
+    await expect(caller.getSleepStages({ side: 'left', nightDate: '2026-06-04', startDate: new Date() })).rejects.toThrow(/not both/)
+    await expect(caller.getSleepStages({ side: 'left', nightDate: '2026-02-30' })).rejects.toThrow()
   })
 })
 
@@ -1645,6 +1623,8 @@ describe('biometrics.getSleepStages query window', () => {
       distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
       qualityScore: 0,
       totalSleepMs: 0,
+      totalStagedMs: 0,
+      recording: null,
       sleepRecordId: 3,
       enteredBedAt: record.enteredBedAt.getTime(),
       leftBedAt: record.leftBedAt.getTime(),

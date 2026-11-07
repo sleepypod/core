@@ -16,7 +16,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
   schedules: { getAll: { useQuery: () => ({ data: mock.schedule, isLoading: mock.loading, error: mock.error }) }, updateAlarmSchedule: { useMutation: () => ({ mutateAsync: mock.mutate, error: mock.mutationError }) } },
   nextAlarm: { get: { useQuery: () => ({ data: mock.nextAlarm, isLoading: mock.loading, error: mock.error, refetch: mock.refresh }) }, change: { useMutation: () => ({ mutateAsync: mock.mutate, isPending: false }) } },
   biometrics: {
-    getLatestSleep: { useQuery: () => ({ data: mock.latest, isLoading: mock.loading, error: mock.error }) },
+    getSleepStages: { useQuery: () => ({ data: mock.latest, isLoading: mock.loading, error: mock.error }) },
     getVitalsSummary: { useQuery: (input: unknown) => {
       mock.vitalsInput(input)
       return { data: mock.vitals, error: mock.mutationError }
@@ -103,19 +103,15 @@ it('shows the next schedule point and updates its countdown', () => {
   expect(vi.getTimerCount()).toBe(0)
 })
 
-it('links sleep details, rounds vitals and keeps open-session query keys stable', () => {
-  const enteredBedAt = new Date(2026, 8, 28, 22), leftBedAt = new Date(2026, 8, 29, 6)
-  mock.latest = { enteredBedAt, leftBedAt, sleepDurationSeconds: 28800, timesExitedBed: 1 }
-  mock.vitals = { avgHeartRate: 55.6, avgHRV: 48.4, avgBreathingRate: null }
-  const { rerender } = render(<LastNightCard side="left" name="Alex" />)
-  expect(screen.getByRole('link').getAttribute('href')).toBe('/de/sleep')
-  expect(screen.getByText('56')).toBeTruthy()
-  expect(screen.getByText(/1 exit$/)).toBeTruthy()
-  expect(mock.vitalsInput).toHaveBeenLastCalledWith({ side: 'left', startDate: enteredBedAt, endDate: leftBedAt })
-  mock.latest = { enteredBedAt, leftBedAt: null, sleepDurationSeconds: null }
-  mock.mutationError = new Error('No vitals')
-  rerender(<LastNightCard side="left" name="Alex" />)
-  expect(mock.vitalsInput).toHaveBeenLastCalledWith({ side: 'left', startDate: enteredBedAt })
-  expect(screen.getByText(/now · 0 exits/)).toBeTruthy()
-  expect(screen.getByText('Could not load vitals: No vitals')).toBeTruthy()
+it('shows complete-night recording coverage instead of the latest fragment', () => {
+  const start = new Date('2026-11-06T22:00:00Z').getTime()
+  mock.latest = { recording: { nightDate: '2026-11-06', recordIds: [40, 41, 42, 43], start, end: start + 9 * 3600000,
+    durationMs: 8 * 3600000, gapsMs: 3600000, exits: 4 },
+  epochs: [{ heartRate: 56, hrv: 35, breathingRate: 14 }, { heartRate: 60, hrv: 45, breathingRate: 16 }] }
+  render(<LastNightCard side="left" name="Alex" />)
+  expect(screen.getByText('8h')).toBeTruthy()
+  expect(screen.getByText('58')).toBeTruthy()
+  expect(screen.getByText(/4 segments. Unknown gaps are excluded/)).toBeTruthy()
+  expect(screen.getByText(/4 exits$/)).toBeTruthy()
+  expect(mock.vitalsInput).not.toHaveBeenCalled()
 })

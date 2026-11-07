@@ -61,7 +61,7 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * - Schedule and sleep timeline (desktop): schedules.getAll, biometrics.getSleepRecords,
  *   health.thermalHistory
  * - context cards: schedules.getAll, environment.getLatestBedTemp,
- *   environment.getLatestAmbientLight, biometrics.getLatestSleep/getVitalsSummary
+ *   environment.getLatestAmbientLight, biometrics.getSleepStages
  *
  * Link sides mirrors every change (drag, ±, power) to both sides. All off
  * powers down whichever sides are on, linked or not.
@@ -218,6 +218,7 @@ export const TempScreen = () => {
           <div className={`${CONTEXT} max-[899px]:order-first`}>
             <span className="sp-label" role="status">Connecting…</span>
             <p className="text-xs text-fg-2">Saved alarms remain available while hardware status reconnects.</p>
+            <LastNightCard side={contextSide} name={sideName(contextSide)} />
             <AlarmCard side={contextSide} />
           </div>
         </div>

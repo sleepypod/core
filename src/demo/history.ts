@@ -305,6 +305,6 @@ export function summarizeEpochs(epochs: SleepEpoch[]) {
     blocks: mergeIntoBlocks(epochs),
     distribution,
     qualityScore: calculateQualityScore(distribution),
-    totalSleepMs: epochs.reduce((sum, e) => sum + e.duration, 0),
+    totalSleepMs: epochs.reduce((total, epoch) => total + (epoch.stage === 'wake' ? 0 : epoch.duration), 0),
   }
 }

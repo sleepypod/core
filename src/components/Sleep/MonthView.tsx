@@ -16,6 +16,7 @@ import {
   monthCells,
   monthWeeks,
   nightWindow,
+  recordingSummary,
   type Side,
   type SleepRecordRow,
 } from './sleepData'
@@ -32,7 +33,7 @@ interface MonthNight {
 
 export function MonthView({ side, month }: { side: Side, month: Date }) {
   const range = useMemo(() => nightWindow(month, daysInMonth(month)), [month])
-  const query = trpc.biometrics.getSleepRecords.useQuery({ side, ...range, limit: 100 })
+  const query = trpc.biometrics.getSleepRecords.useQuery({ side, ...range, limit: 1000 })
 
   const nights = useMemo<MonthNight[]>(() => {
     const byNight = groupByNight((query.data ?? []) as SleepRecordRow[])
@@ -40,7 +41,7 @@ export function MonthView({ side, month }: { side: Side, month: Date }) {
       .map(([key, recs]) => ({
         key,
         date: keyToDate(key),
-        hours: recs.reduce((s, r) => s + r.sleepDurationSeconds, 0) / 3600,
+        hours: recordingSummary(recs).seconds / 3600,
         exits: recs.reduce((s, r) => s + r.timesExitedBed, 0),
       }))
       .sort((a, b) => b.key.localeCompare(a.key))
@@ -56,7 +57,7 @@ export function MonthView({ side, month }: { side: Side, month: Date }) {
       <SectionLabel>{monthName}</SectionLabel>
       <div className="grid grid-cols-3 gap-3">
         <KeyValue label="Nights" value={query.isLoading ? '—' : nights.length} />
-        <KeyValue label="Avg sleep" value={avgHours == null ? '—' : `${avgHours.toFixed(1)}h`} />
+        <KeyValue label="Avg recorded time" value={avgHours == null ? '—' : `${avgHours.toFixed(1)}h`} />
         <KeyValue label="Avg exits" value={avgExits == null ? '—' : avgExits.toFixed(1)} />
       </div>
     </Card>
@@ -78,7 +79,7 @@ export function MonthView({ side, month }: { side: Side, month: Date }) {
 
       <Card>
         <div className="flex items-center">
-          <span className="text-[15px] font-medium">Hours asleep</span>
+          <span className="text-[15px] font-medium">Recorded bed hours</span>
           <span className="ml-auto flex items-center gap-2 text-xs text-fg-2">
             5h
             <span

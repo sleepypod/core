@@ -1,3 +1,5 @@
+import { recordingWindows } from '@/src/lib/sleep-recording'
+import { stagesWithinWindow } from '@/src/lib/stage-coverage'
 import { formatTick, type TimeFormat } from '@/src/lib/timeFormat'
 export { formatClock, formatTick } from '@/src/lib/timeFormat'
 import type { HypnoBlock, StageKey, WeekNight } from '@/src/components/ds'
@@ -86,7 +88,7 @@ export function groupByNight<T extends SleepRecordRow>(records: T[]): Map<string
   return map
 }
 
-/** The session that represents a night: the longest one (naps lose). */
+/** A representative record for editing one session; never a whole-night total. */
 export function mainRecord<T extends SleepRecordRow>(records: T[] | undefined): T | undefined {
   if (!records?.length) return undefined
   return records.reduce((a, b) => (b.sleepDurationSeconds > a.sleepDurationSeconds ? b : a))
@@ -259,36 +261,38 @@ export function buildNights(
     let hr: number | null = null
     let hrv: number | null = null
     let br: number | null = null
-    if (main) {
-      const s = new Date(main.enteredBedAt).getTime()
-      const e = main.leftBedAt ? new Date(main.leftBedAt).getTime() : s + main.sleepDurationSeconds * 1000
-      const inWindow = (t: Date) => {
-        const ms = new Date(t).getTime()
-        return ms >= s && ms <= e
-      }
-      const nv = sortedVitals.filter(v => inWindow(v.timestamp)).map(v => ({ ...v, timestamp: new Date(v.timestamp) }))
-      if (nv.length > 0) {
+    const windows = recordingWindows(recs)
+    if (windows.length) {
+      const inWindow = (timestamp: Date) => windows.some(window => new Date(timestamp) >= window.start && new Date(timestamp) < window.end)
+      const nightVitals = sortedVitals.filter(value => inWindow(value.timestamp)).map(value => ({ ...value, timestamp: new Date(value.timestamp) }))
+      if (nightVitals.length > 0) {
         if (ruleset !== null && calibrationQuality !== null) {
-          const nm = movement.filter(m => inWindow(m.timestamp)).map(m => ({ ...m, timestamp: new Date(m.timestamp) }))
-          const epochs = classifySleepStages(nv, nm, calibrationQuality, ruleset)
+          // Keep per-segment classification and smoothing from crossing unknown gaps.
+          const epochs = windows.flatMap((window) => {
+            const inside = (timestamp: Date) => new Date(timestamp) >= window.start && new Date(timestamp) < window.end
+            const segmentVitals = nightVitals.filter(value => inside(value.timestamp))
+            const segmentMovement = movement.filter(value => inside(value.timestamp)).map(value => ({ ...value, timestamp: new Date(value.timestamp) }))
+            return stagesWithinWindow(classifySleepStages(segmentVitals, segmentMovement, calibrationQuality, ruleset), window)
+          })
           if (epochs.length > 0) {
             distribution = calculateDistribution(epochs)
             quality = calculateQualityScore(distribution, calibrationQuality)
           }
         }
-        hr = average(nv.map(v => v.heartRate))
-        hrv = average(nv.map(v => v.hrv))
-        br = average(nv.map(v => v.breathingRate))
+        hr = average(nightVitals.map(value => value.heartRate))
+        hrv = average(nightVitals.map(value => value.hrv))
+        br = average(nightVitals.map(value => value.breathingRate))
       }
     }
+
     out.push({
       key,
       date: keyToDate(key),
       record: main,
       hours: recordingSummary(recs).seconds / 3600,
       exits: recs.reduce((sum, r) => sum + r.timesExitedBed, 0),
-      bedtime: main ? new Date(main.enteredBedAt) : null,
-      wake: main?.leftBedAt ? new Date(main.leftBedAt) : null,
+      bedtime: windows[0]?.start ?? null,
+      wake: windows.at(-1)?.end ?? null,
       distribution,
       quality,
       hr,

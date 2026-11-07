@@ -61,8 +61,10 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
   // The current week may not hold last night yet (weeks start Sunday), so
   // fall back to the server's "last night" lookup when nothing is picked.
   const useLatest = !record && nightKey === null && isCurrentWeek && !recordsQuery.isLoading
+  // Night keys and the calendar above use the browser's zone, which may differ from the Pod.
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const stagesQuery = trpc.biometrics.getSleepStages.useQuery(
-    record ? { side, sleepRecordId: record.id } : { side },
+    key ? { side, nightDate: key, timeZone } : { side, timeZone },
     { enabled: !!record || useLatest },
   )
   const week = useWeekNights(side, weekStart)
@@ -72,7 +74,10 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
   const error = recordsQuery.error ?? stagesQuery.error
 
   const night = useMemo(() => {
-    const recording = recordingSummary(key ? byNight.get(key) ?? [] : [])
+    const recording = stages?.recording
+      ? { start: stages.recording.start, end: stages.recording.end, seconds: stages.recording.durationMs / 1000,
+          gaps: stages.recording.gapsMs / 1000, count: stages.recording.recordIds.length }
+      : recordingSummary(key ? byNight.get(key) ?? [] : [])
     const epochs = stages?.epochs ?? []
     const start = stages?.enteredBedAt ?? (record ? new Date(record.enteredBedAt).getTime() : epochs[0]?.start)
     const lastEpoch = epochs[epochs.length - 1]
@@ -91,8 +96,8 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       blocks: start != null && end != null ? toHypnoBlocks(stages?.blocks ?? [], start, end) : [],
       ticks: start != null && end != null ? hypnoTicks(start, end, 2, timeFormat) : [],
       durations,
-      asleepSeconds: asleepMs > 0 ? asleepMs / 1000 : record?.sleepDurationSeconds ?? null,
-      exits: record?.timesExitedBed ?? records.find(r => r.id === id)?.timesExitedBed ?? null,
+      asleepSeconds: epochs.length > 0 ? asleepMs / 1000 : null,
+      exits: stages?.recording?.exits ?? (key ? byNight.get(key) ?? [] : []).reduce((total, item) => total + item.timesExitedBed, 0),
       quality: epochs.length > 0 ? stages?.qualityScore ?? null : null,
       distribution: stages?.distribution,
       date: key && record ? keyToDate(key) : start != null ? keyToDate(toNightKey(new Date(start))) : key ? keyToDate(key) : null,
@@ -103,7 +108,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       avgHrv: average(epochs.map(e => e.hrv)),
       avgBr: average(epochs.map(e => e.breathingRate)),
     }
-  }, [stages, record, records, key, timeFormat, byNight])
+  }, [stages, record, key, timeFormat, byNight])
 
   const selectedKey = key ?? (night.start != null ? toNightKey(new Date(night.start)) : null)
   const round = (v: number | null) => (v == null ? '—' : Math.round(v))
@@ -130,7 +135,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
           )}
           >
             <span className="min-[900px]:hidden">Heart rate</span>
-            <span className="max-[899px]:hidden">{night.recording.count > 1 ? 'Heart rate · longest segment' : 'Heart rate through the night'}</span>
+            <span className="max-[899px]:hidden">Heart rate through recorded segments</span>
           </SectionLabel>
           {loading
             ? <div className="h-24 animate-pulse rounded-ctl bg-active" />
@@ -178,7 +183,7 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
           <KeyValue label="Bedtime" value={formatClock(night.recording.start ?? night.start)} size={16} />
           <KeyValue label="Wake" value={formatClock(night.recording.end ?? night.end)} size={16} />
           <KeyValue label="Recorded bed time" value={formatDuration(night.recording.seconds || null)} size={16} />
-          <KeyValue label={night.recording.count > 1 ? 'Estimated sleep · longest segment' : 'Estimated sleep'} value={formatDuration(night.hasStages ? night.asleepSeconds : null)} size={16} />
+          <KeyValue label="Estimated sleep · recorded segments" value={night.asleepSeconds === 0 ? '0m' : formatDuration(night.asleepSeconds)} size={16} />
           <KeyValue label="Bed exits" value={night.exits ?? '—'} size={16} />
         </Card>
 
@@ -232,7 +237,7 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
     deep: fmtStage(night.durations.deep),
   }
   const times = `${formatClock(night.recording.start ?? night.start)} → ${formatClock(night.recording.end ?? night.end)}`
-  const edit = night.id != null && night.start != null && (
+  const edit = night.recording.count === 1 && night.id != null && night.start != null && (
     <SleepRecordActions
       recordId={night.id}
       enteredBedAt={new Date(night.start)}
@@ -265,7 +270,7 @@ function NightCard({ night, error, empty }: { night: Night, error: string | null
       <p className="text-xs text-fg-2">Recorded bed time includes awake periods; it is not a measurement of time asleep.</p>
       {night.recording.count > 1 && (
         <p className="text-sm text-fg-2">
-          {`${night.recording.count} recording segments · ${formatDuration(night.recording.gaps)} between segments, not counted. Stages, quality and vitals below describe the longest segment only.`}
+          {`${night.recording.count} recording segments · ${night.recording.gaps === 0 ? '0m' : formatDuration(night.recording.gaps)} between segments, not counted. Stages, quality and vitals use the available data across recorded segments; gaps remain unknown.`}
         </p>
       )}
 
