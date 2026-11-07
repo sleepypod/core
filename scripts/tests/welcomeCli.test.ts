@@ -174,11 +174,11 @@ it('rejects unknown arguments', () => {
 })
 
 /** Capture a real terminal with redirected stdin, as on an SSH terminal. */
-function runPty(args: string[] = []) {
+function runPty(args: string[] = [], columns = 100) {
   return spawnSync('python3', ['-c', `
 import errno, fcntl, os, pty, struct, subprocess, sys, termios
 master, slave = pty.openpty()
-fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 100, 0, 0))
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, ${columns}, 0, 0))
 child = subprocess.Popen(["/bin/sh", *sys.argv[1:]], stdin=subprocess.DEVNULL, stdout=slave, stderr=slave)
 os.close(slave)
 while True:
@@ -270,4 +270,32 @@ it.each(['4321', '0', '65536', 'invalid'])('uses a valid running service port (%
   env.EXPECTED_PORT = port === '4321' ? port : '3000'
   env.PORT = '9999'
   expect(run().stdout).toMatch(/pod\s+Pod 5/)
+})
+
+it.each([80, 60, 37])('fits the pixel logo and facts into a %i-column colour terminal', (columns) => {
+  const result = runPty(['--demo'], columns)
+  expect(result.status, result.stderr).toBe(0)
+  // eslint-disable-next-line no-control-regex
+  const plain = result.stdout.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replaceAll('\r', '')
+  expect(widest(plain)).toBeLessThanOrEqual(columns)
+  expect(plain).toContain('demo-pod')
+  if (columns >= 38) expect(plain).toMatch(/[▀▄]/)
+  else expect(plain).not.toMatch(/[▀▄]/)
+  expect(result.stdout).not.toContain('\x1b[?25l')
+})
+
+it('keeps the pixel raster at two pixels per cell with a transparent silhouette', () => {
+  const source = readFileSync(resolve('scripts/bin/sp-welcome'), 'utf8')
+  const pixels = source.split('<<\'PIXELS\'\n')[1].split('\nPIXELS\n')[0].split('\n').map(row => row.split(' '))
+  expect(pixels).toHaveLength(40)
+  for (const row of pixels) {
+    expect(row).toHaveLength(38)
+    for (const pixel of row) {
+      if (pixel !== '-') {
+        expect(Number(pixel)).toBeGreaterThanOrEqual(16)
+        expect(Number(pixel)).toBeLessThanOrEqual(255)
+      }
+    }
+  }
+  expect(pixels[0][0]).toBe('-')
 })
