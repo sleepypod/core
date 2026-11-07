@@ -7,7 +7,6 @@ import { Activity, Heart, Wind } from 'lucide-react'
 import {
   Card,
   InlineError,
-  LineChart,
   QualityRing,
   SectionLabel,
   Skeleton,
@@ -21,7 +20,6 @@ import { cn } from '@/lib/utils'
 import { SleepRecordActions } from '@/src/components/biometrics/SleepRecordActions'
 import {
   average,
-  downsample,
   formatDuration,
   formatNightLong,
   formatNightShort,
@@ -40,6 +38,7 @@ import {
 } from './sleepData'
 import { EmptyNote, NightHypnogram, qualityColor, VitalTile } from './parts'
 import { useWeekNights, useWeekRecords } from './useSleepData'
+import { RecordedHeartRateChart } from './RecordedHeartRateChart'
 
 interface NightViewProps {
   side: Side
@@ -101,9 +100,6 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
       quality: epochs.length > 0 ? stages?.qualityScore ?? null : null,
       distribution: stages?.distribution,
       date: key && record ? keyToDate(key) : start != null ? keyToDate(toNightKey(new Date(start))) : key ? keyToDate(key) : null,
-      hr: downsample(epochs.map(e => e.heartRate)),
-      // Same chunking as `hr`, over the epochs that have a reading, so each point knows its time.
-      hrTimes: downsample(epochs.filter(e => e.heartRate != null).map(e => e.start)),
       avgHr: average(epochs.map(e => e.heartRate)),
       avgHrv: average(epochs.map(e => e.hrv)),
       avgBr: average(epochs.map(e => e.breathingRate)),
@@ -113,6 +109,8 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
   const selectedKey = key ?? (night.start != null ? toNightKey(new Date(night.start)) : null)
   const round = (v: number | null) => (v == null ? '—' : Math.round(v))
   const hrValues = epochsHr(night.epochs)
+  const recordingStart = night.recording.start ?? night.start
+  const recordingEnd = night.recording.end ?? night.end
 
   return (
     <div className="grid items-start gap-4 @min-[960px]:grid-cols-[minmax(0,1fr)_300px]">
@@ -139,15 +137,8 @@ export function NightView({ side, weekStart, isCurrentWeek, nightKey, onSelectNi
           </SectionLabel>
           {loading
             ? <div className="h-24 animate-pulse rounded-ctl bg-active" />
-            : hrValues.length > 1
-              ? (
-                  <LineChart
-                    series={[{ data: night.hr, color: 'var(--chart-hr)', fill: true, width: 1.5 }]}
-                    height={96}
-                    xLabel={i => (night.hrTimes[i] != null ? formatClock(new Date(night.hrTimes[i]), { hour: 'numeric', minute: '2-digit' }) : '')}
-                    format={v => `${Math.round(v)} bpm`}
-                  />
-                )
+            : hrValues.length > 1 && recordingStart != null && recordingEnd != null
+              ? <RecordedHeartRateChart epochs={night.epochs} start={recordingStart} end={recordingEnd} />
               : <EmptyNote className="h-24 py-0">No heart-rate data for this night</EmptyNote>}
         </Card>
       </div>

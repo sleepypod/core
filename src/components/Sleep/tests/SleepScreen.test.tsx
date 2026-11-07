@@ -137,14 +137,16 @@ describe('SleepScreen night view', () => {
   })
 
   it('reads out the heart rate under the pointer with the epoch time', () => {
-    const { container } = render(<SleepScreen />)
-    // The heart-rate chart is the filled line (two paths) inside a hoverable box.
-    const box = [...container.querySelectorAll('svg')].map(s => s.parentElement).find(p => p?.className.includes('relative') && p.querySelectorAll('path').length === 2) as HTMLElement
+    render(<SleepScreen />)
+    const box = screen.getByTestId('recorded-heart-rate')
     vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 300, height: 96, right: 300, bottom: 96, toJSON: () => ({}) })
     fireEvent.pointerMove(box, { clientX: 0, clientY: 10 })
     expect(screen.getByTestId('chart-hover').textContent).toBe('11:20 PM · 70 bpm')
-    fireEvent.pointerMove(box, { clientX: 300, clientY: 10 })
+    // The final available epoch is 15 minutes into the 450-minute recording.
+    fireEvent.pointerMove(box, { clientX: 300 * 16 / 450, clientY: 10 })
     expect(screen.getByTestId('chart-hover').textContent).toBe('11:35 PM · 66 bpm')
+    fireEvent.pointerMove(box, { clientX: 300, clientY: 10 })
+    expect(screen.getByTestId('chart-hover').textContent).toContain('No reading')
     fireEvent.pointerLeave(box)
     expect(screen.queryByTestId('chart-hover')).toBeNull()
   })

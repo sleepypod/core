@@ -43,6 +43,8 @@ smoothing cannot cross gaps between records. Month and Tonight durations use
 the union of recorded windows. Tonight's read-only history remains available
 while hardware status reconnects. Missing vitals still mean missing stages;
 these changes do not repair sensor presence gaps or validate sleep stages.
+The heart-rate chart uses actual elapsed time and separate unfilled paths for
+contiguous readings; hovering an unknown interval reports no reading.
 The bounded record limit is 1,000 and movement limit is 10,000 so fragmented
 months and overnight week inputs are not truncated at the old small limits.
 
