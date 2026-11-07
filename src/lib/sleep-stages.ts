@@ -1,5 +1,4 @@
 import { stagesWithinWindow } from './stage-coverage'
-import type { SleepRecordingSummary } from './sleep-recording'
 /**
  * Sleep stage classification — server-side port of iOS SleepAnalyzer.
  *
@@ -49,10 +48,7 @@ export interface SleepStagesResult {
   blocks: SleepStageBlock[]
   distribution: StageDistribution
   qualityScore: number // 0-100
-  /** Estimated non-wake duration; unknown intervals are excluded. */
   totalSleepMs: number
-  totalStagedMs?: number
-  recording?: SleepRecordingSummary | null
   sleepRecordId: number | null
   enteredBedAt: number | null // unix ms
   leftBedAt: number | null // unix ms
@@ -672,7 +668,7 @@ export interface NightsSummary {
   distribution: StageDistribution
   /** Mean quality score over the nights. */
   qualityScore: number
-  /** Mean estimated non-wake time per recorded night, ms. */
+  /** Mean time in bed per night, ms. */
   totalSleepMs: number
   /** Mean time per stage per night, ms. */
   durations: Record<SleepStage, number>
@@ -710,7 +706,7 @@ export function classifyNights(
       blocks: mergeIntoBlocks(latest.epochs),
       distribution: calculateDistribution(allEpochs),
       qualityScore: Math.round(quality),
-      totalSleepMs: perNight(allEpochs.reduce((total, epoch) => total + (epoch.stage === 'wake' ? 0 : epoch.duration), 0)),
+      totalSleepMs: perNight(allEpochs.reduce((sum, e) => sum + e.duration, 0)),
       durations: { wake: perNight(totals.wake), light: perNight(totals.light), deep: perNight(totals.deep), rem: perNight(totals.rem) },
       agreement: scoreAgainstReference(allEpochs, allReference),
       stats: summarizeRuns(runs.map(r => r.stats)),

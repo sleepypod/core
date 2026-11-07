@@ -1484,7 +1484,7 @@ export const biometricsRouter = router({
       enteredBedAt: z.number().nullable(),
       leftBedAt: z.number().nullable(),
     }))
-    .query(async ({ input }): Promise<SleepStagesResult & { stageView?: StageView, stagedBy?: StagedBy }> => {
+    .query(async ({ input }): Promise<SleepStagesResult & { recording?: SleepRecordingSummary | null, totalStagedMs?: number, stageView?: StageView, stagedBy?: StagedBy }> => {
       try {
         // One explicit record, a complete calendar night, or a custom window.
         if ((input.sleepRecordId && (input.startDate || input.endDate || input.nightDate))

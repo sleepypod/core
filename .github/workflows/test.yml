@@ -29,7 +29,8 @@ jobs:
         task:
           - { name: "Lint", cmd: "CHANGED=$(git diff --name-only --diff-filter=d origin/${BASE_REF#refs/heads/}...HEAD -- '*.ts' '*.tsx' | head -200); if [ -n \"$CHANGED\" ]; then echo \"$CHANGED\" | xargs -d '\\n' pnpm eslint --; else echo 'No TS/TSX files changed'; fi" }
           - { name: "Typecheck", cmd: "pnpm tsc" }
-          - { name: "Unit Tests", cmd: "pnpm test run --coverage --passWithNoTests" }
+          # Leave capacity for real Python subprocesses and avoid nested BLAS pools.
+          - { name: "Unit Tests", cmd: "VITEST_MAX_WORKERS=2 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 pnpm test run --coverage --passWithNoTests" }
           # Build workers must not open the same on-disk SQLite file. The browser
           # runner creates and migrates its own isolated databases after the build.
           - { name: "Browser Tests", cmd: "NODE_ENV=production CI=1 DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: pnpm build && pnpm test:browser" }
