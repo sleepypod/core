@@ -11,6 +11,7 @@
 # Intentionally NOT using `set -e`: lookups are best-effort, as in sp-status.
 
 INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+export LC_ALL=C
 
 # ----- style: everything a restyle should need to touch --------------------
 # Colours are xterm-256 indexes. Letters match the mask() art below.
@@ -43,6 +44,8 @@ app sleepypod text
 firmware firmware text
 service service state
 frank frank state
+dns dnsmasq state
+blocked blocked text
 pipeline pipeline text
 left left text
 right right text
@@ -130,18 +133,24 @@ fact() {
 }
 
 lim() {
-  # Run a lookup with a hard deadline, so a wedged D-Bus or mount cannot stall
-  # the screen. Pure shell because `timeout` is not on every firmware variant.
-  lim_secs=$1
-  shift
-  "$@" &
-  lim_pid=$!
-  (sleep "$lim_secs"; kill -9 "$lim_pid") >/dev/null 2>&1 &
-  lim_dog=$!
-  wait "$lim_pid"
-  lim_rc=$?
-  kill "$lim_dog" 2>/dev/null
-  return "$lim_rc"
+  # Python ships on every supported pod. Buffer output privately and isolate
+  # the process group: neither descendants nor uninterruptible filesystem I/O
+  # can hold the renderer's pipe open after the deadline. Never wait after kill.
+  python3 -c '
+import os, signal, subprocess, sys
+try:
+    child = subprocess.Popen(sys.argv[2:], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        output, _ = child.communicate(timeout=float(sys.argv[1]))
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, signal.SIGKILL)
+        sys.exit(124)
+    sys.stdout.buffer.write(output)
+    sys.exit(child.returncode)
+except (OSError, ValueError):
+    sys.exit(1)
+' "$@"
 }
 
 unit_state() {
@@ -157,12 +166,21 @@ json_number() {
 }
 
 api_port() {
-  port=${PORT:-}
-  if [ -z "$port" ] && [ -r "$INSTALL_DIR/.env" ]; then
-    port=$(sed -n 's/^PORT=//p' "$INSTALL_DIR/.env" | head -1 | tr -d '\"\047')
-  fi
-  case "$port" in ''|*[!0-9]*) port=3000 ;; esac
-  echo "$port"
+  # Read the running service environment, not the interactive shell or .env:
+  # standalone Next.js chooses its port before loading dotenv.
+  pid=$(lim 1 systemctl show sleepypod.service --property=MainPID --value)
+  port=$(lim 1 python3 -c '
+import pathlib, sys
+pid = sys.argv[1]
+if pid.isdecimal() and int(pid) > 0:
+    for entry in pathlib.Path("/proc", pid, "environ").read_bytes().split(b"\0"):
+        if entry.startswith(b"PORT="):
+            value = entry[5:].decode("ascii")
+            if value.isdecimal() and 0 < int(value) < 65536:
+                print(int(value))
+            break
+' "$pid" 2>/dev/null)
+  echo "${port:-3000}"
 }
 
 side_summary() {
@@ -205,7 +223,7 @@ fact_device() {
 }
 
 fact_app() {
-  info=$(cat "$INSTALL_DIR/.git-info" 2>/dev/null)
+  info=$(lim 1 cat "$INSTALL_DIR/.git-info" 2>/dev/null)
   commit=$(printf '%s' "$info" | sed -n 's/.*"commitHash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | cut -c1-7)
   branch=$(printf '%s' "$info" | sed -n 's/.*"branch"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
   fact app "$commit${commit:+${branch:+ }}${branch:+($branch)}"
@@ -215,13 +233,26 @@ fact_pipeline() {
   # Same precedence as sp-status. No answer from systemd means no claim at all.
   nats=$(unit_state nats-server.service)
   [ -n "$nats" ] || return 0
-  if [ "$nats" = active ] && [ -d /persistent/jetstream ]; then
+  if [ "$nats" = active ] && lim 1 test -d /persistent/jetstream; then
     fact pipeline 'NATS JetStream'
-  elif grep -q ' /persistent/biometrics ' /proc/mounts 2>/dev/null; then
+  elif lim 1 grep -q ' /persistent/biometrics ' /proc/mounts 2>/dev/null; then
     fact pipeline 'tmpfs .RAW'
-  elif [ -d /persistent ]; then
+  elif lim 1 test -d /persistent; then
     fact pipeline 'filesystem .RAW'
   fi
+}
+
+# Report configured NXDOMAIN zones only when the service and resolver are in use.
+fact_dns() {
+  dns_state=$(unit_state sleepypod-dns.service)
+  fact dns "$dns_state"
+  [ "$dns_state" = active ] || return 0
+  resolver=$(lim 1 readlink /etc/resolv.conf)
+  [ "$resolver" = /etc/sleepypod/resolv.conf ] || return 0
+  zones=$(lim 1 awk -F/ 'NF == 3 && $1 == "address=" && $2 != "" && $3 == "" {
+    printf "%s*.%s", sep, $2; sep=", "
+  }' /etc/sleepypod/dnsmasq.conf)
+  fact blocked "$zones"
 }
 
 fact_disk() {
@@ -239,7 +270,7 @@ fact_disk() {
 }
 
 fact_memory() {
-  awk '
+  lim 1 awk '
     function human(k) {
       if (k >= 1048576) return sprintf("%.1fG", k / 1048576)
       return sprintf("%.0fM", k / 1024)
@@ -256,7 +287,7 @@ fact_memory() {
 }
 
 fact_uptime() {
-  fact uptime "$(awk '{
+  fact uptime "$(lim 1 awk '{
     s = int($1)
     d = int(s / 86400); h = int(s % 86400 / 3600); m = int(s % 3600 / 60)
     if (d) printf "%dd %dh %dm\n", d, h, m
@@ -268,9 +299,9 @@ fact_uptime() {
 facts_live() {
   # Parallel, so the slowest lookup sets the wait rather than the sum of them.
   # Rows go through one pipe instead of temp files, keeping this read-only.
-  fact host "$(uname -n 2>/dev/null)"
-  fact firmware "$(head -1 /etc/rat_version 2>/dev/null | cut -c1-12)"
-  fact_app
+  fact host "$(lim 1 uname -n 2>/dev/null)"
+  fact firmware "$(lim 1 head -1 /etc/rat_version 2>/dev/null | cut -c1-12)"
+  fact_app &
   fact_memory
   fact_uptime
   fact_device &
@@ -278,6 +309,7 @@ facts_live() {
   fact_disk &
   (fact service "$(unit_state sleepypod.service)") &
   (fact frank "$(unit_state frank.service)") &
+  fact_dns &
   wait
 }
 
@@ -288,6 +320,8 @@ facts_demo() {
   fact firmware ca35aafa
   fact service active
   fact frank active
+  fact dns 'active'
+  fact blocked '*.8slp.net'
   fact pipeline 'NATS JetStream'
   fact left '74F -> 68F'
   fact right '71F off'
@@ -303,7 +337,9 @@ facts_none() { :; }
 detect_size() {
   # Sets $rows and $cols rather than printing them: inside $(...) stdout is never the TTY.
   size=
-  [ -t 1 ] && size=$(stty size </dev/tty 2>/dev/null)
+  if [ -t 1 ]; then
+    { size=$(stty size <&3 2>/dev/null); } 3>&1
+  fi
   rows=${size%% *}
   cols=${size##* }
   case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
@@ -358,7 +394,7 @@ render() {
 
     function state_colour(v) {
       if (v == "active" || v == "ok") return good
-      if (v == "failed" || v == "low") return bad
+      if (v == "failed" || v ~ /^low(,|$)/) return bad
       return warn
     }
 
@@ -370,6 +406,8 @@ render() {
       c = bar_colour(p)
       if (length(text) + bar_w + 3 > room) return tint(c, fit(text, room))
       filled = int(p * bar_w / 100 + 0.5)
+      if (filled < 0) filled = 0
+      if (filled > bar_w) filled = bar_w
       return "[" tint(c, repeat("#", filled)) tint(dim, repeat("-", bar_w - filled)) "] " text
     }
 
@@ -378,7 +416,7 @@ render() {
       head = fit(row_label[i], width)
       room = width - label_w
       if (room < 1) return tint(label_colour, head)
-      head = tint(label_colour, head) spaces(label_w - length(head))
+      head = tint(label_colour, head spaces(label_w - length(head)))
       if (!(k in val)) return head tint(dim, "-")
       if (row_style[i] == "bar") return head bar_value(k, room)
       v = fit(val[k], room)
@@ -512,8 +550,10 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
 fi
 
 detect_size
+printf '\n'
 if [ "$animated" = 1 ] && can_animate; then
   animated_render "$source_facts"
 else
   render "$source_facts" "$cols" "$colour"
 fi
+printf '\n'
