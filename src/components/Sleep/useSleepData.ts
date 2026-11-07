@@ -8,7 +8,7 @@ import { buildNights, nightWindow, type MovementRow, type Side, type SleepRecord
 /** Sleep sessions whose night starts within the week (Sun–Sat). */
 export function useWeekRecords(side: Side, weekStart: Date) {
   const range = useMemo(() => nightWindow(weekStart, 7), [weekStart])
-  return trpc.biometrics.getSleepRecords.useQuery({ side, ...range, limit: 21 })
+  return trpc.biometrics.getSleepRecords.useQuery({ side, ...range, limit: 1000 })
 }
 
 /**
@@ -18,9 +18,9 @@ export function useWeekRecords(side: Side, weekStart: Date) {
 export function useWeekNights(side: Side, weekStart: Date) {
   const range = useMemo(() => nightWindow(weekStart, 7), [weekStart])
   const records = useWeekRecords(side, weekStart)
-  // 20 000 covers a week of ~30 s vitals; movement is capped at 1 000 server-side.
+  // 20 000 covers a week of ~30 s vitals; 10 000 movement rows cover a full week of minute epochs.
   const vitals = trpc.biometrics.getVitals.useQuery({ side, ...range, limit: 20000 })
-  const movement = trpc.biometrics.getMovement.useQuery({ side, ...range, limit: 1000 })
+  const movement = trpc.biometrics.getMovement.useQuery({ side, ...range, limit: 10000 })
   const calibration = trpc.calibration.getStatus.useQuery({ side })
   // Until the side's calibration is known (loading, or the lookup failed) no
   // stages are classified; otherwise a low-quality side would show full-rule

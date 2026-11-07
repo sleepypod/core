@@ -163,6 +163,22 @@ describe('week nights', () => {
     expect(movementOnly.distribution?.deep).toBe(0)
   })
 
+  it('includes every recorded segment in vitals and stages without filling gaps or double-counting overlaps', () => {
+    const records = [rec(1, at(21, 22), 2, 1), rec(2, at(21, 23), 1), rec(3, at(22, 4), 1, 2)]
+    const values = (start: Date, heartRate: number, hrv: number, breathingRate: number) => Array.from({ length: 12 }, (_, index) => ({
+      timestamp: new Date(start.getTime() + index * 300000), heartRate, hrv, breathingRate,
+    }))
+    const firstVitals = values(at(21, 22), 60, 40, 12)
+    const lastVitals = values(at(22, 4), 80, 60, 16)
+    const gapVitals = values(at(22, 1), 200, 1, 50)
+    const [, night] = buildNights(at(20, 0), 2, records, [...firstVitals, ...lastVitals, ...gapVitals])
+    const [, withoutGap] = buildNights(at(20, 0), 2, records, [...firstVitals, ...lastVitals])
+    expect(night).toMatchObject({ hours: 3, exits: 3, bedtime: at(21, 22), wake: at(22, 5), hr: 70, hrv: 50, br: 14 })
+    expect(night.distribution).not.toBeNull()
+    expect(night.distribution).toEqual(withoutGap.distribution)
+    expect(night.quality).toEqual(withoutGap.quality)
+  })
+
   it('computes no stages or quality while the classifier is unknown, keeping vitals', () => {
     const r = rec(1, at(21, 23), 1)
     const vitals = [70, 60, 60, 70].map((heartRate, i) => ({

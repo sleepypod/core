@@ -1,3 +1,4 @@
+import { recordingWindows, selectNightRecords, summarizeRecording } from '@/src/lib/sleep-recording'
 import { TRPCError } from '@trpc/server'
 import { POSITION_CHANGE_SCORE_MIN, RESTLESS_SCORE_MIN, pickMinBucketNonStillEpochs } from '@/src/lib/movement'
 import {
@@ -90,15 +91,6 @@ async function stagesForNight(n: DemoNight) {
     enteredBedAt: n.enteredBedAt.getTime(),
     leftBedAt: n.leftBedAt?.getTime() ?? null,
   }
-}
-
-/** Server default for getSleepStages: last night, preferring an overnight session of 3 h+. */
-function lastNight(side: Side): DemoNight | undefined {
-  const recent = demoNights(side).filter(n => n.enteredBedAt.getTime() >= Date.now() - 7 * DAY)
-  return recent.find((n) => {
-    const h = n.enteredBedAt.getHours()
-    return n.sleepDurationSeconds >= 3 * 3600 && (h >= 20 || h < 4)
-  }) ?? recent[0]
 }
 
 export const biometrics: DemoHandlers<'biometrics'> = {
@@ -285,8 +277,9 @@ export const biometrics: DemoHandlers<'biometrics'> = {
   },
 
   getSleepStages: async (input) => {
-    if (input.sleepRecordId && (input.startDate || input.endDate)) {
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Provide either sleepRecordId or startDate/endDate, not both' })
+    if ((input.sleepRecordId && (input.startDate || input.endDate || input.nightDate))
+      || (input.nightDate && (input.startDate || input.endDate))) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Provide either sleepRecordId, nightDate or startDate/endDate, not both' })
     }
     if (input.sleepRecordId) {
       const n = findDemoNight(input.sleepRecordId)
@@ -304,7 +297,15 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       if (epochs.length === 0) return { ...emptyStages(), stageView }
       return { epochs, stageView, ...summarizeEpochs(epochs), sleepRecordId: null, enteredBedAt: null, leftBedAt: null }
     }
-    const n = lastNight(input.side)
-    return n ? stagesForNight(n) : { ...emptyStages(), stageView: await demoStageView(input.side) }
+    const timeZone = input.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+    const selected = selectNightRecords(demoNights(input.side), timeZone, input.nightDate)
+    const recording = summarizeRecording(selected, timeZone)
+    const stageView = await demoStageView(input.side)
+    if (!recording) return { ...emptyStages(), stageView, recording: null, totalStagedMs: 0 }
+    const epochs = recordingWindows(selected).flatMap(window => classifyDemoWindow(input.side, window.start.getTime(), window.end.getTime(), stageView.classifier))
+    return { epochs, stageView, ...summarizeEpochs(epochs), recording,
+      totalStagedMs: epochs.reduce((total, epoch) => total + epoch.duration, 0),
+      totalSleepMs: epochs.reduce((total, epoch) => total + (epoch.stage === 'wake' ? 0 : epoch.duration), 0),
+      sleepRecordId: selected.length === 1 ? selected[0].id : null, enteredBedAt: recording.start, leftBedAt: recording.end }
   },
 }

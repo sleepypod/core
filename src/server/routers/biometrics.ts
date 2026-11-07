@@ -9,7 +9,7 @@ import { biometricsDb, db } from '@/src/db'
 import { sleepRecords, vitals, movement, referenceStages, referenceVitals, referenceSamples, biometricProcessingRuns } from '@/src/db/biometrics-schema'
 import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns } from 'drizzle-orm'
-import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
+import { sideSchema, idSchema, timezoneSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
 import { loadStageView, loadStageInputs } from './sleepStages'
 import { stageViewSchema, type StageView } from '@/src/biometrics/profiles/stage-view'
@@ -26,6 +26,7 @@ import {
 } from '@/src/lib/movement'
 import { recordLegacyReferenceImport } from '@/src/biometrics/references/legacy'
 import { getOccupancy } from '@/src/lib/occupancy'
+import { recordingWindows, selectNightRecords, summarizeRecording, type RecordingWindow, type SleepRecordingSummary } from '@/src/lib/sleep-recording'
 
 /**
  * SQL fragment: movement.timestamp falls inside an existing sleep_records
@@ -116,7 +117,7 @@ export const biometricsRouter = router({
    * @param side - Which side's sleep records to query
    * @param startDate - Optional: only records on or after this date (inclusive)
    * @param endDate - Optional: only records on or before this date (inclusive)
-   * @param limit - Max records to return (default: 30, max: 100)
+   * @param limit - Max records to return (default: 30, max: 1000)
    * @returns Array of sleep records, most recent first
    */
   getSleepRecords: publicProcedure
@@ -139,7 +140,7 @@ export const biometricsRouter = router({
           side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
-          limit: z.number().int().min(1).max(100).default(30),
+          limit: z.number().int().min(1).max(1000).default(30),
         })
         .strict()
     )
@@ -318,7 +319,7 @@ export const biometricsRouter = router({
           side: sideSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
-          limit: z.number().int().min(1).max(1000).default(288),
+          limit: z.number().int().min(1).max(10000).default(288),
         })
         .strict()
     )
@@ -1419,16 +1420,18 @@ export const biometricsRouter = router({
     }),
 
   /**
-   * Get classified sleep stages for a specific sleep record or date range.
+   * Get stages for a complete recorded night, an explicit record, or a custom window.
    *
    * Performs server-side sleep stage classification by:
-   * 1. Fetching the sleep record (if sleepRecordId provided) or using date range
+   * 1. Selecting all records for a calendar night, or an explicit record/range
    * 2. Querying vitals + movement data within that window
-   * 3. Running the rule-based classifier (ported from iOS SleepAnalyzer)
+   * 3. Running the configured classifier separately within each merged recording
    * 4. Returning epochs, merged blocks, distribution, and quality score
    *
    * @param side - Which side to classify
    * @param sleepRecordId - Optional: classify stages for a specific sleep record
+   * @param nightDate - Optional: YYYY-MM-DD of the evening; default is newest recorded night
+   * @param timeZone - Optional: calendar display zone; defaults to the Pod timezone
    * @param startDate - Optional: start of custom date range
    * @param endDate - Optional: end of custom date range
    * @returns Classified sleep stages with blocks, distribution, and quality score
@@ -1440,6 +1443,8 @@ export const biometricsRouter = router({
         .object({
           side: sideSchema,
           sleepRecordId: z.number().int().optional(),
+          nightDate: z.iso.date().optional(),
+          timeZone: timezoneSchema.optional(),
           startDate: z.date().optional(),
           endDate: z.date().optional(),
         })
@@ -1468,6 +1473,11 @@ export const biometricsRouter = router({
       }),
       qualityScore: z.number(),
       totalSleepMs: z.number(),
+      totalStagedMs: z.number().optional(),
+      recording: z.object({
+        nightDate: z.string(), recordIds: z.array(z.number()), start: z.number(), end: z.number(),
+        durationMs: z.number(), gapsMs: z.number(), exits: z.number(),
+      }).nullable().optional(),
       stageView: stageViewSchema.optional(),
       stagedBy: stagedBySchema.optional(),
       sleepRecordId: z.number().nullable(),
@@ -1476,14 +1486,17 @@ export const biometricsRouter = router({
     }))
     .query(async ({ input }): Promise<SleepStagesResult & { stageView?: StageView, stagedBy?: StagedBy }> => {
       try {
-        // Reject ambiguous requests: if sleepRecordId is provided alongside date range, error out
-        if (input.sleepRecordId && (input.startDate || input.endDate)) {
+        // One explicit record, a complete calendar night, or a custom window.
+        if ((input.sleepRecordId && (input.startDate || input.endDate || input.nightDate))
+          || (input.nightDate && (input.startDate || input.endDate))) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'Provide either sleepRecordId or startDate/endDate, not both',
+            message: 'Provide either sleepRecordId, nightDate or startDate/endDate, not both',
           })
         }
 
+        let windows: RecordingWindow[] | undefined
+        let recording: SleepRecordingSummary | null = null
         let windowStart: Date
         let windowEnd: Date
         let sleepRecordId: number | null = null
@@ -1534,88 +1547,50 @@ export const biometricsRouter = router({
           windowEnd = input.endDate
         }
         else {
-          // Default: last night — prefer overnight sleep over daytime naps
-
-          // Fetch device timezone (falls back to 'America/Los_Angeles' if not set)
+          // Latest *night*, not the latest/longest fragment. Fetch all its records.
           const [settings] = await db.select({ timezone: deviceSettings.timezone }).from(deviceSettings).limit(1)
-          const tz = settings?.timezone ?? 'America/Los_Angeles'
-
-          // Fetch recent records (last 7 days) to search for an overnight session
-          const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-          const recentRecords = await biometricsDb
-            .select()
-            .from(sleepRecords)
-            .where(
-              and(
-                eq(sleepRecords.side, input.side),
-                gte(sleepRecords.enteredBedAt, sevenDaysAgo)
-              )
-            )
+          // Calendar clients declare their display zone; other callers use the Pod's zone.
+          const timeZone = input.timeZone ?? settings?.timezone ?? 'America/Los_Angeles'
+          const now = new Date()
+          const anchor = input.nightDate ? Date.parse(`${input.nightDate}T00:00:00Z`) : now.getTime()
+          // A broad UTC envelope includes the selected local day across time zones/DST.
+          const lower = new Date(anchor - (input.nightDate ? 1 : 7) * 86_400_000)
+          const upper = new Date(input.nightDate ? anchor + 3 * 86_400_000 : now.getTime())
+          const recentRecords = await biometricsDb.select().from(sleepRecords)
+            .where(and(eq(sleepRecords.side, input.side), gte(sleepRecords.enteredBedAt, lower), lte(sleepRecords.enteredBedAt, upper)))
             .orderBy(desc(sleepRecords.enteredBedAt))
-
-          // Helper: get local hour (0–23) of a Date in the device timezone
-          const localHour = (d: Date): number => {
-            const parts = new Intl.DateTimeFormat('en-US', {
-              timeZone: tz,
-              hour: 'numeric',
-              hour12: false,
-            }).formatToParts(d)
-            const hourPart = parts.find(p => p.type === 'hour')
-            return parseInt(hourPart?.value ?? '0', 10)
+          const selected = selectNightRecords(recentRecords, timeZone, input.nightDate)
+          recording = summarizeRecording(selected, timeZone, now)
+          windows = recordingWindows(selected, now)
+          if (!recording || !windows.length) {
+            return { epochs: [], blocks: [], distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
+              qualityScore: 0, totalSleepMs: 0, totalStagedMs: 0, recording: null,
+              sleepRecordId: null, enteredBedAt: null, leftBedAt: null }
           }
-
-          // 1st try: 3+ hours AND entered bed between 8 PM (20) and 4 AM (4) local time
-          const overnightRecord = recentRecords.find((r) => {
-            if (r.sleepDurationSeconds < 10800) return false
-            const hour = localHour(r.enteredBedAt)
-            return hour >= 20 || hour < 4
-          })
-
-          let record = overnightRecord
-
-          if (!record) {
-            // 2nd try: longest record in the last 24 hours
-            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
-            const last24h = recentRecords.filter(r => r.enteredBedAt >= oneDayAgo)
-            if (last24h.length > 0) {
-              record = last24h.reduce((best, r) =>
-                r.sleepDurationSeconds > best.sleepDurationSeconds ? r : best
-              )
-            }
-          }
-
-          if (!record) {
-            // Final fallback: most recent record regardless of time or duration
-            record = recentRecords[0]
-          }
-
-          if (!record) {
-            return {
-              epochs: [],
-              blocks: [],
-              distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
-              qualityScore: 0,
-              totalSleepMs: 0,
-              sleepRecordId: null,
-              enteredBedAt: null,
-              leftBedAt: null,
-            }
-          }
-
-          windowStart = record.enteredBedAt
-          windowEnd = record.leftBedAt
-          sleepRecordId = record.id
-          enteredBedAt = record.enteredBedAt.getTime()
-          leftBedAt = record.leftBedAt.getTime()
+          windowStart = windows[0].start
+          windowEnd = windows[windows.length - 1].end
+          sleepRecordId = selected.length === 1 ? selected[0].id : null
+          enteredBedAt = recording.start
+          leftBedAt = selected.some(record => record.leftBedAt === null) ? null : recording.end
         }
 
         const { vitalsData, movementData, calibrationQuality } = await loadStageInputs(input.side, windowStart, windowEnd)
         const stageView = loadStageView(input.side)
         const classifier = stageView.classifier
 
-        // Model features and fallback rules use only the profile delivered to the consumer.
-        const { epochs, stagedBy } = stageNight(vitalsData, movementData, calibrationQuality, classifier.ruleset,
-          loadActiveStageModel(input.side), { start: windowStart, end: windowEnd })
+        // Classify each merged recording independently. No inputs, smoothing or
+        // model windows may bridge a gap between recorded segments.
+        const model = loadActiveStageModel(input.side)
+        const segments = (windows ?? [{ start: windowStart, end: windowEnd }]).map((window) => {
+          const inside = (timestamp: Date) => timestamp >= window.start && timestamp < window.end
+          return stageNight(vitalsData.filter(row => inside(row.timestamp)), movementData.filter(row => inside(row.timestamp)),
+            calibrationQuality, classifier.ruleset, model, window)
+        })
+        const epochs = segments.flatMap(segment => segment.epochs)
+        // A mixed model/rules result cannot truthfully claim one engine for every segment.
+        const stagedBy = segments.every(segment => JSON.stringify(segment.stagedBy) === JSON.stringify(segments[0]?.stagedBy))
+          ? segments[0]?.stagedBy
+          : undefined
 
         if (epochs.length === 0) {
           return {
@@ -1626,6 +1601,8 @@ export const biometricsRouter = router({
             distribution: { wake: 0, light: 0, deep: 0, rem: 0 },
             qualityScore: 0,
             totalSleepMs: 0,
+            totalStagedMs: 0,
+            recording,
             sleepRecordId,
             enteredBedAt,
             leftBedAt,
@@ -1635,7 +1612,8 @@ export const biometricsRouter = router({
         const blocks = mergeIntoBlocks(epochs)
         const distribution = calculateDistribution(epochs)
         const qualityScore = calculateQualityScore(distribution, calibrationQuality)
-        const totalSleepMs = epochs.reduce((sum, e) => sum + e.duration, 0)
+        const totalStagedMs = epochs.reduce((total, epoch) => total + epoch.duration, 0)
+        const totalSleepMs = epochs.reduce((total, epoch) => total + (epoch.stage === 'wake' ? 0 : epoch.duration), 0)
 
         return {
           stageView,
@@ -1645,6 +1623,8 @@ export const biometricsRouter = router({
           distribution,
           qualityScore,
           totalSleepMs,
+          totalStagedMs,
+          recording,
           sleepRecordId,
           enteredBedAt,
           leftBedAt,

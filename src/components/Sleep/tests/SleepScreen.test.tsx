@@ -83,9 +83,9 @@ beforeEach(() => {
   vi.setSystemTime(new Date(2026, 8, 28, 12))
   vi.clearAllMocks()
   state.week.isCurrentWeek = true
-  state.sleep.mockImplementation(({ limit }: { limit: number }) => ({ data: limit === 100 ? MONTH : WEEK, isLoading: false }))
-  state.stages.mockImplementation(({ sleepRecordId }: { sleepRecordId?: number }) => ({
-    data: sleepRecordId === 11 ? stagesFor(at(21, 22), 11) : stagesFor(at(22, 23, 20), 12),
+  state.sleep.mockImplementation(({ startDate }: { startDate: Date }) => ({ data: startDate.getDate() < 15 ? MONTH : WEEK, isLoading: false }))
+  state.stages.mockImplementation(({ nightDate }: { nightDate?: string }) => ({
+    data: nightDate === '2026-09-21' ? stagesFor(at(21, 22), 11) : stagesFor(at(22, 23, 20), 12),
     isLoading: false,
   }))
   state.vitals.mockReturnValue({ data: [], isLoading: false })
@@ -106,34 +106,47 @@ describe('SleepScreen night view', () => {
     expect(screen.getByText('Recorded bed time').nextSibling?.textContent).toBe('7h 0m')
     expect(screen.getByText('Bedtime').nextSibling?.textContent).toBe('10:00 PM')
     expect(screen.getByText('Wake').nextSibling?.textContent).toBe('7:00 AM')
-    expect(screen.getByText('Estimated sleep · longest segment')).toBeTruthy()
-    expect(screen.getByText(/Stages, quality and vitals below describe the longest segment only/)).toBeTruthy()
+    expect(screen.getByText('Estimated sleep · recorded segments')).toBeTruthy()
+    expect(screen.getByText(/Stages, quality and vitals use the available data across recorded segments/)).toBeTruthy()
   })
 
   it('shows the latest night of the week with its summary and vitals', () => {
     render(<SleepScreen />)
-    expect(state.stages).toHaveBeenCalledWith({ side: 'left', sleepRecordId: 12 }, { enabled: true })
+    expect(state.stages).toHaveBeenCalledWith({ side: 'left', nightDate: '2026-09-22', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }, { enabled: true })
     expect(screen.getByText('Tuesday, Sep 22')).toBeTruthy()
     expect(screen.getAllByText('11:20 PM → 6:50 AM').length).toBeGreaterThan(0)
     expect(screen.getByText('Bedtime').nextSibling?.textContent).toBe('11:20 PM')
     expect(screen.getByText('Wake').nextSibling?.textContent).toBe('6:50 AM')
     // Asleep excludes the awake epoch (3 × 5 min).
-    expect(screen.getByText('Estimated sleep').nextSibling?.textContent).toBe('15m')
+    expect(screen.getByText('Estimated sleep · recorded segments').nextSibling?.textContent).toBe('15m')
     expect(screen.getByText('Bed exits').nextSibling?.textContent).toBe('1')
     expect(screen.getByText('min 54 · avg 63 · max 70 bpm')).toBeTruthy()
     expect(screen.getByTestId('record-actions').textContent).toBe('12')
     expect(screen.getByTestId('raw-data')).toBeTruthy()
   })
 
+  it('shows zero estimated sleep for an all-awake recording instead of its bed duration', () => {
+    const result = stagesFor(at(22, 23, 20), 12)
+    state.stages.mockReturnValue({ data: { ...result,
+      epochs: result.epochs.map(epoch => ({ ...epoch, stage: 'wake' as const })),
+      distribution: { wake: 100, rem: 0, light: 0, deep: 0 },
+    }, isLoading: false })
+    render(<SleepScreen />)
+    expect(screen.getByText('Estimated sleep · recorded segments').nextSibling?.textContent).toBe('0m')
+    expect(screen.getByText('Recorded bed time').nextSibling?.textContent).toBe('7h 30m')
+  })
+
   it('reads out the heart rate under the pointer with the epoch time', () => {
-    const { container } = render(<SleepScreen />)
-    // The heart-rate chart is the filled line (two paths) inside a hoverable box.
-    const box = [...container.querySelectorAll('svg')].map(s => s.parentElement).find(p => p?.className.includes('relative') && p.querySelectorAll('path').length === 2) as HTMLElement
+    render(<SleepScreen />)
+    const box = screen.getByTestId('recorded-heart-rate')
     vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 300, height: 96, right: 300, bottom: 96, toJSON: () => ({}) })
     fireEvent.pointerMove(box, { clientX: 0, clientY: 10 })
     expect(screen.getByTestId('chart-hover').textContent).toBe('11:20 PM · 70 bpm')
-    fireEvent.pointerMove(box, { clientX: 300, clientY: 10 })
+    // The final available epoch is 15 minutes into the 450-minute recording.
+    fireEvent.pointerMove(box, { clientX: 300 * 16 / 450, clientY: 10 })
     expect(screen.getByTestId('chart-hover').textContent).toBe('11:35 PM · 66 bpm')
+    fireEvent.pointerMove(box, { clientX: 300, clientY: 10 })
+    expect(screen.getByTestId('chart-hover').textContent).toContain('No reading')
     fireEvent.pointerLeave(box)
     expect(screen.queryByTestId('chart-hover')).toBeNull()
   })
@@ -141,7 +154,7 @@ describe('SleepScreen night view', () => {
   it('opens another night from the This week bars', () => {
     render(<SleepScreen />)
     fireEvent.click(screen.getByRole('button', { name: /^Mon, Sep 21/ }))
-    expect(state.stages).toHaveBeenLastCalledWith({ side: 'left', sleepRecordId: 11 }, { enabled: true })
+    expect(state.stages).toHaveBeenLastCalledWith({ side: 'left', nightDate: '2026-09-21', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }, { enabled: true })
     expect(screen.getByText('Monday, Sep 21')).toBeTruthy()
     expect(screen.getByText('Bed exits').nextSibling?.textContent).toBe('3')
     expect((screen.getByRole('button', { name: /^Sun, Sep 20/ }) as HTMLButtonElement).disabled).toBe(true)
@@ -150,7 +163,7 @@ describe('SleepScreen night view', () => {
   it('falls back to the server latest night when the current week is empty', () => {
     state.sleep.mockReturnValue({ data: [], isLoading: false })
     render(<SleepScreen />)
-    expect(state.stages).toHaveBeenCalledWith({ side: 'left' }, { enabled: true })
+    expect(state.stages).toHaveBeenCalledWith({ side: 'left', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }, { enabled: true })
     expect(screen.getByText('Tuesday, Sep 22')).toBeTruthy()
   })
 
@@ -158,7 +171,7 @@ describe('SleepScreen night view', () => {
     state.week.isCurrentWeek = false
     state.sleep.mockReturnValue({ data: [], isLoading: false })
     render(<SleepScreen />)
-    expect(state.stages).toHaveBeenCalledWith({ side: 'left' }, { enabled: false })
+    expect(state.stages).toHaveBeenCalledWith({ side: 'left', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }, { enabled: false })
     expect(screen.getByText('No sleep recorded this week')).toBeTruthy()
     expect(screen.getByText('Bedtime').nextSibling?.textContent).toBe('—')
   })
@@ -209,7 +222,7 @@ describe('SleepScreen week and month views', () => {
   it('shows the month calendar, stats and nights list', () => {
     render(<SleepScreen />)
     pick('Month')
-    expect(state.sleep).toHaveBeenLastCalledWith(expect.objectContaining({ side: 'left', limit: 100, startDate: new Date(2026, 8, 1, 12) }))
+    expect(state.sleep).toHaveBeenLastCalledWith(expect.objectContaining({ side: 'left', limit: 1000, startDate: new Date(2026, 8, 1, 12) }))
     expect(screen.getAllByText('September 2026').length).toBeGreaterThan(0)
     const day3 = screen.getByTestId('day-2026-09-03')
     expect(day3.style.background).toContain('0.6')
