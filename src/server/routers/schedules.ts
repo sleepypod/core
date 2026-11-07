@@ -699,7 +699,12 @@ export const schedulesRouter = router({
         })).max(14).default([]),
       })
     )
-    .output(z.object({ success: z.boolean() }))
+    .output(z.object({
+      success: z.boolean(),
+      // IDs of the rows this call created, in input order: an editor that
+      // saves as it goes replaces its rows and keeps editing the new ones.
+      created: z.object({ temperature: z.array(z.number()), power: z.array(z.number()), alarm: z.array(z.number()) }),
+    }))
     .mutation(async ({ input }) => {
       try {
         const upsertTemp: TemperatureRow[] = []
@@ -787,7 +792,15 @@ export const schedulesRouter = router({
           for (const row of upsertAlarm) jm.upsertAlarmJob(row)
         })
 
-        return { success: true }
+        return {
+          success: true,
+          // Creates are pushed before updates, so each list starts with them.
+          created: {
+            temperature: upsertTemp.slice(0, input.creates.temperature.length).map(r => r.id),
+            power: upsertPower.slice(0, input.creates.power.length).map(r => r.id),
+            alarm: upsertAlarm.slice(0, input.creates.alarm.length).map(r => r.id),
+          },
+        }
       }
       catch (error) {
         if (error instanceof TRPCError) throw error

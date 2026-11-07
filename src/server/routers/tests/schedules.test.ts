@@ -197,12 +197,19 @@ describe('schedules.batchUpdate', () => {
       },
     })
 
-    expect(result).toEqual({ success: true })
-
     const all = await caller.getAll({ side: 'left' })
     expect(all.temperature).toHaveLength(2)
     expect(all.power).toHaveLength(1)
     expect(all.alarm).toHaveLength(1)
+    // The created rows' IDs, in input order, so an editor can keep editing them.
+    expect(result).toEqual({
+      success: true,
+      created: {
+        temperature: [all.temperature.find(r => r.dayOfWeek === 'monday')?.id, all.temperature.find(r => r.dayOfWeek === 'tuesday')?.id],
+        power: [all.power[0].id],
+        alarm: [all.alarm[0].id],
+      },
+    })
   })
 
   it('deletes schedules by ID', async () => {
@@ -302,7 +309,7 @@ describe('schedules.batchUpdate', () => {
 
   it('accepts empty input without errors', async () => {
     const result = await caller.batchUpdate({})
-    expect(result).toEqual({ success: true })
+    expect(result).toEqual({ success: true, created: { temperature: [], power: [], alarm: [] } })
   })
 
   it('applies deletes and creates atomically', async () => {
@@ -814,7 +821,7 @@ describe('schedules scheduler-failure paths swallow errors', () => {
         ],
       },
     })
-    expect(result).toEqual({ success: true })
+    expect(result).toEqual({ success: true, created: { temperature: expect.any(Array), power: [], alarm: [] } })
     expect(errSpy).toHaveBeenCalled()
     errSpy.mockRestore()
   })
@@ -1530,7 +1537,7 @@ describe('schedules openapi meta + input schema contract', () => {
     expect(await c.deleteTemperatureSchedule({ id: temperature.id })).toEqual({ success: true })
     expect(await c.deletePowerSchedule({ id: power.id })).toEqual({ success: true })
     expect(await c.deleteAlarmSchedule({ id: alarm.id })).toEqual({ success: true })
-    expect(await c.batchUpdate({})).toEqual({ success: true })
+    expect(await c.batchUpdate({})).toEqual({ success: true, created: { temperature: [], power: [], alarm: [] } })
   })
 
   it('defaults every batchUpdate list to empty at both nesting levels', async () => {

@@ -128,8 +128,9 @@ describe('AlarmSection', () => {
     expect(within(dialog).getByText('Edit alarm')).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
+    // Delete first lets any waiting save finish.
+    await s.findByText('Delete alarm?')
     const confirm = s.getByRole('dialog')
-    expect(within(confirm).getByText('Delete alarm?')).toBeTruthy()
     expect(within(confirm).getByText(/remove the alarm for 2 days/)).toBeTruthy()
     fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(s.queryByRole('dialog')).toBeNull())
@@ -143,6 +144,7 @@ describe('AlarmSection', () => {
     const s = render(<AlarmSection side="left" />)
     fireEvent.click(s.getByRole('button', { name: 'Edit Mon alarm' }))
     fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+    await s.findByText('Delete alarm?')
     fireEvent.click(within(s.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(s.getByText(/Couldn't delete: locked/)).toBeTruthy())
     expect(s.getByRole('button', { name: 'Retry' })).toBeTruthy()

@@ -192,9 +192,22 @@ export const schedules: DemoHandlers<'schedules'> = {
     for (const id of input.deletes?.power ?? []) power = remove(power, 'Power', id)
     for (const id of input.deletes?.alarm ?? []) alarm = remove(alarm, 'Alarm', id)
 
-    for (const c of input.creates?.temperature ?? []) temperature.push({ ...c, enabled: c.enabled ?? true, ...stamp() })
-    for (const c of input.creates?.power ?? []) power.push({ ...c, endAction: c.endAction ?? 'turn_off', enabled: c.enabled ?? true, ...stamp() })
-    for (const c of input.creates?.alarm ?? []) alarm.push({ ...c, vibrationPattern: c.vibrationPattern ?? 'rise', wakeWindow: c.wakeWindow ?? 0, snoozeDuration: c.snoozeDuration ?? 300, snoozeTaper: c.snoozeTaper ?? 0, enabled: c.enabled ?? true, ...stamp() })
+    const created = { temperature: [] as number[], power: [] as number[], alarm: [] as number[] }
+    for (const c of input.creates?.temperature ?? []) {
+      const row = { ...c, enabled: c.enabled ?? true, ...stamp() }
+      temperature.push(row)
+      created.temperature.push(row.id)
+    }
+    for (const c of input.creates?.power ?? []) {
+      const row = { ...c, endAction: c.endAction ?? 'turn_off' as const, enabled: c.enabled ?? true, ...stamp() }
+      power.push(row)
+      created.power.push(row.id)
+    }
+    for (const c of input.creates?.alarm ?? []) {
+      const row = { ...c, vibrationPattern: c.vibrationPattern ?? 'rise' as const, wakeWindow: c.wakeWindow ?? 0, snoozeDuration: c.snoozeDuration ?? 300, snoozeTaper: c.snoozeTaper ?? 0, enabled: c.enabled ?? true, ...stamp() }
+      alarm.push(row)
+      created.alarm.push(row.id)
+    }
 
     for (const { id, ...changes } of input.updates?.temperature ?? []) update(temperature, 'Temperature', id, changes)
     for (const { id, ...changes } of input.updates?.power ?? []) update(power, 'Power', id, changes)
@@ -207,6 +220,6 @@ export const schedules: DemoHandlers<'schedules'> = {
     }
     releaseDemoDays(edited)
 
-    return { success: true }
+    return { success: true, created }
   },
 }
