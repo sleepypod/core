@@ -6,6 +6,7 @@
 # Every fact falls back to "-", and every lookup has a deadline, so the screen
 # still appears promptly on a slow or half-broken pod. Colour is used only on a
 # TTY without NO_COLOR; piped output is plain ASCII so it pastes into Discord.
+# --animate plays once while the facts load, then leaves the same static screen.
 #
 # Intentionally NOT using `set -e`: lookups are best-effort, as in sp-status.
 
@@ -22,10 +23,18 @@ BAD_COLOUR=203
 DIM_COLOUR=240
 
 ART_WIDTH=38
+ART_ROWS=20
 GAP=3
 PANEL_WIDTH=37 # below ART_WIDTH + GAP + PANEL_WIDTH the panel drops under the logo
 LABEL_WIDTH=10
 BAR_WIDTH=10
+
+# --animate: seconds per logo row, then per Z. Each Z is "rows up from the line
+# below the logo, column, glyph", rising from the pillow into the gap by the moon.
+LINE_DELAY=0.03
+ZZZ_DELAY=0.12
+ZZZ_COLOUR=183
+ZZZ_STEPS='13 31 z 15 33 z 17 35 Z'
 
 # fact key, label, style (text | state | bar). Row order is display order.
 PANEL_ROWS='host host text
@@ -107,9 +116,10 @@ WORD
 
 usage() {
   cat <<'USAGE'
-Usage: sp-welcome [--demo]
+Usage: sp-welcome [--demo] [--animate]
 
-  --demo   render with sample facts (preview off-pod)
+  --demo     render with sample facts (preview off-pod)
+  --animate  draw the logo in first, on a colour terminal tall enough for it
 USAGE
 }
 
@@ -287,11 +297,16 @@ facts_demo() {
   fact uptime '3d 4h 12m'
 }
 
+facts_none() { :; }
+
 # ----- layout ---------------------------------------------------------------
-detect_columns() {
-  # Sets $cols rather than printing it: inside $(...) stdout is never the TTY.
-  cols=
-  [ -t 1 ] && cols=$(stty size </dev/tty 2>/dev/null | awk '{ print $2 }')
+detect_size() {
+  # Sets $rows and $cols rather than printing them: inside $(...) stdout is never the TTY.
+  size=
+  [ -t 1 ] && size=$(stty size </dev/tty 2>/dev/null)
+  rows=${size%% *}
+  cols=${size##* }
+  case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
   case "$cols" in ''|*[!0-9]*|0) cols=${COLUMNS:-80} ;; esac
   case "$cols" in ''|*[!0-9]*|0) cols=80 ;; esac
 }
@@ -304,7 +319,7 @@ render() {
     echo '%%word'; wordmark
     echo '%%rows'; printf '%s\n' "$PANEL_ROWS"
     echo '%%facts'; "$1" 2>/dev/null
-  } | LC_ALL=C awk -v cols="$2" -v colour="$3" \
+  } | LC_ALL=C awk -v cols="$2" -v colour="$3" -v logo_only="${4:-0}" \
     -v palette="$PALETTE" -v gradient="$WORD_GRADIENT" \
     -v label_colour="$LABEL_COLOUR" -v good="$GOOD_COLOUR" -v warn="$WARN_COLOUR" \
     -v bad="$BAD_COLOUR" -v dim="$DIM_COLOUR" \
@@ -400,6 +415,11 @@ render() {
     }
 
     END {
+      if (logo_only) {
+        for (i = 1; i <= art_n; i++) print paint(art[i], letters[i])
+        exit
+      }
+
       side = cols >= art_w + gap + panel_w
       width = side ? panel_w : cols
 
@@ -434,11 +454,53 @@ render() {
     }'
 }
 
+# ----- animation ------------------------------------------------------------
+can_animate() {
+  # Fractional sleep is the one thing a minimal BusyBox may lack.
+  [ "$colour" = 1 ] && [ "$rows" -gt "$ART_ROWS" ] && [ "$cols" -ge "$ART_WIDTH" ] &&
+    sleep 0.01 2>/dev/null
+}
+
+animate() {
+  # No pipelines: a Ctrl-C has to stop this with one kill. Painted rows are never
+  # empty (they end in a colour reset), so splitting on newlines keeps them all.
+  set -f
+  IFS='
+'
+  for line in $1; do
+    printf '%s\n' "$line"
+    sleep "$LINE_DELAY"
+  done
+  IFS=' '
+  # shellcheck disable=SC2086 # split into up, column, glyph triples
+  set -- $ZZZ_STEPS
+  while [ "$#" -ge 3 ]; do
+    printf '\033[%dA\033[%dG\033[38;5;%dm%s\033[0m\033[%dB\r' "$1" "$2" "$ZZZ_COLOUR" "$3" "$1"
+    sleep "$ZZZ_DELAY"
+    shift 3
+  done
+}
+
+animated_render() {
+  # The animation runs beside the lookups, so a slow pod is not made any slower.
+  logo=$(render facts_none "$cols" "$colour" 1)
+  trap 'printf "\033[?25h"' EXIT
+  trap 'kill "$anim_pid" 2>/dev/null; exit 130' INT TERM
+  printf '\033[?25l'
+  animate "$logo" &
+  anim_pid=$!
+  screen=$(render "$1" "$cols" "$colour")
+  wait "$anim_pid"
+  printf '\033[%dA\r\033[J%s\n' "$ART_ROWS" "$screen"
+}
+
 # ----- main -----------------------------------------------------------------
 source_facts=facts_live
+animated=0
 for arg in "$@"; do
   case "$arg" in
     --demo) source_facts=facts_demo ;;
+    --animate) animated=1 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
@@ -449,5 +511,9 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
   colour=1
 fi
 
-detect_columns
-render "$source_facts" "$cols" "$colour"
+detect_size
+if [ "$animated" = 1 ] && can_animate; then
+  animated_render "$source_facts"
+else
+  render "$source_facts" "$cols" "$colour"
+fi

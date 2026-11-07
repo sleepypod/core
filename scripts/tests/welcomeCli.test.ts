@@ -70,6 +70,26 @@ it('keeps logo and mask the same shape so colours land on the right cells', () =
   })
 })
 
+it('keeps the animation geometry on the logo: every Z lands on an empty cell', () => {
+  const source = readFileSync(resolve('scripts/bin/sp-welcome'), 'utf8')
+  const art = source.split(`<<'ART'\n`)[1].split('\nART\n')[0].split('\n')
+  expect(source).toContain(`ART_ROWS=${art.length}\n`)
+  const steps = (source.match(/^ZZZ_STEPS='(.+)'$/m)?.[1] ?? '').split(' ')
+  expect(steps.length).toBeGreaterThan(0)
+  for (let i = 0; i < steps.length; i += 3) {
+    const line = art[art.length - Number(steps[i])]
+    expect(line.length, `Z ${i / 3}`).toBeLessThan(Number(steps[i + 1]))
+  }
+})
+
+it.each([{ NO_COLOR: '1' }, {}])('keeps piped output static under --animate with %j', (extra) => {
+  Object.assign(env, extra)
+  const animated = run(['--demo', '--animate'])
+  expect(animated.status, animated.stderr).toBe(0)
+  expect(animated.stdout).toBe(run(['--demo']).stdout)
+  expect(animated.stdout).toMatch(/^[\n -~]+$/)
+})
+
 it.each([79, 77, 60, 40])('drops the panel beneath the logo at %i columns', (columns) => {
   env.COLUMNS = String(columns)
   const result = run(['--demo'])
