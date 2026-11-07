@@ -1,0 +1,453 @@
+#!/bin/sh
+# sp-welcome — neofetch-style welcome screen: the sleepypod logo beside a panel
+# of live pod facts. Read-only: it reads files, asks systemd for unit state and
+# GETs the local status API, and never writes, restarts or touches hardware.
+#
+# Every fact falls back to "-", and every lookup has a deadline, so the screen
+# still appears promptly on a slow or half-broken pod. Colour is used only on a
+# TTY without NO_COLOR; piped output is plain ASCII so it pastes into Discord.
+#
+# Intentionally NOT using `set -e`: lookups are best-effort, as in sp-status.
+
+INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+
+# ----- style: everything a restyle should need to touch --------------------
+# Colours are xterm-256 indexes. Letters match the mask() art below.
+PALETTE='a=223 b=209 c=205 d=134 e=63 f=26 g=195 h=153 i=183 j=105'
+WORD_GRADIENT='b c d e j' # wordmark, left to right, following the moon
+LABEL_COLOUR=105
+GOOD_COLOUR=114
+WARN_COLOUR=221
+BAD_COLOUR=203
+DIM_COLOUR=240
+
+ART_WIDTH=38
+GAP=3
+PANEL_WIDTH=37 # below ART_WIDTH + GAP + PANEL_WIDTH the panel drops under the logo
+LABEL_WIDTH=10
+BAR_WIDTH=10
+
+# fact key, label, style (text | state | bar). Row order is display order.
+PANEL_ROWS='host host text
+pod pod text
+app sleepypod text
+firmware firmware text
+service service state
+frank frank state
+pipeline pipeline text
+left left text
+right right text
+water water state
+disk disk bar
+memory memory bar
+uptime uptime text'
+
+# Traced from the iOS WelcomeLogo.png: per-cell tone and silhouette were sampled
+# from the image, then the pillows and mattress edges were outlined by hand.
+art() {
+  cat <<'ART'
+          ...
+         .**+=:::::...
+         :@@@@#o*+*++=-::..
+          +@@@@@@#ooooooo**+==:
+           +@@@@@@@@@########+
+            .+#@@@@@@@@@@#+:
+               .-=+++++=-.
+
+             .=@@@@@@@=.-:.
+       .=@@@=(@@@@@@@@)##o+-:.
+     .-(@@@@@@@@)-----'#######o+=-.
+.=*oo+ '-------'################o*=-:.
++oooo*=-.___.-=*###############.-'*oo*
+=ooooo###oo*-.___.-=*#####_.-'oooooo**
+:===+++*ooooooo*-.___.-'%%oooooooooooo
+..::...::-=+ooooo%%%%%%%oooooooooooooo
+  . : . . : .:-=+*oo####ooo*******+=:
+       . : . . :.:=+*******+*****+=:
+            . . .:.:-=+++++++=-:
+                .:-===-:.
+ART
+}
+
+# Colour of each art() cell, as a PALETTE letter sampled from the same image.
+mask() {
+  cat <<'MASK'
+          bbc
+         bbbbccdffffff
+         bbbbbccdefffffffff
+          bbbbbccddefffffffffff
+           aaaabbcccdddeeeefff
+            aaaaaaaaacccccca
+               aaaaaaaaaaa
+
+             ggggggggggeeee
+       gggggggggggggggghhjjjee
+     gggggggggggggggggghhhhhhhjjeee
+iiiiie ggggggggghhhhhhhhhhhhhhhhhjeeee
+jiiiijeffffejjhhhhhhhhhhhhhiiiiiijjjjj
+fffeeeeeeeffffffejhhhhhiiiiiiiiiiiiiii
+ffffffffffeeeeeeffejiiiiiiiiiiiiiiiiii
+ffffffffffffffejjiiiiiiiiiiiiiiiiiiiii
+  f f f f f ffffffeeeejjjjjjjjjjiiiii
+       f f f f fffffffeeeeeeejjjjjff
+            f f fffffffffeeeeeff
+                fffffffff
+MASK
+}
+
+wordmark() {
+  cat <<'WORD'
+     _                           _
+ ___| |___ ___ ___ _ _ ___ ___ _| |
+|_ -| | -_| -_| . | | | . | . | . |
+|___|_|___|___|  _|_  |  _|___|___|
+              |_| |___|_|
+WORD
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: sp-welcome [--demo]
+
+  --demo   render with sample facts (preview off-pod)
+USAGE
+}
+
+# ----- lookups --------------------------------------------------------------
+fact() {
+  # key, value, optional detail. A fact left unset renders as a dash.
+  [ -n "$2" ] && printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}"
+}
+
+lim() {
+  # Run a lookup with a hard deadline, so a wedged D-Bus or mount cannot stall
+  # the screen. Pure shell because `timeout` is not on every firmware variant.
+  lim_secs=$1
+  shift
+  "$@" &
+  lim_pid=$!
+  (sleep "$lim_secs"; kill -9 "$lim_pid") >/dev/null 2>&1 &
+  lim_dog=$!
+  wait "$lim_pid"
+  lim_rc=$?
+  kill "$lim_dog" 2>/dev/null
+  return "$lim_rc"
+}
+
+unit_state() {
+  lim 1 systemctl is-active "$1" 2>/dev/null | head -1
+}
+
+json_string() {
+  sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" | head -1
+}
+
+json_number() {
+  sed -n "s/.*\"$1\":\(-\{0,1\}[0-9][0-9.]*\).*/\1/p" | head -1
+}
+
+api_port() {
+  port=${PORT:-}
+  if [ -z "$port" ] && [ -r "$INSTALL_DIR/.env" ]; then
+    port=$(sed -n 's/^PORT=//p' "$INSTALL_DIR/.env" | head -1 | tr -d '\"\047')
+  fi
+  case "$port" in ''|*[!0-9]*) port=3000 ;; esac
+  echo "$port"
+}
+
+side_summary() {
+  # On/off comes from targetLevel alone: the firmware countdown keeps running
+  # after power-off, so nothing else is reliable.
+  side=$(printf '%s' "$1" | sed -n "s/.*\"$2\":{\([^}]*\)}.*/\1/p")
+  [ -n "$side" ] || return 0
+  current=$(printf '%s' "$side" | json_number currentTemperature)
+  target=$(printf '%s' "$side" | json_number targetTemperature)
+  level=$(printf '%s' "$side" | json_number targetLevel)
+  [ -n "$current" ] && current=$(printf '%.0fF' "$current")
+  if [ "$level" = 0 ]; then
+    echo "${current:--} off"
+  elif [ -n "$target" ]; then
+    printf '%s -> %.0fF\n' "${current:--}" "$target"
+  else
+    echo "$current"
+  fi
+}
+
+fact_device() {
+  status=$(lim 3 curl --silent --fail --max-time 2 --noproxy '*' \
+    "http://127.0.0.1:$(api_port)/api/device/status" 2>/dev/null)
+  [ -n "$status" ] || return 0
+
+  # Same revision rule as sp-info. Only the revision is kept, never the serial.
+  fact pod "$(printf '%s' "$status" | json_string sensorLabel | awk -F- '{
+    for (i = NF; i > 0; i--) if ($i ~ /^[H-Z][0-9][0-9]$/) {
+      c = substr($i, 1, 1)
+      print "Pod " (c == "H" ? 3 : c == "I" ? 4 : 5) " (" $i ")"
+      exit
+    }
+  }')"
+  fact left "$(side_summary "$status" leftSide)"
+  fact right "$(side_summary "$status" rightSide)"
+
+  water=$(printf '%s' "$status" | json_string waterLevel)
+  case "$status" in *'"isPriming":true'*) water="${water:+$water, }priming" ;; esac
+  fact water "$water"
+}
+
+fact_app() {
+  info=$(cat "$INSTALL_DIR/.git-info" 2>/dev/null)
+  commit=$(printf '%s' "$info" | sed -n 's/.*"commitHash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | cut -c1-7)
+  branch=$(printf '%s' "$info" | sed -n 's/.*"branch"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  fact app "$commit${commit:+${branch:+ }}${branch:+($branch)}"
+}
+
+fact_pipeline() {
+  # Same precedence as sp-status. No answer from systemd means no claim at all.
+  nats=$(unit_state nats-server.service)
+  [ -n "$nats" ] || return 0
+  if [ "$nats" = active ] && [ -d /persistent/jetstream ]; then
+    fact pipeline 'NATS JetStream'
+  elif grep -q ' /persistent/biometrics ' /proc/mounts 2>/dev/null; then
+    fact pipeline 'tmpfs .RAW'
+  elif [ -d /persistent ]; then
+    fact pipeline 'filesystem .RAW'
+  fi
+}
+
+fact_disk() {
+  usage_line=$(lim 1 df -Pk /persistent 2>/dev/null | awk '
+    function human(k) {
+      if (k >= 1048576) return sprintf("%.1fG", k / 1048576)
+      return sprintf("%.0fM", k / 1024)
+    }
+    NR == 2 {
+      pct = $(NF - 1)
+      sub(/%/, "", pct)
+      printf "%s\t%s/%s\n", pct, human($(NF - 3)), human($(NF - 4))
+    }')
+  [ -n "$usage_line" ] && printf 'disk\t%s\n' "$usage_line"
+}
+
+fact_memory() {
+  awk '
+    function human(k) {
+      if (k >= 1048576) return sprintf("%.1fG", k / 1048576)
+      return sprintf("%.0fM", k / 1024)
+    }
+    /^MemTotal:/ { total = $2 }
+    /^MemFree:/ { free = $2 }
+    /^MemAvailable:/ { avail = $2 }
+    END {
+      if (!total) exit
+      if (avail == "") avail = free
+      used = total - avail
+      printf "memory\t%d\t%s/%s\n", used * 100 / total, human(used), human(total)
+    }' /proc/meminfo 2>/dev/null
+}
+
+fact_uptime() {
+  fact uptime "$(awk '{
+    s = int($1)
+    d = int(s / 86400); h = int(s % 86400 / 3600); m = int(s % 3600 / 60)
+    if (d) printf "%dd %dh %dm\n", d, h, m
+    else if (h) printf "%dh %dm\n", h, m
+    else printf "%dm\n", m
+  }' /proc/uptime 2>/dev/null)"
+}
+
+facts_live() {
+  # Parallel, so the slowest lookup sets the wait rather than the sum of them.
+  # Rows go through one pipe instead of temp files, keeping this read-only.
+  fact host "$(uname -n 2>/dev/null)"
+  fact firmware "$(head -1 /etc/rat_version 2>/dev/null | cut -c1-12)"
+  fact_app
+  fact_memory
+  fact_uptime
+  fact_device &
+  fact_pipeline &
+  fact_disk &
+  (fact service "$(unit_state sleepypod.service)") &
+  (fact frank "$(unit_state frank.service)") &
+  wait
+}
+
+facts_demo() {
+  fact host demo-pod
+  fact pod 'Pod 5 (J55)'
+  fact app '6179822 (dev)'
+  fact firmware ca35aafa
+  fact service active
+  fact frank active
+  fact pipeline 'NATS JetStream'
+  fact left '74F -> 68F'
+  fact right '71F off'
+  fact water ok
+  fact disk 42 '2.6G/6.2G'
+  fact memory 61 '1.2G/1.9G'
+  fact uptime '3d 4h 12m'
+}
+
+# ----- layout ---------------------------------------------------------------
+detect_columns() {
+  # Sets $cols rather than printing it: inside $(...) stdout is never the TTY.
+  cols=
+  [ -t 1 ] && cols=$(stty size </dev/tty 2>/dev/null | awk '{ print $2 }')
+  case "$cols" in ''|*[!0-9]*|0) cols=${COLUMNS:-80} ;; esac
+  case "$cols" in ''|*[!0-9]*|0) cols=80 ;; esac
+}
+
+render() {
+  # The sections are streamed to one awk, which owns all layout decisions.
+  {
+    echo '%%art'; art
+    echo '%%mask'; mask
+    echo '%%word'; wordmark
+    echo '%%rows'; printf '%s\n' "$PANEL_ROWS"
+    echo '%%facts'; "$1" 2>/dev/null
+  } | LC_ALL=C awk -v cols="$2" -v colour="$3" \
+    -v palette="$PALETTE" -v gradient="$WORD_GRADIENT" \
+    -v label_colour="$LABEL_COLOUR" -v good="$GOOD_COLOUR" -v warn="$WARN_COLOUR" \
+    -v bad="$BAD_COLOUR" -v dim="$DIM_COLOUR" \
+    -v art_w="$ART_WIDTH" -v gap="$GAP" -v panel_w="$PANEL_WIDTH" \
+    -v label_w="$LABEL_WIDTH" -v bar_w="$BAR_WIDTH" '
+    function fg(n) { return colour ? sprintf("\033[38;5;%dm", n) : "" }
+    function off() { return colour ? "\033[0m" : "" }
+    function tint(n, s) { return fg(n) s off() }
+    function spaces(n,   s) { s = ""; while (n-- > 0) s = s " "; return s }
+    function repeat(c, n,   s) { s = ""; while (n-- > 0) s = s c; return s }
+    function fit(s, n) {
+      if (n < 0) n = 0
+      if (length(s) <= n) return s
+      return n < 3 ? substr(s, 1, n) : substr(s, 1, n - 2) ".."
+    }
+
+    # Emit a colour code only where the mask letter changes.
+    function paint(text, letters,   out, i, c, m, last) {
+      if (!colour) return text
+      out = ""; last = ""
+      for (i = 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        m = substr(letters, i, 1)
+        if (c != " " && m != last && (m in pal)) { out = out fg(pal[m]); last = m }
+        out = out c
+      }
+      return out off()
+    }
+
+    function word_line(text,   letters, i) {
+      letters = ""
+      for (i = 1; i <= length(text); i++)
+        letters = letters grad[int((i - 1) * ngrad / word_w) + 1]
+      return paint(text, letters)
+    }
+
+    function state_colour(v) {
+      if (v == "active" || v == "ok") return good
+      if (v == "failed" || v == "low") return bad
+      return warn
+    }
+
+    function bar_colour(p) { return p >= 90 ? bad : p >= 80 ? warn : good }
+
+    function bar_value(k, room,   p, text, filled, c) {
+      p = val[k] + 0
+      text = p "% " detail[k]
+      c = bar_colour(p)
+      if (length(text) + bar_w + 3 > room) return tint(c, fit(text, room))
+      filled = int(p * bar_w / 100 + 0.5)
+      return "[" tint(c, repeat("#", filled)) tint(dim, repeat("-", bar_w - filled)) "] " text
+    }
+
+    function fact_line(i, width,   k, room, head, v) {
+      k = row_key[i]
+      head = fit(row_label[i], width)
+      room = width - label_w
+      if (room < 1) return tint(label_colour, head)
+      head = tint(label_colour, head) spaces(label_w - length(head))
+      if (!(k in val)) return head tint(dim, "-")
+      if (row_style[i] == "bar") return head bar_value(k, room)
+      v = fit(val[k], room)
+      if (row_style[i] == "state") return head tint(state_colour(val[k]), v)
+      return head v
+    }
+
+    BEGIN {
+      FS = "\t"
+      n = split(palette, pairs, " ")
+      for (i = 1; i <= n; i++) { split(pairs[i], kv, "="); pal[kv[1]] = kv[2] }
+      ngrad = split(gradient, grad, " ")
+    }
+    /^%%(art|mask|word|rows|facts)$/ { sec = substr($0, 3); next }
+    sec == "art"  { art[++art_n] = $0; next }
+    sec == "mask" { letters[++mask_n] = $0; next }
+    sec == "word" {
+      word[++word_n] = $0
+      if (length($0) > word_w) word_w = length($0)
+      next
+    }
+    sec == "rows" {
+      split($0, r, " ")
+      row_n++
+      row_key[row_n] = r[1]; row_label[row_n] = r[2]; row_style[row_n] = r[3]
+      next
+    }
+    sec == "facts" {
+      v = $2; d = $3
+      gsub(/[^ -~]/, "", v)
+      gsub(/[^ -~]/, "", d)
+      if (v != "") { val[$1] = v; detail[$1] = d }
+      next
+    }
+
+    END {
+      side = cols >= art_w + gap + panel_w
+      width = side ? panel_w : cols
+
+      panel_n = 0
+      if (width >= word_w) {
+        for (i = 1; i <= word_n; i++) panel[++panel_n] = word_line(word[i])
+      } else {
+        panel[++panel_n] = tint(pal[grad[1]], fit("sleepypod", width))
+      }
+      panel[++panel_n] = ""
+      for (i = 1; i <= row_n; i++) panel[++panel_n] = fact_line(i, width)
+
+      if (side) {
+        top = int((art_n - panel_n) / 2)
+        if (top < 0) top = 0
+        total = art_n > top + panel_n ? art_n : top + panel_n
+        for (i = 1; i <= total; i++) {
+          p = i - top
+          right = (p >= 1 && p <= panel_n) ? panel[p] : ""
+          left = art[i]
+          if (right != "") left = left spaces(art_w + gap - length(left))
+          print paint(left, letters[i]) right
+        }
+        exit
+      }
+
+      if (cols >= art_w) {
+        for (i = 1; i <= art_n; i++) print paint(art[i], letters[i])
+        print ""
+      }
+      for (i = 1; i <= panel_n; i++) print panel[i]
+    }'
+}
+
+# ----- main -----------------------------------------------------------------
+source_facts=facts_live
+for arg in "$@"; do
+  case "$arg" in
+    --demo) source_facts=facts_demo ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+
+colour=0
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+  colour=1
+fi
+
+detect_columns
+render "$source_facts" "$cols" "$colour"
