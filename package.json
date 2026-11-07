@@ -46,7 +46,7 @@
   "dependencies": {
     "@ajayche/trpc-panel": "^2.0.4",
     "@base-ui/react": "^1.2.0",
-    "@formatjs/intl-localematcher": "^0.9.0",
+    "@formatjs/intl-localematcher": "^0.10.0",
     "@lingui/core": "^6.0.0",
     "@lingui/macro": "^5.9.2",
     "@lingui/react": "^6.0.0",
@@ -99,7 +99,7 @@
     "@lingui/swc-plugin": "^6.0.0",
     "@lingui/vite-plugin": "^6.0.0",
     "@playwright/test": "1.64.1",
-    "@rolldown/plugin-babel": "^0.2.4",
+    "@rolldown/plugin-babel": "^0.3.0",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^11.0.0",
     "@stryker-mutator/core": "^10.0.0",
@@ -119,7 +119,7 @@
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@types/three": "0.186.0",
+    "@types/three": "0.187.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.0",
     "@vitest/coverage-v8": "4.1.12",
@@ -134,8 +134,8 @@
     "jsdom": "^29.0.0",
     "lint-staged": "^16.4.0",
     "semantic-release": "^25.0.3",
-    "tailwindcss": "4.3.3",
-    "three": "0.186.1",
+    "tailwindcss": "4.3.4",
+    "three": "0.187.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.71.0",
@@ -143,7 +143,7 @@
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.0.18"
   },
-  "packageManager": "pnpm@10.34.7",
+  "packageManager": "pnpm@10.34.9",
   "pnpm": {
     "onlyBuiltDependencies": [
       "cbor-extract",
@@ -158,7 +158,7 @@
     },
     "overrides": {
       "dbus-next>usocket": "-",
-      "@babel/runtime": "7.29.10"
+      "@babel/runtime": "7.29.13"
     }
   }
 }
