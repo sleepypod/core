@@ -38,7 +38,7 @@ const callerMock = vi.hoisted(() => {
     health: { system: fn(), hardware: fn(), thermal: fn(), restartService: fn() },
     waterLevel: { getLatest: fn(), getAlerts: fn(), dismissAlert: fn() },
     pumpAlerts: { list: fn(), acknowledgeAndRestore: fn() },
-    system: { getDiskUsage: fn(), getVersion: fn(), internetStatus: fn(), getLogs: fn(), freeStorage: fn(), triggerUpdate: fn() },
+    system: { getDiskUsage: fn(), getVersion: fn(), internetStatus: fn(), getLogs: fn(), freeStorage: fn(), triggerUpdate: fn(), getSensorSource: fn() },
     runOnce: { start: fn(), getActive: fn(), cancel: fn() },
     automations: {
       status: fn(), tonight: fn(), list: fn(), setEnabled: fn(), setDryRun: fn(), setKillSwitch: fn(),
@@ -132,6 +132,7 @@ describe('sleepypod MCP server', () => {
       'get_pod_status',
       'get_saved_curves',
       'get_schedules',
+      'get_sensor_source',
       'get_settings',
       'get_sleep_history',
       'get_sleep_stage_rules',
@@ -809,6 +810,49 @@ describe('sleepypod MCP server', () => {
     expect(callerMock.settings.updateDevice).toHaveBeenCalledWith({ temperatureUnit: 'C' })
     const settings = await client.callTool({ name: 'get_settings', arguments: {} }) as CallToolResult
     expect(parse(settings)).toMatchObject({ device: { temperatureUnit: 'F' }, sides: { right: { awayMode: true } } })
+  })
+
+  it('set_device_settings pins or clears the NATS subject prefix and says what still needs a restart', async () => {
+    const client = await connect()
+    callerMock.settings.updateDevice.mockResolvedValue({ natsSubjectPrefix: 'rawmem' })
+
+    const pinned = await client.callTool({ name: 'set_device_settings', arguments: { natsSubjectPrefix: 'rawmem' } }) as CallToolResult
+    expect(callerMock.settings.updateDevice).toHaveBeenCalledWith({ natsSubjectPrefix: 'rawmem' })
+    expect(parse(pinned)).toEqual({ natsSubjectPrefix: 'rawmem' })
+    const followUp = pinned.content[1]
+    expect(followUp.type === 'text' && followUp.text).toContain('pod_maintenance restart_service')
+
+    await client.callTool({ name: 'set_device_settings', arguments: { natsSubjectPrefix: null } })
+    expect(callerMock.settings.updateDevice).toHaveBeenLastCalledWith({ natsSubjectPrefix: null })
+
+    const other = await client.callTool({ name: 'set_device_settings', arguments: { temperatureUnit: 'C' } }) as CallToolResult
+    expect(other.content).toHaveLength(1)
+  })
+
+  it('set_device_settings rejects a NATS prefix that is not a single subject token', async () => {
+    const client = await connect()
+    for (const natsSubjectPrefix of ['raw.sens', '*', '>', '', 'x'.repeat(33)]) {
+      const result = await client.callTool({ name: 'set_device_settings', arguments: { natsSubjectPrefix } }) as CallToolResult
+      expect(result.isError, natsSubjectPrefix).toBe(true)
+    }
+    expect(callerMock.settings.updateDevice).not.toHaveBeenCalled()
+  })
+
+  it('get_sensor_source returns the stream diagnostics and tells the agent how to fix a prefix', async () => {
+    const client = await connect()
+    const diagnostics = {
+      stream: { source: 'nats' },
+      nats: { mode: 'auto', configuredPrefix: null, observedPrefixes: [{ prefix: 'rawv2', subscribed: false }] },
+    }
+    callerMock.system.getSensorSource.mockResolvedValue(diagnostics)
+
+    const result = await client.callTool({ name: 'get_sensor_source', arguments: {} }) as CallToolResult
+    expect(parse(result)).toEqual(diagnostics)
+    expect(callerMock.system.getSensorSource).toHaveBeenCalledWith({})
+    const tool = (await client.listTools()).tools.find(t => t.name === 'get_sensor_source')
+    expect(tool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+    expect(tool?.description).toContain('set natsSubjectPrefix to that prefix')
+    expect(tool?.description).toContain('null to return to auto')
   })
 
   it('sleep history, vitals trend and occupancy read the biometrics router', async () => {
