@@ -113,6 +113,8 @@ vi.mock('@/src/services/autoOffWatcher', () => autoOffMock)
 const autoOnMock = vi.hoisted(() => ({ restartAutoOnWatcher: vi.fn() }))
 vi.mock('@/src/services/autoOnWatcher', () => autoOnMock)
 vi.mock('@/src/homekit', () => homekitMock)
+const streamMock = vi.hoisted(() => ({ restartNatsFrameSource: vi.fn(async () => true) }))
+vi.mock('@/src/streaming/piezoStream', () => streamMock)
 vi.mock('@/src/db', () => ({
   db: { select: dbMock.select, update: dbMock.update, transaction: dbMock.transaction },
   biometricsDb: {},
@@ -139,6 +141,7 @@ beforeEach(() => {
   pumpStallMock.standDown.mockReset().mockResolvedValue(undefined)
   homekitMock.enable.mockReset().mockResolvedValue(undefined)
   homekitMock.disable.mockReset().mockResolvedValue(undefined)
+  streamMock.restartNatsFrameSource.mockReset().mockResolvedValue(true)
   dbState.topRowsQueue.length = 0
   dbState.txRowsQueue.length = 0
   dbState.txSetCalls.length = 0
@@ -1320,6 +1323,63 @@ it('persists solo setup and zone policy and applies the transition once', async 
   dbState.txRowsQueue.push([updated], [updated])
   await caller.updateDevice({ bedMode: 'solo-left', unusedZoneMode: 'independent' })
   expect(schedulerMock.jm.applyBedConfiguration).toHaveBeenCalledTimes(1)
+})
+
+describe('settings.updateDevice natsSubjectPrefix', () => {
+  it('pins a prefix and re-subscribes the sensor stream once', async () => {
+    const current = { ...baseDevice, natsSubjectPrefix: null }
+    const updated = { ...current, natsSubjectPrefix: 'rawmem' }
+    dbState.txRowsQueue.push([current], [updated])
+    const result = await caller.updateDevice({ natsSubjectPrefix: 'rawmem' })
+    expect(result.natsSubjectPrefix).toBe('rawmem')
+    expect(dbState.txSetCalls[0]).toMatchObject({ natsSubjectPrefix: 'rawmem' })
+    expect(streamMock.restartNatsFrameSource).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns to auto with null', async () => {
+    const current = { ...baseDevice, natsSubjectPrefix: 'rawmem' }
+    dbState.txRowsQueue.push([current], [{ ...current, natsSubjectPrefix: null }])
+    const result = await caller.updateDevice({ natsSubjectPrefix: null })
+    expect(result.natsSubjectPrefix).toBeNull()
+    expect(dbState.txSetCalls[0]).toMatchObject({ natsSubjectPrefix: null })
+    expect(streamMock.restartNatsFrameSource).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the stream alone when the prefix is unchanged or not sent', async () => {
+    const current = { ...baseDevice, natsSubjectPrefix: 'rawmem' }
+    dbState.txRowsQueue.push([current], [current], [current], [current])
+    await caller.updateDevice({ natsSubjectPrefix: 'rawmem' })
+    await caller.updateDevice({ ledDayBrightness: 50 })
+    expect(streamMock.restartNatsFrameSource).not.toHaveBeenCalled()
+  })
+
+  it('keeps the saved setting when the stream restart fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    streamMock.restartNatsFrameSource.mockRejectedValueOnce(new Error('connect refused'))
+    const current = { ...baseDevice, natsSubjectPrefix: null }
+    dbState.txRowsQueue.push([current], [{ ...current, natsSubjectPrefix: 'raw' }])
+    await expect(caller.updateDevice({ natsSubjectPrefix: 'raw' })).resolves.toMatchObject({ natsSubjectPrefix: 'raw' })
+    expect(error).toHaveBeenCalledWith('NATS frame source restart failed:', expect.any(Error))
+    error.mockRestore()
+  })
+
+  it.each(['raw.sens', 'raw.*', '>', '*', '', 'raw mem', 'x'.repeat(33)])('rejects %j, which is not a single subject token', async (natsSubjectPrefix) => {
+    await expect(caller.updateDevice({ natsSubjectPrefix })).rejects.toThrow()
+    expect(dbMock.transaction).not.toHaveBeenCalled()
+  })
+
+  it('accepts letters, digits, underscore and dash up to 32 characters', async () => {
+    const prefix = 'Raw_mem-2'.padEnd(32, 'x')
+    const current = { ...baseDevice, natsSubjectPrefix: null }
+    dbState.txRowsQueue.push([current], [{ ...current, natsSubjectPrefix: prefix }])
+    await expect(caller.updateDevice({ natsSubjectPrefix: prefix })).resolves.toMatchObject({ natsSubjectPrefix: prefix })
+  })
+
+  it('reports auto from getAll for a row written before the column existed', async () => {
+    dbState.topRowsQueue.push([{ ...baseDevice }], [], [])
+    const result = await caller.getAll({})
+    expect(result.device.natsSubjectPrefix).toBeNull()
+  })
 })
 
 it('rejects invalid sleeper setup and zone policy', async () => {

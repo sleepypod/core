@@ -119,6 +119,20 @@ export function registerStatusTools(server: McpServer) {
     return jsonResult({ system, hardware, thermal, waterLevel, waterAlerts, pumpAlerts, disk, version, internet })
   }))
 
+  server.registerTool('get_sensor_source', {
+    title: 'Get sensor data source',
+    description:
+      'Where the pod reads raw sensor frames from: the firmware generation, whether the stream reads .RAW files or '
+      + 'NATS, and the age of the last frame. On NATS, the nats block lists the subject prefix mode (auto or pinned), '
+      + 'the subscribed subjects, which prefix feeds each sensor subject, and observedPrefixes: every prefix seen '
+      + 'publishing <prefix>.sens.*, with subscribed false for one the readers do not read. To diagnose empty '
+      + 'biometrics or "No frames": if no frames are arriving and observedPrefixes includes a prefix with subscribed '
+      + 'false, set natsSubjectPrefix to that prefix with set_device_settings; if a pinned prefix stopped working, set '
+      + 'natsSubjectPrefix to null to return to auto. Observed prefixes appear within seconds of the stream starting.',
+    inputSchema: {},
+    annotations: READ_ONLY,
+  }, async () => runTool(async () => jsonResult(await getCaller().system.getSensorSource({}))))
+
   server.registerTool('get_logs', {
     title: 'Read service logs',
     description:

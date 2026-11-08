@@ -83,7 +83,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 |---|---|---|
 | "What timezone / unit is it on?" | `get_settings` | `settings.getAll` |
 | "I'm away until Friday" / "Keep it on all night" / "Turn off when I get up" / "Rename my side" | `set_side_settings` | `settings.updateSide` |
-| "Switch to Celsius" / "Dim the LED at night" / "Prime daily at 2pm" / "Cap at 10 hours" | `set_device_settings` | `settings.updateDevice` |
+| "Switch to Celsius" / "Dim the LED at night" / "Prime daily at 2pm" / "Cap at 10 hours" / "Read sensors from the rawmem subjects" | `set_device_settings` | `settings.updateDevice` |
 
 ### Automations (Autopilot)
 
@@ -97,6 +97,7 @@ claude mcp add --transport http sleepypod http://192.168.1.88:3000/api/mcp
 | Intent | Tool | Procedures |
 |---|---|---|
 | "Something's wrong" / "Is the bed actually cooling?" / "Is everything OK?" | `diagnose_pod` | `health.system`, `hardware`, `thermal`, `waterLevel.getLatest`, `getAlerts`, `pumpAlerts.list`, `system.getDiskUsage`, `getVersion`, `internetStatus` |
+| "Why are my biometrics empty?" / "Is the pod getting sensor data?" / "Which NATS subjects is it reading?" | `get_sensor_source` | `system.getSensorSource` |
 | "Show me the logs" / "Why did the sleep detector crash?" | `get_logs` | `system.getLogs` |
 | "Clear the pump alert" / "Restart the piezo service" / "Free up space" / "Update the software" | `pod_maintenance` | `pumpAlerts.acknowledgeAndRestore`, `waterLevel.dismissAlert`, `health.restartService`, `system.freeStorage`, `databases.checkIntegrity`, `system.triggerUpdate` |
 

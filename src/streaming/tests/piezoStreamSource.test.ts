@@ -47,6 +47,7 @@ const natsMock = vi.hoisted(() => ({
 
 vi.mock('../natsFrameSource', () => ({
   SUBSCRIBE_SUBJECTS: ['raw.sens.>', 'raw.frz.>'],
+  natsSubjectPrefixes: (configured: string | null) => configured === null ? ['raw', 'rawmem'] : [configured],
   natsReachable: vi.fn(async () => {
     if (natsMock.probeErrorOnce) {
       natsMock.probeErrorOnce = false
@@ -68,10 +69,21 @@ vi.mock('../sensorSourceDiscovery', () => ({
   discoverSensorSource: vi.fn(async () => 'unknown'),
 }))
 
+// The stored natsSubjectPrefix; `startNatsSource` reads it on every connect.
+const settingsMock = vi.hoisted(() => ({ natsSubjectPrefix: null as string | null, readError: null as Error | null }))
+
 // Keep persistence hermetic — dispatch → recordCapFrame must not touch a real db.
 vi.mock('@/src/db', () => {
   const chain = { values: () => chain, onConflictDoNothing: () => chain, where: () => chain, run: () => {} }
-  return { biometricsDb: { insert: () => chain, delete: () => chain } }
+  const select = () => ({
+    from: () => ({
+      limit: async () => {
+        if (settingsMock.readError) throw settingsMock.readError
+        return [{ prefix: settingsMock.natsSubjectPrefix }]
+      },
+    }),
+  })
+  return { biometricsDb: { insert: () => chain, delete: () => chain }, db: { select } }
 })
 
 vi.mock('@/src/hardware/dacMonitor.instance', () => ({
@@ -81,6 +93,9 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 import {
   __test__,
   getLatestCapSenseSnapshot,
+  getNatsSourceStats,
+  readNatsSubjectPrefix,
+  restartNatsFrameSource,
   shutdownPiezoStreamServer,
   startPiezoStreamServer,
 } from '../piezoStream'
@@ -130,6 +145,8 @@ describe('startPiezoStreamServer — source selection', () => {
     natsMock.startCalls = 0
     natsMock.stopCalls = 0
     natsMock.captured = null
+    settingsMock.natsSubjectPrefix = null
+    settingsMock.readError = null
     for (const f of fs.readdirSync(tmpRawDir)) fs.rmSync(path.join(tmpRawDir, f), { force: true })
     delete process.env.PIEZO_SENSOR_SOURCE
     vi.mocked(discoverSensorSource).mockResolvedValue('unknown')
@@ -490,5 +507,96 @@ describe('startPiezoStreamServer — source selection', () => {
     await waitFor(() => natsMock.stopCalls === 1)
 
     expect(__test__.natsSourceActive).toBe(false)
+  })
+
+  it('reads the stored prefix when the NATS source connects', async () => {
+    settingsMock.natsSubjectPrefix = 'rawmem'
+    natsMock.reachable = true
+    startPiezoStreamServer()
+    await waitFor(() => __test__.natsSourceActive)
+    expect(natsMock.captured.prefixes).toEqual(['rawmem'])
+    expect(getNatsSourceStats()).toMatchObject({ messages: 0 })
+    expect(await readNatsSubjectPrefix()).toBe('rawmem')
+  })
+
+  it('treats an invalid stored prefix as auto', async () => {
+    settingsMock.natsSubjectPrefix = 'raw.sens'
+    expect(await readNatsSubjectPrefix()).toBeNull()
+  })
+
+  it('reads auto when the setting cannot be read', async () => {
+    settingsMock.readError = new Error('no such column: nats_subject_prefix')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    natsMock.reachable = true
+    startPiezoStreamServer()
+    await waitFor(() => __test__.natsSourceActive)
+    expect(natsMock.captured.prefixes).toEqual(['raw', 'rawmem'])
+    expect(warn).toHaveBeenCalledWith('[sensorStream] could not read natsSubjectPrefix, reading the default prefixes:', settingsMock.readError)
+  })
+
+  it('restarts only the NATS source on a prefix change, keeping the WS server and its clients', async () => {
+    natsMock.reachable = true
+    const server = startPiezoStreamServer()
+    await waitFor(() => __test__.natsSourceActive)
+    expect(natsMock.captured.prefixes).toEqual(['raw', 'rawmem'])
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Missing WS address')
+    const client = new WebSocket(`ws://127.0.0.1:${address.port}`)
+    await new Promise<void>((resolve, reject) => {
+      client.once('open', resolve)
+      client.once('error', reject)
+    })
+    try {
+      settingsMock.natsSubjectPrefix = 'rawmem'
+      expect(await restartNatsFrameSource()).toBe(true)
+
+      expect(natsMock.stopCalls).toBe(1)
+      expect(natsMock.startCalls).toBe(2)
+      expect(natsMock.captured.prefixes).toEqual(['rawmem'])
+      expect(__test__.natsSourceActive).toBe(true)
+      expect(startPiezoStreamServer()).toBe(server)
+      expect(client.readyState).toBe(WebSocket.OPEN)
+      expect(vi.mocked(natsReachable)).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      client.terminate()
+    }
+  })
+
+  it('serializes back-to-back restarts so the last setting wins', async () => {
+    natsMock.reachable = true
+    startPiezoStreamServer()
+    await waitFor(() => __test__.natsSourceActive)
+
+    settingsMock.natsSubjectPrefix = 'rawmem'
+    const first = restartNatsFrameSource()
+    settingsMock.natsSubjectPrefix = 'custom'
+    const second = restartNatsFrameSource()
+    expect(await Promise.all([first, second])).toEqual([true, true])
+
+    expect(natsMock.startCalls).toBe(3)
+    expect(natsMock.stopCalls).toBe(2)
+    expect(natsMock.captured.prefixes).toEqual(['custom'])
+  })
+
+  it('does nothing on a prefix change while reading RAW', async () => {
+    process.env.PIEZO_SENSOR_SOURCE = 'raw'
+    startPiezoStreamServer()
+    expect(await restartNatsFrameSource()).toBe(false)
+    expect(startNatsFrameSource).not.toHaveBeenCalled()
+  })
+
+  it('falls back to source selection when the re-subscribe fails', async () => {
+    natsMock.reachable = true
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    startPiezoStreamServer()
+    await waitFor(() => __test__.natsSourceActive)
+
+    natsMock.startError = new Error('connection refused')
+    expect(await restartNatsFrameSource()).toBe(false)
+    expect(__test__.natsSourceActive).toBe(false)
+    natsMock.startError = null
+    await waitFor(() => __test__.natsSourceActive)
+    expect(error).toHaveBeenCalledWith('[sensorStream] NATS connect failed; retrying source discovery:', expect.any(Error))
   })
 })

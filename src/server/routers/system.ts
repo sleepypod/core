@@ -17,7 +17,7 @@ import {
   type FirmwareSignals,
 } from '@/src/lib/firmwareGeneration'
 import { getServerPerformance } from '@/src/lib/serverPerformance'
-import { getSensorFrameTimes } from '@/src/streaming/piezoStream'
+import { getNatsSourceStats, getSensorFrameTimes, readNatsSubjectPrefix } from '@/src/streaming/piezoStream'
 import { isWanBlocked, setInternetAccess } from '@/src/hardware/internetAccess'
 
 const execFileAsync = promisify(execFile)
@@ -103,6 +103,31 @@ export function _resetFirmwareSignalsForTest(): void {
 }
 
 const SENSOR_TRANSPORT_OVERRIDES = ['raw', 'nats'] as const
+
+/** The `nats` block of `getSensorSource`: what the reader is set to, subscribes to, and sees published. */
+async function natsReaderDiagnostics() {
+  const configuredPrefix = await readNatsSubjectPrefix().catch(() => null)
+  // Null only for the moment a prefix change re-subscribes.
+  const stats = getNatsSourceStats()
+  const subjects = stats?.subjects ?? []
+  const now = Date.now()
+  return {
+    mode: configuredPrefix === null ? 'auto' as const : 'pinned' as const,
+    configuredPrefix,
+    subscribedSubjects: subjects,
+    sources: { ...stats?.sources },
+    messages: stats?.messages ?? 0,
+    decodeFailures: stats?.decodeFailures ?? 0,
+    ignoredMessages: stats?.ignoredMessages ?? 0,
+    observedPrefixes: Object.entries(stats?.observedPrefixes ?? {}).map(([prefix, seen]) => ({
+      prefix,
+      subscribed: subjects.includes(`${prefix}.sens.>`),
+      messages: seen.messages,
+      lastSeenAtMs: seen.lastSeenMs,
+      lastSeenAgeMs: Math.max(0, now - seen.lastSeenMs),
+    })),
+  }
+}
 
 /**
  * Run `df -B1 <path>` and return the parsed totals, or null if the mount
@@ -634,9 +659,11 @@ export const systemRouter = router({
 
   /**
    * Which sensor-frame transport this pod's firmware provides, and which one
-   * the core's stream actually selected at startup. Read-only: selection
-   * happens once per process (see `docs/nats-frame-readers.md`), so this
-   * exists to make the choice visible in Settings → Device without a shell.
+   * the core's stream actually selected at startup. Selection happens once
+   * per process (see `docs/nats-frame-readers.md`), so this exists to make the
+   * choice visible in Settings → Device without a shell. On NATS, `nats` adds
+   * the subject prefixes in use and every prefix seen publishing, so a wrong
+   * prefix is fixable through settings.natsSubjectPrefix.
    */
   getSensorSource: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/system/sensor-source', protect: false, tags: ['System'] } })
@@ -672,6 +699,28 @@ export const systemRouter = router({
         firstFrameMs: z.number().nullable(),
         uptimeSeconds: z.number(),
       }),
+      /** The NATS reader's subject prefixes and traffic; null unless NATS is the selected source. */
+      nats: z.object({
+        /** `auto` reads `raw` and `rawmem` (raw wins per subject); `pinned` reads only configuredPrefix. */
+        mode: z.enum(['auto', 'pinned']),
+        /** settings.natsSubjectPrefix; null in auto mode. */
+        configuredPrefix: z.string().nullable(),
+        subscribedSubjects: z.array(z.string()),
+        /** Prefix feeding each sensor subject, e.g. `{ "sens.piezo": "rawmem" }`. */
+        sources: z.record(z.string(), z.string()),
+        messages: z.number(),
+        decodeFailures: z.number(),
+        /** Messages dropped because a higher-priority prefix feeds that subject. */
+        ignoredMessages: z.number(),
+        /** Every prefix seen publishing `<prefix>.sens.*`; `subscribed: false` means firmware publishes where we don't read. */
+        observedPrefixes: z.array(z.object({
+          prefix: z.string(),
+          subscribed: z.boolean(),
+          messages: z.number(),
+          lastSeenAtMs: z.number(),
+          lastSeenAgeMs: z.number(),
+        })),
+      }).nullable(),
     }))
     .query(async () => {
       const signals = await getFirmwareSignals()
@@ -710,6 +759,7 @@ export const systemRouter = router({
           firstFrameMs: perf.firstFrameMs,
           uptimeSeconds: perf.uptimeSeconds,
         },
+        nats: perf.sensorSource === 'nats' ? await natsReaderDiagnostics() : null,
       }
     }),
 })
