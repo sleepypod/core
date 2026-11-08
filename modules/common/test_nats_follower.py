@@ -9,11 +9,13 @@ through NatsFollower's decode path and assert the yielded dicts satisfy the
 existing parsers — exactly the contract the .RAW path already relies on.
 """
 
+import asyncio
 import base64
 import socket
 import struct
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -190,6 +192,38 @@ class TestDecodePath:
         assert rec["type"] == "frzTemp"
         for key in ("left", "right", "amb", "hs"):
             assert isinstance(rec[key], int)
+
+
+@pytest.mark.parametrize("prefix", ["raw", "rawmem"])
+def test_follower_receives_sensor_and_freezer_records(prefix):
+    messages = {
+        f"{prefix}.sens.piezo": _payload("raw.sens.piezo"),
+        f"{prefix}.sens.bedtemp": _payload("raw.sens.bedtemp"),
+        f"{prefix}.frz.health": _payload("raw.frz.health"),
+        f"{prefix}.log": b"not a sensor record",
+    }
+
+    async def subscribe(pattern, *, cb):
+        for subject, data in messages.items():
+            if subject.startswith(pattern.removesuffix(">")):
+                await cb(SimpleNamespace(data=data))
+
+    async def close():
+        pass
+
+    async def connect(*args, **kwargs):
+        return SimpleNamespace(subscribe=subscribe, close=close)
+
+    shutdown = threading.Event()
+    shutdown.set()  # Return after subscribing and delivering the fixtures.
+    follower = NatsFollower(shutdown)
+    asyncio.run(follower._connect_and_run(SimpleNamespace(connect=connect)))
+
+    assert follower._queue.qsize() == 3
+    assert {follower._queue.get_nowait()["type"] for _ in range(3)} == {
+        "piezo-dual", "bedTemp", "frzHealth",
+    }
+    assert follower._decode_failures == 0
 
 
 # ---------------------------------------------------------------------------

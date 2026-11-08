@@ -8,7 +8,7 @@
  * those pods the file tailer finds nothing, so the WS live stream, the
  * `latestCapSenseSnapshot`, `cap_sense_frames`, and the `cap.*` automation
  * signals all stay empty. This module is the second `.RAW` consumer: it
- * subscribes to the firmware's `raw.sens.>` / `raw.frz.>` subjects, decodes each
+ * subscribes to the firmware's sensor and freezer subjects, decodes each
  * message through the SAME decode path the tailer uses, and hands the decoded
  * frame back to `piezoStream` so every downstream consumer is fed identically.
  *
@@ -32,12 +32,10 @@ const NATS_HOST = process.env.PIEZO_NATS_HOST ?? '127.0.0.1'
 const NATS_PORT = Number(process.env.PIEZO_NATS_PORT ?? 4222)
 
 /**
- * Subjects the firmware publishes sensor frames on. `raw.log` is intentionally
- * excluded — its payload is multiple concatenated CBOR maps (unlike the single
- * map every sensor subject carries) and it has no live consumer; sp-status reads
- * it as a JetStream point-fetch instead.
+ * Firmware publishes sensor frames under `raw` or `rawmem`. Subscribe only to
+ * the sensor and freezer subjects so log payloads stay out of the frame decoder.
  */
-export const SUBSCRIBE_SUBJECTS = ['raw.sens.>', 'raw.frz.>'] as const
+export const SUBSCRIBE_SUBJECTS = ['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>'] as const
 
 // Never give up reconnecting. On a NATS-only pod there is no `.RAW` file to fall
 // back to, so a dropped connection must self-heal rather than strand the stream;

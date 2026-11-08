@@ -155,11 +155,6 @@ describe('startNatsFrameSource', () => {
     })
   })
 
-  it('excludes raw.log from the live subscriptions', () => {
-    expect(SUBSCRIBE_SUBJECTS).toEqual(['raw.sens.>', 'raw.frz.>'])
-    expect(SUBSCRIBE_SUBJECTS as readonly string[]).not.toContain('raw.log')
-  })
-
   it('decodes a capSense fixture through to onFrame and counts it', async () => {
     const onFrame = vi.fn()
     const src = await startNatsFrameSource({ decode, onFrame })
@@ -182,11 +177,13 @@ describe('startNatsFrameSource', () => {
     expect(frame.left1.every((n: number) => Number.isInteger(n))).toBe(true)
   })
 
-  it('routes a freezer-subject fixture through the raw.frz.> subscription', async () => {
+  it.each(['raw', 'rawmem'])('routes sensor and freezer frames on %s', async (prefix) => {
     const onFrame = vi.fn()
     await startNatsFrameSource({ decode, onFrame })
-    deliver('raw.frz.health', fixture('raw.frz.health'))
-    expect(onFrame.mock.calls[0][0].type).toBe('frzHealth')
+    deliver(`${prefix}.sens.bedtemp`, fixture('raw.sens.bedtemp'))
+    deliver(`${prefix}.frz.health`, fixture('raw.frz.health'))
+    expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp', 'frzHealth'])
+    expect(() => deliver(`${prefix}.log`, new Uint8Array())).toThrow('no subscription matches')
   })
 
   it('passes new/out-of-scope types (blanketReadings) through without throwing', async () => {

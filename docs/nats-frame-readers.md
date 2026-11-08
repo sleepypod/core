@@ -25,7 +25,8 @@ runtime — never a replacement.
 
 ## Wire format (as captured)
 
-Each subscribed sensor message (`raw.sens.>` / `raw.frz.>`) contains one
+The readers subscribe to `raw.sens.>`, `raw.frz.>`, `rawmem.sens.>` and
+`rawmem.frz.>` to cover both firmware subject prefixes. Each sensor message contains one
 complete CBOR value whose decoded value is a record map. Definite and
 indefinite maps both occur; consumers must not depend on a leading encoding
 byte. NATS supplies the message boundary, so sensor readers need no outer
@@ -249,7 +250,8 @@ accrues.
   `queue.Queue(maxsize=256)`; the generator `get()`s from the queue. Queue
   full ⇒ drop-oldest + counter (matches tailer semantics: live data beats
   backlog; 256 is about one minute of the full captured sensor firehose).
-- **Subscription:** core NATS subscribe on `raw.sens.>` and `raw.frz.>`
+- **Subscription:** core NATS subscribe on `raw.sens.>`, `raw.frz.>`,
+  `rawmem.sens.>` and `rawmem.frz.>`
   (plain subscribe, not JetStream pull — see Backfill below). Per-module
   subject narrowing is a premature optimization at these rates
   (~4.6 KB/s total); every consumer gets the same firehose and filters by

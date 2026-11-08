@@ -51,10 +51,9 @@ NATS_DEFAULT_HOST = "127.0.0.1"
 NATS_DEFAULT_PORT = 4222
 NATS_INFO_MAX_BYTES = 4096
 
-# Subjects consumed by the biometrics modules. raw.log lives outside these
-# prefixes on purpose — it is a firmware log channel surfaced by sp-status,
-# not a sensor stream, so the modules never subscribe to it.
-NATS_SENSOR_SUBJECTS = ("raw.sens.>", "raw.frz.>")
+# Firmware publishes under raw or rawmem. Subscribe to sensor and freezer
+# subjects only so the log payloads never reach the record decoder.
+NATS_SENSOR_SUBJECTS = ("raw.sens.>", "raw.frz.>", "rawmem.sens.>", "rawmem.frz.>")
 
 # Bounded hand-off queue. Full ⇒ drop-oldest (live data beats backlog, exactly
 # like the file tailer jumping to EOF). 256 ≈ 2 min of capSense at 2 Hz.
