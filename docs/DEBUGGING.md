@@ -63,7 +63,10 @@ reads red/amber while the bed is occupied, the ingest pipeline has stalled.
    in-app equivalent of the `biometrics pipeline` section of `sp-status`
    (`docs/nats-frame-readers.md` → "Surfacing the selection in the app"). On
    NATS firmware, stop here: there are no `.RAW` files to inspect, and an
-   empty `/persistent/biometrics` is expected.
+   empty `/persistent/biometrics` is expected. If no frames arrive and
+   **Publishing prefixes** lists one marked "(not read)", set **Subject
+   prefix** to it, then **Restart biometrics modules** (an MCP agent:
+   `get_sensor_source`, then `set_device_settings` with `natsSubjectPrefix`).
 1. Confirm `RAW_DATA_DIR` matches the tmpfs hot dir (`/persistent/biometrics`,
    per ADR-0018). A mismatch makes readers see an empty directory while frank
    writes fine — the classic silent failure (`docs/sleep-detector.md` §9).

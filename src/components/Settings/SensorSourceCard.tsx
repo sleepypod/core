@@ -1,22 +1,37 @@
 'use client'
 
-import { Waves } from 'lucide-react'
+import { useState } from 'react'
+import { RotateCw, Waves } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Card, CardHeader, InlineError, SettingRow, Skeleton, StatusDot } from '@/src/components/ds'
-import { fmtAgo } from '@/src/lib/dataPath'
-import { sensorSourceVerdict, TRANSPORT_LABELS } from './sensorSourceLogic'
+import { Button, Card, CardHeader, InlineError, SegmentedControl, SettingRow, Skeleton, StatusDot, TextField } from '@/src/components/ds'
+import { fmtAgo, RESTARTABLE_UNITS } from '@/src/lib/dataPath'
+import { isNatsSubjectPrefix } from '@/src/lib/natsSubjectPrefix'
+import type { inferRouterOutputs } from '@trpc/server'
+import type { AppRouter } from '@/src/server/routers/app'
+import {
+  observedSummary,
+  PREFIX_CHOICES,
+  prefixChoice,
+  sensorSourceVerdict,
+  sourcesSummary,
+  TRANSPORT_LABELS,
+  type PrefixChoice,
+} from './sensorSourceLogic'
 
 const POLL_MS = 10_000
 
+type NatsDiagnostics = NonNullable<inferRouterOutputs<AppRouter>['system']['getSensorSource']['nats']>
+
 /**
- * Settings → Device → "Sensor data source". Read-only.
+ * Settings → Device → "Sensor data source".
  *
  * A fleet of sleepypods spans three firmware generations, and which one a pod
  * runs decides whether the core reads `.RAW` files or a local NATS stream.
- * The pick is automatic and happens once per process, so there is nothing to
- * toggle here — the card exists so the first support question ("which
- * pipeline is this pod on, and is data flowing?") is answerable from the app
- * instead of `sp-status` over SSH.
+ * The transport pick is automatic and happens once per process — the card
+ * exists so the first support question ("which pipeline is this pod on, and
+ * is data flowing?") is answerable from the app instead of `sp-status` over
+ * SSH. On NATS firmware it also sets the subject prefix the readers subscribe
+ * under, for firmware that publishes somewhere the auto mode doesn't read.
  */
 export function SensorSourceCard() {
   const q = trpc.system.getSensorSource.useQuery({}, { refetchInterval: POLL_MS })
@@ -40,7 +55,9 @@ export function SensorSourceCard() {
     legacyNatsDisabled: stream.legacyNatsDisabled,
     lastFrameAgeMs: stream.lastFrameAgeMs,
     uptimeSeconds: stream.uptimeSeconds,
+    observedPrefixes: q.data.nats?.observedPrefixes,
   })
+  const natsRelevant = stream.source === 'nats' || firmware.expectedTransport === 'nats'
 
   return (
     <Card tone={verdict.tone === 'danger' ? 'danger' : verdict.tone === 'warn' ? 'warn' : undefined}>
@@ -69,9 +86,114 @@ export function SensorSourceCard() {
         </span>
       </SettingRow>
 
+      {q.data.nats && <NatsTraffic nats={q.data.nats} />}
+
+      {natsRelevant && <SubjectPrefixSetting />}
+
       {verdict.note && (
         <p className="text-xs leading-[1.4] text-warn text-pretty" data-testid="source-note">{verdict.note}</p>
       )}
     </Card>
+  )
+}
+
+/** Which prefix feeds each subject, and every prefix the firmware publishes under. */
+function NatsTraffic({ nats }: { nats: NatsDiagnostics }) {
+  return (
+    <>
+      <SettingRow label="Subjects" sub={sourcesSummary(nats.sources) ?? 'No subject has delivered a frame yet.'}>
+        <span className="font-mono text-[13px]" data-testid="nats-mode">{nats.mode}</span>
+      </SettingRow>
+      <SettingRow label="Publishing prefixes" sub={observedSummary(nats.observedPrefixes) ?? 'None seen yet.'} />
+    </>
+  )
+}
+
+/**
+ * `settings.natsSubjectPrefix`. The core's stream re-subscribes on save; the
+ * Python biometrics modules read it at startup, so a change offers to restart
+ * them through the same `health.restartService` path System → Health uses.
+ */
+function SubjectPrefixSetting() {
+  const utils = trpc.useUtils()
+  const settings = trpc.settings.getAll.useQuery({})
+  const saved = settings.data?.device.natsSubjectPrefix ?? null
+  const [customOpen, setCustomOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [changed, setChanged] = useState(false)
+  const update = trpc.settings.updateDevice.useMutation({
+    onSuccess: () => {
+      setChanged(true)
+      setCustomOpen(false)
+      void utils.settings.getAll.invalidate()
+      void utils.system.getSensorSource.invalidate()
+    },
+  })
+  const restart = trpc.health.restartService.useMutation()
+  const [restarting, setRestarting] = useState(false)
+  const [restartResult, setRestartResult] = useState<string | null>(null)
+
+  if (!settings.data) return null
+
+  const choice: PrefixChoice = customOpen ? 'custom' : prefixChoice(saved)
+  const save = (prefix: string | null) => {
+    if (prefix !== saved) update.mutate({ natsSubjectPrefix: prefix })
+  }
+  const choose = (next: PrefixChoice) => {
+    if (next === 'custom') {
+      setCustomOpen(true)
+      setDraft(prefixChoice(saved) === 'custom' ? saved ?? '' : '')
+      return
+    }
+    setCustomOpen(false)
+    save(next === 'auto' ? null : next)
+  }
+  const draftValid = isNatsSubjectPrefix(draft)
+  const restartModules = async () => {
+    setRestarting(true)
+    setRestartResult(null)
+    const results = await Promise.all(RESTARTABLE_UNITS.map(unit => restart.mutateAsync({ unit }).catch((e: Error) => ({ ok: false, message: e.message }))))
+    const failed = results.filter(r => !r.ok)
+    setRestarting(false)
+    setRestartResult(failed.length === 0 ? `Restarted ${results.length} biometrics modules.` : failed.map(r => r.message).join(' '))
+  }
+
+  return (
+    <>
+      <SettingRow
+        label="Subject prefix"
+        sub="Auto reads raw and rawmem, preferring raw. Pin a prefix only if the firmware publishes somewhere else."
+      >
+        <SegmentedControl ariaLabel="NATS subject prefix" size="sm" value={choice} options={PREFIX_CHOICES} onChange={choose} />
+      </SettingRow>
+      {choice === 'custom' && (
+        <div className="flex items-end gap-2.5">
+          <TextField
+            label="Custom prefix"
+            className="flex-1"
+            value={draft}
+            onChange={setDraft}
+            placeholder="rawmem"
+            maxLength={32}
+            hint={draft === '' || draftValid ? undefined : 'Letters, digits, _ or -, up to 32 characters. No dots or wildcards.'}
+          />
+          <Button disabled={!draftValid || update.isPending} onClick={() => save(draft)}>
+            {update.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      )}
+      {update.error && <InlineError>{update.error.message}</InlineError>}
+      {changed && (
+        <div className="flex flex-wrap items-center gap-2.5" data-testid="prefix-restart">
+          <p className="min-w-0 flex-1 basis-[220px] text-xs leading-[1.4] text-fg-2 text-pretty">
+            The live stream switched already. Biometrics modules pick this up on their next restart.
+          </p>
+          <Button icon={RotateCw} disabled={restarting} onClick={() => void restartModules()}>
+            {restarting ? 'Restarting…' : 'Restart biometrics modules'}
+          </Button>
+          {restartResult && <p className="w-full text-xs text-fg-2" data-testid="prefix-restart-result">{restartResult}</p>}
+        </div>
+      )}
+    </>
   )
 }
