@@ -12,6 +12,7 @@ existing parsers — exactly the contract the .RAW path already relies on.
 import asyncio
 import base64
 import socket
+import sqlite3
 import struct
 import threading
 import time
@@ -20,11 +21,14 @@ from types import SimpleNamespace
 import pytest
 
 from common.nats_follower import (
+    NATS_SENSOR_SUBJECTS,
+    NATS_SUBJECT_PREFIXES,
     NatsFollower,
     NatsFollowerError,
     NatsRecordBuffer,
     create_follower,
     nats_reachable,
+    subject_prefixes,
     wait_for_nats,
 )
 from common.raw_follower import RawFileFollower
@@ -39,6 +43,12 @@ def _payload(subject: str) -> bytes:
 # Every committed fixture is a single-map sensor subject. raw.log is outside
 # the raw.sens.>/raw.frz.> subscription and intentionally not committed.
 SENSOR_SUBJECTS = list(CAPTURE_FIXTURES)
+
+
+@pytest.fixture(autouse=True)
+def _no_pod_settings(tmp_path, monkeypatch):
+    """Keep followers on auto unless a test provides a settings db."""
+    monkeypatch.setenv("DATABASE_URL", f"file:{tmp_path / 'absent.db'}")
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +275,72 @@ def test_follower_lets_rawmem_take_over_when_raw_goes_silent():
     assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
     assert follower._sources == {"sens.bedtemp": "rawmem"}
     assert follower._ignored == 2
+
+
+def _settings_db(tmp_path, prefix="unset", column=True):
+    path = tmp_path / "sleepypod.db"
+    conn = sqlite3.connect(path)
+    if column:
+        conn.execute("CREATE TABLE device_settings (id INTEGER PRIMARY KEY, nats_subject_prefix TEXT)")
+        if prefix != "unset":
+            conn.execute("INSERT INTO device_settings VALUES (1, ?)", (prefix,))
+    else:
+        conn.execute("CREATE TABLE device_settings (id INTEGER PRIMARY KEY, bed_mode TEXT)")
+        conn.execute("INSERT INTO device_settings VALUES (1, 'two')")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_subject_prefixes_default_to_auto_without_a_settings_db(tmp_path):
+    assert subject_prefixes(tmp_path / "absent.db") == NATS_SUBJECT_PREFIXES
+
+
+def test_subject_prefixes_read_auto_on_an_older_schema(tmp_path):
+    assert subject_prefixes(_settings_db(tmp_path, column=False)) == NATS_SUBJECT_PREFIXES
+
+
+@pytest.mark.parametrize("stored", [None, "unset"])
+def test_subject_prefixes_read_auto_when_unset(tmp_path, stored):
+    assert subject_prefixes(_settings_db(tmp_path, stored)) == NATS_SUBJECT_PREFIXES
+
+
+def test_subject_prefixes_read_a_pinned_prefix(tmp_path):
+    assert subject_prefixes(_settings_db(tmp_path, "rawmem")) == ("rawmem",)
+
+
+@pytest.mark.parametrize("stored", ["raw.sens", "*", ">", "", "raw mem", "x" * 33])
+def test_subject_prefixes_ignore_an_invalid_pin(tmp_path, stored):
+    assert subject_prefixes(_settings_db(tmp_path, stored)) == NATS_SUBJECT_PREFIXES
+
+
+def test_subject_prefixes_read_auto_when_the_db_is_unreadable(tmp_path):
+    path = tmp_path / "sleepypod.db"
+    path.write_bytes(b"not a sqlite database" * 100)
+    assert subject_prefixes(path) == NATS_SUBJECT_PREFIXES
+
+
+def test_follower_reads_the_pinned_prefix_from_database_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"file:{_settings_db(tmp_path, 'rawmem')}")
+    follower = NatsFollower(threading.Event())
+    assert follower._subjects == ("rawmem.sens.>", "rawmem.frz.>")
+
+
+def test_follower_defaults_to_both_prefixes():
+    assert NatsFollower(threading.Event())._subjects == NATS_SENSOR_SUBJECTS
+
+
+def test_pinned_follower_feeds_its_prefix_without_a_startup_grace():
+    follower = NatsFollower(threading.Event(), prefixes=("rawmem",))
+    follower._subscribed_monotonic = time.monotonic()
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._sources == {"sens.bedtemp": "rawmem"}
+    assert follower._ignored == 0
+
+
+def test_record_buffer_passes_prefixes_through():
+    buf = NatsRecordBuffer(threading.Event(), prefixes=("custom",))
+    assert buf._follower._subjects == ("custom.sens.>", "custom.frz.>")
 
 
 def test_undecodable_raw_message_does_not_claim_subject():
