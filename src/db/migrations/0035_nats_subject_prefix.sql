@@ -1,0 +1,1 @@
+ALTER TABLE `device_settings` ADD `nats_subject_prefix` text;

@@ -53,8 +53,11 @@ import { flushCapFrameWindows, recordCapFrame, resetCapFrameWindows } from './ca
 import { capSideChannels, capSideStatus } from './normalizeFrame'
 import { discoverSensorSource } from './sensorSourceDiscovery'
 import { recordSensorSource, recordFirstSensorFrame } from '@/src/lib/serverPerformance'
-import { natsReachable, startNatsFrameSource } from './natsFrameSource'
-import type { NatsFrameSourceHandle } from './natsFrameSource'
+import { natsReachable, natsSubjectPrefixes, startNatsFrameSource } from './natsFrameSource'
+import type { NatsFrameSourceHandle, NatsFrameSourceStats } from './natsFrameSource'
+import { db } from '@/src/db'
+import { deviceSettings } from '@/src/db/schema'
+import { isNatsSubjectPrefix } from '@/src/lib/natsSubjectPrefix'
 import { ALLOWED_HOSTS_ENV, isHostAllowed, parseAllowedHosts } from '@/src/lib/hostAllowlist'
 // ---------------------------------------------------------------------------
 // Configuration
@@ -105,6 +108,8 @@ function createStreamState() {
     streamingInterval: null as ReturnType<typeof setInterval> | null,
     // Exactly one live source is owned by this server.
     natsSource: null as NatsFrameSourceHandle | null,
+    // Tail of the serialized natsSubjectPrefix restarts.
+    natsRestart: null as Promise<boolean> | null,
     rawStop: null as (() => Promise<void>) | null,
     warnedUnknownTypes: new Set<string>(),
     // undefined subscribes the client to every sensor type.
@@ -955,10 +960,29 @@ async function selectAndStartSource(expectedServer: WebSocketServer): Promise<vo
   startRawTailingLoop()
 }
 
+/** The pinned `device_settings.nats_subject_prefix`, or null for auto (unset or invalid). */
+export async function readNatsSubjectPrefix(): Promise<string | null> {
+  const [row] = await db.select({ prefix: deviceSettings.natsSubjectPrefix }).from(deviceSettings).limit(1)
+  return isNatsSubjectPrefix(row?.prefix) ? row.prefix : null
+}
+
+/** Prefixes to subscribe; an unreadable setting reads as auto. */
+async function loadNatsSubjectPrefixes(): Promise<readonly string[]> {
+  try {
+    return natsSubjectPrefixes(await readNatsSubjectPrefix())
+  }
+  catch (err) {
+    console.warn('[sensorStream] could not read natsSubjectPrefix, reading the default prefixes:', err)
+    return natsSubjectPrefixes(null)
+  }
+}
+
 /** Connect the loopback-NATS source, feeding decoded frames into the shared dispatch. */
 async function startNatsSource(expectedServer: WebSocketServer): Promise<boolean> {
   try {
+    const prefixes = await loadNatsSubjectPrefixes()
     const source = await startNatsFrameSource({
+      prefixes,
       decode: decodeSensorFrames,
       onFrame: (frame) => { if (streamState.wss === expectedServer) dispatchSensorFrame(frame) },
       onReady: () => console.log('[sensorStream] NATS frame source active'),
@@ -980,6 +1004,38 @@ async function startNatsSource(expectedServer: WebSocketServer): Promise<boolean
     console.error('[sensorStream] NATS connect failed; retrying source discovery:', err)
     return false
   }
+}
+
+/**
+ * Re-subscribe the NATS source after `natsSubjectPrefix` changes. Only the
+ * frame source restarts; the WS server, its clients and the process stay up.
+ * Resolves false when NATS isn't the active source (RAW, or still choosing; a
+ * pending pick reads the new setting when it connects). Calls are serialized
+ * so back-to-back changes end on the latest setting.
+ */
+export function restartNatsFrameSource(): Promise<boolean> {
+  const run = async (): Promise<boolean> => {
+    const server = streamState.wss
+    const current = streamState.natsSource
+    if (!server || !current) return false
+    streamState.natsSource = null
+    try {
+      await current.stop()
+    }
+    catch { /* already closing */ }
+    if (await startNatsSource(server)) return true
+    // Reconnect failed: hand back to the startup selection loop, which retries.
+    void selectAndStartSource(server)
+    return false
+  }
+  const next = (streamState.natsRestart ?? Promise.resolve(false)).then(run, run)
+  streamState.natsRestart = next
+  return next
+}
+
+/** Live counters of the NATS reader, or null when it isn't running. */
+export function getNatsSourceStats(): NatsFrameSourceStats | null {
+  return streamState.natsSource?.stats ?? null
 }
 
 /**

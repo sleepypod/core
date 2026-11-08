@@ -1108,6 +1108,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "pump_stall_recovery_rpm | sql:integer | logical:number/SQLiteInteger | not-null | default:1500 | not-primary-key | not-unique | not-autoincrement | enum:none",
       "pump_stall_recovery_samples | sql:integer | logical:number/SQLiteInteger | not-null | default:3 | not-primary-key | not-unique | not-autoincrement | enum:none",
       "autopilot_enabled | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:true | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "nats_subject_prefix | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "created_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
       "updated_at | sql:integer | logical:date/SQLiteTimestamp | not-null | default:sql:(unixepoch()) | not-primary-key | not-unique | not-autoincrement | enum:none",
     ],

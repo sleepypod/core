@@ -54,7 +54,7 @@ const nats = vi.hoisted(() => {
 
 vi.mock('@nats-io/transport-node', () => ({ connect: nats.connect }))
 
-import { natsReachable, startNatsFrameSource } from '../natsFrameSource'
+import { natsReachable, natsSubjectPrefixes, startNatsFrameSource, SUBJECT_PREFIXES } from '../natsFrameSource'
 import { __test__ as piezo } from '../piezoStream'
 
 const decode = piezo.decodeSensorFrames
@@ -65,13 +65,25 @@ function fixture(subject: string): Buffer {
   return Buffer.from(f.payloadB64, 'base64')
 }
 
-/** Deliver a payload to whichever subscription's wildcard covers `subject`. */
-function deliver(subject: string, payload: Uint8Array): void {
-  const prefix = (s: string) => s.endsWith('.>') ? s.slice(0, -1) : `${s}.`
-  const sub = nats.state.subs.find(s => subject.startsWith(prefix(s.subject)))
-  if (!sub) throw new Error(`no subscription matches ${subject}`)
-  sub.cb(null, { subject, data: payload })
+/** NATS wildcard match: `*` is one token, a trailing `>` is one or more. */
+function matches(pattern: string, subject: string): boolean {
+  const p = pattern.split('.')
+  const t = subject.split('.')
+  for (let i = 0; i < p.length; i++) {
+    if (p[i] === '>') return t.length > i
+    if (i >= t.length || (p[i] !== '*' && p[i] !== t[i])) return false
+  }
+  return p.length === t.length
 }
+
+/** Deliver a payload to every subscription whose wildcard covers `subject`, like a NATS server. */
+function deliver(subject: string, payload: Uint8Array): void {
+  const subs = nats.state.subs.filter(s => matches(s.subject, subject))
+  if (subs.length === 0) throw new Error(`no subscription matches ${subject}`)
+  for (const sub of subs) sub.cb(null, { subject, data: payload })
+}
+
+const DISCOVERY = '*.sens.>'
 
 describe('natsReachable', () => {
   const servers: net.Server[] = []
@@ -146,8 +158,9 @@ describe('startNatsFrameSource', () => {
 
   it('subscribes to the sensor subjects with infinite reconnect', async () => {
     const onFrame = vi.fn()
-    await startNatsFrameSource({ decode, onFrame })
-    expect(nats.state.subs.map(s => s.subject)).toEqual(['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>'])
+    const src = await startNatsFrameSource({ decode, onFrame })
+    expect(nats.state.subs.map(s => s.subject)).toEqual(['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>', DISCOVERY])
+    expect(src.stats.subjects).toEqual(['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>'])
     expect(nats.state.connectOpts).toMatchObject({
       servers: '127.0.0.1:4222',
       maxReconnectAttempts: -1,
@@ -164,6 +177,53 @@ describe('startNatsFrameSource', () => {
     expect(frame.type).toBe('capSense')
     expect(frame.left).toMatchObject({ out: 3288, status: 'good' })
     expect(src.stats).toMatchObject({ messages: 1, framesDecoded: 1, decodeFailures: 0, sources: { 'sens.capsense': 'raw' }, ignoredMessages: 0 })
+  })
+
+  it('reads only a pinned prefix, with no startup grace to wait out', async () => {
+    const onFrame = vi.fn()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const src = await startNatsFrameSource({ decode, onFrame, prefixes: ['rawmem'] })
+
+    expect(nats.state.subs.map(s => s.subject)).toEqual(['rawmem.sens.>', 'rawmem.frz.>', DISCOVERY])
+    deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
+    expect(() => deliver('raw.frz.health', fixture('raw.frz.health'))).toThrow('no subscription matches')
+    deliver('raw.sens.bedtemp', fixture('raw.sens.bedtemp'))
+
+    expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp'])
+    expect(src.stats).toMatchObject({ messages: 1, sources: { 'sens.bedtemp': 'rawmem' }, ignoredMessages: 0 })
+  })
+
+  it('records every prefix publishing sensor subjects without feeding frames from discovery', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(10_000)
+      const onFrame = vi.fn()
+      const decodeSpy = vi.fn(decode)
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const src = await startNatsFrameSource({ decode: decodeSpy, onFrame, prefixes: ['raw'] })
+
+      deliver('raw.sens.bedtemp', fixture('raw.sens.bedtemp'))
+      deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
+      vi.setSystemTime(12_000)
+      deliver('rawmem.sens.piezo', fixture('raw.sens.piezo'))
+
+      expect(onFrame).toHaveBeenCalledTimes(1)
+      expect(decodeSpy).toHaveBeenCalledTimes(1)
+      expect(src.stats.messages).toBe(1)
+      expect(src.stats.observedPrefixes).toEqual({
+        raw: { messages: 1, lastSeenMs: 10_000 },
+        rawmem: { messages: 2, lastSeenMs: 12_000 },
+      })
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('bounds how many publishing prefixes discovery remembers', async () => {
+    const src = await startNatsFrameSource({ decode, onFrame: vi.fn(), prefixes: ['raw'] })
+    for (let i = 0; i < 20; i++) deliver(`p${i}.sens.x`, new Uint8Array())
+    expect(Object.keys(src.stats.observedPrefixes)).toHaveLength(16)
   })
 
   it('applies the piezo int32 conversion (2000-byte string → 500 samples)', async () => {
@@ -347,6 +407,25 @@ describe('startNatsFrameSource', () => {
     error.mockRestore()
   })
 
+  it('names a publishing prefix it does not read when its own subjects stay silent', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const src = await startNatsFrameSource({ decode, onFrame: vi.fn() })
+      deliver('rawv2.sens.piezo', fixture('raw.sens.piezo'))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(warn).toHaveBeenCalledWith(
+        '[natsSource] firmware publishes under %s, which this reader does not subscribe to — set natsSubjectPrefix to read it',
+        'rawv2',
+      )
+      await src.stop()
+    }
+    finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('warns once when the subscription stays silent', async () => {
     vi.useFakeTimers()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -375,5 +454,17 @@ describe('startNatsFrameSource', () => {
     const src = await startNatsFrameSource({ decode, onFrame: vi.fn() })
     await src.stop()
     expect(nats.state.drained).toBe(true)
+  })
+})
+
+describe('natsSubjectPrefixes', () => {
+  it('reads auto when unset and the pin when valid', () => {
+    expect(natsSubjectPrefixes(null)).toBe(SUBJECT_PREFIXES)
+    expect(natsSubjectPrefixes(undefined)).toBe(SUBJECT_PREFIXES)
+    expect(natsSubjectPrefixes('rawmem')).toEqual(['rawmem'])
+  })
+
+  it.each(['raw.sens', '*', '>', '', 'x'.repeat(33)])('reads an invalid stored value %j as auto', (stored) => {
+    expect(natsSubjectPrefixes(stored)).toBe(SUBJECT_PREFIXES)
   })
 })

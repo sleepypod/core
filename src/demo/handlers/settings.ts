@@ -35,6 +35,7 @@ const deviceSettings: DeviceSettings = {
   pumpStallAutoRecoveryEnabled: true,
   pumpStallRecoveryRpm: 1500,
   pumpStallRecoverySamples: 3,
+  natsSubjectPrefix: null,
   createdAt,
   updatedAt: createdAt,
 }

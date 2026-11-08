@@ -97,6 +97,7 @@ function resetSchema(): void {
       pump_stall_recovery_rpm INTEGER NOT NULL DEFAULT 1500,
       pump_stall_recovery_samples INTEGER NOT NULL DEFAULT 3,
       autopilot_enabled INTEGER NOT NULL DEFAULT 1,
+      nats_subject_prefix TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );

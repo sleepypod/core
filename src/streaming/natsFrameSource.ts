@@ -23,6 +23,7 @@ import * as net from 'node:net'
 // Type-only import: the runtime client is loaded lazily in `connectNats` so pods
 // and tests that never select NATS don't pull in the transport.
 import type { NatsConnection } from '@nats-io/transport-node'
+import { isNatsSubjectPrefix } from '@/src/lib/natsSubjectPrefix'
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -44,9 +45,28 @@ const NATS_PORT = Number(process.env.PIEZO_NATS_PORT ?? 4222)
  * intentionally excluded — its payload is multiple concatenated CBOR maps
  * (unlike the single map every sensor subject carries) and it has no live
  * consumer; sp-status reads it as a JetStream point-fetch instead.
+ *
+ * This list is the auto mode. `device_settings.nats_subject_prefix` pins both
+ * readers to a single prefix instead, for firmware that publishes elsewhere.
  */
 export const SUBJECT_PREFIXES = ['raw', 'rawmem'] as const
-export const SUBSCRIBE_SUBJECTS = SUBJECT_PREFIXES.flatMap(prefix => [`${prefix}.sens.>`, `${prefix}.frz.>`])
+
+export function subscribeSubjects(prefixes: readonly string[]): string[] {
+  return prefixes.flatMap(prefix => [`${prefix}.sens.>`, `${prefix}.frz.>`])
+}
+export const SUBSCRIBE_SUBJECTS = subscribeSubjects(SUBJECT_PREFIXES)
+
+/** Prefixes to read for a configured setting: the pinned one, else auto. An invalid stored value reads as auto. */
+export function natsSubjectPrefixes(configured: string | null | undefined): readonly string[] {
+  return isNatsSubjectPrefix(configured) ? [configured] : SUBJECT_PREFIXES
+}
+
+// Diagnostic-only: records which prefixes publish sensor subjects at all, so a
+// firmware that moves to a prefix we don't read shows up in getSensorSource.
+// Messages here are counted, never decoded or fed to consumers.
+const DISCOVERY_SUBJECT = '*.sens.>'
+// Bounds the map if something publishes under many prefixes.
+const MAX_OBSERVED_PREFIXES = 16
 
 // Never give up reconnecting. On a NATS-only pod there is no `.RAW` file to fall
 // back to, so a dropped connection must self-heal rather than strand the stream;
@@ -136,6 +156,10 @@ export interface NatsFrameSourceStats {
   sources: Record<string, string>
   /** Messages dropped because another prefix owns the subject or the grace is running. */
   ignoredMessages: number
+  /** Subjects the frame subscriptions cover, e.g. `['raw.sens.>', 'raw.frz.>']`. */
+  subjects: string[]
+  /** Every prefix seen publishing `<prefix>.sens.*`, read or not (discovery only). */
+  observedPrefixes: Record<string, { messages: number, lastSeenMs: number }>
 }
 
 export interface NatsFrameSourceOptions {
@@ -156,6 +180,11 @@ export interface NatsFrameSourceOptions {
   onClose?: (err?: Error) => void
   host?: string
   port?: number
+  /**
+   * Prefixes to read in priority order (see `natsSubjectPrefixes`). Defaults to
+   * the auto list; a single pinned prefix has nothing to wait for, so no grace.
+   */
+  prefixes?: readonly string[]
   /** Override the fallback-prefix startup grace (tests). */
   fallbackGraceMs?: number
 }
@@ -191,7 +220,17 @@ export async function startNatsFrameSource(
   const host = opts.host ?? NATS_HOST
   const port = opts.port ?? NATS_PORT
   const fallbackGraceMs = opts.fallbackGraceMs ?? FALLBACK_GRACE_MS
-  const stats: NatsFrameSourceStats = { messages: 0, framesDecoded: 0, decodeFailures: 0, sources: {}, ignoredMessages: 0 }
+  const priority: readonly string[] = opts.prefixes ?? SUBJECT_PREFIXES
+  const subjects = subscribeSubjects(priority)
+  const stats: NatsFrameSourceStats = {
+    messages: 0,
+    framesDecoded: 0,
+    decodeFailures: 0,
+    sources: {},
+    ignoredMessages: 0,
+    subjects,
+    observedPrefixes: {},
+  }
 
   let stopped = false
   let loggedDecodeFailure = false
@@ -201,7 +240,7 @@ export async function startNatsFrameSource(
   const nc = await connectNats(host, port)
   const subscribedAt = Date.now()
   console.log('[natsSource] connected to NATS at %s:%d — subscribing %s',
-    host, port, SUBSCRIBE_SUBJECTS.join(', '))
+    host, port, subjects.join(', '))
 
   const handleMessage = (err: Error | null, subject: string, data: Uint8Array): void => {
     if (err) {
@@ -212,7 +251,6 @@ export async function startNatsFrameSource(
     const dot = subject.indexOf('.')
     const prefix = subject.slice(0, dot)
     const tail = subject.slice(dot + 1)
-    const priority = SUBJECT_PREFIXES as readonly string[]
     const rank = priority.indexOf(prefix)
     const owner = stats.sources[tail]
     const now = Date.now()
@@ -261,14 +299,34 @@ export async function startNatsFrameSource(
     }
   }
 
-  SUBSCRIBE_SUBJECTS.forEach(subject =>
+  subjects.forEach(subject =>
     nc.subscribe(subject, { callback: (err, msg) => handleMessage(err, msg.subject, msg.data) }))
+
+  nc.subscribe(DISCOVERY_SUBJECT, {
+    callback: (err, msg) => {
+      if (err) return
+      const prefix = msg.subject.slice(0, msg.subject.indexOf('.'))
+      const seen = stats.observedPrefixes[prefix]
+      if (seen) {
+        seen.messages += 1
+        seen.lastSeenMs = Date.now()
+      }
+      else if (Object.keys(stats.observedPrefixes).length < MAX_OBSERVED_PREFIXES) {
+        stats.observedPrefixes[prefix] = { messages: 1, lastSeenMs: Date.now() }
+      }
+    },
+  })
 
   // Surface a persistently silent subscription once (health signal only).
   const silenceTimer = setTimeout(() => {
     if (!stopped && stats.messages === 0) {
       console.warn('[natsSource] no frames received %ds after subscribing — sensor idle or firmware not publishing',
         Math.round(SILENCE_WARN_MS / 1000))
+      const unread = Object.keys(stats.observedPrefixes).filter(prefix => !priority.includes(prefix))
+      if (unread.length > 0) {
+        console.warn('[natsSource] firmware publishes under %s, which this reader does not subscribe to — set natsSubjectPrefix to read it',
+          unread.join(', '))
+      }
     }
   }, SILENCE_WARN_MS)
   // Don't let the health timer hold the process open on its own.

@@ -79,6 +79,10 @@ export const deviceSettings = sqliteTable('device_settings', {
   autopilotEnabled: integer('autopilot_enabled', { mode: 'boolean' })
     .notNull()
     .default(true),
+  // NATS subject prefix the sensor readers subscribe under (`<prefix>.sens.>`,
+  // `<prefix>.frz.>`). NULL = auto: read `raw` and `rawmem` with `raw` winning
+  // per subject. Set it to pin firmware that publishes under another prefix.
+  natsSubjectPrefix: text('nats_subject_prefix'),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

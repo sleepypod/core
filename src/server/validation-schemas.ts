@@ -4,6 +4,7 @@
  */
 import { z } from 'zod'
 import type { Condition as AutomationCondition, Expr as AutomationExpr } from '@/src/automation/types'
+import { NATS_SUBJECT_PREFIX_PATTERN } from '@/src/lib/natsSubjectPrefix'
 
 /**
  * Time string validation (HH:MM format in 24-hour time)
@@ -147,6 +148,11 @@ export const timezoneSchema = z.string().refine((tz) => {
     return false
   }
 }, 'Must be a valid IANA timezone, e.g. "America/Los_Angeles"')
+
+/** A single NATS subject token (letters, digits, `_`, `-`; up to 32 characters). */
+export const natsSubjectPrefixSchema = z
+  .string()
+  .regex(NATS_SUBJECT_PREFIX_PATTERN, 'NATS subject prefix must be 1-32 letters, digits, "_" or "-" (no dots or wildcards)')
 
 /**
  * ISO 8601 datetime string validation
