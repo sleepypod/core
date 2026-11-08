@@ -25,7 +25,17 @@ runtime — never a replacement.
 
 ## Wire format (as captured)
 
-Each subscribed sensor message (`raw.sens.>` / `raw.frz.>`) contains one
+The readers subscribe to `raw.sens.>`, `raw.frz.>`, `rawmem.sens.>` and
+`rawmem.frz.>` to cover both firmware subject prefixes (`rawmem` arrived with the
+EmmcWear firmware, rat_version `4b7552d5`). Each sensor subject (`sens.piezo`,
+`frz.temp`, ...) is fed by exactly one prefix, and `raw` always wins: `rawmem`
+feeds a subject only when `raw` has not delivered a decodable message for it and
+30 s have passed since subscribing (three periods of the slowest 0.1 Hz
+subjects). A prefix silent on a subject for 60 s gives it up, so one stray
+message can't pin a subject to a prefix that no longer feeds it. Pods that
+publish `raw` read exactly what they read before `rawmem` existed, and a firmware that publishes both never double-feeds a consumer.
+The journal logs which subject feeds each sensor (`[natsSource] reading
+sens.piezo from rawmem.sens.piezo`). Each sensor message contains one
 complete CBOR value whose decoded value is a record map. Definite and
 indefinite maps both occur; consumers must not depend on a leading encoding
 byte. NATS supplies the message boundary, so sensor readers need no outer
@@ -249,7 +259,8 @@ accrues.
   `queue.Queue(maxsize=256)`; the generator `get()`s from the queue. Queue
   full ⇒ drop-oldest + counter (matches tailer semantics: live data beats
   backlog; 256 is about one minute of the full captured sensor firehose).
-- **Subscription:** core NATS subscribe on `raw.sens.>` and `raw.frz.>`
+- **Subscription:** core NATS subscribe on `raw.sens.>`, `raw.frz.>`,
+  `rawmem.sens.>` and `rawmem.frz.>`
   (plain subscribe, not JetStream pull — see Backfill below). Per-module
   subject narrowing is a premature optimization at these rates
   (~4.6 KB/s total); every consumer gets the same firehose and filters by

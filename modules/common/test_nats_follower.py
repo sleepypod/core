@@ -9,11 +9,13 @@ through NatsFollower's decode path and assert the yielded dicts satisfy the
 existing parsers — exactly the contract the .RAW path already relies on.
 """
 
+import asyncio
 import base64
 import socket
 import struct
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -190,6 +192,86 @@ class TestDecodePath:
         assert rec["type"] == "frzTemp"
         for key in ("left", "right", "amb", "hs"):
             assert isinstance(rec[key], int)
+
+
+@pytest.mark.parametrize("prefix", ["raw", "rawmem"])
+def test_follower_receives_sensor_and_freezer_records(prefix):
+    messages = {
+        f"{prefix}.sens.piezo": _payload("raw.sens.piezo"),
+        f"{prefix}.sens.bedtemp": _payload("raw.sens.bedtemp"),
+        f"{prefix}.frz.health": _payload("raw.frz.health"),
+        f"{prefix}.log": b"not a sensor record",
+    }
+
+    async def subscribe(pattern, *, cb):
+        for subject, data in messages.items():
+            if subject.startswith(pattern.removesuffix(">")):
+                await cb(SimpleNamespace(subject=subject, data=data))
+
+    async def close():
+        pass
+
+    async def connect(*args, **kwargs):
+        return SimpleNamespace(subscribe=subscribe, close=close)
+
+    shutdown = threading.Event()
+    shutdown.set()  # Return after subscribing and delivering the fixtures.
+    follower = NatsFollower(shutdown, fallback_grace_seconds=0)
+    asyncio.run(follower._connect_and_run(SimpleNamespace(connect=connect)))
+
+    assert follower._queue.qsize() == 3
+    assert {follower._queue.get_nowait()["type"] for _ in range(3)} == {
+        "piezo-dual", "bedTemp", "frzHealth",
+    }
+    assert follower._decode_failures == 0
+    assert set(follower._sources.values()) == {prefix}
+
+
+def test_follower_holds_fallback_prefix_during_startup_grace():
+    follower = NatsFollower(threading.Event())
+    follower._subscribed_monotonic = time.monotonic()
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._sources == {"sens.bedtemp": "raw"}
+    assert follower._ignored == 1
+
+
+def test_follower_feeds_each_subject_from_raw_first_then_rawmem():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.frz.health"), "rawmem.frz.health")
+
+    assert follower._sources == {"sens.bedtemp": "raw", "frz.health": "rawmem"}
+    assert follower._queue.qsize() == 2
+    assert follower._ignored == 1
+
+
+def test_follower_hands_subject_back_to_raw():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+    assert follower._sources == {"sens.bedtemp": "raw"}
+
+
+def test_follower_lets_rawmem_take_over_when_raw_goes_silent():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+
+    follower._owner_last_monotonic["sens.bedtemp"] -= 61
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._sources == {"sens.bedtemp": "rawmem"}
+    assert follower._ignored == 2
+
+
+def test_undecodable_raw_message_does_not_claim_subject():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(b"\xff not cbor", "raw.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._sources == {"sens.bedtemp": "rawmem"}
 
 
 # ---------------------------------------------------------------------------

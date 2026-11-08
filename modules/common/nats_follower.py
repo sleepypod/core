@@ -51,10 +51,26 @@ NATS_DEFAULT_HOST = "127.0.0.1"
 NATS_DEFAULT_PORT = 4222
 NATS_INFO_MAX_BYTES = 4096
 
-# Subjects consumed by the biometrics modules. raw.log lives outside these
-# prefixes on purpose — it is a firmware log channel surfaced by sp-status,
-# not a sensor stream, so the modules never subscribe to it.
-NATS_SENSOR_SUBJECTS = ("raw.sens.>", "raw.frz.>")
+# Firmware publishes under raw, or rawmem since the EmmcWear firmware
+# (rat_version 4b7552d5). Prefixes are in priority order and each sensor
+# subject (sens.piezo, frz.temp, ...) is fed by exactly one of them: a raw
+# subject always wins, and a fallback prefix feeds a subject only when no
+# higher-priority prefix is delivering it and the startup grace has passed.
+# A prefix that goes silent on a subject for a minute gives the subject up, so
+# one stray message can't pin a subject to a prefix that no longer feeds it.
+# Pods that publish raw therefore read exactly what they read before rawmem
+# existed, and a firmware publishing both never double-feeds. <prefix>.log lives outside
+# these subjects on purpose — it is a firmware log channel surfaced by
+# sp-status, not a sensor stream, so the modules never subscribe to it.
+NATS_SUBJECT_PREFIXES = ("raw", "rawmem")
+NATS_SENSOR_SUBJECTS = tuple(
+    f"{prefix}.{kind}.>" for prefix in NATS_SUBJECT_PREFIXES for kind in ("sens", "frz"))
+
+# The slowest sensor subjects publish at 0.1 Hz, so 30 s gives a higher-priority
+# prefix three chances to claim a subject before a fallback prefix may feed it.
+NATS_FALLBACK_GRACE_SECONDS = 30.0
+# Six periods of the slowest subjects: an owner silent this long gives the subject up.
+NATS_OWNER_STALE_SECONDS = 60.0
 
 # Bounded hand-off queue. Full ⇒ drop-oldest (live data beats backlog, exactly
 # like the file tailer jumping to EOF). 256 ≈ 2 min of capSense at 2 Hz.
@@ -159,7 +175,8 @@ class NatsFollower:
     def __init__(self, shutdown_event, servers=NATS_DEFAULT_SERVER,
                  subjects: Iterable[str] = NATS_SENSOR_SUBJECTS,
                  queue_maxsize: int = NATS_QUEUE_MAXSIZE,
-                 max_reconnect_failures: int = MAX_RECONNECT_FAILURES):
+                 max_reconnect_failures: int = MAX_RECONNECT_FAILURES,
+                 fallback_grace_seconds: float = NATS_FALLBACK_GRACE_SECONDS):
         self._shutdown = shutdown_event
         self._servers = servers
         self._subjects = tuple(subjects)
@@ -174,6 +191,13 @@ class NatsFollower:
         self._decode_failures = 0
         self._dropped = 0
         self._decode_logged = False
+        self._fallback_grace = fallback_grace_seconds
+        self._subscribed_monotonic = 0.0
+        # Prefix feeding each sensor subject, e.g. {"sens.piezo": "rawmem"}.
+        self._sources: dict = {}
+        self._owner_last_monotonic: dict = {}
+        self._ignored = 0
+        self._ignored_logged = False
         self._start_monotonic = 0.0
         self._silence_logged = False
 
@@ -202,14 +226,29 @@ class NatsFollower:
         except queue.Full:
             pass
 
-    def _handle_payload(self, data: bytes) -> Optional[dict]:
+    def _handle_payload(self, data: bytes, subject: Optional[str] = None) -> Optional[dict]:
         """Decode one CBOR message payload and enqueue it.
 
         The transport guarantees message boundaries, so there is no framing,
         magic-byte scan, or corruption recovery — just decode. A malformed
         payload is logged (first occurrence) and dropped against a failure
-        counter. Returns the decoded record, or None on a bad payload.
+        counter. Messages on a subject another prefix owns, or on a fallback
+        prefix during the startup grace, are dropped against an ignored
+        counter (see NATS_SUBJECT_PREFIXES). Returns the decoded record, or
+        None on a bad or ignored payload.
         """
+        prefix, _, tail = subject.partition(".") if subject else (None, "", "")
+        owner = self._sources.get(tail)
+        now = time.monotonic()
+        if prefix is not None and self._owned_elsewhere(prefix, tail, owner, now):
+            self._ignored += 1
+            if not self._ignored_logged:
+                self._ignored_logged = True
+                log.warning("Ignoring %s — %s.%s already feeds it", subject, owner, tail)
+            return None
+        if prefix is not None and self._in_fallback_grace(prefix, now):
+            self._ignored += 1
+            return None
         try:
             record = cbor2.loads(data)
         except Exception as e:  # cbor2.CBORDecodeError + defensive catch-all
@@ -222,9 +261,25 @@ class NatsFollower:
         if not isinstance(record, dict):
             self._decode_failures += 1
             return None
+        if prefix is not None:
+            if owner != prefix:
+                self._sources[tail] = prefix
+                log.info("NatsFollower reading %s from %s", tail, subject)
+            self._owner_last_monotonic[tail] = now
         self._msg_count += 1
         self._offer(record)
         return record
+
+    def _owned_elsewhere(self, prefix: str, tail: str, owner: Optional[str], now: float) -> bool:
+        """True when a higher-priority prefix is still feeding this subject."""
+        return (owner is not None
+                and NATS_SUBJECT_PREFIXES.index(prefix) > NATS_SUBJECT_PREFIXES.index(owner)
+                and now - self._owner_last_monotonic[tail] < NATS_OWNER_STALE_SECONDS)
+
+    def _in_fallback_grace(self, prefix: str, now: float) -> bool:
+        """True while a fallback prefix must wait for raw to claim subjects."""
+        return (NATS_SUBJECT_PREFIXES.index(prefix) > 0
+                and now - self._subscribed_monotonic < self._fallback_grace)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -325,8 +380,9 @@ class NatsFollower:
             return
 
         async def on_msg(msg):
-            self._handle_payload(msg.data)
+            self._handle_payload(msg.data, msg.subject)
 
+        self._subscribed_monotonic = time.monotonic()
         for subject in self._subjects:
             await nc.subscribe(subject, cb=on_msg)
         log.info("NatsFollower subscribed to %s on %s",

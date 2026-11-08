@@ -8,7 +8,7 @@
  * those pods the file tailer finds nothing, so the WS live stream, the
  * `latestCapSenseSnapshot`, `cap_sense_frames`, and the `cap.*` automation
  * signals all stay empty. This module is the second `.RAW` consumer: it
- * subscribes to the firmware's `raw.sens.>` / `raw.frz.>` subjects, decodes each
+ * subscribes to the firmware's sensor and freezer subjects, decodes each
  * message through the SAME decode path the tailer uses, and hands the decoded
  * frame back to `piezoStream` so every downstream consumer is fed identically.
  *
@@ -32,12 +32,21 @@ const NATS_HOST = process.env.PIEZO_NATS_HOST ?? '127.0.0.1'
 const NATS_PORT = Number(process.env.PIEZO_NATS_PORT ?? 4222)
 
 /**
- * Subjects the firmware publishes sensor frames on. `raw.log` is intentionally
- * excluded — its payload is multiple concatenated CBOR maps (unlike the single
- * map every sensor subject carries) and it has no live consumer; sp-status reads
- * it as a JetStream point-fetch instead.
+ * Firmware publishes sensor frames under `raw`, or `rawmem` since the EmmcWear
+ * firmware (rat_version 4b7552d5). Prefixes are in priority order and each
+ * sensor subject (`sens.piezo`, `frz.temp`, ...) is fed by exactly one of them:
+ * a `raw` subject always wins, and a fallback prefix feeds a subject only when
+ * no higher-priority prefix is delivering it and the startup grace has passed.
+ * A prefix that goes silent on a subject for a minute gives the subject up, so
+ * one stray message can't pin a subject to a prefix that no longer feeds it.
+ * Pods that publish `raw` therefore read exactly what they read before `rawmem`
+ * existed, and a firmware publishing both never double-feeds. `<prefix>.log` is
+ * intentionally excluded — its payload is multiple concatenated CBOR maps
+ * (unlike the single map every sensor subject carries) and it has no live
+ * consumer; sp-status reads it as a JetStream point-fetch instead.
  */
-export const SUBSCRIBE_SUBJECTS = ['raw.sens.>', 'raw.frz.>'] as const
+export const SUBJECT_PREFIXES = ['raw', 'rawmem'] as const
+export const SUBSCRIBE_SUBJECTS = SUBJECT_PREFIXES.flatMap(prefix => [`${prefix}.sens.>`, `${prefix}.frz.>`])
 
 // Never give up reconnecting. On a NATS-only pod there is no `.RAW` file to fall
 // back to, so a dropped connection must self-heal rather than strand the stream;
@@ -49,6 +58,11 @@ const MAX_RECONNECT_ATTEMPTS = -1
 const RECONNECT_TIME_WAIT_MS = 2_000
 const PROBE_TIMEOUT_MS = 2_000
 const PROBE_MAX_GREETING_BYTES = 16 * 1024
+// The slowest sensor subjects publish at 0.1 Hz, so 30 s gives a higher-priority
+// prefix three chances to claim a subject before a fallback prefix may feed it.
+const FALLBACK_GRACE_MS = 30_000
+// Six periods of the slowest subjects: an owner silent this long gives the subject up.
+const OWNER_STALE_MS = 60_000
 // A live pod ticks capSense at 2 Hz, so a subscription silent this long past
 // startup is worth surfacing once — a health signal, not a source-selection input.
 const SILENCE_WARN_MS = 60_000
@@ -118,6 +132,10 @@ export interface NatsFrameSourceStats {
   framesDecoded: number
   /** Messages whose payload decoded to zero frames (malformed / typeless). */
   decodeFailures: number
+  /** Prefix feeding each sensor subject, e.g. `{ 'sens.piezo': 'rawmem' }`. */
+  sources: Record<string, string>
+  /** Messages dropped because another prefix owns the subject or the grace is running. */
+  ignoredMessages: number
 }
 
 export interface NatsFrameSourceOptions {
@@ -138,6 +156,8 @@ export interface NatsFrameSourceOptions {
   onClose?: (err?: Error) => void
   host?: string
   port?: number
+  /** Override the fallback-prefix startup grace (tests). */
+  fallbackGraceMs?: number
 }
 
 export interface NatsFrameSourceHandle {
@@ -170,19 +190,42 @@ export async function startNatsFrameSource(
 ): Promise<NatsFrameSourceHandle> {
   const host = opts.host ?? NATS_HOST
   const port = opts.port ?? NATS_PORT
-  const stats: NatsFrameSourceStats = { messages: 0, framesDecoded: 0, decodeFailures: 0 }
+  const fallbackGraceMs = opts.fallbackGraceMs ?? FALLBACK_GRACE_MS
+  const stats: NatsFrameSourceStats = { messages: 0, framesDecoded: 0, decodeFailures: 0, sources: {}, ignoredMessages: 0 }
 
   let stopped = false
   let loggedDecodeFailure = false
+  let loggedIgnored = false
+  const ownerLastAt: Record<string, number> = {}
 
   const nc = await connectNats(host, port)
+  const subscribedAt = Date.now()
   console.log('[natsSource] connected to NATS at %s:%d — subscribing %s',
     host, port, SUBSCRIBE_SUBJECTS.join(', '))
 
-  const handleMessage = (err: Error | null, data: Uint8Array): void => {
+  const handleMessage = (err: Error | null, subject: string, data: Uint8Array): void => {
     if (err) {
       // Per-subscription errors (e.g. permission) — surface, keep the others live.
       console.warn('[natsSource] subscription error:', err.message)
+      return
+    }
+    const dot = subject.indexOf('.')
+    const prefix = subject.slice(0, dot)
+    const tail = subject.slice(dot + 1)
+    const priority = SUBJECT_PREFIXES as readonly string[]
+    const rank = priority.indexOf(prefix)
+    const owner = stats.sources[tail]
+    const now = Date.now()
+    if (owner !== undefined && rank > priority.indexOf(owner) && now - ownerLastAt[tail] < OWNER_STALE_MS) {
+      stats.ignoredMessages += 1
+      if (!loggedIgnored) {
+        loggedIgnored = true
+        console.warn('[natsSource] ignoring %s — %s.%s already feeds it', subject, owner, tail)
+      }
+      return
+    }
+    if (rank > 0 && now - subscribedAt < fallbackGraceMs) {
+      stats.ignoredMessages += 1
       return
     }
     stats.messages += 1
@@ -204,6 +247,11 @@ export async function startNatsFrameSource(
       }
       return
     }
+    if (owner !== prefix) {
+      stats.sources[tail] = prefix
+      console.log('[natsSource] reading %s from %s', tail, subject)
+    }
+    ownerLastAt[tail] = now
     for (const frame of frames) {
       stats.framesDecoded += 1
       try {
@@ -214,7 +262,7 @@ export async function startNatsFrameSource(
   }
 
   SUBSCRIBE_SUBJECTS.forEach(subject =>
-    nc.subscribe(subject, { callback: (err, msg) => handleMessage(err, msg.data) }))
+    nc.subscribe(subject, { callback: (err, msg) => handleMessage(err, msg.subject, msg.data) }))
 
   // Surface a persistently silent subscription once (health signal only).
   const silenceTimer = setTimeout(() => {
