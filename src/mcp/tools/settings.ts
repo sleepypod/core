@@ -11,7 +11,8 @@ import { natsSubjectPrefixSchema } from '@/src/server/validation-schemas'
 const MUTATING = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 
 export const NATS_PREFIX_FOLLOW_UP
-  = 'natsSubjectPrefix saved. The live sensor stream re-subscribed already. The biometrics modules read the prefix at '
+  = 'natsSubjectPrefix saved. It only matters when get_sensor_source shows stream.source "nats"; on a .RAW pod it has '
+    + 'no effect. On NATS the live sensor stream re-subscribed already. The biometrics modules read the prefix at '
     + 'startup: restart sleepypod-piezo-processor.service, sleepypod-sleep-detector.service and '
     + 'sleepypod-environment-monitor.service with pod_maintenance restart_service (confirm with the user first); '
     + 'sleepypod-calibrator.service picks it up on its next restart. '
