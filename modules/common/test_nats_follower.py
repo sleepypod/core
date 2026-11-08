@@ -255,6 +255,18 @@ def test_follower_hands_subject_back_to_raw():
     assert follower._sources == {"sens.bedtemp": "raw"}
 
 
+def test_follower_lets_rawmem_take_over_when_raw_goes_silent():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+
+    follower._owner_last_monotonic["sens.bedtemp"] -= 61
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._sources == {"sens.bedtemp": "rawmem"}
+    assert follower._ignored == 2
+
+
 def test_undecodable_raw_message_does_not_claim_subject():
     follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
     assert follower._handle_payload(b"\xff not cbor", "raw.sens.bedtemp") is None

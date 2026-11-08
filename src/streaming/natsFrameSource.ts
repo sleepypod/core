@@ -36,7 +36,9 @@ const NATS_PORT = Number(process.env.PIEZO_NATS_PORT ?? 4222)
  * firmware (rat_version 4b7552d5). Prefixes are in priority order and each
  * sensor subject (`sens.piezo`, `frz.temp`, ...) is fed by exactly one of them:
  * a `raw` subject always wins, and a fallback prefix feeds a subject only when
- * no higher-priority prefix has delivered it and the startup grace has passed.
+ * no higher-priority prefix is delivering it and the startup grace has passed.
+ * A prefix that goes silent on a subject for a minute gives the subject up, so
+ * one stray message can't pin a subject to a prefix that no longer feeds it.
  * Pods that publish `raw` therefore read exactly what they read before `rawmem`
  * existed, and a firmware publishing both never double-feeds. `<prefix>.log` is
  * intentionally excluded — its payload is multiple concatenated CBOR maps
@@ -59,6 +61,8 @@ const PROBE_MAX_GREETING_BYTES = 16 * 1024
 // The slowest sensor subjects publish at 0.1 Hz, so 30 s gives a higher-priority
 // prefix three chances to claim a subject before a fallback prefix may feed it.
 const FALLBACK_GRACE_MS = 30_000
+// Six periods of the slowest subjects: an owner silent this long gives the subject up.
+const OWNER_STALE_MS = 60_000
 // A live pod ticks capSense at 2 Hz, so a subscription silent this long past
 // startup is worth surfacing once — a health signal, not a source-selection input.
 const SILENCE_WARN_MS = 60_000
@@ -192,6 +196,7 @@ export async function startNatsFrameSource(
   let stopped = false
   let loggedDecodeFailure = false
   let loggedIgnored = false
+  const ownerLastAt: Record<string, number> = {}
 
   const nc = await connectNats(host, port)
   const subscribedAt = Date.now()
@@ -207,15 +212,20 @@ export async function startNatsFrameSource(
     const dot = subject.indexOf('.')
     const prefix = subject.slice(0, dot)
     const tail = subject.slice(dot + 1)
-    const rank = (SUBJECT_PREFIXES as readonly string[]).indexOf(prefix)
+    const priority = SUBJECT_PREFIXES as readonly string[]
+    const rank = priority.indexOf(prefix)
     const owner = stats.sources[tail]
-    const ownerRank = owner === undefined ? Infinity : (SUBJECT_PREFIXES as readonly string[]).indexOf(owner)
-    if (rank > ownerRank || (rank > 0 && Date.now() - subscribedAt < fallbackGraceMs)) {
+    const now = Date.now()
+    if (owner !== undefined && rank > priority.indexOf(owner) && now - ownerLastAt[tail] < OWNER_STALE_MS) {
       stats.ignoredMessages += 1
-      if (owner !== undefined && owner !== prefix && !loggedIgnored) {
+      if (!loggedIgnored) {
         loggedIgnored = true
         console.warn('[natsSource] ignoring %s — %s.%s already feeds it', subject, owner, tail)
       }
+      return
+    }
+    if (rank > 0 && now - subscribedAt < fallbackGraceMs) {
+      stats.ignoredMessages += 1
       return
     }
     stats.messages += 1
@@ -241,6 +251,7 @@ export async function startNatsFrameSource(
       stats.sources[tail] = prefix
       console.log('[natsSource] reading %s from %s', tail, subject)
     }
+    ownerLastAt[tail] = now
     for (const frame of frames) {
       stats.framesDecoded += 1
       try {

@@ -204,16 +204,21 @@ describe('startNatsFrameSource', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const src = await startNatsFrameSource({ decode, onFrame, fallbackGraceMs: 0 })
 
+    const log = vi.mocked(console.log)
+    deliver('raw.sens.bedtemp', fixture('raw.sens.bedtemp'))
+    deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
     deliver('raw.sens.bedtemp', fixture('raw.sens.bedtemp'))
     deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
     deliver('rawmem.frz.health', fixture('raw.frz.health'))
 
-    expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp', 'frzHealth'])
+    expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp', 'bedTemp', 'frzHealth'])
     expect(src.stats).toMatchObject({
-      messages: 2,
+      messages: 3,
       sources: { 'sens.bedtemp': 'raw', 'frz.health': 'rawmem' },
-      ignoredMessages: 1,
+      ignoredMessages: 2,
     })
+    expect(log.mock.calls.filter(([message]) => message === '[natsSource] reading %s from %s')).toHaveLength(2)
+    expect(warn).toHaveBeenCalledOnce()
     expect(warn).toHaveBeenCalledWith('[natsSource] ignoring %s — %s.%s already feeds it', 'rawmem.sens.bedtemp', 'raw', 'sens.bedtemp')
   })
 
@@ -229,6 +234,32 @@ describe('startNatsFrameSource', () => {
 
     expect(onFrame).toHaveBeenCalledTimes(2)
     expect(src.stats).toMatchObject({ sources: { 'sens.bedtemp': 'raw' }, ignoredMessages: 1 })
+  })
+
+  it('lets rawmem take a subject over once raw has been silent on it for a minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const onFrame = vi.fn()
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const src = await startNatsFrameSource({ decode, onFrame, fallbackGraceMs: 0 })
+
+      deliver('raw.sens.piezo', fixture('raw.sens.piezo'))
+      vi.advanceTimersByTime(59_000)
+      deliver('rawmem.sens.piezo', fixture('raw.sens.piezo'))
+      expect(onFrame).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(2_000)
+      deliver('rawmem.sens.piezo', fixture('raw.sens.piezo'))
+      deliver('raw.sens.piezo', fixture('raw.sens.piezo'))
+
+      expect(onFrame).toHaveBeenCalledTimes(3)
+      expect(src.stats).toMatchObject({ sources: { 'sens.piezo': 'raw' }, ignoredMessages: 1 })
+      expect(log).toHaveBeenCalledWith('[natsSource] reading %s from %s', 'sens.piezo', 'rawmem.sens.piezo')
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not let an undecodable raw message claim a subject', async () => {

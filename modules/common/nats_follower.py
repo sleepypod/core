@@ -55,7 +55,9 @@ NATS_INFO_MAX_BYTES = 4096
 # (rat_version 4b7552d5). Prefixes are in priority order and each sensor
 # subject (sens.piezo, frz.temp, ...) is fed by exactly one of them: a raw
 # subject always wins, and a fallback prefix feeds a subject only when no
-# higher-priority prefix has delivered it and the startup grace has passed.
+# higher-priority prefix is delivering it and the startup grace has passed.
+# A prefix that goes silent on a subject for a minute gives the subject up, so
+# one stray message can't pin a subject to a prefix that no longer feeds it.
 # Pods that publish raw therefore read exactly what they read before rawmem
 # existed, and a firmware publishing both never double-feeds. <prefix>.log lives outside
 # these subjects on purpose — it is a firmware log channel surfaced by
@@ -67,6 +69,8 @@ NATS_SENSOR_SUBJECTS = tuple(
 # The slowest sensor subjects publish at 0.1 Hz, so 30 s gives a higher-priority
 # prefix three chances to claim a subject before a fallback prefix may feed it.
 NATS_FALLBACK_GRACE_SECONDS = 30.0
+# Six periods of the slowest subjects: an owner silent this long gives the subject up.
+NATS_OWNER_STALE_SECONDS = 60.0
 
 # Bounded hand-off queue. Full ⇒ drop-oldest (live data beats backlog, exactly
 # like the file tailer jumping to EOF). 256 ≈ 2 min of capSense at 2 Hz.
@@ -191,6 +195,7 @@ class NatsFollower:
         self._subscribed_monotonic = 0.0
         # Prefix feeding each sensor subject, e.g. {"sens.piezo": "rawmem"}.
         self._sources: dict = {}
+        self._owner_last_monotonic: dict = {}
         self._ignored = 0
         self._ignored_logged = False
         self._start_monotonic = 0.0
@@ -234,11 +239,15 @@ class NatsFollower:
         """
         prefix, _, tail = subject.partition(".") if subject else (None, "", "")
         owner = self._sources.get(tail)
-        if prefix is not None and self._ignores(prefix, owner):
+        now = time.monotonic()
+        if prefix is not None and self._owned_elsewhere(prefix, tail, owner, now):
             self._ignored += 1
-            if owner is not None and owner != prefix and not self._ignored_logged:
+            if not self._ignored_logged:
                 self._ignored_logged = True
                 log.warning("Ignoring %s — %s.%s already feeds it", subject, owner, tail)
+            return None
+        if prefix is not None and self._in_fallback_grace(prefix, now):
+            self._ignored += 1
             return None
         try:
             record = cbor2.loads(data)
@@ -252,18 +261,25 @@ class NatsFollower:
         if not isinstance(record, dict):
             self._decode_failures += 1
             return None
-        if prefix is not None and owner != prefix:
-            self._sources[tail] = prefix
-            log.info("NatsFollower reading %s from %s", tail, subject)
+        if prefix is not None:
+            if owner != prefix:
+                self._sources[tail] = prefix
+                log.info("NatsFollower reading %s from %s", tail, subject)
+            self._owner_last_monotonic[tail] = now
         self._msg_count += 1
         self._offer(record)
         return record
 
-    def _ignores(self, prefix: str, owner: Optional[str]) -> bool:
-        rank = NATS_SUBJECT_PREFIXES.index(prefix) if prefix in NATS_SUBJECT_PREFIXES else len(NATS_SUBJECT_PREFIXES)
-        if owner is not None and rank > NATS_SUBJECT_PREFIXES.index(owner):
-            return True
-        return rank > 0 and time.monotonic() - self._subscribed_monotonic < self._fallback_grace
+    def _owned_elsewhere(self, prefix: str, tail: str, owner: Optional[str], now: float) -> bool:
+        """True when a higher-priority prefix is still feeding this subject."""
+        return (owner is not None
+                and NATS_SUBJECT_PREFIXES.index(prefix) > NATS_SUBJECT_PREFIXES.index(owner)
+                and now - self._owner_last_monotonic[tail] < NATS_OWNER_STALE_SECONDS)
+
+    def _in_fallback_grace(self, prefix: str, now: float) -> bool:
+        """True while a fallback prefix must wait for raw to claim subjects."""
+        return (NATS_SUBJECT_PREFIXES.index(prefix) > 0
+                and now - self._subscribed_monotonic < self._fallback_grace)
 
     # -- lifecycle ---------------------------------------------------------
 

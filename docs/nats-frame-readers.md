@@ -31,8 +31,9 @@ EmmcWear firmware, rat_version `4b7552d5`). Each sensor subject (`sens.piezo`,
 `frz.temp`, ...) is fed by exactly one prefix, and `raw` always wins: `rawmem`
 feeds a subject only when `raw` has not delivered a decodable message for it and
 30 s have passed since subscribing (three periods of the slowest 0.1 Hz
-subjects). Pods that publish `raw` read exactly what they read before `rawmem`
-existed, and a firmware that publishes both never double-feeds a consumer.
+subjects). A prefix silent on a subject for 60 s gives it up, so one stray
+message can't pin a subject to a prefix that no longer feeds it. Pods that
+publish `raw` read exactly what they read before `rawmem` existed, and a firmware that publishes both never double-feeds a consumer.
 The journal logs which subject feeds each sensor (`[natsSource] reading
 sens.piezo from rawmem.sens.piezo`). Each sensor message contains one
 complete CBOR value whose decoded value is a record map. Definite and
