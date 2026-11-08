@@ -216,7 +216,7 @@ def test_follower_receives_sensor_and_freezer_records(prefix):
 
     shutdown = threading.Event()
     shutdown.set()  # Return after subscribing and delivering the fixtures.
-    follower = NatsFollower(shutdown)
+    follower = NatsFollower(shutdown, fallback_grace_seconds=0)
     asyncio.run(follower._connect_and_run(SimpleNamespace(connect=connect)))
 
     assert follower._queue.qsize() == 3
@@ -224,19 +224,42 @@ def test_follower_receives_sensor_and_freezer_records(prefix):
         "piezo-dual", "bedTemp", "frzHealth",
     }
     assert follower._decode_failures == 0
-    assert follower._prefix == prefix
+    assert set(follower._sources.values()) == {prefix}
 
 
-def test_follower_latches_first_decoded_prefix():
+def test_follower_holds_fallback_prefix_during_startup_grace():
     follower = NatsFollower(threading.Event())
-    assert follower._handle_payload(b"\xff not cbor", "raw.sens.capsense") is None
-    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
-    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp") is None
+    follower._subscribed_monotonic = time.monotonic()
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._sources == {"sens.bedtemp": "raw"}
+    assert follower._ignored == 1
+
+
+def test_follower_feeds_each_subject_from_raw_first_then_rawmem():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
     assert follower._handle_payload(_payload("raw.frz.health"), "rawmem.frz.health")
 
-    assert follower._prefix == "rawmem"
+    assert follower._sources == {"sens.bedtemp": "raw", "frz.health": "rawmem"}
     assert follower._queue.qsize() == 2
-    assert (follower._decode_failures, follower._ignored) == (1, 1)
+    assert follower._ignored == 1
+
+
+def test_follower_hands_subject_back_to_raw():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp") is None
+    assert follower._sources == {"sens.bedtemp": "raw"}
+
+
+def test_undecodable_raw_message_does_not_claim_subject():
+    follower = NatsFollower(threading.Event(), fallback_grace_seconds=0)
+    assert follower._handle_payload(b"\xff not cbor", "raw.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._sources == {"sens.bedtemp": "rawmem"}
 
 
 # ---------------------------------------------------------------------------

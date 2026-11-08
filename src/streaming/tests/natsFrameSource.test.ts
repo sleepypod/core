@@ -163,7 +163,7 @@ describe('startNatsFrameSource', () => {
     const frame = onFrame.mock.calls[0][0]
     expect(frame.type).toBe('capSense')
     expect(frame.left).toMatchObject({ out: 3288, status: 'good' })
-    expect(src.stats).toMatchObject({ messages: 1, framesDecoded: 1, decodeFailures: 0, prefix: 'raw', ignoredMessages: 0 })
+    expect(src.stats).toMatchObject({ messages: 1, framesDecoded: 1, decodeFailures: 0, sources: { 'sens.capsense': 'raw' }, ignoredMessages: 0 })
   })
 
   it('applies the piezo int32 conversion (2000-byte string → 500 samples)', async () => {
@@ -179,28 +179,69 @@ describe('startNatsFrameSource', () => {
 
   it.each(['raw', 'rawmem'])('routes sensor and freezer frames on %s', async (prefix) => {
     const onFrame = vi.fn()
-    await startNatsFrameSource({ decode, onFrame })
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await startNatsFrameSource({ decode, onFrame, fallbackGraceMs: 0 })
     deliver(`${prefix}.sens.bedtemp`, fixture('raw.sens.bedtemp'))
     deliver(`${prefix}.frz.health`, fixture('raw.frz.health'))
     expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp', 'frzHealth'])
     expect(() => deliver(`${prefix}.log`, new Uint8Array())).toThrow('no subscription matches')
   })
 
-  it('latches onto the first prefix that decodes and ignores the other', async () => {
+  it('holds rawmem back during the startup grace so raw can claim each subject', async () => {
     const onFrame = vi.fn()
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const src = await startNatsFrameSource({ decode, onFrame })
 
-    deliver('raw.sens.capsense', new Uint8Array([0x00]))
     deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
+
+    expect(onFrame).not.toHaveBeenCalled()
+    expect(src.stats).toMatchObject({ messages: 0, sources: {}, ignoredMessages: 1 })
+  })
+
+  it('feeds each subject from raw when raw publishes it, and from rawmem only otherwise', async () => {
+    const onFrame = vi.fn()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const src = await startNatsFrameSource({ decode, onFrame, fallbackGraceMs: 0 })
+
     deliver('raw.sens.bedtemp', fixture('raw.sens.bedtemp'))
+    deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
     deliver('rawmem.frz.health', fixture('raw.frz.health'))
 
     expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp', 'frzHealth'])
-    expect(src.stats).toMatchObject({ prefix: 'rawmem', messages: 3, decodeFailures: 1, ignoredMessages: 1 })
-    expect(log).toHaveBeenCalledWith('[natsSource] reading sensor frames from %s.* subjects', 'rawmem')
-    expect(warn).toHaveBeenCalledWith('[natsSource] ignoring %s.* — already reading %s.*', 'raw', 'rawmem')
+    expect(src.stats).toMatchObject({
+      messages: 2,
+      sources: { 'sens.bedtemp': 'raw', 'frz.health': 'rawmem' },
+      ignoredMessages: 1,
+    })
+    expect(warn).toHaveBeenCalledWith('[natsSource] ignoring %s — %s.%s already feeds it', 'rawmem.sens.bedtemp', 'raw', 'sens.bedtemp')
+  })
+
+  it('hands a subject back to raw when raw starts publishing it', async () => {
+    const onFrame = vi.fn()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const src = await startNatsFrameSource({ decode, onFrame, fallbackGraceMs: 0 })
+
+    deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
+    deliver('raw.sens.bedtemp', fixture('raw.sens.bedtemp'))
+    deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
+
+    expect(onFrame).toHaveBeenCalledTimes(2)
+    expect(src.stats).toMatchObject({ sources: { 'sens.bedtemp': 'raw' }, ignoredMessages: 1 })
+  })
+
+  it('does not let an undecodable raw message claim a subject', async () => {
+    const onFrame = vi.fn()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const src = await startNatsFrameSource({ decode, onFrame, fallbackGraceMs: 0 })
+
+    deliver('raw.sens.bedtemp', new Uint8Array([0x00]))
+    deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
+
+    expect(onFrame).toHaveBeenCalledTimes(1)
+    expect(src.stats.sources).toEqual({ 'sens.bedtemp': 'rawmem' })
   })
 
   it('passes new/out-of-scope types (blanketReadings) through without throwing', async () => {
