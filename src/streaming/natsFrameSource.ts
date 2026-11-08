@@ -32,10 +32,16 @@ const NATS_HOST = process.env.PIEZO_NATS_HOST ?? '127.0.0.1'
 const NATS_PORT = Number(process.env.PIEZO_NATS_PORT ?? 4222)
 
 /**
- * Firmware publishes sensor frames under `raw` or `rawmem`. Subscribe only to
- * the sensor and freezer subjects so log payloads stay out of the frame decoder.
+ * Firmware publishes sensor frames under `raw`, or `rawmem` since the EmmcWear
+ * firmware (rat_version 4b7552d5). Both are subscribed and the source latches
+ * onto whichever prefix delivers a decodable frame first, so a firmware that
+ * publishes on both never double-feeds the consumers. `<prefix>.log` is
+ * intentionally excluded — its payload is multiple concatenated CBOR maps
+ * (unlike the single map every sensor subject carries) and it has no live
+ * consumer; sp-status reads it as a JetStream point-fetch instead.
  */
-export const SUBSCRIBE_SUBJECTS = ['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>'] as const
+export const SUBJECT_PREFIXES = ['raw', 'rawmem'] as const
+export const SUBSCRIBE_SUBJECTS = SUBJECT_PREFIXES.flatMap(prefix => [`${prefix}.sens.>`, `${prefix}.frz.>`])
 
 // Never give up reconnecting. On a NATS-only pod there is no `.RAW` file to fall
 // back to, so a dropped connection must self-heal rather than strand the stream;
@@ -116,6 +122,10 @@ export interface NatsFrameSourceStats {
   framesDecoded: number
   /** Messages whose payload decoded to zero frames (malformed / typeless). */
   decodeFailures: number
+  /** Subject prefix latched by the first decoded frame; null until then. */
+  prefix: string | null
+  /** Messages on a prefix other than the latched one, dropped uncounted above. */
+  ignoredMessages: number
 }
 
 export interface NatsFrameSourceOptions {
@@ -168,19 +178,29 @@ export async function startNatsFrameSource(
 ): Promise<NatsFrameSourceHandle> {
   const host = opts.host ?? NATS_HOST
   const port = opts.port ?? NATS_PORT
-  const stats: NatsFrameSourceStats = { messages: 0, framesDecoded: 0, decodeFailures: 0 }
+  const stats: NatsFrameSourceStats = { messages: 0, framesDecoded: 0, decodeFailures: 0, prefix: null, ignoredMessages: 0 }
 
   let stopped = false
   let loggedDecodeFailure = false
+  let loggedIgnored = false
 
   const nc = await connectNats(host, port)
   console.log('[natsSource] connected to NATS at %s:%d — subscribing %s',
     host, port, SUBSCRIBE_SUBJECTS.join(', '))
 
-  const handleMessage = (err: Error | null, data: Uint8Array): void => {
+  const handleMessage = (err: Error | null, subject: string, data: Uint8Array): void => {
     if (err) {
       // Per-subscription errors (e.g. permission) — surface, keep the others live.
       console.warn('[natsSource] subscription error:', err.message)
+      return
+    }
+    const prefix = subject.slice(0, subject.indexOf('.'))
+    if (stats.prefix !== null && prefix !== stats.prefix) {
+      stats.ignoredMessages += 1
+      if (!loggedIgnored) {
+        loggedIgnored = true
+        console.warn('[natsSource] ignoring %s.* — already reading %s.*', prefix, stats.prefix)
+      }
       return
     }
     stats.messages += 1
@@ -202,6 +222,10 @@ export async function startNatsFrameSource(
       }
       return
     }
+    if (stats.prefix === null) {
+      stats.prefix = prefix
+      console.log('[natsSource] reading sensor frames from %s.* subjects', prefix)
+    }
     for (const frame of frames) {
       stats.framesDecoded += 1
       try {
@@ -212,7 +236,7 @@ export async function startNatsFrameSource(
   }
 
   SUBSCRIBE_SUBJECTS.forEach(subject =>
-    nc.subscribe(subject, { callback: (err, msg) => handleMessage(err, msg.data) }))
+    nc.subscribe(subject, { callback: (err, msg) => handleMessage(err, msg.subject, msg.data) }))
 
   // Surface a persistently silent subscription once (health signal only).
   const silenceTimer = setTimeout(() => {

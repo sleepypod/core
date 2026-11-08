@@ -51,9 +51,15 @@ NATS_DEFAULT_HOST = "127.0.0.1"
 NATS_DEFAULT_PORT = 4222
 NATS_INFO_MAX_BYTES = 4096
 
-# Firmware publishes under raw or rawmem. Subscribe to sensor and freezer
-# subjects only so the log payloads never reach the record decoder.
-NATS_SENSOR_SUBJECTS = ("raw.sens.>", "raw.frz.>", "rawmem.sens.>", "rawmem.frz.>")
+# Firmware publishes under raw, or rawmem since the EmmcWear firmware
+# (rat_version 4b7552d5). Both are subscribed and the follower latches onto
+# whichever prefix delivers a decodable record first, so a firmware that
+# publishes on both never double-feeds the module. <prefix>.log lives outside
+# these subjects on purpose — it is a firmware log channel surfaced by
+# sp-status, not a sensor stream, so the modules never subscribe to it.
+NATS_SUBJECT_PREFIXES = ("raw", "rawmem")
+NATS_SENSOR_SUBJECTS = tuple(
+    f"{prefix}.{kind}.>" for prefix in NATS_SUBJECT_PREFIXES for kind in ("sens", "frz"))
 
 # Bounded hand-off queue. Full ⇒ drop-oldest (live data beats backlog, exactly
 # like the file tailer jumping to EOF). 256 ≈ 2 min of capSense at 2 Hz.
@@ -173,6 +179,9 @@ class NatsFollower:
         self._decode_failures = 0
         self._dropped = 0
         self._decode_logged = False
+        self._prefix: Optional[str] = None
+        self._ignored = 0
+        self._ignored_logged = False
         self._start_monotonic = 0.0
         self._silence_logged = False
 
@@ -201,14 +210,24 @@ class NatsFollower:
         except queue.Full:
             pass
 
-    def _handle_payload(self, data: bytes) -> Optional[dict]:
+    def _handle_payload(self, data: bytes, subject: Optional[str] = None) -> Optional[dict]:
         """Decode one CBOR message payload and enqueue it.
 
         The transport guarantees message boundaries, so there is no framing,
         magic-byte scan, or corruption recovery — just decode. A malformed
         payload is logged (first occurrence) and dropped against a failure
-        counter. Returns the decoded record, or None on a bad payload.
+        counter. Once a record decodes, its subject prefix is latched and
+        messages on any other prefix are dropped against an ignored counter.
+        Returns the decoded record, or None on a bad or ignored payload.
         """
+        prefix = subject.split(".", 1)[0] if subject else None
+        if self._prefix is not None and prefix is not None and prefix != self._prefix:
+            self._ignored += 1
+            if not self._ignored_logged:
+                self._ignored_logged = True
+                log.warning("Ignoring %s.* NATS subjects — already reading %s.*",
+                            prefix, self._prefix)
+            return None
         try:
             record = cbor2.loads(data)
         except Exception as e:  # cbor2.CBORDecodeError + defensive catch-all
@@ -221,6 +240,9 @@ class NatsFollower:
         if not isinstance(record, dict):
             self._decode_failures += 1
             return None
+        if self._prefix is None and prefix is not None:
+            self._prefix = prefix
+            log.info("NatsFollower reading records from %s.* subjects", prefix)
         self._msg_count += 1
         self._offer(record)
         return record
@@ -324,7 +346,7 @@ class NatsFollower:
             return
 
         async def on_msg(msg):
-            self._handle_payload(msg.data)
+            self._handle_payload(msg.data, msg.subject)
 
         for subject in self._subjects:
             await nc.subscribe(subject, cb=on_msg)

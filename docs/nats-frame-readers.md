@@ -26,7 +26,10 @@ runtime — never a replacement.
 ## Wire format (as captured)
 
 The readers subscribe to `raw.sens.>`, `raw.frz.>`, `rawmem.sens.>` and
-`rawmem.frz.>` to cover both firmware subject prefixes. Each sensor message contains one
+`rawmem.frz.>` to cover both firmware subject prefixes (`rawmem` arrived with the
+EmmcWear firmware, rat_version `4b7552d5`). Each reader latches onto the prefix of
+the first message that decodes and drops messages on the other prefix, so a
+firmware that publishes on both never double-feeds a consumer. Each sensor message contains one
 complete CBOR value whose decoded value is a record map. Definite and
 indefinite maps both occur; consumers must not depend on a leading encoding
 byte. NATS supplies the message boundary, so sensor readers need no outer

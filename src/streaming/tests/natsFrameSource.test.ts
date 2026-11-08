@@ -15,7 +15,7 @@ import fixtures from './fixtures/natsFrames.json'
 // drive by hand. State lives in vi.hoisted so the (hoisted) vi.mock factory can
 // see it and the tests can push messages / inspect connect options.
 const nats = vi.hoisted(() => {
-  interface Sub { subject: string, cb: (err: Error | null, msg: { data: Uint8Array }) => void }
+  interface Sub { subject: string, cb: (err: Error | null, msg: { subject: string, data: Uint8Array }) => void }
   const state = {
     subs: [] as Sub[],
     connectOpts: null as Record<string, unknown> | null,
@@ -54,7 +54,7 @@ const nats = vi.hoisted(() => {
 
 vi.mock('@nats-io/transport-node', () => ({ connect: nats.connect }))
 
-import { natsReachable, startNatsFrameSource, SUBSCRIBE_SUBJECTS } from '../natsFrameSource'
+import { natsReachable, startNatsFrameSource } from '../natsFrameSource'
 import { __test__ as piezo } from '../piezoStream'
 
 const decode = piezo.decodeSensorFrames
@@ -70,7 +70,7 @@ function deliver(subject: string, payload: Uint8Array): void {
   const prefix = (s: string) => s.endsWith('.>') ? s.slice(0, -1) : `${s}.`
   const sub = nats.state.subs.find(s => subject.startsWith(prefix(s.subject)))
   if (!sub) throw new Error(`no subscription matches ${subject}`)
-  sub.cb(null, { data: payload })
+  sub.cb(null, { subject, data: payload })
 }
 
 describe('natsReachable', () => {
@@ -147,7 +147,7 @@ describe('startNatsFrameSource', () => {
   it('subscribes to the sensor subjects with infinite reconnect', async () => {
     const onFrame = vi.fn()
     await startNatsFrameSource({ decode, onFrame })
-    expect(nats.state.subs.map(s => s.subject)).toEqual([...SUBSCRIBE_SUBJECTS])
+    expect(nats.state.subs.map(s => s.subject)).toEqual(['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>'])
     expect(nats.state.connectOpts).toMatchObject({
       servers: '127.0.0.1:4222',
       maxReconnectAttempts: -1,
@@ -163,7 +163,7 @@ describe('startNatsFrameSource', () => {
     const frame = onFrame.mock.calls[0][0]
     expect(frame.type).toBe('capSense')
     expect(frame.left).toMatchObject({ out: 3288, status: 'good' })
-    expect(src.stats).toMatchObject({ messages: 1, framesDecoded: 1, decodeFailures: 0 })
+    expect(src.stats).toMatchObject({ messages: 1, framesDecoded: 1, decodeFailures: 0, prefix: 'raw', ignoredMessages: 0 })
   })
 
   it('applies the piezo int32 conversion (2000-byte string → 500 samples)', async () => {
@@ -184,6 +184,23 @@ describe('startNatsFrameSource', () => {
     deliver(`${prefix}.frz.health`, fixture('raw.frz.health'))
     expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp', 'frzHealth'])
     expect(() => deliver(`${prefix}.log`, new Uint8Array())).toThrow('no subscription matches')
+  })
+
+  it('latches onto the first prefix that decodes and ignores the other', async () => {
+    const onFrame = vi.fn()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const src = await startNatsFrameSource({ decode, onFrame })
+
+    deliver('raw.sens.capsense', new Uint8Array([0x00]))
+    deliver('rawmem.sens.bedtemp', fixture('raw.sens.bedtemp'))
+    deliver('raw.sens.bedtemp', fixture('raw.sens.bedtemp'))
+    deliver('rawmem.frz.health', fixture('raw.frz.health'))
+
+    expect(onFrame.mock.calls.map(([frame]) => frame.type)).toEqual(['bedTemp', 'frzHealth'])
+    expect(src.stats).toMatchObject({ prefix: 'rawmem', messages: 3, decodeFailures: 1, ignoredMessages: 1 })
+    expect(log).toHaveBeenCalledWith('[natsSource] reading sensor frames from %s.* subjects', 'rawmem')
+    expect(warn).toHaveBeenCalledWith('[natsSource] ignoring %s.* — already reading %s.*', 'raw', 'rawmem')
   })
 
   it('passes new/out-of-scope types (blanketReadings) through without throwing', async () => {
@@ -223,7 +240,7 @@ describe('startNatsFrameSource', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const src = await startNatsFrameSource({ decode, onFrame: vi.fn() })
 
-    nats.state.subs[0].cb(new Error('permission denied'), { data: new Uint8Array() })
+    nats.state.subs[0].cb(new Error('permission denied'), { subject: 'raw.sens.capsense', data: new Uint8Array() })
 
     expect(src.stats.messages).toBe(0)
     expect(warn).toHaveBeenCalledWith('[natsSource] subscription error:', 'permission denied')

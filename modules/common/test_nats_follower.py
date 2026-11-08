@@ -206,7 +206,7 @@ def test_follower_receives_sensor_and_freezer_records(prefix):
     async def subscribe(pattern, *, cb):
         for subject, data in messages.items():
             if subject.startswith(pattern.removesuffix(">")):
-                await cb(SimpleNamespace(data=data))
+                await cb(SimpleNamespace(subject=subject, data=data))
 
     async def close():
         pass
@@ -224,6 +224,19 @@ def test_follower_receives_sensor_and_freezer_records(prefix):
         "piezo-dual", "bedTemp", "frzHealth",
     }
     assert follower._decode_failures == 0
+    assert follower._prefix == prefix
+
+
+def test_follower_latches_first_decoded_prefix():
+    follower = NatsFollower(threading.Event())
+    assert follower._handle_payload(b"\xff not cbor", "raw.sens.capsense") is None
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "rawmem.sens.bedtemp")
+    assert follower._handle_payload(_payload("raw.sens.bedtemp"), "raw.sens.bedtemp") is None
+    assert follower._handle_payload(_payload("raw.frz.health"), "rawmem.frz.health")
+
+    assert follower._prefix == "rawmem"
+    assert follower._queue.qsize() == 2
+    assert (follower._decode_failures, follower._ignored) == (1, 1)
 
 
 # ---------------------------------------------------------------------------
