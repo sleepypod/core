@@ -3,6 +3,7 @@ import {
   MIN_BUCKET_NONSTILL_FLOOR,
   MOVEMENT_BUCKET_DAY_SECONDS,
   MOVEMENT_BUCKET_WEEK_SECONDS,
+  MOVEMENT_CHART_SCORE_MIN,
   pickMinBucketNonStillEpochs,
   pickMovementBucketSeconds,
   POSITION_CHANGE_SCORE_MIN,
@@ -17,8 +18,12 @@ describe('movement constants', () => {
     expect(POSITION_CHANGE_SCORE_MIN).toBe(200)
   })
 
+  test('charts count only minutes at the higher movement score', () => {
+    expect(MOVEMENT_CHART_SCORE_MIN).toBe(400)
+  })
+
   test('bucket sizes match the documented day vs week defaults', () => {
-    expect(MOVEMENT_BUCKET_DAY_SECONDS).toBe(5 * 60)
+    expect(MOVEMENT_BUCKET_DAY_SECONDS).toBe(15 * 60)
     expect(MOVEMENT_BUCKET_WEEK_SECONDS).toBe(30 * 60)
   })
 })

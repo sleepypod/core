@@ -28,6 +28,7 @@ import { useSideNames } from '@/src/hooks/useSideNames'
 import { OccupancyCheck } from '@/src/components/diagnostics/OccupancyCheck'
 import { RawDataButton } from './RawDataButton'
 import { referenceInSession, type ReferencePoint, VitalsLegend } from './VitalsChart'
+import { MOVEMENT_BUCKET_DAY_SECONDS, MOVEMENT_CHART_SCORE_MIN } from '@/src/lib/movement'
 import { WATCH_MOTION_MAX_SERIES_MS, watchInWindows } from '@/src/lib/watchMovement'
 import { WatchUpload } from './WatchUpload'
 import { VitalsExplorer } from './VitalsExplorer'
@@ -76,7 +77,7 @@ function BiometricsBody({ sectionSwitch, now }: { sectionSwitch?: ReactNode, now
   // Health's read of whether "occupied" is believable (no movement, no vitals for hours → suspect).
   const dataPathQ = trpc.health.dataPath.useQuery({}, { refetchInterval: 60_000 })
   const fileCountQ = trpc.biometrics.getFileCount.useQuery({}, { refetchInterval: 60_000 })
-  const movementQ = trpc.biometrics.getMovementBuckets.useQuery({ side, startDate, endDate, bucketSeconds: 300, limit: 10000 }, { refetchInterval: 5 * 60_000 })
+  const movementQ = trpc.biometrics.getMovementBuckets.useQuery({ side, startDate, endDate, bucketSeconds: MOVEMENT_BUCKET_DAY_SECONDS, eventScoreMin: MOVEMENT_CHART_SCORE_MIN, limit: 10000 }, { refetchInterval: 5 * 60_000 })
   // Imported Apple Watch heart rate (scripts/import-watch-health.py), drawn over the pod's.
   // No placeholderData: after a side switch the other person's Watch samples
   // must not sit over this side's pod line while the new query loads.

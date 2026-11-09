@@ -503,6 +503,8 @@ export const biometricsRouter = router({
           startDate: z.date().optional(),
           endDate: z.date().optional(),
           bucketSeconds: z.number().int().min(60).max(86400),
+          /** Score a minute must reach to count in eventCount; defaults to POSITION_CHANGE_SCORE_MIN. */
+          eventScoreMin: z.number().int().min(1).max(1000).optional(),
           limit: z.number().int().min(1).max(10000).default(2000),
         })
         .strict()
@@ -527,13 +529,14 @@ export const biometricsRouter = router({
         const bSec = Math.floor(input.bucketSeconds)
         const bucket = sql<number>`(${movement.timestamp} / ${sql.raw(String(bSec))}) * ${sql.raw(String(bSec))}`
         const minNonStill = pickMinBucketNonStillEpochs(bSec)
+        const eventScoreMin = input.eventScoreMin ?? POSITION_CHANGE_SCORE_MIN
         const nonStillEpochs = sql<number>`SUM(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 ELSE 0 END)`
 
         const rows = await biometricsDb
           .select({
             bucketStart: bucket,
             totalMovement: sql<number>`SUM(${movement.totalMovement})`,
-            eventCount: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
+            eventCount: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(eventScoreMin))} THEN 1 END)`,
             sampleCount: count(),
           })
           .from(movement)
