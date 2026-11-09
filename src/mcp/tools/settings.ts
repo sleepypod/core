@@ -4,10 +4,19 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
+import { getCaller, jsonResult, runTool, textResult } from '@/src/mcp/caller'
 import { side, timeOfDay } from '@/src/mcp/schemas'
+import { natsSubjectPrefixSchema } from '@/src/server/validation-schemas'
 
 const MUTATING = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+
+export const NATS_PREFIX_FOLLOW_UP
+  = 'natsSubjectPrefix saved. It only matters when get_sensor_source shows stream.source "nats"; on a .RAW pod it has '
+    + 'no effect. On NATS the live sensor stream re-subscribed already. The biometrics modules read the prefix at '
+    + 'startup: restart sleepypod-piezo-processor.service, sleepypod-sleep-detector.service and '
+    + 'sleepypod-environment-monitor.service with pod_maintenance restart_service (confirm with the user first); '
+    + 'sleepypod-calibrator.service picks it up on its next restart. '
+    + 'Check get_sensor_source afterwards to confirm frames are arriving.'
 
 export function registerSettingsTools(server: McpServer) {
   server.registerTool('get_settings', {
@@ -54,7 +63,8 @@ export function registerSettingsTools(server: McpServer) {
     title: 'Change device settings',
     description:
       'Update pod-wide settings: timezone (IANA name), temperatureUnit shown in the app, daily reboot and daily '
-      + 'prime times, LED night mode and brightness, globalMaxOnHours safety cap. Only the provided fields change.',
+      + 'prime times, LED night mode and brightness, globalMaxOnHours safety cap, natsSubjectPrefix for the sensor '
+      + 'readers. Only the provided fields change.',
     inputSchema: {
       timezone: z.string().optional().describe('IANA timezone, e.g. "America/Los_Angeles".'),
       temperatureUnit: z.enum(['F', 'C']).optional(),
@@ -70,7 +80,15 @@ export function registerSettingsTools(server: McpServer) {
       ledNightEndTime: timeOfDay.optional(),
       globalMaxOnHours: z.number().int().min(1).max(48).nullable().optional()
         .describe('Force every side off after this many continuous hours. null disables the cap.'),
+      natsSubjectPrefix: natsSubjectPrefixSchema.nullable().optional()
+        .describe('NATS subject prefix the sensor readers subscribe under (<prefix>.sens.> and <prefix>.frz.>). '
+          + 'null = auto: read "raw" and "rawmem", raw winning per subject. Pin a prefix only when get_sensor_source '
+          + 'shows the firmware publishing under one the readers do not subscribe to; set null to return to auto.'),
     },
     annotations: MUTATING,
-  }, async input => runTool(async () => jsonResult(await getCaller().settings.updateDevice(input))))
+  }, async input => runTool(async () => {
+    const result = jsonResult(await getCaller().settings.updateDevice(input))
+    if (input.natsSubjectPrefix === undefined) return result
+    return { content: [...result.content, ...textResult(NATS_PREFIX_FOLLOW_UP).content] }
+  }))
 }

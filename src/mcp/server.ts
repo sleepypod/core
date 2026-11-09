@@ -27,6 +27,7 @@ const INSTRUCTIONS = `Sleepypod controls an Eight Sleep Pod running the open-sou
 The bed has two independent sides ("left" and "right"), each with its own temperature, schedules and sleeper.
 Temperature control precedence, highest first: manual hold (set_temperature) > run-once curve > automation > schedule.
 Start with get_pod_status for anything about the present, get_sleep_summary for last night, and diagnose_pod when something seems wrong.
+When live sensor data or biometrics are empty, check get_sensor_source before changing anything.
 Confirm with the user before prime_pod, pod_maintenance and manage_schedule delete.
 Run apply_sleep_curve with mode "preview" and show the result before calling it with mode "apply".
 Run preview_sleep_stage_rules before set_sleep_stage_rules and apply a tuned ruleset only when it improves kappa against the reference stages; a reset or rollback the user asks for does not need to.

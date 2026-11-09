@@ -29,7 +29,8 @@ async function setup() {
   const location = { pythonPath, modulesPath: root }
   return { build, location, source: join(root, 'common/biometrics/shadow.py') }
 }
-it('validates real source and wheel metadata against the probe, then detects source replacement', async () => {
+// Needs the locked piezo-processor venv, which Stryker's sandbox doesn't carry.
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('validates real source and wheel metadata against the probe, then detects source replacement', async () => {
   const { build, location, source } = await setup()
   const guard = guardShadowPythonInstallation(location, build)
   guard()
@@ -37,12 +38,12 @@ it('validates real source and wheel metadata against the probe, then detects sou
   copyFileSync(source + '.old', source)
   expect(guard).toThrow(/changed/)
 })
-it('refuses source content changed after probing', async () => {
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('refuses source content changed after probing', async () => {
   const { build, location, source } = await setup()
   writeFileSync(source, '# changed')
   expect(() => guardShadowPythonInstallation(location, build)).toThrow(/differs from probe/)
 })
-it('detects metadata mutation and executable link replacement', async () => {
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('detects metadata mutation and executable link replacement', async () => {
   const { build, location } = await setup()
   const guard = guardShadowPythonInstallation(location, build)
   writeFileSync(build.dependencyFiles.numpy.wheel, 'changed')
@@ -53,7 +54,7 @@ it('detects metadata mutation and executable link replacement', async () => {
   symlinkSync(process.execPath, other.location.pythonPath)
   expect(executableGuard).toThrow(/changed/)
 })
-it('refuses malformed build hashes and non-absolute dependency paths', async () => {
+it.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined)('refuses malformed build hashes and non-absolute dependency paths', async () => {
   const { build, location } = await setup()
   expect(() => guardShadowPythonInstallation(location, { ...build, hash: 'a'.repeat(64) })).toThrow(/integrity/)
   build.dependencyFiles.numpy.record = 'relative/RECORD'

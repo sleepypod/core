@@ -12,6 +12,8 @@ import { useMemo } from 'react'
 import {
   BarChart,
   Bar,
+  ComposedChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -19,6 +21,7 @@ import {
   Tooltip,
 } from 'recharts'
 import { pickMovementBucketSeconds } from '@/src/lib/movement'
+import { WATCH_MAX_SCALE, WATCH_MOTION_MAX_SERIES_MS, watchBuckets, type WatchMinute } from '@/src/lib/watchMovement'
 
 interface BucketRecord {
   side: 'left' | 'right'
@@ -37,7 +40,12 @@ interface SummaryRecord {
 interface ChartDataPoint {
   time: string
   timestamp: number
-  movement: number
+  /** Pod events/hr; null where only the Watch has a bucket, or at a line break. */
+  movement: number | null
+  /** Watch movement as a fraction of its night's peak; null breaks the line. */
+  watch?: number | null
+  /** Watch moving readings summed over the bucket. */
+  watchMoving?: number
 }
 
 /**
@@ -100,6 +108,37 @@ function toChartData(buckets: BucketRecord[], bucketSeconds: number): ChartDataP
 }
 
 /**
+ * Add Apple Watch movement to the pod's bucket points. Watch minutes count
+ * only inside a sleep record (the nights shown); each night is scaled to its
+ * own peak. Buckets only the Watch has are added without a bar, and a break
+ * point is inserted wherever consecutive Watch buckets are not adjacent, so the
+ * line never bridges a gap. Without Watch data the points come back unchanged.
+ */
+export function withWatchMovement(points: ChartDataPoint[], minutes: WatchMinute[], nights: Array<{ start: number, end: number }>, bucketSeconds: number): ChartDataPoint[] {
+  const bucketMs = bucketSeconds * 1000
+  const watch = watchBuckets(minutes, nights, bucketMs)
+  if (watch.size === 0) return points
+  const byTime = new Map(points.map(p => [p.timestamp, { ...p, watch: null as number | null }]))
+  for (const [t, w] of watch) {
+    const point = byTime.get(t) ?? { time: new Date(t).toISOString(), timestamp: t, movement: null, watch: null }
+    byTime.set(t, { ...point, watch: w.scaled, watchMoving: w.moving })
+  }
+  const merged: ChartDataPoint[] = []
+  let lastWatch: number | null = null
+  for (const point of [...byTime.values()].sort((a, b) => a.timestamp - b.timestamp)) {
+    if (point.watch != null) {
+      if (lastWatch != null && point.timestamp - lastWatch > bucketMs) {
+        const t = lastWatch + bucketMs
+        if (merged.at(-1)?.watch != null) merged.push({ time: new Date(t).toISOString(), timestamp: t, movement: null, watch: null })
+      }
+      lastWatch = point.timestamp
+    }
+    merged.push(point)
+  }
+  return merged
+}
+
+/**
  * For week view, return one tick key per calendar day (the first bucket
  * of that day) so the axis shows Mon/Tue/Wed/... cleanly. Day view
  * returns undefined and lets recharts auto-space ticks.
@@ -141,6 +180,7 @@ function MovementTooltip({ active, payload, bucketSeconds }: MovementTooltipProp
   const timeFormat = useTimeFormat()
   if (!active || !payload?.[0]) return null
   const data = payload[0].payload as ChartDataPoint
+  if (data.movement == null && data.watchMoving == null) return null
   // Tooltip shows the full bucket timestamp regardless of whether the
   // axis hides labels for non-day-boundary buckets.
   const tooltipLabel = formatClock(new Date(data.timestamp), timeFormat, {
@@ -152,9 +192,16 @@ function MovementTooltip({ active, payload, bucketSeconds }: MovementTooltipProp
   return (
     <div className="rounded-ctl border border-line-2 bg-surface px-3 py-2 text-xs">
       <p className="text-fg-2">{tooltipLabel}</p>
-      <p className="font-mono text-fg">
-        {`${data.movement} /hr`}
-      </p>
+      {data.movement != null && (
+        <p className="font-mono text-fg">
+          {`${data.movement} /hr`}
+        </p>
+      )}
+      {data.watchMoving != null && (
+        <p className="font-mono text-cool">
+          {`Watch ${data.watchMoving} moving`}
+        </p>
+      )}
     </div>
   )
 }
@@ -193,6 +240,11 @@ export function MovementChart() {
     { refetchOnWindowFocus: false },
   )
 
+  const watchQuery = trpc.biometrics.getWatchMotionSeries.useQuery(
+    { side, startDate: weekStart, endDate: weekEnd },
+    { refetchOnWindowFocus: false, enabled: weekEnd.getTime() - weekStart.getTime() <= WATCH_MOTION_MAX_SERIES_MS },
+  )
+
   const buckets = useMemo(() => (bucketsQuery.data ?? []) as BucketRecord[], [bucketsQuery.data])
 
   const totalSleepSeconds = useMemo(
@@ -207,7 +259,22 @@ export function MovementChart() {
     [summaryQuery.data, totalSleepSeconds, nights],
   )
 
-  const chartData = useMemo(() => toChartData(buckets, bucketSeconds), [buckets, bucketSeconds])
+  const nightWindows = useMemo(
+    () => Array.isArray(sleepData)
+      ? sleepData.map(r => ({ start: new Date(r.enteredBedAt).getTime(), end: r.leftBedAt ? new Date(r.leftBedAt).getTime() : weekEnd.getTime() }))
+      : [],
+    [sleepData, weekEnd],
+  )
+  const watchMinutes = useMemo(
+    () => (watchQuery.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), moving: r.movingSamples })),
+    [watchQuery.data],
+  )
+  const chartData = useMemo(
+    () => withWatchMovement(toChartData(buckets, bucketSeconds), watchMinutes, nightWindows, bucketSeconds),
+    [buckets, bucketSeconds, watchMinutes, nightWindows],
+  )
+  const hasWatch = chartData.some(p => p.watch != null)
+  const Chart = hasWatch ? ComposedChart : BarChart
 
   const isMultiDay = bucketSeconds >= 30 * 60
   const tickKeys = useMemo(() => pickTickKeys(chartData, isMultiDay), [chartData, isMultiDay])
@@ -244,7 +311,7 @@ export function MovementChart() {
             : (
                 <div className="h-[140px] w-full">
                   <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                    <BarChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} barCategoryGap="15%">
+                    <Chart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} barCategoryGap="15%">
                       <CartesianGrid stroke="var(--border-grid)" vertical={false} />
                       <XAxis
                         dataKey="time"
@@ -262,10 +329,24 @@ export function MovementChart() {
                         cursor={{ fill: 'var(--surface-active)' }}
                       />
                       <Bar dataKey="movement" fill="var(--accent-warm)" radius={[2, 2, 0, 0]} maxBarSize={12} isAnimationActive={false} />
-                    </BarChart>
+                      {hasWatch && <YAxis yAxisId="watch" hide domain={[0, WATCH_MAX_SCALE]} />}
+                      {hasWatch && <Line yAxisId="watch" dataKey="watch" stroke="var(--accent-cool)" strokeWidth={1.25} dot={false} connectNulls={false} isAnimationActive={false} />}
+                    </Chart>
                   </ResponsiveContainer>
                 </div>
               )}
+      {hasWatch && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-fg-2" data-testid="movement-watch-legend">
+          <span className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-[2px] bg-warm" />
+            Pod
+          </span>
+          <span className="flex items-center gap-2">
+            <span className="h-0.5 w-4 rounded bg-cool" />
+            Apple Watch · scaled per night
+          </span>
+        </div>
+      )}
     </Card>
   )
 }

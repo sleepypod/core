@@ -322,13 +322,39 @@ export const referenceSamples = sqliteTable('reference_samples', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),
   source: text('source', { enum: ['apple_watch'] }).notNull(),
-  metric: text('metric', { enum: ['breathing_rate', 'hrv_sdnn'] }).notNull(),
+  metric: text('metric', { enum: ['breathing_rate', 'hrv_sdnn', 'hrv_rmssd', 'blood_oxygen', 'resting_heart_rate', 'skin_temperature', 'breathing_disturbances'] }).notNull(),
   timestamp: integer('timestamp', { mode: 'timestamp' }).notNull(),
+  // Set when the reading covers a window; a spot reading has none.
+  endTimestamp: integer('end_timestamp', { mode: 'timestamp' }),
   value: real('value').notNull(),
+  device: text('device'), // hardware that measured it, e.g. Watch8,2; null for rows from older clients
+  algorithm: text('algorithm'), // the vendor's algorithm version, when it reports one
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   importId: text('import_id'), // set in the inserting transaction, like reference_vitals
 }, t => [
   uniqueIndex('uq_reference_samples_side_metric_timestamp_source').on(t.side, t.metric, t.timestamp, t.source),
+])
+
+/**
+ * Apple Watch wrist-movement recordings (watch-motion-v1/v2 files sent by the
+ * iOS app), one row per night holding the trimmed canonical file. A movement
+ * label for comparison and off-pod training only: never read by the stage
+ * classifier, movement scoring or any hardware control. A resend of the same
+ * night (side, recorded_from) replaces the stored file in place.
+ */
+export const watchMotionCaptures = sqliteTable('watch_motion_captures', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  version: text('version', { enum: ['watch-motion-v1', 'watch-motion-v2'] }).notNull(),
+  recordedFrom: integer('recorded_from', { mode: 'timestamp_ms' }).notNull(),
+  recordedTo: integer('recorded_to', { mode: 'timestamp_ms' }).notNull(),
+  bins: integer('bins').notNull(),
+  trimmedBins: integer('trimmed_bins').notNull(),
+  sha256: text('sha256').notNull(),
+  file: text('file').notNull(), // canonical JSON (sorted keys), served byte-for-byte
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+}, t => [
+  uniqueIndex('uq_watch_motion_captures_side_recorded_from').on(t.side, t.recordedFrom),
 ])
 
 // ── Calibration tables ──

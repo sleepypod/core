@@ -42,9 +42,16 @@ const fsPromisesMock = vi.hoisted(() => ({
 const sensorMock = vi.hoisted(() => ({
   frameTimes: {} as Record<string, number>,
   perf: { sensorSource: 'pending' as 'pending' | 'raw' | 'nats', firstFrameMs: null as number | null, uptimeSeconds: 12 },
+  natsPrefix: null as string | null | Error,
+  natsStats: null as Record<string, unknown> | null,
 }))
 vi.mock('@/src/streaming/piezoStream', () => ({
   getSensorFrameTimes: () => sensorMock.frameTimes,
+  getNatsSourceStats: () => sensorMock.natsStats,
+  readNatsSubjectPrefix: async () => {
+    if (sensorMock.natsPrefix instanceof Error) throw sensorMock.natsPrefix
+    return sensorMock.natsPrefix
+  },
 }))
 vi.mock('@/src/lib/serverPerformance', () => ({
   getServerPerformance: () => sensorMock.perf,
@@ -976,6 +983,76 @@ describe('system.getSensorSource', () => {
     expect(r.firmware.signals).toMatchObject({ natsUnitInstalled: true, natsServerActive: true, jetstreamDirPresent: true, biometricsTmpfsMounted: false })
     expect(r.stream).toMatchObject({ source: 'nats', lastFrameAtMs: 5_000, lastFrameType: 'capSense', firstFrameMs: 1800 })
     expect(r.stream.lastFrameAgeMs).toBeGreaterThan(0)
+  })
+
+  describe('nats block', () => {
+    beforeEach(() => {
+      routeExec(() => enoent)
+      fsPromisesMock.readFile.mockRejectedValue(enoent)
+      sensorMock.natsPrefix = null
+      sensorMock.natsStats = null
+    })
+
+    it('is null unless NATS is the selected source', async () => {
+      sensorMock.perf = { sensorSource: 'raw', firstFrameMs: 400, uptimeSeconds: 60 }
+      expect((await caller.getSensorSource({})).nats).toBeNull()
+      sensorMock.perf = { sensorSource: 'pending', firstFrameMs: null, uptimeSeconds: 5 }
+      expect((await caller.getSensorSource({})).nats).toBeNull()
+    })
+
+    it('reports auto mode, per-subject sources and a publishing prefix the reader does not subscribe to', async () => {
+      sensorMock.perf = { sensorSource: 'nats', firstFrameMs: 1800, uptimeSeconds: 900 }
+      const now = Date.now()
+      sensorMock.natsStats = {
+        messages: 40,
+        framesDecoded: 40,
+        decodeFailures: 1,
+        sources: { 'sens.piezo': 'raw', 'frz.temp': 'rawmem' },
+        ignoredMessages: 7,
+        subjects: ['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>'],
+        observedPrefixes: {
+          raw: { messages: 30, lastSeenMs: now - 1_000 },
+          rawv2: { messages: 5, lastSeenMs: now - 2_000 },
+        },
+      }
+
+      const { nats } = await caller.getSensorSource({})
+      expect(nats).toMatchObject({
+        mode: 'auto',
+        configuredPrefix: null,
+        subscribedSubjects: ['raw.sens.>', 'raw.frz.>', 'rawmem.sens.>', 'rawmem.frz.>'],
+        sources: { 'sens.piezo': 'raw', 'frz.temp': 'rawmem' },
+        messages: 40,
+        decodeFailures: 1,
+        ignoredMessages: 7,
+        observedPrefixes: [
+          { prefix: 'raw', subscribed: true, messages: 30, lastSeenAtMs: now - 1_000 },
+          { prefix: 'rawv2', subscribed: false, messages: 5, lastSeenAtMs: now - 2_000 },
+        ],
+      })
+      expect(nats?.observedPrefixes[1].lastSeenAgeMs).toBeGreaterThanOrEqual(2_000)
+    })
+
+    it('reports a pinned prefix, and empty traffic while the reader re-subscribes', async () => {
+      sensorMock.perf = { sensorSource: 'nats', firstFrameMs: 1800, uptimeSeconds: 900 }
+      sensorMock.natsPrefix = 'rawmem'
+      expect((await caller.getSensorSource({})).nats).toEqual({
+        mode: 'pinned',
+        configuredPrefix: 'rawmem',
+        subscribedSubjects: [],
+        sources: {},
+        messages: 0,
+        decodeFailures: 0,
+        ignoredMessages: 0,
+        observedPrefixes: [],
+      })
+    })
+
+    it('reads auto when the setting cannot be read', async () => {
+      sensorMock.perf = { sensorSource: 'nats', firstFrameMs: 1800, uptimeSeconds: 900 }
+      sensorMock.natsPrefix = new Error('database locked')
+      expect((await caller.getSensorSource({})).nats).toMatchObject({ mode: 'auto', configuredPrefix: null })
+    })
   })
 
   it('classifies the old frank.sh shim pod and surfaces the env override', async () => {

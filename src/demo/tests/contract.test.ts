@@ -79,6 +79,7 @@ describe('demo handlers honour the real router contracts', () => {
         await call('biometrics.getVitalsSummary', { side })
         await call('biometrics.getMovementBuckets', { side, bucketSeconds: 300 })
         await call('biometrics.getMovementSummary', { side })
+        await call('biometrics.getWatchMotionSeries', { side, startDate: new Date(now - day), endDate: new Date(now) })
         await call('biometrics.getSleepStages', { side })
         await call('calibration.getStatus', { side })
         await call('calibration.getHistory', { side })

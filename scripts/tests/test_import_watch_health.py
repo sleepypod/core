@@ -11,6 +11,7 @@ import io
 import os
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +23,8 @@ _spec.loader.exec_module(iw)
 TZ = timezone(timedelta(hours=-7))
 T0 = datetime(2026, 10, 9, 2, 0, tzinfo=TZ)
 WATCH = "Jon&#8217;s Apple Watch"
+WATCH_HARDWARE = '&lt;&lt;HKDevice: 0x1&gt;, name:Apple Watch, manufacturer:Apple Inc., model:Watch, hardware:Watch8,2&gt;'
+PHONE_HARDWARE = '&lt;&lt;HKDevice: 0x2&gt;, name:iPhone, manufacturer:Apple Inc., model:iPhone, hardware:iPhone17,1&gt;'
 
 
 def hk_time(dt):
@@ -39,8 +42,8 @@ def hr_record(at, bpm, source=WATCH):
             f'startDate="{hk_time(at)}" endDate="{hk_time(at)}" value="{bpm}"/>\n')
 
 
-def quantity_record(kind, at, value, unit, source=WATCH):
-    return (f' <Record type="HKQuantityTypeIdentifier{kind}" sourceName="{source}" unit="{unit}" '
+def quantity_record(kind, at, value, unit, source=WATCH, device=''):
+    return (f' <Record type="HKQuantityTypeIdentifier{kind}" sourceName="{source}" device="{device}" unit="{unit}" '
             f'startDate="{hk_time(at)}" endDate="{hk_time(at)}" value="{value}"/>\n')
 
 
@@ -115,14 +118,14 @@ class ImportWatchHealthTest(unittest.TestCase):
             {'timestamp': int((T0 + timedelta(minutes=6)).timestamp()), 'heartRate': 56.5},
             {'timestamp': int((T0 + timedelta(minutes=11)).timestamp()), 'heartRate': 61.0},
         ])
-        self.assertEqual(written, {'stages': 3, 'vitals': 3, 'breathing': 0, 'hrv': 0})
+        self.assertEqual(written, {'stages': 3, 'vitals': 3, 'breathing': 0, 'hrv': 0, 'rmssd': 0, 'oxygen': 0})
         self.assertIn('wrote 3 new stage segments, 3 new heart-rate', err)
 
     def test_dry_run_posts_nothing_but_reports_counts(self):
         write_export(self.export, [(0, 20, 'AsleepCore')], [(1, 58)])
         post, written, err = self.run_import(dry_run=True)
         self.assertEqual(post.calls, [])
-        self.assertEqual(written, {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0})
+        self.assertEqual(written, {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0, 'rmssd': 0, 'oxygen': 0})
         self.assertIn('1 stage segments', err)
         self.assertIn('1 heart-rate samples', err)
 
@@ -133,7 +136,7 @@ class ImportWatchHealthTest(unittest.TestCase):
         self.assertEqual(len(post.calls[0][1]['segments']), 1)
         self.assertEqual(len(post.calls[1][1]['samples']), 1)
         _, written_all, _ = self.run_import(days=0)
-        self.assertEqual(written_all, {'stages': 2, 'vitals': 2, 'breathing': 0, 'hrv': 0})
+        self.assertEqual(written_all, {'stages': 2, 'vitals': 2, 'breathing': 0, 'hrv': 0, 'rmssd': 0, 'oxygen': 0})
 
     def test_batches_at_the_api_limit(self):
         write_export(self.export, [], [(m, 60) for m in range(0, 4500)])
@@ -185,6 +188,32 @@ class ImportWatchHealthTest(unittest.TestCase):
         post, _, _ = self.run_import(source_pattern='Nope')
         self.assertEqual(post.calls, [])
 
+    def test_a_watch_is_found_by_its_device_whatever_the_source_is_named(self):
+        at = T0 + timedelta(minutes=2)
+        write_export(self.export, [], [], extra=(
+            quantity_record('OxygenSaturation', at, 0.97, '%', source='nPhone', device=WATCH_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=1), 0.96, '%', source='Blood Oxygen', device=WATCH_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=2), 0.95, '%', source='nPhone', device=PHONE_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=3), 0.94, '%', source='nPhone')
+            + sleep_record(at, at + timedelta(minutes=20), 'AsleepCore', source='nPhone')))
+        post, _, _ = self.run_import()
+        self.assertEqual([u for u, _ in post.calls], ['http://192.168.1.88:3000/api/biometrics/reference-samples'])
+        self.assertEqual([s['value'] for s in post.calls[0][1]['samples']], [97.0, 96.0])
+
+    def test_sleepypod_is_never_a_reference_even_on_a_watch_device(self):
+        at = T0 + timedelta(minutes=2)
+        write_export(self.export, [], [], extra=quantity_record('OxygenSaturation', at, 0.97, '%', source='sleepypod', device=WATCH_HARDWARE))
+        post, _, _ = self.run_import()
+        self.assertEqual(post.calls, [])
+
+    def test_a_chosen_source_is_the_only_filter(self):
+        at = T0 + timedelta(minutes=2)
+        write_export(self.export, [], [], extra=(
+            quantity_record('OxygenSaturation', at, 0.97, '%', source='nPhone', device=WATCH_HARDWARE)
+            + quantity_record('OxygenSaturation', at + timedelta(minutes=1), 0.96, '%', source='Blood Oxygen', device=WATCH_HARDWARE)))
+        post, _, _ = self.run_import(source_pattern='^Blood Oxygen$')
+        self.assertEqual([s['value'] for s in post.calls[0][1]['samples']], [96.0])
+
     def test_posts_breathing_rate_and_hrv_per_metric(self):
         write_export(self.export, [], [(1, 58)], rr=[(2, 14.5), (7, 15), (8, 2), (9, 90)], hrv=[(3, 48), (4, 0), (5, 900)])
         post, written, err = self.run_import()
@@ -195,8 +224,8 @@ class ImportWatchHealthTest(unittest.TestCase):
                                             'samples': [{'timestamp': t(2), 'value': 14.5}, {'timestamp': t(7), 'value': 15.0}]})
         self.assertEqual(post.calls[2][1], {'side': 'left', 'source': 'apple_watch', 'metric': 'hrv_sdnn',
                                             'samples': [{'timestamp': t(3), 'value': 48.0}]})
-        self.assertEqual(written, {'stages': 0, 'vitals': 1, 'breathing': 2, 'hrv': 1})
-        self.assertIn('2 breathing-rate and 1 HRV samples', err)
+        self.assertEqual(written, {'stages': 0, 'vitals': 1, 'breathing': 2, 'hrv': 1, 'rmssd': 0, 'oxygen': 0})
+        self.assertIn('2 breathing-rate, 1 HRV, 0 RMSSD and 0 blood-oxygen samples', err)
         # --hr-only and --stages-only leave breathing rate and HRV out.
         post, _, _ = self.run_import(stages=False, extra=False)
         self.assertEqual([u.rsplit('/', 1)[1] for u, _ in post.calls], ['reference-vitals'])
@@ -211,7 +240,7 @@ class ImportWatchHealthTest(unittest.TestCase):
         t = lambda m: int((T0 + timedelta(minutes=m)).timestamp())
         self.assertEqual(post.calls[1][1]['samples'], [{'timestamp': t(2), 'value': 15.0}])
         self.assertEqual(post.calls[2][1]['samples'], [{'timestamp': t(4), 'value': 42.0}])
-        self.assertEqual(written, {'stages': 0, 'vitals': 1, 'breathing': 1, 'hrv': 1})
+        self.assertEqual(written, {'stages': 0, 'vitals': 1, 'breathing': 1, 'hrv': 1, 'rmssd': 0, 'oxygen': 0})
 
     def test_never_imports_records_sleepypod_wrote_to_health(self):
         at = T0 + timedelta(minutes=1)
@@ -229,7 +258,50 @@ class ImportWatchHealthTest(unittest.TestCase):
         self.assertEqual(values, [58.0, 14.0, 40.0])
         self.assertEqual([s['stage'] for s in post.calls[0][1]['segments']], ['light'])
         _, written_any, _ = self.run_import(source_pattern='.')
-        self.assertEqual(written_any, {'stages': 1, 'vitals': 1, 'breathing': 1, 'hrv': 1})
+        self.assertEqual(written_any, {'stages': 1, 'vitals': 1, 'breathing': 1, 'hrv': 1, 'rmssd': 0, 'oxygen': 0})
+
+    def test_rmssd_remains_distinct_and_preserves_breathing(self):
+        at = T0 + timedelta(minutes=2)
+        extra = (quantity_record('HeartRateVariabilityRMSSD', at, 0.032, 's')
+                 + quantity_record('HeartRateVariabilityRMSSD', at, 32, 'us')
+                 + quantity_record('HeartRateVariabilityRMSSD', at, 99, 'ms', source='sleepypod Watch'))
+        write_export(self.export, [], [], rr=[(2, 14)], hrv=[(2, 48)], extra=extra)
+        post, written, _ = self.run_import()
+        self.assertEqual([p['metric'] for _, p in post.calls], ['breathing_rate', 'hrv_sdnn', 'hrv_rmssd'])
+        self.assertEqual([p['samples'][0]['value'] for _, p in post.calls], [14, 48, 32])
+        self.assertEqual(written['rmssd'], 1)
+
+    def test_blood_oxygen_fraction_is_stored_as_a_percentage(self):
+        at = T0 + timedelta(minutes=2)
+        extra = (quantity_record('OxygenSaturation', at, 0.97, '%')
+                 # A percentage, not a fraction, lands out of range rather than as 9700%.
+                 + quantity_record('OxygenSaturation', at + timedelta(minutes=1), 97, '%')
+                 + quantity_record('OxygenSaturation', at + timedelta(minutes=2), 0.4, '%')
+                 + quantity_record('OxygenSaturation', at + timedelta(minutes=3), 0.96, 'ratio')
+                 + quantity_record('OxygenSaturation', at + timedelta(minutes=4), 0.95, '%', source='sleepypod Watch'))
+        write_export(self.export, [], [], extra=extra)
+        post, written, _ = self.run_import()
+        self.assertEqual([(p['metric'], p['source'], p['samples'][0]['value'], len(p['samples'])) for _, p in post.calls],
+                         [('blood_oxygen', 'apple_watch', 97, 1)])
+        self.assertEqual(written['oxygen'], 1)
+
+    def test_oxygen_only_leaves_every_other_metric_alone(self):
+        at = T0 + timedelta(minutes=2)
+        write_export(self.export, [(0, 20, 'AsleepCore')], [(2, 58)], rr=[(2, 14)], hrv=[(2, 48)],
+                     extra=quantity_record('OxygenSaturation', at, 0.97, '%'))
+        post, written, _ = self.run_import(stages=False, hr=False, extra=False)
+        self.assertEqual([p.get('metric') for _, p in post.calls], ['blood_oxygen'])
+        self.assertEqual(written, {'stages': 0, 'vitals': 0, 'breathing': 0, 'hrv': 0, 'rmssd': 0, 'oxygen': 1})
+
+    def test_only_flags_choose_what_is_imported(self):
+        write_export(self.export, [], [])
+        cases = {'--oxygen-only': (False, False, False, True), '--stages-only': (True, False, False, False),
+                 '--hr-only': (False, True, False, False)}
+        for flag, (stages, hr, extra, oxygen) in cases.items():
+            with mock.patch.object(iw, 'run', return_value={}) as run:
+                iw.main([self.export, '--pod', 'x', '--side', 'left', flag])
+            self.assertEqual({k: run.call_args.kwargs[k] for k in ('stages', 'hr', 'extra', 'oxygen')},
+                             {'stages': stages, 'hr': hr, 'extra': extra, 'oxygen': oxygen}, flag)
 
     def test_base_url_forms(self):
         self.assertEqual(iw.base_url('192.168.1.88'), 'http://192.168.1.88:3000')

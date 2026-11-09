@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   axisTicks, BREAK_PX, baselineBand, clampTo, fmtDuration, fmtGap, formatRangeLabel, layoutAxis, metricStats, nearestIndex,
-  nightWindow, percentile, rangeWindow, rollingMean, segmentTicks, sessionHeader, splitSessions, STALL_PX,
+  nightWindow, percentile, rangeWindow, readingsInSessions, rollingMean, segmentTicks, sessionHeader, splitSessions, STALL_PX,
   type VitalPoint,
 } from '../biometricsLogic'
 
@@ -64,6 +64,15 @@ describe('sessions', () => {
   it('clamps to the chart domain', () => {
     expect(clampTo(120, [36, 90])).toBe(90)
     expect(clampTo(20, [36, 90])).toBe(36)
+  })
+})
+
+describe('readings on the axis', () => {
+  it('keeps readings inside a session, edges included, and drops those between sessions', () => {
+    const sessions = [{ start: 100, end: 200 }, { start: 400, end: 500 }]
+    const readings = [99, 100, 200, 201, 300, 400, 501].map(t => ({ t }))
+    expect(readingsInSessions(readings, sessions).map(r => r.t)).toEqual([100, 200, 400])
+    expect(readingsInSessions(readings, [])).toEqual([])
   })
 })
 

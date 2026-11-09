@@ -7,6 +7,7 @@ import {
   evaluateStageModel,
   failingTestVectors,
   filterModelOutliers,
+  POD_CONTEXT_CONTRACT,
   POD_NATIVE_CONTRACT,
   stageModelBlocks,
   stageModelContract,
@@ -123,6 +124,49 @@ describe('feature contract parity', () => {
         }
       })
     }
+  })
+
+  it('reproduces the training workspace on the synthetic night, podContext contract', () => {
+    const fixture = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'stage-features-night.json'), 'utf8')) as Fixture
+    const expected = (JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'stage-features-context.json'), 'utf8')) as { contractC: Record<string, number>[] }).contractC
+    const vitals = fixture.vitals.map(v => ({ timestamp: new Date(v.ts * 1000), heartRate: v.hr, hrv: v.hrv, breathingRate: v.br }))
+    const movement = fixture.movement.map(m => ({ timestamp: new Date(m.ts * 1000), totalMovement: m.total }))
+    const rows = stageModelFeatures('podContext', new Date(fixture.enteredBed * 1000), new Date(fixture.leftBed * 1000), vitals, movement)
+    expect(rows.length).toBe(expected.length)
+    expect(rows.some(row => row.values.activeMinutes > 0)).toBe(true)
+    rows.forEach((row, i) => {
+      expect(row.start).toBe(expected[i].start)
+      for (const column of POD_CONTEXT_CONTRACT) {
+        expect(Math.abs(row.values[column] - expected[i][column]), `${column} at row ${i}`).toBeLessThan(1e-6)
+      }
+    })
+  })
+
+  it('falls back to the epoch itself for missing neighbours and treats a still night as one bout', () => {
+    const t0 = new Date(Date.UTC(2026, 9, 1))
+    const vitals = [1, 2, 11, 12].map(m => ({ timestamp: new Date(t0.getTime() + m * 60_000), heartRate: 60 + m, hrv: 40, breathingRate: 14 }))
+    const movement = Array.from({ length: 15 }, (_, m) => ({ timestamp: new Date(t0.getTime() + m * 60_000), totalMovement: 5 }))
+    const rows = stageModelFeatures('podContext', t0, new Date(t0.getTime() + 15 * 60_000), vitals, movement)
+    expect(rows.map(r => (r.start - t0.getTime() / 1000) / 60)).toEqual([0, 10])
+    for (const row of rows) {
+      expect(row.values.hrZPrev).toBe(row.values.hrZ)
+      expect(row.values.hrZNext).toBe(row.values.hrZ)
+      expect(row.values.activeMinutes).toBe(0)
+      expect(row.values.minutesFromMove).toBe(720)
+      expect(row.values.stillBoutMinutes).toBe(14)
+    }
+    expect(rows[1].values.minutesToExit).toBe(5)
+  })
+
+  it('accepts a podContext model', () => {
+    const inputs = Object.fromEntries(POD_CONTEXT_CONTRACT.map(c => [c, 0]))
+    const model = stageModelSchema.parse({
+      version: 'context-forest', kind: 'forest', classes: ['wake', 'light', 'deep', 'rem'], featureContract: [...POD_CONTEXT_CONTRACT],
+      trees: [{ f: [-1], t: [0], l: [-1], r: [-1], v: [[0, 1, 0, 0]] }], testVectors: [{ inputs, expected: 1 }],
+    })
+    expect(POD_CONTEXT_CONTRACT.length).toBe(33)
+    expect(stageModelContract(model)).toBe('podContext')
+    expect(failingTestVectors(model)).toEqual([])
   })
 
   it('drops a partial trailing epoch and epochs without heart rate', () => {

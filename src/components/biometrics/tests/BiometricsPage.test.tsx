@@ -21,6 +21,8 @@ const state = vi.hoisted(() => ({
   shown: ['left', 'right'] as Array<'left' | 'right'>,
   reference: [] as Array<{ timestamp: Date, heartRate: number }>,
   referenceHrv: [] as Array<{ timestamp: Date, value: number }>,
+  referenceRmssd: [] as Array<{ timestamp: Date, value: number }> | undefined,
+  referenceOxygen: [] as Array<{ timestamp: Date, value: number }> | undefined,
   referenceOpts: undefined as Record<string, unknown> | undefined,
 }))
 
@@ -56,7 +58,8 @@ vi.mock('@/src/utils/trpc', () => ({
       },
       getFileCount: { useQuery: () => ({ data: { rawFiles: { left: 4, right: 4 }, totalSizeMB: 8.45 } }) },
       getMovementBuckets: { useQuery: () => ({ data: [{ bucketStart: new Date(2026, 8, 27, 5), eventCount: 3 }] }) },
-      getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : [] }) },
+      getReferenceSamples: { useQuery: (input: { metric: string }) => ({ data: input.metric === 'hrv_sdnn' ? state.referenceHrv : input.metric === 'hrv_rmssd' ? state.referenceRmssd : input.metric === 'blood_oxygen' ? state.referenceOxygen : [] }) },
+      getWatchMotionSeries: { useQuery: () => ({ data: [] }) },
       getReferenceVitals: {
         useQuery: (_input: unknown, opts: Record<string, unknown>) => {
           state.referenceOpts = opts
@@ -85,6 +88,8 @@ beforeAll(() => {
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
   state.referenceHrv = []
+  state.referenceRmssd = []
+  state.referenceOxygen = []
   state.occupied = true
   state.timeFormat = '12h'
   state.dataPath = { occupancy: { left: 'occupied', right: 'empty' } }
@@ -185,7 +190,7 @@ describe('BiometricsPage', () => {
       vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, toJSON: () => ({}) })
       render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
       expect(screen.getAllByTestId('vitals-reference')).toHaveLength(1)
-      expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
+      expect(screen.getByText('Apple Watch').nextElementSibling?.textContent).toContain('heart rate')
     }
     finally {
       state.reference = []
@@ -307,8 +312,48 @@ it('clears session focus when switching people and ignores clearing the date fie
 
 it('explains SDNN comparability only when Watch HRV is overlaid', () => {
   const view = render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
-  expect(screen.queryByText(/Watch SDNN and sleepypod/)).toBeNull()
+  expect(screen.queryByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeNull()
   state.referenceHrv = [{ timestamp: new Date(LAST_VITAL), value: 30 }]
   view.rerender(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
-  expect(screen.getByText(/Watch SDNN and sleepypod/)).toBeTruthy()
+  expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
+})
+
+it('draws a Watch-only night and names RMSSD when the pod recorded nothing', () => {
+  state.vitals.mockReturnValue({ data: [], isLoading: false })
+  state.referenceRmssd = [{ timestamp: new Date(LAST_VITAL), value: 32 }]
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.getByText('HRV · RMSSD')).toBeTruthy()
+  expect(screen.getByText(/Watch SDNN, Watch RMSSD and sleepypod/)).toBeTruthy()
+})
+
+it('draws a Watch-only night from blood oxygen alone', () => {
+  state.vitals.mockReturnValue({ data: [], isLoading: false })
+  state.referenceOxygen = [{ timestamp: new Date(LAST_VITAL), value: 96 }]
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.getByText('blood oxygen')).toBeTruthy()
+})
+
+it('names blood oxygen only when a reading falls inside a session', () => {
+  state.referenceOxygen = [{ timestamp: new Date(LAST_VITAL + 3 * 60 * 60_000), value: 96 }]
+  const view = render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('blood oxygen')).toBeNull()
+  state.referenceOxygen = [{ timestamp: new Date(LAST_VITAL), value: 96 }]
+  view.rerender(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.getByText('blood oxygen')).toBeTruthy()
+})
+
+it('keeps the pod chart while Watch blood oxygen has not loaded', () => {
+  state.referenceOxygen = undefined
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.queryByText('blood oxygen')).toBeNull()
+})
+
+it('keeps the pod chart while Watch RMSSD has not loaded', () => {
+  state.referenceRmssd = undefined
+  render(<I18nProvider i18n={i18n}><BiometricsPage /></I18nProvider>)
+  expect(screen.queryByText('No vitals in this range')).toBeNull()
+  expect(screen.queryByText('HRV · RMSSD')).toBeNull()
 })

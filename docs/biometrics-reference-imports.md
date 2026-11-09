@@ -144,8 +144,10 @@ follows the same contract for one `metric` per request, `breathing_rate`
 samples stored in `reference_samples` and first-write-wins on side, metric,
 time and source. The **Upload Apple Watch data** dialog
 (`POST /api/biometrics/watch-upload`) feeds all three from a Health export,
-using only Watch-sourced records: anything the sleepypod iOS app wrote back
-into Health is the pod's own data and is never imported as a reference.
+using only records an Apple Watch made, matched on `sourceName` or the record's
+`device`, since a source can carry any name the owner gave it. Sleep stages have
+no `device` and match on `sourceName` alone. Anything the sleepypod iOS app wrote
+back into Health is the pod's own data and is never imported as a reference.
 Newly accepted rows and normalized provenance commit atomically; if provenance
 cannot be saved, the legacy insert rolls back too.
 
@@ -205,3 +207,100 @@ Biometric calibration draws the nights as a trend with these as markers once
 any night in the last 31 days pairs with Watch data.
 HRV is not like-for-like: the pod stores a window IBI variability index, not
 SDNN, which the response's `hrvNote` repeats.
+
+## Devices
+
+Wearables differ: an Apple Watch reports SDNN and, from iOS 27, RMSSD; other
+devices report one, the other or neither, and each has its own stage labels.
+Every value below is optional. A device sends what it has and a missing metric
+stays missing, never zero.
+
+`GET /api/biometrics/reference-capabilities` lists the metrics this pod accepts
+with their unit and bounds, and the optional sample fields. `/reference-samples`
+rejects unknown metrics and fields, so a client reads this first. A 404 means
+older software: keep to `breathing_rate` and `hrv_sdnn` with bare
+`{ timestamp, value }` samples.
+
+| Metric | Unit | Notes |
+| --- | --- | --- |
+| `breathing_rate` | breaths/min | |
+| `hrv_sdnn` | ms | |
+| `hrv_rmssd` | ms | Not comparable with the pod's `window_ibi_variability_v1` index |
+| `blood_oxygen` | % | 0 to 100, not a fraction |
+| `resting_heart_rate` | bpm | |
+| `skin_temperature` | degC | Absolute. A device reporting only a deviation from baseline must not use this metric |
+| `breathing_disturbances` | events/h | |
+
+A sample may add `endTimestamp` when it covers a window, `device` for the
+hardware (`Watch8,2`) and `algorithm` for the vendor's version. The same metric
+can change meaning between hardware or algorithm versions, so keep these whenever
+the source reports them. Normalized rows accept the same `device` and `algorithm`.
+
+`/reference-samples`, `/reference-stages` and `/reference-vitals` remain
+`apple_watch` only, because the Watch charts and the deviation report read those
+tables across sources. Any other device, such as a ring or an Android watch, uses
+the preview and commit import above with its own `source`.
+
+### Apple Watch blood oxygen row
+
+The Health export importer and `/reference-samples` accept `blood_oxygen` as a
+percentage. Health exports write saturation as a fraction under unit `%` (`0.97`),
+so the importer multiplies by 100 before the 50–100 check. Nights and Biometrics
+draw it as a separate row, because the pod has no oxygen sensor to overlay it on.
+The row and its legend entry appear only when a reading falls inside a drawn
+session, so daytime spot checks alone add nothing. The row spans 80–100%; a lower
+reading sits on the bottom edge and its hover label keeps the real value.
+`scripts/import-watch-health.py --oxygen-only` imports this metric alone.
+
+### Optional Apple Watch RMSSD overlay
+
+The Health export importer and legacy `reference-samples` endpoints accept
+`hrv_rmssd` separately from `hrv_sdnn` and `breathing_rate`. Both HRV metrics use
+milliseconds and the same 1–500 ms ingestion guard; this is an input sanity
+bound, not a clinical validity claim. Export values in seconds are converted
+before validation. Records written by sleepypod are excluded from Watch imports.
+The unique key includes the metric, so SDNN, RMSSD and breathing can coexist at
+one timestamp; retrying an import preserves existing records.
+
+Nights and Biometrics show RMSSD only when samples exist, as a distinct labeled
+Watch overlay on the HRV row. Missing Watch data produces no RMSSD legend or
+placeholder. Sampling gaps remain gaps. Pod HRV is a window-based IBI variability
+index, not Watch RMSSD or SDNN; the overlay does not make them interchangeable.
+The existing deviation report continues using SDNN and does not silently
+substitute RMSSD. Breathing keeps its own series and units.
+
+The companion iOS app requests and reads HealthKit RMSSD only on iOS 27 or
+newer. Its optional read cannot block the existing breathing/SDNN upload; an
+RMSSD read failure is reported while the other readings are sent. A newer app
+and core are needed for RMSSD sync. Neither deployment nor local training
+imports a Health export automatically; the user must initiate/authorize an
+import. No Watch is required for Pod-only charts or model inference.
+
+### Apple Watch wrist movement
+
+`POST /api/biometrics/watch-motion?side=left|right` stores one night's
+`watch-motion-v1` or `watch-motion-v2` file from the iOS app, sent as-is
+(format: sleepypod-ios `docs/watch-motion-format.md`). It is a movement label
+only: it never feeds sleep staging, movement scoring or hardware control.
+Bodies over 8 MiB are rejected (413), and so are files carrying `raw`
+readings (400). `binSeconds` must be 2, every `bins` column must match
+`startMs` in length, `startMs` must lie on the 2 s Unix grid and strictly
+increase, counts must be nonnegative integers, and v2 requires (v1 forbids)
+`meanX`/`meanY`/`meanZ`. Bins outside [`recordedFromMs`, `recordedToMs`) are
+leftovers of an earlier recording and are trimmed, not rejected; a bin
+overlapping the start edge stays. The response reports `trimmedBins`.
+
+One capture is kept per side and `recordedFromMs`. Resending identical
+trimmed content returns `status: "unchanged"`; different content for the same
+night replaces the stored file in place (`"replaced"`, same `id`). The stored
+file is the trimmed file as sorted-key compact JSON; `sha256` is its hash.
+`GET /api/biometrics/watch-motion?side=&startDate=&endDate=` lists capture
+metadata overlapping the window (dates as ISO 8601 or Unix ms), and
+`GET /api/biometrics/watch-motion/{id}` returns the stored file byte for byte
+for the training workspace. `biometrics.getWatchMotionSeries`
+(`GET /api/biometrics/watch-motion-series`) sums the bins per minute
+(`movingSamples`, max `maxJerk`, mean `magnitudeVariance`, `samples`) for at
+most 31 days; minutes without bins are absent rather than zero. The night
+chart draws it over the pod's movement, scaled to each night. Unlike the other
+reference tables, captures (~0.5 MB a night) are pruned with the biometrics
+retention window by `recordedToMs`; the iPhone keeps the original files.

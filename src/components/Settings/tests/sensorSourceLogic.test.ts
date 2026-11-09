@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   FIRST_FRAME_GRACE_MS,
   FRAME_STALE_MS,
+  observedSummary,
+  prefixChoice,
   sensorSourceVerdict,
+  sourcesSummary,
+  unreadPrefixes,
   type SensorSourceVerdictInput,
 } from '../sensorSourceLogic'
 
@@ -59,5 +63,38 @@ describe('sensorSourceVerdict', () => {
       .toBe('PIEZO_NATS_DISABLED=1 forces .RAW files regardless of firmware.')
     // An override that matches the firmware is still worth saying.
     expect(sensorSourceVerdict({ ...base, override: 'nats' }).note).toContain('PIEZO_SENSOR_SOURCE=nats')
+  })
+})
+
+describe('NATS subject prefix helpers', () => {
+  const unread = { prefix: 'rawv2', subscribed: false, messages: 4, lastSeenAgeMs: 1_000 }
+  const read = { prefix: 'raw', subscribed: true, messages: 9, lastSeenAgeMs: 2_000 }
+
+  it('maps the stored prefix to a segment', () => {
+    expect(prefixChoice(null)).toBe('auto')
+    expect(prefixChoice('raw')).toBe('raw')
+    expect(prefixChoice('rawmem')).toBe('rawmem')
+    expect(prefixChoice('rawv2')).toBe('custom')
+  })
+
+  it('groups subjects by the prefix feeding them', () => {
+    expect(sourcesSummary({})).toBeNull()
+    expect(sourcesSummary({ 'sens.piezo': 'rawmem', 'frz.temp': 'raw', 'sens.bedtemp': 'raw' }))
+      .toBe('raw: frz.temp, sens.bedtemp · rawmem: sens.piezo')
+  })
+
+  it('marks publishing prefixes the readers do not subscribe to', () => {
+    expect(observedSummary([])).toBeNull()
+    expect(observedSummary([read, unread])).toBe('raw 2s ago · rawv2 (not read) 1s ago')
+    expect(unreadPrefixes([read, unread])).toEqual(['rawv2'])
+    expect(unreadPrefixes(undefined)).toEqual([])
+  })
+
+  it('names an unread prefix only while NATS frames are missing or stale', () => {
+    const starved = sensorSourceVerdict({ ...base, lastFrameAgeMs: null, observedPrefixes: [read, unread] })
+    expect(starved.note).toBe('Firmware publishes under rawv2, which this pod doesn\'t read. Set the subject prefix to rawv2.')
+    expect(sensorSourceVerdict({ ...base, lastFrameAgeMs: FRAME_STALE_MS + 1, observedPrefixes: [unread] }).note).toContain('rawv2')
+    expect(sensorSourceVerdict({ ...base, observedPrefixes: [unread] }).note).toBeNull()
+    expect(sensorSourceVerdict({ ...base, lastFrameAgeMs: null, observedPrefixes: [read] }).note).toBeNull()
   })
 })

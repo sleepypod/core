@@ -1,7 +1,7 @@
 import { and, asc, count, eq, inArray, isNull } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import * as schema from '@/src/db/biometrics-schema'
-import { REFERENCE_LIMITS, type ReferenceImportInput } from './contracts'
+import { REFERENCE_LIMITS, REFERENCE_UNITS, type ReferenceImportInput } from './contracts'
 import { previewReferenceImport } from './normalize'
 import { ReferenceStore } from './store'
 
@@ -22,7 +22,9 @@ export function recordLegacyReferenceImport(db: BetterSQLite3Database<typeof sch
     rows: rows.map(row => 'heartRate' in row
       ? { recordKey: `apple-watch-hr:${row.timestamp.getTime()}`, metric: 'heart_rate', value: row.heartRate, unit: 'bpm', timestampMs: row.timestamp.getTime(), annotation }
       : 'metric' in row
-        ? { recordKey: `apple-watch-${row.metric}:${row.timestamp.getTime()}`, metric: row.metric, value: row.value, unit: row.metric === 'breathing_rate' ? 'breaths/min' : 'ms', timestampMs: row.timestamp.getTime(), annotation }
+        ? { recordKey: `apple-watch-${row.metric}:${row.timestamp.getTime()}`, metric: row.metric, value: row.value, unit: REFERENCE_UNITS[row.metric].unit,
+            ...(row.endTimestamp ? { startMs: row.timestamp.getTime(), endMs: row.endTimestamp.getTime() } : { timestampMs: row.timestamp.getTime() }),
+            ...(row.device ? { device: row.device } : {}), ...(row.algorithm ? { algorithm: row.algorithm } : {}), annotation }
         : { recordKey: `apple-watch-stage:${row.start.getTime()}`, metric: 'sleep_stages', value: row.stage, unit: 'stage', startMs: row.start.getTime(), endMs: row.end.getTime(), annotation }),
   }
   const preview = previewReferenceImport(input)

@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server'
+import { referenceCapabilities } from '@/src/biometrics/references/contracts'
 import { POSITION_CHANGE_SCORE_MIN, RESTLESS_SCORE_MIN, pickMinBucketNonStillEpochs } from '@/src/lib/movement'
 import {
   activeDemoNight,
@@ -217,14 +218,35 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       .slice(-(input.limit ?? 5000))
   },
 
+  getReferenceCapabilities: () => referenceCapabilities(),
+
   getReferenceSamples: (input) => {
     const start = input.startDate.getTime()
     const end = input.endDate.getTime()
     if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    if (input.metric !== 'hrv_sdnn' && input.metric !== 'breathing_rate' && input.metric !== 'blood_oxygen') return []
+    const reading = (v: ReturnType<typeof referenceGrid>[number]) => input.metric === 'blood_oxygen'
+      ? 94 + v.breathingRate % 5
+      : input.metric === 'hrv_sdnn' ? v.hrv * 0.7 : v.breathingRate - 0.8
     return referenceGrid(input.side, start, end)
-      .map(v => ({ timestamp: new Date(v.t), value: Math.round((input.metric === 'hrv_sdnn' ? v.hrv * 0.7 : v.breathingRate - 0.8) * 10) / 10 }))
+      .map(v => ({ timestamp: new Date(v.t), endTimestamp: null, device: null, algorithm: null, value: Math.round(reading(v) * 10) / 10 }))
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       .slice(-(input.limit ?? 5000))
+  },
+
+  // Apple Watch wrist movement per minute, loosely following the pod's own
+  // movement score, so the night chart shows the Watch overlay.
+  getWatchMotionSeries: (input) => {
+    const start = input.startDate.getTime()
+    const end = input.endDate.getTime()
+    if (start > end) throw new TRPCError({ code: 'BAD_REQUEST', message: 'startDate must be before or equal to endDate' })
+    return demoMovement(input.side, start, end).map(m => ({
+      timestamp: new Date(Math.floor(m.t / MINUTE) * MINUTE),
+      movingSamples: Math.round(m.score / 12),
+      maxJerk: Math.round(m.score / 40 * 100) / 100,
+      meanVariance: m.score * 1e-6,
+      samples: 3000,
+    }))
   },
 
   getReferenceStages: (input) => {

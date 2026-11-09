@@ -93,6 +93,9 @@ fi
 
 systemctl daemon-reload
 
+# Remove our SSH login welcome.
+rm -f /etc/profile.d/sleepypod-welcome.sh
+
 # Remove CLI tools
 echo "Removing CLI tools..."
 rm -f /usr/local/bin/sp-info

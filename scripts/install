@@ -1549,6 +1549,12 @@ if [ -d "$INSTALL_DIR/scripts/bin" ]; then
     chmod 0755 "$target"
   done
 fi
+# Static welcome for interactive SSH logins only.
+if [ -f "$INSTALL_DIR/scripts/profile.d/sleepypod-welcome.sh" ]; then
+  mkdir -p /etc/profile.d
+  install -m 0644 "$INSTALL_DIR/scripts/profile.d/sleepypod-welcome.sh" /etc/profile.d/sleepypod-welcome.sh
+fi
+
 # Root ExecStartPre drop-in that re-applies a block saved in Settings at boot,
 # from a root-owned copy of internet-control in /usr/local/bin.
 source "$INSTALL_DIR/scripts/lib/internet-choice-helpers"

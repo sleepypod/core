@@ -6,6 +6,7 @@ import { deviceSettings, sideSettings, tapGestures } from '@/src/db/schema'
 import { eq, and } from 'drizzle-orm'
 import {
   isoDatetimeSchema,
+  natsSubjectPrefixSchema,
   sideSchema,
   tapTypeSchema,
   temperatureUnitSchema,
@@ -41,6 +42,7 @@ const deviceSettingsSchema = z.object({
   pumpStallAutoRecoveryEnabled: z.boolean(),
   pumpStallRecoveryRpm: z.number(),
   pumpStallRecoverySamples: z.number(),
+  natsSubjectPrefix: z.string().nullable().default(null),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 })
@@ -196,6 +198,7 @@ export const settingsRouter = router({
             pumpStallAutoRecoveryEnabled: false,
             pumpStallRecoveryRpm: 1500,
             pumpStallRecoverySamples: 3,
+            natsSubjectPrefix: null,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
@@ -250,6 +253,8 @@ export const settingsRouter = router({
           pumpStallAutoRecoveryEnabled: z.boolean().optional(),
           pumpStallRecoveryRpm: z.number().int().min(500).max(3000).optional(),
           pumpStallRecoverySamples: z.number().int().min(1).max(10).optional(),
+          // NATS sensor subject prefix. `null` = auto (`raw`, then `rawmem`).
+          natsSubjectPrefix: natsSubjectPrefixSchema.nullable().optional(),
         })
         .strict()
     )
@@ -277,6 +282,7 @@ export const settingsRouter = router({
       pumpStallAutoRecoveryEnabled: z.boolean(),
       pumpStallRecoveryRpm: z.number(),
       pumpStallRecoverySamples: z.number(),
+      natsSubjectPrefix: z.string().nullable().default(null),
       createdAt: z.date(),
       updatedAt: z.date(),
     }))
@@ -302,6 +308,7 @@ export const settingsRouter = router({
         // race a concurrent settings mutation.
         let priorPumpStallProtectionEnabled = false
         let bedConfigurationChanged = false
+        let natsSubjectPrefixChanged = false
 
         const updated = db.transaction((tx) => {
           // Fetch current settings to validate final computed state
@@ -322,6 +329,8 @@ export const settingsRouter = router({
           priorPumpStallProtectionEnabled = Boolean(current.pumpStallProtectionEnabled)
           bedConfigurationChanged = (input.bedMode !== undefined && input.bedMode !== current.bedMode)
             || (input.unusedZoneMode !== undefined && input.unusedZoneMode !== current.unusedZoneMode)
+          natsSubjectPrefixChanged = input.natsSubjectPrefix !== undefined
+            && input.natsSubjectPrefix !== current.natsSubjectPrefix
 
           // Compute final state after update
           const finalRebootDaily = input.rebootDaily ?? current.rebootDaily
@@ -453,6 +462,19 @@ export const settingsRouter = router({
 
         if (bedConfigurationChanged) {
           await (await getJobManager()).applyBedConfiguration()
+        }
+
+        // The in-process sensor stream re-subscribes now. The Python biometrics
+        // modules read the prefix at startup, so they need a unit restart
+        // (health.restartService) to follow.
+        if (natsSubjectPrefixChanged) {
+          try {
+            const { restartNatsFrameSource } = await import('@/src/streaming/piezoStream')
+            await restartNatsFrameSource()
+          }
+          catch (e) {
+            console.error('NATS frame source restart failed:', e)
+          }
         }
 
         return updated

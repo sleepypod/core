@@ -109,9 +109,30 @@ describe('reference helpers', () => {
 describe('VitalsLegend', () => {
   it('lists the Watch series only when present', () => {
     const { rerender } = render(<VitalsLegend bandLabel="middle 50%" stalled={false} />)
-    expect(screen.queryByText('Apple Watch heart rate')).toBeNull()
+    expect(screen.queryByText('Apple Watch')).toBeNull()
     rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} reference />)
-    expect(screen.getByText('Apple Watch heart rate')).toBeTruthy()
+    expect(screen.getByText('Apple Watch')).toBeTruthy()
+  })
+
+  it('keeps each series under the device that measured it', () => {
+    render(<VitalsLegend bandLabel="middle 50%" stalled reference referenceHrv referenceRmssd referenceBr />)
+    const pod = screen.getByText('Pod').nextElementSibling?.textContent
+    const watch = screen.getByText('Apple Watch').nextElementSibling?.textContent
+    for (const series of ['9-min average', 'per minute', 'middle 50%', 'in bed, no vitals']) {
+      expect(pod).toContain(series)
+      expect(watch).not.toContain(series)
+    }
+    for (const series of ['heart rate', 'HRV · SDNN', 'HRV · RMSSD', 'breathing']) {
+      expect(watch).toContain(series)
+      expect(pod).not.toContain(series)
+    }
+  })
+
+  it('names RMSSD only when it is overlaid', () => {
+    const { rerender } = render(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceHrv />)
+    expect(screen.queryByText('HRV · RMSSD')).toBeNull()
+    rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceRmssd />)
+    expect(screen.getByText('HRV · RMSSD')).toBeTruthy()
   })
 })
 
@@ -261,6 +282,17 @@ it.each(['referenceHrv', 'referenceBr'] as const)('joins nearby %s samples but l
   expect(screen.getAllByTestId(`vitals-watch-${key}`)).toHaveLength(4)
 })
 
+it('labels Watch RMSSD on the dot and on hover, apart from SDNN', () => {
+  withWidth()
+  const { container } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceRmssd={[{ t: START, value: 32 }]} referenceHrv={[{ t: START, value: 48 }]} />)
+  expect(screen.getByTestId('vitals-watch-rmssd').textContent).toBe('Apple Watch RMSSD · 32 ms')
+  const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+  vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ left: 0 } as DOMRect)
+  fireEvent.pointerMove(overlay, { clientX: 2, clientY: 50 })
+  expect(screen.getByTestId('vitals-watch-rmssd-hover').textContent).toBe('Watch RMSSD 32 ms')
+  expect(screen.getByTestId('vitals-watch-hrv-hover').textContent).toBe('Watch SDNN 48 ms')
+})
+
 it('exposes Watch SDNN and breathing through the interaction overlay, without bridging gaps', () => {
   withWidth()
   const { container, rerender } = render(
@@ -288,4 +320,111 @@ it('exposes Watch SDNN and breathing through the interaction overlay, without br
   )
   expect(screen.queryByTestId('vitals-watch-hrv-hover')).toBeNull()
   expect(screen.queryByTestId('vitals-watch-br-hover')).toBeNull()
+})
+
+it('overlays RMSSD separately while retaining SDNN and breathing and breaking gaps', () => {
+  withWidth()
+  const referenceRmssd = [{ t: START, value: 32 }, { t: START + MIN, value: 34 }, { t: START + 60 * MIN, value: 30 }]
+  render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceRmssd={referenceRmssd} referenceHrv={[{ t: START, value: 48 }]} referenceBr={[{ t: START, value: 14 }]} />)
+  expect(screen.getAllByTestId('vitals-watch-rmssd')).toHaveLength(3)
+  expect(screen.getAllByTestId('vitals-watch-rmssd-line')).toHaveLength(1)
+  expect(screen.getByTestId('vitals-watch-rmssd-line').getAttribute('stroke-dasharray')).toBe('6 3')
+  expect(screen.getByTestId('vitals-watch-hrv')).toBeTruthy()
+  expect(screen.getByTestId('vitals-watch-br')).toBeTruthy()
+})
+
+describe('blood oxygen row', () => {
+  const inSession = [{ t: START, value: 96 }, { t: START + MIN, value: 94 }, { t: START + 60 * MIN, value: 91 }]
+  const between = [{ t: START + 4 * 60 * MIN, value: 97 }]
+  const height = () => Number.parseInt(screen.getByTestId('vitals-chart').style.height)
+
+  it('adds a row of its own, breaking the line across sampling gaps', () => {
+    withWidth()
+    render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceOxygen={inSession} />)
+    expect(screen.getByText('Blood oxygen')).toBeTruthy()
+    expect(screen.getAllByTestId('vitals-watch-oxygen')).toHaveLength(3)
+    expect(screen.getAllByTestId('vitals-watch-oxygen-line')).toHaveLength(1)
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('blood oxygen')
+    expect(screen.getAllByTestId('vitals-watch-oxygen')[0].textContent).toBe('Apple Watch blood oxygen · 96%')
+  })
+
+  it('leaves the chart as it was with no readings, or only readings between sessions', () => {
+    withWidth()
+    const { rerender } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} />)
+    const without = height()
+    expect(screen.queryByText('Blood oxygen')).toBeNull()
+    rerender(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceOxygen={between} />)
+    expect(screen.queryByText('Blood oxygen')).toBeNull()
+    expect(screen.queryByTestId('vitals-watch-oxygen')).toBeNull()
+    expect(height()).toBe(without)
+    rerender(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceOxygen={inSession} />)
+    expect(height()).toBe(without + 96)
+  })
+
+  it('moves the movement row below it instead of drawing over it', () => {
+    withWidth()
+    const { rerender } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} />)
+    const top = () => Number.parseInt(screen.getByText('Movement').parentElement?.style.top ?? '')
+    const before = top()
+    rerender(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceOxygen={inSession} />)
+    expect(top()).toBe(before + 96)
+  })
+
+  it('pins a reading below the row to its bottom edge and keeps the real value on hover', () => {
+    withWidth()
+    render(<VitalsChart sessions={sessions} stall={null} bands={bands} referenceOxygen={[{ t: START + 2 * MIN, value: 72 }, { t: START + 3 * MIN, value: 80 }]} />)
+    const [low, floor] = screen.getAllByTestId('vitals-watch-oxygen')
+    expect(low.getAttribute('cy')).toBe(floor.getAttribute('cy'))
+    fireEvent.pointerMove(screen.getByTestId('vitals-chart').querySelector('rect[fill="transparent"]') as Element, { clientX: 8 })
+    expect(screen.getByTestId('vitals-watch-oxygen-hover').textContent).toBe('Watch blood oxygen 72%')
+  })
+
+  it('names blood oxygen under the Watch only when the row is drawn', () => {
+    const { rerender } = render(<VitalsLegend bandLabel="middle 50%" stalled={false} />)
+    expect(screen.queryByText('blood oxygen')).toBeNull()
+    rerender(<VitalsLegend bandLabel="middle 50%" stalled={false} referenceOxygen />)
+    expect(screen.getByText('Apple Watch').nextElementSibling?.textContent).toContain('blood oxygen')
+  })
+})
+
+describe('VitalsChart Apple Watch movement overlay', () => {
+  it('draws nothing extra without Watch movement', () => {
+    withWidth()
+    const { container: plain } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} />)
+    const { container: empty } = render(<VitalsChart sessions={sessions} stall={null} bands={bands} watchMovement={[]} />)
+    // Same markup apart from the per-instance hatch pattern id.
+    const strip = (html: string) => html.replace(/_r_\w+_|«\w+»|:r\w+:/g, '')
+    expect(strip(empty.innerHTML)).toBe(strip(plain.innerHTML))
+    expect(screen.queryAllByTestId('watch-movement-line')).toHaveLength(0)
+  })
+
+  it('sums into the pod\'s 5-minute buckets, breaks the line at missing buckets, dots isolated ones and ignores minutes outside sessions', () => {
+    withWidth()
+    const watchMovement = [
+      // Before the first session: outside the night, never drawn or counted.
+      { t: START - 30 * MIN, moving: 500 },
+      { t: START, moving: 2 }, { t: START + MIN, moving: 4 }, { t: START + 6 * MIN, moving: 1 }, { t: START + 11 * MIN, moving: 20 },
+      // A bucket without bins: a new run, and this one stands alone.
+      { t: START + 20 * MIN, moving: 5 },
+      { t: START + 30 * MIN, moving: 3 }, { t: START + 35 * MIN, moving: 2 },
+      // Between sessions.
+      { t: START + 4 * 60 * MIN, moving: 50 },
+    ]
+    render(<VitalsChart sessions={sessions} stall={null} bands={bands} watchMovement={watchMovement} />)
+    const lines = screen.getAllByTestId('watch-movement-line')
+    expect(lines).toHaveLength(2)
+    expect(lines[0].getAttribute('d')?.match(/[ML]/g)).toEqual(['M', 'L', 'L'])
+    expect(lines[0].getAttribute('stroke')).toBe('var(--accent-cool)')
+    expect(screen.getAllByTestId('watch-movement-dot')).toHaveLength(1)
+    // Scaled to the in-session peak, so the out-of-session 500 does not flatten the night.
+    const ys = (lines[0].getAttribute('d') ?? '').split(/[ML]/).filter(Boolean).map(p => Number(p.split(' ')[1]))
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(20)
+  })
+
+  it('lists Watch movement in the legend only when shown', () => {
+    const { rerender } = render(<VitalsLegend bandLabel="band" stalled={false} />)
+    expect(screen.queryByTestId('legend-watch-movement')).toBeNull()
+    rerender(<VitalsLegend bandLabel="band" stalled={false} watchMovement />)
+    expect(screen.getByTestId('legend-watch-movement').textContent).toBe('movement · scaled per night')
+  })
 })

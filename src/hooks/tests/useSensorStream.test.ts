@@ -606,6 +606,7 @@ describe('useSensorStream — reconnect + error paths', () => {
       })
       await promise
       expect(resolved).toBeNull()
+      expect(sensorSingleton.timeRangeResolvers).toHaveLength(0)
       unmount()
     }
     finally {
@@ -689,6 +690,71 @@ describe('useSensorStream — reconnect + error paths', () => {
         await vi.advanceTimersByTimeAsync(5_000)
       })
       expect(wsMock.sockets.length).toBe(beforeCount)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops the FPS timer on unmount', async () => {
+    vi.useFakeTimers()
+    try {
+      const { unmount } = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      act(() => (wsMock.sockets[0] as FakeWS).triggerOpen())
+      expect(vi.getTimerCount()).toBe(1)
+      unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restarts the FPS timer on reconnect without leaking the old interval or old samples', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(0)
+      const { unmount } = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      const first = wsMock.sockets[0] as FakeWS
+      act(() => first.triggerOpen())
+      act(() => first.triggerMessage({ type: 'capSense', ts: 1, left: 1, right: 2 }))
+      expect(sensorSingleton.fpsTimestamps).toHaveLength(1)
+
+      act(() => first.triggerClose())
+      await act(async () => vi.advanceTimersByTimeAsync(1_000))
+      const second = wsMock.sockets[1] as FakeWS
+      act(() => second.triggerOpen())
+      expect(sensorSingleton.fpsTimestamps).toEqual([])
+      expect(vi.getTimerCount()).toBe(1)
+
+      unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops replay state when the socket reopens after an unexpected close', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result, unmount } = renderHook(() => useSensorStream())
+      await vi.advanceTimersByTimeAsync(0)
+      const first = wsMock.sockets[0] as FakeWS
+      act(() => first.triggerOpen())
+      act(() => result.current.seekWaveform(50))
+      expect(result.current.isSeeking).toBe(true)
+      expect(result.current.replayWaveform).toEqual([])
+
+      act(() => first.triggerClose())
+      await act(async () => vi.advanceTimersByTimeAsync(1_000))
+      act(() => (wsMock.sockets[1] as FakeWS).triggerOpen())
+
+      expect(result.current.isSeeking).toBe(false)
+      expect(result.current.replayWaveform).toBeNull()
+      unmount()
     }
     finally {
       vi.useRealTimers()

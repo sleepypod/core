@@ -124,6 +124,7 @@ describe('homekit bridge', () => {
     delete g.__sp_homekit_identity__
     delete g.__sp_homekit_setupURI__
     delete g.__sp_homekit_transitioning__
+    delete g.__sp_homekit_retiredAdvertisers__
 
     m.bridgeInstance = null
     m.BridgeCtor.mockClear()
@@ -186,6 +187,44 @@ describe('homekit bridge', () => {
     expect(m.buildAmbientSensor).toHaveBeenCalledTimes(1)
     expect(m.bindPumpHealth).toHaveBeenCalledWith(fakeService, 'left')
     expect(m.bindPumpHealth).toHaveBeenCalledWith(fakeService, 'right')
+  })
+
+  it('initializes HAP storage before loading the identity', async () => {
+    const { startBridge } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    expect(m.initHapStorage).toHaveBeenCalledOnce()
+    expect(m.initHapStorage.mock.invocationCallOrder[0])
+      .toBeLessThan(m.loadOrCreateIdentity.mock.invocationCallOrder[0])
+  })
+
+  it('adds each builder service to its own wrapped accessory', async () => {
+    const services = {
+      thermostat: { left: { name: 'thermostat-left' }, right: { name: 'thermostat-right' } },
+      occupancy: { left: { name: 'occupancy-left' }, right: { name: 'occupancy-right' } },
+      snooze: { left: { name: 'snooze-left' }, right: { name: 'snooze-right' } },
+    }
+    const primeService = { name: 'prime' }
+    const ambientService = { name: 'ambient' }
+    m.buildThermostatService.mockImplementation((side: 'left' | 'right') => ({ service: services.thermostat[side], stop: m.thermostatStop }))
+    m.buildOccupancySensor.mockImplementation((side: 'left' | 'right') => ({ service: services.occupancy[side], stop: m.occupancyStop }))
+    m.buildSnoozeSwitch.mockImplementation((side: 'left' | 'right') => ({ service: services.snooze[side], stop: m.snoozeStop }))
+    m.buildPrimeSwitch.mockImplementation(() => ({ service: primeService, stop: m.primeStop }))
+    m.buildAmbientSensor.mockImplementation(() => ({ service: ambientService, stop: m.ambientStop }))
+
+    const { startBridge } = await import('../bridge')
+    await startBridge(fakeMonitor)
+
+    const wrapped = m.AccessoryCtor.mock.results.map(r => r.value as { addService: ReturnType<typeof vi.fn> })
+    expect(wrapped.map(acc => acc.addService.mock.calls)).toEqual([
+      [[services.thermostat.left]],
+      [[services.occupancy.left]],
+      [[services.snooze.left]],
+      [[services.thermostat.right]],
+      [[services.occupancy.right]],
+      [[services.snooze.right]],
+      [[primeService]],
+      [[ambientService]],
+    ])
   })
 
   it('startBridge constructs the bridge with lowercase "sleepypod" name', async () => {
@@ -338,6 +377,7 @@ describe('homekit bridge', () => {
     expect(m.ambientStop).toHaveBeenCalledTimes(1)
     expect(m.pumpStop).toHaveBeenCalledTimes(2)
     expect(getStatus().running).toBe(false)
+    expect(getStatus().setupURI).toBeNull()
   })
 
   it('stopBridge keeps the singleton live when unpublish() throws', async () => {
@@ -447,6 +487,32 @@ describe('homekit bridge', () => {
     await startBridge(fakeMonitor)
     expect(advertiser.destroy).toHaveBeenCalledOnce()
     expect(getStatus().running).toBe(true)
+
+    // A successful retry retires the advertiser for good.
+    await stopBridge()
+    expect(advertiser.destroy).toHaveBeenCalledOnce()
+  })
+
+  it('warns and keeps a retired advertiser queued when its cleanup retry fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { startBridge, stopBridge, getStatus } = await import('../bridge')
+    await startBridge(fakeMonitor)
+    if (!m.bridgeInstance) throw new Error('bridge instance missing')
+    const advertiser = {
+      destroy: vi.fn()
+        .mockRejectedValueOnce(new Error('mdns socket busy'))
+        .mockResolvedValue(undefined),
+    }
+    Object.assign(m.bridgeInstance, { _server: undefined, _advertiser: advertiser })
+    m.bridgeInstance.unpublish.mockRejectedValueOnce(new Error('cleanup interrupted'))
+    await expect(stopBridge()).rejects.toThrow('cleanup interrupted')
+
+    await startBridge(fakeMonitor)
+    expect(getStatus().running).toBe(true)
+    expect(warn).toHaveBeenCalledWith('[homekit] retired advertiser cleanup failed:', 'mdns socket busy')
+
+    await stopBridge()
+    expect(advertiser.destroy).toHaveBeenCalledTimes(2)
   })
 
   it('stopBridge never destroys persisted accessory data', async () => {
@@ -703,6 +769,8 @@ describe('homekit bridge', () => {
       expect((globalThis as Record<string, unknown>).__sp_homekit_identity__).toMatchObject({
         wasPaired: true,
       })
+      // Cleared on the marking tick itself, not deferred to the next one.
+      expect(vi.getTimerCount()).toBe(0)
 
       // Third tick: interval has self-cancelled — no further calls.
       m.markIdentityPaired.mockClear()
@@ -724,11 +792,13 @@ describe('homekit bridge', () => {
       await startBridge(fakeMonitor)
       expect(m.markIdentityPaired).toHaveBeenCalledTimes(1)
       m.markIdentityPaired.mockClear()
+      expect(vi.getTimerCount()).toBe(1)
 
       // Tick: interval sees wasPaired=true on the current identity,
       // takes the early-return self-cancel branch.
       vi.advanceTimersByTime(30_000)
       expect(m.markIdentityPaired).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
 
       // And stays cancelled.
       vi.advanceTimersByTime(60_000)

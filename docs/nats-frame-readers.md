@@ -25,7 +25,19 @@ runtime — never a replacement.
 
 ## Wire format (as captured)
 
-Each subscribed sensor message (`raw.sens.>` / `raw.frz.>`) contains one
+The readers subscribe to `raw.sens.>`, `raw.frz.>`, `rawmem.sens.>` and
+`rawmem.frz.>` to cover both firmware subject prefixes (`rawmem` arrived with the
+EmmcWear firmware, rat_version `4b7552d5`). Each sensor subject (`sens.piezo`,
+`frz.temp`, ...) is fed by exactly one prefix, and `raw` always wins: `rawmem`
+feeds a subject only when `raw` has not delivered a decodable message for it and
+30 s have passed since subscribing (three periods of the slowest 0.1 Hz
+subjects). A prefix silent on a subject for 60 s gives it up, so one stray
+message can't pin a subject to a prefix that no longer feeds it. Pods that
+publish `raw` read exactly what they read before `rawmem` existed, and a firmware that publishes both never double-feeds a consumer.
+The journal logs which subject feeds each sensor (`[natsSource] reading
+sens.piezo from rawmem.sens.piezo`). That is the auto mode; the
+`natsSubjectPrefix` setting can pin both readers to a single prefix instead
+(see [Subject prefix setting](#subject-prefix-setting)). Each sensor message contains one
 complete CBOR value whose decoded value is a record map. Definite and
 indefinite maps both occur; consumers must not depend on a leading encoding
 byte. NATS supplies the message boundary, so sensor readers need no outer
@@ -194,9 +206,12 @@ is data flowing?* Until now the only answer was `sp-status` over SSH. Two
 in-app surfaces answer it without a shell:
 
 - **Settings → Device → Sensor data source** (`SensorSourceCard`, backed by
-  `system.getSensorSource`). Read-only. Shows the firmware generation, the
+  `system.getSensorSource`). Shows the firmware generation, the
   transport the core's stream picked at startup, and the age of the last live
   frame, with a note when the two disagree or an env override is in force.
+  On NATS firmware it also shows which prefix feeds each subject, every
+  prefix seen publishing, and the subject prefix control (below). The
+  transport itself stays read-only.
   The firmware half is probed once per process (the signals cannot change
   while the core is running); only the stream fields are live on each poll,
   and a service restart re-detects.
@@ -226,14 +241,68 @@ shows "Not running on a pod" when no systemd probe could run.
 
 ### What the card deliberately does not do
 
-- **No toggle.** Source selection happens once per process and the two
+- **No transport toggle.** Source selection happens once per process and the two
   sources are designed never to run together, so a UI switch would need a
   service restart to take effect and would invite forcing the wrong path. The
   existing `PIEZO_SENSOR_SOURCE=raw|nats` env override covers custom firmware;
-  the card names it when set.
+  the card names it when set. The subject prefix is different: changing it
+  only changes which NATS subjects the already-selected source reads.
 - **No per-module view.** The Python readers each run the same selector in
   their own process. Their liveness is already on System → Health per unit;
   their individual source pick is in their journals.
+
+## Subject prefix setting
+
+Firmware has moved its sensor subjects once already (`raw` → `rawmem` in
+EmmcWear, rat_version `4b7552d5`), and the first pod to hit that needed a code
+patch. `device_settings.nats_subject_prefix` makes the next move a setting:
+
+- **`null` (default) = auto.** Both readers subscribe to `raw` and `rawmem`
+  with the per-subject priority rule above.
+- **A pinned prefix** (one NATS token, `^[A-Za-z0-9_-]{1,32}$`, so no dots or
+  wildcards) makes both readers subscribe to `<prefix>.sens.>` and
+  `<prefix>.frz.>` only. With a single prefix there is no fallback grace.
+  `settings.updateDevice` validates the value; a stored value that fails the
+  pattern (a hand-edited row) reads as auto in both readers.
+
+**Discovery.** The Node reader also subscribes to `*.sens.>`, in auto and
+pinned mode alike. That subscription only counts messages per prefix
+(`stats.observedPrefixes`, bounded to 16 prefixes); it never decodes or feeds
+a frame. A pin to the wrong prefix is exactly when this is needed, so it runs
+in both modes. If the reader's own subjects stay silent for 60 s while discovery
+has seen a prefix it does not read, the journal says so: `[natsSource] firmware
+publishes under rawv2, which this reader does not subscribe to — set
+natsSubjectPrefix to read it`.
+
+**Applying a change.**
+
+- Node (`piezoStream`): `settings.updateDevice` calls
+  `restartNatsFrameSource()` when the value changes. Only the NATS frame
+  source stops and reconnects with the new prefixes; the WebSocket server,
+  its clients and the process stay up. Restarts are serialized, so
+  back-to-back changes end on the latest value. If NATS is not the active
+  source the call is a no-op; a source still being selected reads the
+  setting when it connects. A failed reconnect hands back to the startup
+  selection loop.
+- Python (`NatsFollower`): `subject_prefixes()` reads the setting once at
+  construction, tolerant like `side_mode` (missing db, table or column,
+  unreadable db, or an invalid value → auto). A change takes effect on the
+  module's next restart. The Settings card offers **Restart biometrics
+  modules**, which calls `health.restartService` for piezo-processor,
+  sleep-detector and environment-monitor (the units the installer's sudoers
+  rule covers). The MCP `set_device_settings` reply tells the agent to do the
+  same through `pod_maintenance restart_service`, which keeps its approval
+  prompt. The calibrator is not in that sudoers rule and picks the change up
+  on its next restart.
+
+**Diagnostics.** `system.getSensorSource` returns a `nats` block (null unless
+NATS is the selected source): `mode` (`auto` | `pinned`), `configuredPrefix`,
+`subscribedSubjects`, `sources` (subject → prefix), `messages`,
+`decodeFailures`, `ignoredMessages`, and `observedPrefixes`
+(`{ prefix, subscribed, messages, lastSeenAtMs, lastSeenAgeMs }[]`). The MCP
+tool `get_sensor_source` returns the same object, and its description tells an
+agent the fix: no frames plus an observed prefix with `subscribed: false` →
+set `natsSubjectPrefix` to it; a pin that stopped working → set it to `null`.
 
 ## `NatsFollower` design
 
@@ -249,7 +318,9 @@ accrues.
   `queue.Queue(maxsize=256)`; the generator `get()`s from the queue. Queue
   full ⇒ drop-oldest + counter (matches tailer semantics: live data beats
   backlog; 256 is about one minute of the full captured sensor firehose).
-- **Subscription:** core NATS subscribe on `raw.sens.>` and `raw.frz.>`
+- **Subscription:** core NATS subscribe on `raw.sens.>`, `raw.frz.>`,
+  `rawmem.sens.>` and `rawmem.frz.>`, or `<prefix>.sens.>` and
+  `<prefix>.frz.>` when `nats_subject_prefix` is pinned
   (plain subscribe, not JetStream pull — see Backfill below). Per-module
   subject narrowing is a premature optimization at these rates
   (~4.6 KB/s total); every consumer gets the same firehose and filters by

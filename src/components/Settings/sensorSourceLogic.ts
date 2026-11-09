@@ -17,6 +17,15 @@ export interface SensorSourceVerdictInput {
   /** Server-computed age of the newest live frame; null before the first one. */
   lastFrameAgeMs: number | null
   uptimeSeconds: number
+  /** Prefixes seen publishing sensor subjects (NATS only). */
+  observedPrefixes?: ReadonlyArray<ObservedPrefix>
+}
+
+export interface ObservedPrefix {
+  prefix: string
+  subscribed: boolean
+  messages: number
+  lastSeenAgeMs: number
 }
 
 export interface SensorSourceVerdict {
@@ -84,6 +93,11 @@ export function sensorSourceVerdict(i: SensorSourceVerdictInput): SensorSourceVe
 }
 
 function overrideNote(i: SensorSourceVerdictInput): string | null {
+  const unread = unreadPrefixes(i.observedPrefixes)
+  const starved = i.lastFrameAgeMs === null || i.lastFrameAgeMs > FRAME_STALE_MS
+  if (i.source === 'nats' && starved && unread.length > 0) {
+    return `Firmware publishes under ${unread.join(', ')}, which this pod doesn't read. Set the subject prefix to ${unread[0]}.`
+  }
   if (i.override) {
     return `PIEZO_SENSOR_SOURCE=${i.override} forces this source regardless of firmware.`
   }
@@ -94,4 +108,43 @@ function overrideNote(i: SensorSourceVerdictInput): string | null {
     return `Firmware looks like ${i.expectedTransport === 'nats' ? 'NATS' : '.RAW'} firmware, but the stream fell back to ${TRANSPORT_LABELS[i.source]}. Restart the service to re-detect, then check sp-status.`
   }
   return null
+}
+
+export type PrefixChoice = 'auto' | 'raw' | 'rawmem' | 'custom'
+
+export const PREFIX_CHOICES: ReadonlyArray<{ value: PrefixChoice, label: string }> = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'raw', label: 'raw' },
+  { value: 'rawmem', label: 'rawmem' },
+  { value: 'custom', label: 'Custom…' },
+]
+
+/** Which segment a stored `natsSubjectPrefix` shows as; null is auto. */
+export function prefixChoice(prefix: string | null): PrefixChoice {
+  if (prefix === null) return 'auto'
+  return prefix === 'raw' || prefix === 'rawmem' ? prefix : 'custom'
+}
+
+/** Prefixes publishing sensor subjects that the readers don't subscribe to. */
+export function unreadPrefixes(observed: ReadonlyArray<ObservedPrefix> | undefined): string[] {
+  return (observed ?? []).filter(p => !p.subscribed).map(p => p.prefix)
+}
+
+/** "raw: sens.piezo, frz.temp · rawmem: sens.capsense2", or null before any subject has a source. */
+export function sourcesSummary(sources: Record<string, string>): string | null {
+  const byPrefix = new Map<string, string[]>()
+  const entries = Object.entries(sources).sort(([sa, pa], [sb, pb]) => pa.localeCompare(pb) || sa.localeCompare(sb))
+  for (const [subject, prefix] of entries) {
+    byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), subject])
+  }
+  if (byPrefix.size === 0) return null
+  return [...byPrefix].map(([prefix, subjects]) => `${prefix}: ${subjects.join(', ')}`).join(' · ')
+}
+
+/** "raw 2s ago · rawv2 (not read) 1s ago", or null before discovery has seen anything. */
+export function observedSummary(observed: ReadonlyArray<ObservedPrefix>): string | null {
+  if (observed.length === 0) return null
+  return observed
+    .map(p => `${p.prefix}${p.subscribed ? '' : ' (not read)'} ${fmtAgo(p.lastSeenAgeMs)}`)
+    .join(' · ')
 }

@@ -2,6 +2,7 @@ import { changeRecordingPolicy, DEFAULT_RECORDING_POLICY } from '@/src/lib/recor
 import { flashInsights } from '@/src/lib/flashInsights'
 import type { DemoHandlers, RouterOutputs } from '../types'
 import { DAY, HOUR, MINUTE, hashSeed, seededRandom } from '../util'
+import { settings } from './settings'
 
 type Storage = RouterOutputs['system']['getStorage']
 type ReclaimItem = Storage['reclaimable']['items'][number]
@@ -186,8 +187,12 @@ export const system: DemoHandlers<'system'> = {
     return { freedBytes: removed.reduce((s, i) => s + i.bytes, 0), removed: removed.length }
   },
 
-  getSensorSource: () => {
+  getSensorSource: async () => {
     const lastFrameAgeMs = 400 + (Date.now() % 1_200)
+    if (!settings.getAll) throw new Error('Missing demo settings')
+    const configuredPrefix = (await settings.getAll({})).device.natsSubjectPrefix
+    const prefixes = configuredPrefix === null ? ['raw', 'rawmem'] : [configuredPrefix]
+    const feeding = configuredPrefix ?? 'raw'
     return {
       firmware: {
         generation: 'nats',
@@ -213,6 +218,22 @@ export const system: DemoHandlers<'system'> = {
         lastFrameType: 'piezo-dual',
         firstFrameMs: 3124,
         uptimeSeconds: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000),
+      },
+      nats: {
+        mode: configuredPrefix === null ? 'auto' : 'pinned',
+        configuredPrefix,
+        subscribedSubjects: prefixes.flatMap(prefix => [`${prefix}.sens.>`, `${prefix}.frz.>`]),
+        sources: Object.fromEntries(['sens.piezo', 'sens.capsense2', 'sens.bedtemp', 'frz.temp', 'frz.health'].map(subject => [subject, feeding])),
+        messages: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000) * 4,
+        decodeFailures: 0,
+        ignoredMessages: 0,
+        observedPrefixes: [{
+          prefix: 'raw',
+          subscribed: prefixes.includes('raw'),
+          messages: Math.floor((Date.now() - DEMO_UPTIME_START) / 1000) * 3,
+          lastSeenAtMs: Date.now() - lastFrameAgeMs,
+          lastSeenAgeMs: lastFrameAgeMs,
+        }],
       },
     }
   },
