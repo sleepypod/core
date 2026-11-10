@@ -28,8 +28,8 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 03 | Tonight main screen | Bed, temperature, next wake and actual control mode; morning brief; accessible web/native layouts | Pending |
 | 04 | Overnight comfort envelope | Persisted narrow overnight range, explicit wake exception start, arbitration/override/DST tests and live acknowledged policy | In progress: shared automatic range and explicit wake exception |
 | 05 | Recording health | Freshness, dropout, storage and processing checks; actionable messages; failed-source fixtures and live verification | In progress: authenticated read-only checks and web cards |
-| 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Pending |
-| 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Pending |
+| 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Native implementation tested; hosted checks and actual Watch delivery pending |
+| 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Web implemented and tested; native validation in progress |
 | 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Pending |
 | 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Pending |
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
@@ -80,3 +80,10 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 - **04 — automatic comfort range:** [authority and validation](OVERNIGHT_COMFORT_LIMIT.md)
   documents the range, wake exception and dispatch guards. Live activation remains
   separate from the software implementation.
+- **06 — Watch recording assistant:** [native PR 61](https://github.com/lucaandrea/sleepypod-ios/pull/61)
+  adds provenance-specific sleep coverage and automatic morning refresh opportunities.
+  The signed iPhone suite passed 1,208 tests with nine skips; seven focused refresh
+  regressions and two iPad UI tests passed. Physical delivery and release are pending.
+- **07 — guided learning:** [scope and evidence](GUIDED_LEARNING.md) separates
+  stages, private baseline and temperature learning. Web unit, production-build and
+  mobile/desktop browser checks passed; native and live release remain separate.

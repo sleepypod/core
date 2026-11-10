@@ -1,11 +1,12 @@
-export type AutopilotView = 'automations' | 'diagnostics'
+export type AutopilotView = 'automations' | 'diagnostics' | 'learning'
 
 export const AUTOPILOT_VIEWS: ReadonlyArray<{ id: AutopilotView, label: string }> = [
   { id: 'automations', label: 'Automations' },
   { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'learning', label: 'Learning' },
 ]
 
-/** Resolve `?view=` — anything but Diagnostics lands on Automations. */
+/** Unknown saved links retain the existing Automations destination. */
 export function resolveAutopilotView(raw: string | null): AutopilotView {
-  return raw === 'diagnostics' ? 'diagnostics' : 'automations'
+  return raw === 'diagnostics' || raw === 'learning' ? raw : 'automations'
 }

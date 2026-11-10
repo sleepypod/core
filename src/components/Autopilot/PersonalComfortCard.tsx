@@ -17,8 +17,8 @@ import { WaterForecastCard } from './WaterForecastCard'
 
 const fieldClass = 'rounded-ctl border border-line bg-surface px-3 py-2 text-sm text-fg'
 
-export function PersonalComfortCard() {
-  const [side, setSide] = useState<Side>('left')
+export function PersonalComfortCard({ initialSide = 'left' }: { initialSide?: Side }) {
+  const [side, setSide] = useState<Side>(initialSide)
   const { sideName } = useSideNames()
   const utils = trpc.useUtils()
   const query = trpc.comfort.get.useQuery({ side }, { refetchInterval: 5_000 })

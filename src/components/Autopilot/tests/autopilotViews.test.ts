@@ -6,9 +6,10 @@ describe('resolveAutopilotView', () => {
     expect(resolveAutopilotView(null)).toBe('automations')
     expect(resolveAutopilotView('bogus')).toBe('automations')
     expect(resolveAutopilotView('diagnostics')).toBe('diagnostics')
+    expect(resolveAutopilotView('learning')).toBe('learning')
   })
 
   it('lists the views A–Z', () => {
-    expect(AUTOPILOT_VIEWS.map(v => v.label)).toEqual(['Automations', 'Diagnostics'])
+    expect(AUTOPILOT_VIEWS.map(v => v.label)).toEqual(['Automations', 'Diagnostics', 'Learning'])
   })
 })

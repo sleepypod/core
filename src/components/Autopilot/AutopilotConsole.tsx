@@ -21,6 +21,7 @@ import type { Condition } from '@/src/automation/types'
 import { AutomationsList, type ListItem } from './AutomationsList'
 import { ActivityCard } from './ActivityCard'
 import { PersonalComfortCard } from './PersonalComfortCard'
+import { LearningJourney } from './LearningJourney'
 import { TonightCard, type FireMark, type TimelineRule } from './TonightCard'
 import { StatusPanel, STRIP_HOURS, type RuleMode as DiagMode } from './StatusPanel'
 import { fromAST, missingLiveSignals, type TemplateId } from './builderModel'
@@ -34,6 +35,7 @@ export function AutopilotConsole() {
   const searchParams = useSearchParams()
   const { unit } = useTemperatureUnit()
   const view = resolveAutopilotView(searchParams.get('view'))
+  const learningSide = searchParams.get('side') === 'right' ? 'right' : 'left'
   useDocumentTitle(AUTOPILOT_VIEWS.find(v => v.id === view)?.label, 'Autopilot')
   const setView = useCallback((next: AutopilotView) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -163,6 +165,7 @@ export function AutopilotConsole() {
                   </>
                 ) },
                 { value: 'diagnostics', label: 'Diagnostics' },
+                { value: 'learning', label: 'Learning' },
               ]}
             />
           </>
@@ -181,7 +184,7 @@ export function AutopilotConsole() {
             New automation
           </Button>
           <TonightCard rules={timelineRules} tonight={tonightQ.data} fires={fires} unit={unit} />
-          <PersonalComfortCard />
+          <div id="personal-comfort"><PersonalComfortCard key={learningSide} initialSide={learningSide} /></div>
           <AutomationsList
             items={items}
             loading={listQ.isLoading}
@@ -204,6 +207,24 @@ export function AutopilotConsole() {
           loading={diagQ.isLoading}
           onKill={enabled => killM.mutate({ enabled })}
           onMode={(id, mode) => void setMode(id, mode).catch(() => {})}
+        />
+      )}
+      {view === 'learning' && (
+        <LearningJourney
+          key={learningSide}
+          side={learningSide}
+          lang={lang}
+          onSideChange={(side) => {
+            const params = new URLSearchParams(searchParams.toString())
+            params.set('side', side)
+            router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+          }}
+          onTemperature={() => {
+            const params = new URLSearchParams(searchParams.toString())
+            params.delete('view')
+            params.set('side', learningSide)
+            router.push(`${pathname}?${params.toString()}#personal-comfort`)
+          }}
         />
       )}
     </>
