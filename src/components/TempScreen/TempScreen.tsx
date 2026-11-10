@@ -8,6 +8,7 @@ import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, NoticeStack, PageHeader, Skeleton } from '@/src/components/ds'
 import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
+import { RecordingHealthCard } from '@/src/components/Sleep/RecordingHealthCard'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
 import { SideSelector } from '@/src/components/SideSelector/SideSelector'
 import { useTempView } from '@/src/components/Stage/stagePrefs'
@@ -231,6 +232,7 @@ export const TempScreen = () => {
       {header}
 
       <NoticeStack notices={notices} />
+      <RecordingHealthCard />
 
       <Link href="/settings?section=sides" className="mb-3 inline-flex rounded-ctl border border-line-2 px-3 py-2 text-sm text-fg-2 hover:text-fg" aria-label={`Manage sleepers: ${sleeperLabel}`}>
         {sleeperLabel}

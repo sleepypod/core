@@ -11,6 +11,7 @@ import { RawDataButton } from '@/src/components/biometrics/RawDataButton'
 import { NightView } from './NightView'
 import { WeekView } from './WeekView'
 import { MonthView } from './MonthView'
+import { RecordingHealthCard } from './RecordingHealthCard'
 import { formatRange, monthStart, type Side, type SleepView } from './sleepData'
 
 const VIEWS = [
@@ -122,6 +123,7 @@ export function SleepScreen({ sectionSwitch }: { sectionSwitch?: ReactNode } = {
           </>
         )}
       />
+      <RecordingHealthCard />
       <div className="flex flex-col gap-3.5 min-[900px]:hidden">
         {sectionSwitch}
         {viewControl(true)}

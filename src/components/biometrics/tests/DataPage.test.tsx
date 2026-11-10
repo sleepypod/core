@@ -84,3 +84,4 @@ describe('DataPage single-sleeper routing', () => {
     expect(state.selectSide).not.toHaveBeenCalled()
   })
 })
+vi.mock('@/src/components/Sleep/RecordingHealthCard', () => ({ RecordingHealthCard: () => <div data-testid="recording-health" /> }))

@@ -564,3 +564,4 @@ describe('sleeper line and view switches', () => {
   })
 })
 
+vi.mock('@/src/components/Sleep/RecordingHealthCard', () => ({ RecordingHealthCard: () => <div data-testid="recording-health" /> }))

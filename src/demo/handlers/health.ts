@@ -3,6 +3,7 @@ import type { DemoHandlers, RouterOutputs } from '../types'
 import { DAY, HOUR, MINUTE, hashSeed, randomBetween, seededRandom } from '../util'
 import { getDemoDeviceStatus } from './device'
 import { DEMO_UPTIME_START } from './system'
+import { evaluateRecordingHealth } from '@/src/recording-health/evaluate'
 
 type Side = 'left' | 'right'
 type ThermalHistory = RouterOutputs['health']['thermalHistory']
@@ -297,6 +298,8 @@ function history(): History {
 }
 
 export const health: DemoHandlers<'health'> = {
+  recording: () => evaluateRecordingHealth({ now: Date.now(), path: dataPath(), history: history(),
+    storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true }),
   performance: () => {
     const rand = seededRandom(hashSeed(`perf:${Math.floor(Date.now() / 10_000)}`))
     return {

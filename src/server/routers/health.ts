@@ -26,6 +26,8 @@ import { getDataPath } from '@/src/lib/dataPathCollect'
 import { readHistory } from '@/src/lib/healthHistory'
 import { NODES, RESTARTABLE_UNITS, STAGES } from '@/src/lib/dataPath'
 import { requestBrokerRestart } from '@/src/server/maintenance'
+import { recordingHealthSchema } from '@/src/recording-health/contract'
+import { getRecordingHealth } from '@/src/recording-health/instance'
 
 const execFileAsync = promisify(execFile)
 
@@ -47,6 +49,12 @@ const restartUnitEnum = z.enum([...RESTARTABLE_UNITS, 'sleepypod.service'])
  * - `hardware`  — raw socket connectivity check with latency
  */
 export const healthRouter = router({
+  recording: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/health/recording', protect: true, tags: ['Health'] } })
+    .input(z.object({}))
+    .output(recordingHealthSchema)
+    .query(() => getRecordingHealth()),
+
   performance: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/health/performance', protect: false, tags: ['Health'] } })
     .input(z.object({}))

@@ -128,14 +128,24 @@ async function collect(now: number): Promise<DataPathInputs> {
 // Several open Health tabs plus the sampler shouldn't each shell out to
 // systemctl; one evaluation serves everyone for a few seconds.
 const CACHE_MS = 4000
-let cached: { at: number, value: Promise<DataPathState> } | null = null
+const globals = globalThis as typeof globalThis & {
+  __sp_dataPathCache?: { at: number, value: Promise<DataPathState> }
+}
+
+/** Observe the sampler's latest check without starting a scheduler or opening hardware. */
+export function getObservedDataPath(now = Date.now()): Promise<DataPathState | null> {
+  const cached = globals.__sp_dataPathCache
+  if (!cached || now < cached.at || now - cached.at > 60_000) return Promise.resolve(null)
+  return cached.value.catch(() => null)
+}
 
 export function getDataPath(now = Date.now()): Promise<DataPathState> {
-  if (cached && now - cached.at < CACHE_MS) return cached.value
+  const cached = globals.__sp_dataPathCache
+  if (cached && now >= cached.at && now - cached.at < CACHE_MS) return cached.value
   const value = collect(now).then(evaluateDataPath)
-  cached = { at: now, value }
+  globals.__sp_dataPathCache = { at: now, value }
   value.catch(() => {
-    if (cached?.value === value) cached = null
+    if (globals.__sp_dataPathCache?.value === value) delete globals.__sp_dataPathCache
   })
   return value
 }

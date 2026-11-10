@@ -19,6 +19,7 @@ vi.mock('@/src/lib/occupancy', () => ({ getOccupancy: () => ({ occupied: false }
 vi.mock('@/src/lib/thermalTruth', () => ({ readThermalTruth: mock.thermal }))
 vi.mock('@/src/lib/dataPath', async importOriginal => ({ ...await importOriginal<typeof DataPathModule>(), evaluateDataPath: (input: DataPathInputs) => input }))
 beforeEach(() => {
+  delete (globalThis as typeof globalThis & { __sp_dataPathCache?: unknown }).__sp_dataPathCache
   vi.resetModules()
   vi.resetAllMocks()
   mock.integrity.mockReturnValue({ status: 'ok' })
@@ -26,6 +27,28 @@ beforeEach(() => {
   mock.thermal.mockReturnValue({ sides: [{ side: 'left', verdict: 'delivering' }] })
   mock.select.mockReturnValue([{ at: new Date(1000), rows: 3, top: 2 }])
   mock.monitor = { getStatus: () => 'running', getLastPollAt: () => 1000, getPollIntervalMs: () => 2000 }
+})
+
+it('offers passive recording checks without starting any producer and rejects stale or future cache entries', async () => {
+  const { getDataPath, getObservedDataPath } = await import('../dataPathCollect')
+  expect(await getObservedDataPath(10000)).toBeNull()
+  expect(mock.manager).not.toHaveBeenCalled()
+  expect(mock.connect).not.toHaveBeenCalled()
+  const first = await getDataPath(10000)
+  expect(await getObservedDataPath(70000)).toBe(first)
+  expect(await getObservedDataPath(70001)).toBeNull()
+  expect(await getObservedDataPath(9999)).toBeNull()
+  expect(mock.manager).toHaveBeenCalledOnce()
+  expect(mock.connect).toHaveBeenCalledOnce()
+})
+
+it('shares observed checks across separately loaded module instances', async () => {
+  const first = await import('../dataPathCollect')
+  const sample = await first.getDataPath(10000)
+  vi.resetModules()
+  const second = await import('../dataPathCollect')
+  expect(await second.getObservedDataPath(11000)).toBe(sample)
+  expect(mock.connect).toHaveBeenCalledOnce()
 })
 
 it('collects timestamps and health inputs once per cache window', async () => {

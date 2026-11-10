@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SleepScreen } from '../SleepScreen'
+vi.mock('../RecordingHealthCard', () => ({ RecordingHealthCard: () => <div data-testid="recording-health" /> }))
 
 const state = vi.hoisted(() => ({
   sleep: vi.fn(),
