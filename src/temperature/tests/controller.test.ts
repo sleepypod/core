@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { withSideLock } from '@/src/hardware/sideLock'
 import type { Side } from '@/src/hardware/types'
-import { ControlGuardError, withinControlRequest, withinDispatchGuard } from '@/src/controls/context'
+import { ControlGuardError, beforeControlWrite, withinControlRequest, withinDispatchGuard } from '@/src/controls/context'
 import { DEFAULT_HOLD_MS, TemperatureController, selectTemperatureRequest } from '../controller'
 import type { TemperatureControllerDeps, TemperatureRequest, TemperatureSource } from '../controller'
 
@@ -521,5 +521,97 @@ describe('temperature arbitration', () => {
     await withSideLock('left', () => h.controller.powerOnLocked('left'))
     expect(h.apply).toHaveBeenCalledExactlyOnceWith('left', 72)
     expect(h.controller.status('left').blocked).toBeNull()
+  })
+})
+
+describe('comfort limit authority across temperature paths', () => {
+  function limited() {
+    const context = harness()
+    let ceiling = 72
+    context.baselines.left = [request('schedule', 85)]
+    context.deps.resolveTarget = (_side, proposed, requestedF) => {
+      const targetF = proposed?.source === 'manual' ? requestedF : Math.min(ceiling, Math.max(68, requestedF))
+      return { requestedF, targetF, minF: 68, maxF: ceiling, revision: 1, wakeUntil: null,
+        state: proposed?.source === 'manual' ? 'manual' : targetF === requestedF ? 'within_range' : 'limited' }
+    }
+    return { ...context, ceiling: (value: number) => {
+      ceiling = value
+    } }
+  }
+  it.each(['reconcile', 'power-on', 'recovery', 'relative-rule'] as const)('limits a hotter schedule during %s', async (path) => {
+    const context = limited()
+    switch (path) {
+      case 'reconcile':
+        await context.controller.reconcile('left')
+        break
+      case 'power-on':
+        await withSideLock('left', () => context.controller.powerOnLocked('left'))
+        break
+      case 'recovery':
+        expect(context.controller.recoveryTargetLocked('left', 80)).toBe(72)
+        break
+      case 'relative-rule':
+        expect(context.controller.automationBaseline('left')).toBe(72)
+        break
+    }
+    expect(context.controller.status('left')).toMatchObject({ targetTemperature: 72, comfortLimit: { requestedF: 85, targetF: 72, state: 'limited' } })
+    if (path === 'reconcile' || path === 'power-on') expect(context.apply).toHaveBeenLastCalledWith('left', 72)
+  })
+  it('uses the latest limit after transport recovery and rejects tightening during dispatch', async () => {
+    const context = limited()
+    context.deps.connect = async () => {
+      context.ceiling(70)
+    }
+    await context.controller.reconcile('left')
+    expect(context.apply).toHaveBeenLastCalledWith('left', 70)
+    context.ceiling(72)
+    context.deps.connect = async () => {}
+    context.deps.apply = async () => {
+      context.ceiling(69)
+      beforeControlWrite()
+    }
+    await expect(context.controller.reconcile('left', true)).rejects.toBeInstanceOf(ControlGuardError)
+  })
+  it('limits automatic fallback and corrects a leftover wake target without powering an off side', async () => {
+    const context = limited()
+    context.baselines.left = []
+    context.deps.readCurrentTarget = () => 105
+    await context.controller.reconcile('left')
+    expect(context.apply).toHaveBeenLastCalledWith('left', 72)
+    context.apply.mockClear()
+    context.powered.left = false
+    await context.controller.reconcile('left')
+    expect(context.apply).not.toHaveBeenCalled()
+    await withSideLock('left', () => context.controller.powerOnLocked('left', 80))
+    expect(context.apply).toHaveBeenLastCalledWith('left', 72)
+  })
+  it('preserves policy identity for admitted targets and withdraws out-of-range proposals', async () => {
+    const context = limited(), application = vi.fn(async (_input, execute) => {
+      await execute()
+    })
+    await context.controller.replacePolicy('left', 'comfort', [request('autopilot', 84)], () => true, () => true, application)
+    expect(application).not.toHaveBeenCalled()
+    expect(context.apply).toHaveBeenLastCalledWith('left', 72)
+    await context.controller.replacePolicy('left', 'comfort', [request('autopilot', 70)], () => true, () => true, application)
+    expect(application).toHaveBeenCalledOnce()
+    expect(application.mock.calls[0][0]).toMatchObject({ targetF: 70, comfortLimit: { requestedF: 70, targetF: 70 } })
+  })
+  it('manual holds explicitly override the range until their original expiry', async () => {
+    const context = limited()
+    await context.controller.setManual('left', 80, 60_000)
+    expect(context.apply).toHaveBeenLastCalledWith('left', 80, undefined)
+    context.advance(60_000)
+    await context.controller.reconcile('left')
+    expect(context.apply).toHaveBeenLastCalledWith('left', 72)
+  })
+  it('withholds automatic targets on failed configuration reads without preventing manual Stop', async () => {
+    const context = limited()
+    context.deps.resolveTarget = (_side, _request, requestedF) => ({ state: 'unavailable', requestedF, targetF: null,
+      minF: null, maxF: null, revision: null, wakeUntil: null })
+    await context.controller.reconcile('left')
+    expect(context.apply).not.toHaveBeenCalled()
+    await expect(withSideLock('left', () => context.controller.powerOnLocked('left'))).rejects.toThrow('unavailable')
+    await context.controller.powerOff('left')
+    expect(context.powered.left).toBe(false)
   })
 })

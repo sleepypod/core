@@ -1,8 +1,9 @@
 'use client'
 
-import { Link2, Power } from 'lucide-react'
+import { Link2, Power, ShieldCheck } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { ComfortLimitCard } from '@/src/components/TempScreen/ComfortLimitCard'
 import { SideCard } from '@/src/components/TempScreen/SideCard'
 import type { Presence } from '@/src/components/TempScreen/SideCard'
 import { stepForDisplay } from '@/src/components/TempScreen/nightPhases'
@@ -13,7 +14,7 @@ import { useAwayMode } from '@/src/components/TempScreen/useAwayMode'
 import { useNightPhases } from '@/src/components/TempScreen/useNightPhases'
 import { useSideTemperature } from '@/src/components/TempScreen/useSideTemperature'
 import { useTempNotices } from '@/src/components/TempScreen/useTempNotices'
-import { NoticeStack } from '@/src/components/ds'
+import { Modal, NoticeStack } from '@/src/components/ds'
 import { latestThermalReading, THERMAL_STALE_SECONDS } from '@/src/components/ThermalBed/thermalData'
 import type { Zones } from '@/src/components/ThermalBed/thermalData'
 import { useDeviceStatus } from '@/src/hooks/useDeviceStatus'
@@ -150,6 +151,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     right: useNightPhases('right', now, unit, display, isStepper),
   }
 
+  const [limitsOpen, setLimitsOpen] = useState(false)
   const [selected, setSelected] = useState<StageSide | null>(null)
   const [hover, setHover] = useState<StageSide | null>(null)
   const [previewAt, setPreviewAt] = useState<number | null>(null)
@@ -319,6 +321,11 @@ export function TempStage({ onExit }: { onExit: () => void }) {
       )}
     >
       <h1 className="sr-only">Temperature</h1>
+      {limitsOpen && (
+        <Modal open onClose={() => setLimitsOpen(false)} title={`${names[panelSide]} comfort limit`}>
+          <ComfortLimitCard side={panelSide} />
+        </Modal>
+      )}
       {mode !== '2d' && (
         <StageCanvas
           ref={canvas}
@@ -396,6 +403,10 @@ export function TempStage({ onExit }: { onExit: () => void }) {
               )}
           <ViewSwitch view="stage" onChange={v => v === 'cards' && onExit()} />
           <SettingsLink />
+          <button type="button" onClick={() => setLimitsOpen(true)} className={cn(PILL, 'border-[#26262a] text-[#b0b0b6] hover:bg-[#17171a]')} style={GLASS}>
+            <ShieldCheck size={14} />
+            Comfort limits
+          </button>
           <button
             type="button"
             aria-pressed={isLinked}

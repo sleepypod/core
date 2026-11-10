@@ -17,6 +17,8 @@
  * shouldBlock is read from API route handlers.
  */
 
+import { withinDispatchGuard, ControlGuardError } from '@/src/controls/context'
+import { resolvePersistedComfortLimit } from '@/src/temperature/limitInstance'
 import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
 import { and, desc, eq, isNull, lt, lte } from 'drizzle-orm'
 import { biometricsDb, db } from '@/src/db'
@@ -602,6 +604,22 @@ export function identifyResolution(side: Side, expectedState: object, alertId: n
   return true
 }
 
+/** Recovery and short pump probes obey the same limit, even before the passive controller starts. */
+function resolveRecoveryTarget(side: Side, fallback: number): number {
+  const controller = getTemperatureControllerIfRunning()
+  const target = controller
+    ? controller.recoveryTargetLocked(side, fallback)
+    : resolvePersistedComfortLimit(side, null, fallback, Date.now()).targetF
+  if (target === null) throw new Error('Automatic comfort limit is unavailable during recovery')
+  return target
+}
+
+async function writeRecoveryTemperature(side: Side, target: number, duration: number): Promise<void> {
+  await withinDispatchGuard(() => {
+    if (resolveRecoveryTarget(side, target) !== target) throw new ControlGuardError()
+  }, () => getSharedHardwareClient().setTemperature(side, target, duration))
+}
+
 /**
  * Perform the one guard-authorized duration write for a manual resolution.
  * Ordinary writers remain blocked for the entire operation.
@@ -617,12 +635,11 @@ export async function restoreAcknowledgedSession(
     if (state !== expectedState || !state.resolutionPending) {
       throw new Error('pump-stall resolution was superseded before restore')
     }
-    const client = getSharedHardwareClient()
     const controller = getTemperatureControllerIfRunning()
-    restore.targetTemperature = controller?.recoveryTargetLocked(side, restore.targetTemperature) ?? restore.targetTemperature
+    restore.targetTemperature = resolveRecoveryTarget(side, restore.targetTemperature)
     restore.durationSeconds = controller?.recoveryDurationLocked(side, restore.durationSeconds) ?? restore.durationSeconds
     if (restore.durationSeconds <= 0) throw new Error('Hardware heating deadline expired during recovery')
-    await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+    await writeRecoveryTemperature(side, restore.targetTemperature, restore.durationSeconds)
     controller?.recoveredLocked(side, restore.targetTemperature)
     wrote = true
   })
@@ -997,15 +1014,14 @@ async function autoRecover(side: Side, now: number): Promise<void> {
     await withSideLock(side, async () => {
       if (getState()[side] !== state || !state.blocked) return
       if (releaseSupersededRecovery(side, state)) return
-      const client = getSharedHardwareClient()
       // setPower(on) delegates to setTemperature without a duration, emitting
       // a contradictory 28,800-second session before the real duration. One
       // duration-bearing write is sufficient to energize and restore.
       const controller = getTemperatureControllerIfRunning()
-      restore.targetTemperature = controller?.recoveryTargetLocked(side, restore.targetTemperature) ?? restore.targetTemperature
+      restore.targetTemperature = resolveRecoveryTarget(side, restore.targetTemperature)
       restore.durationSeconds = controller?.recoveryDurationLocked(side, restore.durationSeconds) ?? restore.durationSeconds
       if (restore.durationSeconds <= 0) throw new Error('Hardware heating deadline expired during recovery')
-      await client.setTemperature(side, restore.targetTemperature, restore.durationSeconds)
+      await writeRecoveryTemperature(side, restore.targetTemperature, restore.durationSeconds)
       if (getState()[side] !== state || !state.blocked) return
       controller?.recoveredLocked(side, restore.targetTemperature)
       try {
@@ -1069,10 +1085,10 @@ async function startRecoveryProbe(side: Side, now: number): Promise<void> {
     await withSideLock(side, async () => {
       if (getState()[side] !== state || !state.blocked || state.probeStartedAt !== now) return
       if (releaseSupersededRecovery(side, state)) return
-      const client = getSharedHardwareClient()
+      restore.targetTemperature = resolveRecoveryTarget(side, restore.targetTemperature)
       // A short duration is a crash-safe lease: if this process dies during
       // the probe, firmware stops it at the probe-window boundary.
-      await client.setTemperature(side, restore.targetTemperature, probeDurationSeconds)
+      await writeRecoveryTemperature(side, restore.targetTemperature, probeDurationSeconds)
     })
   }
   catch (err) {

@@ -393,6 +393,13 @@
       "when": 1793581754044,
       "tag": "0055_thermal_forecast_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1794349828083,
+      "tag": "0056_nosy_doctor_faustus",
+      "breakpoints": true
     }
   ]
 }

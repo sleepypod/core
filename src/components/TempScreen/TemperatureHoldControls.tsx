@@ -72,6 +72,14 @@ export function HoldStatus({ side, control, prefix, onResumed, disabled = false 
           </button>
         )}
       </div>
+      {control?.comfortLimit && ['limited', 'wake', 'manual', 'unavailable'].includes(control.comfortLimit.state) && (
+        <p className="text-sm text-fg-2">
+          {control.comfortLimit.state === 'limited' && `Requested ${control.comfortLimit.requestedF}°F · limited to ${control.comfortLimit.targetF}°F by your comfort range.`}
+          {control.comfortLimit.state === 'wake' && 'Wake warming · your saved alarm temporarily permits this higher target.'}
+          {control.comfortLimit.state === 'manual' && control.comfortLimit.revision !== null && control.comfortLimit.revision > 0 && 'Manual hold · automatic limits resume when this hold ends.'}
+          {control.comfortLimit.state === 'unavailable' && 'Automatic target withheld: the saved comfort limit could not be read.'}
+        </p>
+      )}
       {resume.error && (
         <p role="alert" className="text-[13px] text-danger">
           Could not resume:

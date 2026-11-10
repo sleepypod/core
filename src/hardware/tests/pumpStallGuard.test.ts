@@ -62,6 +62,11 @@ const { sqlite, biometricsSqlite } = dbModule as typeof dbModule & {
 function resetSchema(): void {
   ;(sqlite as any).exec(`
     DROP TABLE IF EXISTS device_settings;
+    DROP TABLE IF EXISTS side_settings;
+    DROP TABLE IF EXISTS temperature_limits;
+    CREATE TABLE side_settings (side TEXT PRIMARY KEY, away_mode INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE temperature_limits (side TEXT PRIMARY KEY, revision INTEGER NOT NULL, config TEXT NOT NULL);
+    INSERT INTO side_settings (side) VALUES ('left'), ('right');
     DROP TABLE IF EXISTS device_state;
     CREATE TABLE device_settings (
       id INTEGER PRIMARY KEY,
@@ -2545,15 +2550,17 @@ describe('pumpStallGuard — active recovery probes', () => {
 
     advance(__test__.PROBE_BACKOFFS_MS[0])
     const probing = frame(0)
-    for (let i = 0; i < 5; i += 1) await Promise.resolve()
-
-    expect(__test__.getState().left.probeStartedAt).toBeNull()
-    expect(__test__.getState().left.cutoffPending).toBe(true)
-    expect(acknowledge('left').conflict).toBe('hardware_pending')
-    expect(shouldBlock('left')).toBe(true)
-
-    resolvePark()
-    await probing
+    try {
+      await vi.waitFor(() => expect(resolvePark).toBeTypeOf('function'))
+      expect(__test__.getState().left.probeStartedAt).toBeNull()
+      expect(__test__.getState().left.cutoffPending).toBe(true)
+      expect(acknowledge('left').conflict).toBe('hardware_pending')
+      expect(shouldBlock('left')).toBe(true)
+    }
+    finally {
+      resolvePark?.()
+      await probing
+    }
     expect(__test__.getState().left.cutoffPending).toBe(false)
   })
 
@@ -2738,6 +2745,27 @@ describe('pumpStallGuard mutation regressions — reservation ownership', () => 
     expect(sqlite.prepare('SELECT powered_on_at, last_updated FROM device_state WHERE side = ?').get('left')).toEqual({
       powered_on_at: expect.any(Number), last_updated: expect.any(Number),
     })
+  })
+
+  it('limits manual recovery even before the passive controller starts', async () => {
+    sqlite.prepare('INSERT INTO temperature_limits (side, revision, config) VALUES (?, ?, ?)')
+      .run('left', 1, JSON.stringify({ enabled: true, minF: 68, maxF: 72 }))
+    const token = acknowledge('left').rearmToken as object
+    await restoreAcknowledgedSession('left', { targetTemperature: 85, durationSeconds: 1234 }, token)
+    expect(setTemperature).toHaveBeenCalledWith('left', 72, 1234)
+  })
+
+  it('rechecks a tightened recovery limit at the hardware dispatch boundary', async () => {
+    const { beforeControlWrite } = await import('@/src/controls/context')
+    sqlite.prepare('INSERT INTO temperature_limits (side, revision, config) VALUES (?, ?, ?)')
+      .run('left', 1, JSON.stringify({ enabled: true, minF: 68, maxF: 72 }))
+    setTemperature.mockImplementationOnce(async () => {
+      sqlite.prepare('UPDATE temperature_limits SET config = ? WHERE side = ?')
+        .run(JSON.stringify({ enabled: true, minF: 68, maxF: 70 }), 'left')
+      beforeControlWrite()
+    })
+    const token = acknowledge('left').rearmToken as object
+    await expect(restoreAcknowledgedSession('left', { targetTemperature: 85, durationSeconds: 1234 }, token)).rejects.toThrow('no longer permit')
   })
 
   it('keeps a successful hardware restore successful when its DB mirror fails', async () => {

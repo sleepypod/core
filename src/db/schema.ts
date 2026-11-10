@@ -400,6 +400,13 @@ export const temperatureHolds = sqliteTable('temperature_holds', {
   expiresAt: integer('expires_at').notNull(),
 })
 
+/** Automatic limits are independent of personal learning mode and wake-alarm temperature. */
+export const temperatureLimits = sqliteTable('temperature_limits', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  revision: integer('revision').notNull(),
+  config: text('config').notNull(),
+})
+
 /** Personal comfort records are separate from the shared controller's holds. */
 export const comfortStates = sqliteTable('comfort_states', {
   side: text('side', { enum: ['left', 'right'] }).primaryKey(),

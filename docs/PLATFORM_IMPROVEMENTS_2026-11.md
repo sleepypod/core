@@ -26,7 +26,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 01 | Automatic home/away connection | Verified-origin pairing, authenticated route selection, credential isolation, expired access and work-network/cellular tests; no mutation replay | Pending |
 | 02 | Useful offline app | Encrypted identity-scoped records, reports and confirmed schedules; timestamps; account-switch/revocation tests; offline phone/iPad walkthrough | In progress: owner offline library |
 | 03 | Tonight main screen | Bed, temperature, next wake and actual control mode; morning brief; accessible web/native layouts | Pending |
-| 04 | Overnight comfort envelope | Persisted narrow overnight range, explicit wake exception start, arbitration/override/DST tests and live acknowledged policy | Pending |
+| 04 | Overnight comfort envelope | Persisted narrow overnight range, explicit wake exception start, arbitration/override/DST tests and live acknowledged policy | In progress: shared automatic range and explicit wake exception |
 | 05 | Recording health | Freshness, dropout, storage and processing checks; actionable messages; failed-source fixtures and live verification | In progress: authenticated read-only checks and web cards |
 | 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Pending |
 | 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Pending |
@@ -75,5 +75,8 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
   remains. Detailed receipts are in native `Integration/parity/OFFLINE_LIBRARY.md`.
 - **05 — recording readiness:** [implementation and validation](RECORDING_READINESS.md)
   covers eight independent equipment/history checks, source expiry and web status.
-  Native presentation, classification-dropout analysis and physical deployment
-  remain separate acceptance work.
+  Core PR 84 passed hosted checks and merged. Native PR 59 adds matching cards;
+  classification-dropout analysis and physical deployment remain separate work.
+- **04 — automatic comfort range:** [authority and validation](OVERNIGHT_COMFORT_LIMIT.md)
+  documents the range, wake exception and dispatch guards. Live activation remains
+  separate from the software implementation.

@@ -7,6 +7,7 @@ import { biometricShadow } from './biometricShadow'
 import { biometricTuning } from './biometricTuning'
 import { calibration } from './calibration'
 import { comfort } from './comfort'
+import { comfortLimit } from './comfortLimit'
 import { controls } from './controls'
 import { curveTemplates } from './curveTemplates'
 import { databases } from './databases'
@@ -40,6 +41,7 @@ export const demoRouters = {
   biometricShadow,
   calibration,
   comfort,
+  comfortLimit,
   controls,
   curveTemplates,
   databases,

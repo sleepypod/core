@@ -192,3 +192,12 @@ describe('alarmWarmupMinutes', () => {
     expect(alarmWarmupMinutes(45)).toBe(45)
   })
 })
+
+it('recomputes a wake span after clock rollback instead of retaining the following week', () => {
+  const rows = [{ id: 'wake', dayOfWeek: 'tuesday' as const, time: '07:00', temperature: 105, wakeWindow: 0, duration: 20 }]
+  const cache = new Map<string, number>()
+  expect(alarmTemperatureTargets(rows, 'UTC', Date.parse('2026-09-29T07:16Z'), cache)).toEqual([])
+  expect(alarmTemperatureTargets(rows, 'UTC', Date.parse('2026-09-29T06:40Z'), cache)[0]).toMatchObject({
+    startsAt: Date.parse('2026-09-29T06:30Z'), temperature: 105,
+  })
+})

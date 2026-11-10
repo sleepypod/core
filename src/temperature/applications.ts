@@ -1,3 +1,4 @@
+import { comfortLimitDecisionSchema } from './limits'
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { z } from 'zod'
@@ -6,6 +7,7 @@ import type { Side } from '@/src/hardware/types'
 const timestamp = z.number().int().nonnegative().max(8_640_000_000_000_000)
 const positiveId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
 export const temperatureApplicationInputSchema = z.object({
+  comfortLimit: comfortLimitDecisionSchema.optional(),
   side: z.enum(['left', 'right']),
   targetF: z.number().min(55).max(110),
   durationSec: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),

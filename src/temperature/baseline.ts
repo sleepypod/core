@@ -60,6 +60,8 @@ export interface AlarmTemperatureRow extends WeeklyTarget {
 }
 
 export type AlarmOccurrenceCache = Map<string, number>
+const cacheGlobals = globalThis as typeof globalThis & { __sp_alarmOccurrenceClocks?: WeakMap<AlarmOccurrenceCache, number> }
+const alarmOccurrenceClocks = cacheGlobals.__sp_alarmOccurrenceClocks ??= new WeakMap<AlarmOccurrenceCache, number>()
 
 /** Warm-up lead for an alarm: ALARM_WARMUP_MIN, or its wake window when longer. */
 export function alarmWarmupMinutes(wakeWindow: number): number {
@@ -74,6 +76,10 @@ export function alarmWarmupMinutes(wakeWindow: number): number {
  * temperature no longer lingers as the day's set point until the evening.
  */
 export function alarmTemperatureTargets(rows: AlarmTemperatureRow[], timezone: string, now: number, cache: AlarmOccurrenceCache = new Map()): TemperatureRequest[] {
+  // A clock correction can move back into a span already evicted for next week.
+  const previous = alarmOccurrenceClocks.get(cache)
+  if (previous !== undefined && now < previous) cache.clear()
+  alarmOccurrenceClocks.set(cache, now)
   const out: TemperatureRequest[] = []
   const activeKeys = new Set<string>()
   let zone: WeeklyZone | null = null

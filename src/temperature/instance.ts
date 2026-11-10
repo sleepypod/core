@@ -1,3 +1,4 @@
+import { resolvePersistedComfortLimit } from './limitInstance'
 import type { Statement } from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
 import { db, sqlite } from '@/src/db'
@@ -141,6 +142,7 @@ export function getTemperatureController(): TemperatureController {
         db.insert(temperatureHolds).values(values).onConflictDoUpdate({ target: temperatureHolds.side, set: values }).run()
       },
       readBaseline,
+      resolveTarget: resolvePersistedComfortLimit,
       // A device_state row left over from before a restart is not evidence of
       // a live session until the firmware has reported in. Gating here covers
       // every reconcile path (the automation engine's startup tick, scheduler

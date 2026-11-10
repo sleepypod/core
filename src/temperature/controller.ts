@@ -1,3 +1,4 @@
+import type { ComfortLimitDecision } from './limits'
 import { MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
 import { assertControlCurrent, ControlGuardError, withinDispatchGuard } from '@/src/controls/context'
 import type { RecordTemperatureApplication, TemperatureApplicationInput, TemperatureApplicationReceipt } from './applications'
@@ -33,6 +34,7 @@ export interface TemperatureControlStatus {
   targetTemperature: number | null
   holdUntil: number | null
   blocked: 'safety' | 'off' | null
+  comfortLimit?: ComfortLimitDecision
 }
 
 interface PolicyLease {
@@ -54,6 +56,7 @@ export interface TemperatureControllerDeps {
   writeHold: (side: Side, hold: TemperatureRequest | null) => void
   /** Compute current schedule/session requests from their original clocks. */
   readBaseline: (side: Side, now: number) => TemperatureRequest[]
+  resolveTarget?: (side: Side, request: TemperatureRequest | null, requestedF: number, now: number) => ComfortLimitDecision
   isPowered: (side: Side) => boolean
   readCurrentTarget: (side: Side) => number | null
   readHardwareDeadline: (side: Side) => number | null
@@ -123,14 +126,26 @@ export class TemperatureController {
 
   constructor(private deps: TemperatureControllerDeps) {}
 
+  private target(side: Side, request: TemperatureRequest | null, fallback: number): number | null {
+    const requestedF = request?.temperature ?? fallback
+    if (!Number.isFinite(requestedF) || requestedF < MIN_TEMP || requestedF > MAX_TEMP) return null
+    return this.deps.resolveTarget ? this.deps.resolveTarget(side, request, requestedF, this.deps.now()).targetF : requestedF
+  }
+
   /** Keep the selected owner with the attempt; arbitration status alone is not delivery evidence. */
   private recordApplication(side: Side, targetF: number, durationSec: number | undefined,
-    request: TemperatureRequest | null, reason: TemperatureApplicationInput['reason'], apply: () => Promise<void>): Promise<void> {
+    request: TemperatureRequest | null, reason: TemperatureApplicationInput['reason'], apply: () => Promise<void>, requestedFallback = targetF): Promise<void> {
+    const decision = this.deps.resolveTarget?.(side, request, request?.temperature ?? requestedFallback, this.deps.now())
     const input = { side, targetF, durationSec: durationSec ?? null,
-      source: request?.source ?? null, requestId: request?.id ?? null, reason }
+      source: request?.source ?? null, requestId: request?.id ?? null, reason,
+      ...(decision && decision.state !== 'disabled' ? { comfortLimit: decision } : {}) }
+    // Recheck at every actual FIFO write: a wake window or saved limit can change while queued.
+    const limitedApply = () => withinDispatchGuard(() => {
+      if (this.target(side, request, requestedFallback) !== targetF) throw new ControlGuardError()
+    }, apply)
     const execute = async () => {
-      if (this.deps.recordApplication) return this.deps.recordApplication(input, apply)
-      await apply()
+      if (this.deps.recordApplication) return this.deps.recordApplication(input, limitedApply)
+      await limitedApply()
       return undefined
     }
     // Identity, not a caller-controlled ID: an automation rule cannot borrow a policy's hook.
@@ -153,10 +168,13 @@ export class TemperatureController {
     const now = this.deps.now()
     const hold = this.deps.readHold(side)
     const selected = this.select(side, now, hold)
+    const fallback = selected?.temperature ?? this.deps.readCurrentTarget(side)
+    const comfortLimit = fallback === null ? undefined : this.deps.resolveTarget?.(side, selected, fallback, now)
     return {
+      ...(comfortLimit ? { comfortLimit } : {}),
       source: selected?.source ?? null,
       requestId: selected?.id ?? null,
-      targetTemperature: selected?.temperature ?? null,
+      targetTemperature: selected ? this.target(side, selected, selected.temperature) : null,
       holdUntil: hold && isLiveRequest(hold, now) ? hold.expiresAt : null,
       blocked: this.deps.isBlocked(side) ? 'safety' : this.isPowered(side) ? null : 'off',
     }
@@ -177,7 +195,10 @@ export class TemperatureController {
     for (const [producer, leases] of this.policies[side]) {
       const live = leases.filter((lease) => {
         try {
+          // A personal policy may apply only its reviewed one-degree proposal.
+          // If a new range excludes it, fall back to the bounded schedule instead.
           return isLiveRequest(lease.request, now) && lease.isEligible()
+            && this.target(side, lease.request, lease.request.temperature) === lease.request.temperature
         }
         catch { return false }
       })
@@ -298,10 +319,8 @@ export class TemperatureController {
     assertControlCurrent()
     if (manual) this.deps.onManualControl?.(side)
     const selected = this.select(side, this.deps.now())
-    const temperature = selected?.temperature ?? fallback
-    if (!Number.isFinite(temperature) || temperature < MIN_TEMP || temperature > MAX_TEMP) {
-      throw new Error('Temperature outside hardware bounds')
-    }
+    const temperature = this.target(side, selected, fallback)
+    if (temperature === null) throw new Error('Automatic comfort limit is unavailable; inspect configuration before powering on')
     // A scheduled ON during a manual hold must not extend its bounded session.
     // A new explicit ON with no hold starts a new hardware session.
     const previousDeadline = this.deps.readHardwareDeadline(side)
@@ -313,7 +332,7 @@ export class TemperatureController {
     }
     try {
       await this.recordApplication(side, temperature, duration, selected, 'power_on',
-        () => duration === undefined ? this.deps.apply(side, temperature) : this.deps.apply(side, temperature, duration))
+        () => duration === undefined ? this.deps.apply(side, temperature) : this.deps.apply(side, temperature, duration), fallback)
     }
     catch (error) {
       this.invalidate(side)
@@ -378,8 +397,8 @@ export class TemperatureController {
 
   /** Relative rules use the scheduled/session baseline, never their own output or a manual hold. */
   automationBaseline(side: Side): number | undefined {
-    return selectTemperatureRequest(this.deps.readBaseline(side, this.deps.now()), this.deps.now())?.temperature
-      ?? 75
+    const request = selectTemperatureRequest(this.deps.readBaseline(side, this.deps.now()), this.deps.now())
+    return this.target(side, request, 75) ?? undefined
   }
 
   async powerOff(side: Side, isCurrent: () => boolean = () => true): Promise<void> {
@@ -400,7 +419,9 @@ export class TemperatureController {
 
   /** Guard recovery owns the bounded hardware duration; it resolves only the target here. */
   recoveryTargetLocked(side: Side, fallback: number): number {
-    return this.select(side, this.deps.now())?.temperature ?? fallback
+    const target = this.target(side, this.select(side, this.deps.now()), fallback)
+    if (target === null) throw new Error('Automatic comfort limit is unavailable')
+    return target
   }
 
   /** Called only after a successful, guard-authorized restore under the side lock. */
@@ -448,10 +469,14 @@ export class TemperatureController {
     // With no configured owner, releasing a hold leaves the current target in
     // place. Always-on keepalive may refresh that target without inventing an
     // owner or extending a hold. The off/safety gates still apply.
-    if (!selected && force && this.isPowered(side) && !this.deps.isBlocked(side)) {
+    const currentTarget = this.deps.readCurrentTarget(side)
+    const correctedTarget = !selected && currentTarget !== null ? this.target(side, null, currentTarget) : null
+    const needsLimitCorrection = correctedTarget !== null && currentTarget !== correctedTarget
+    if (!selected && (force || needsLimitCorrection) && this.isPowered(side) && !this.deps.isBlocked(side)) {
       await this.deps.connect()
       selected = this.select(side, this.deps.now())
-      const target = selected?.temperature ?? this.deps.readCurrentTarget(side)
+      const reported = this.deps.readCurrentTarget(side)
+      const target = selected || reported !== null ? this.target(side, selected, reported ?? 75) : null
       if (isCurrent() && target !== null && Number.isFinite(target) && target >= MIN_TEMP && target <= MAX_TEMP
         && this.isPowered(side) && !this.deps.isBlocked(side)) {
         const duration = this.remainingDuration(side, selected)
@@ -460,7 +485,7 @@ export class TemperatureController {
           return this.status(side)
         }
         await this.recordApplication(side, target, duration, selected, 'keepalive',
-          () => duration === undefined ? this.deps.apply(side, target) : this.deps.apply(side, target, duration))
+          () => duration === undefined ? this.deps.apply(side, target) : this.deps.apply(side, target, duration), reported ?? target)
         this.applied[side] = target
         this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
       }
@@ -469,7 +494,8 @@ export class TemperatureController {
       return status
     }
     if (selected && !this.deps.isBlocked(side) && this.isPowered(side)
-      && (force || selected.temperature !== this.applied[side]
+      && this.target(side, selected, selected.temperature) !== null
+      && (force || this.target(side, selected, selected.temperature) !== this.applied[side]
         || this.hardwareDeadline(side, selected) !== this.appliedDeadline[side])) {
       await this.deps.connect()
       // Connecting can wait for transport recovery. Do not issue an expired
@@ -481,10 +507,11 @@ export class TemperatureController {
           await this.powerOffLocked(side)
           return this.status(side)
         }
-        const target = selected.temperature
+        const target = this.target(side, selected, selected.temperature)
+        if (target === null) return this.status(side)
         await this.recordApplication(side, target, duration, selected, force ? 'keepalive' : 'reconcile',
           () => duration === undefined ? this.deps.apply(side, target) : this.deps.apply(side, target, duration))
-        this.applied[side] = selected.temperature
+        this.applied[side] = target
         this.appliedDeadline[side] = this.hardwareDeadline(side, selected)
       }
     }

@@ -25,6 +25,7 @@ import { biometricTuningRouter } from './biometricTuning'
 import { biometricShadowRouter } from './biometricShadow'
 import { capabilitiesRouter } from './capabilities'
 import { comfortRouter } from './comfort'
+import { comfortLimitRouter } from './comfortLimit'
 import { controlsRouter } from './controls'
 import { notificationsRouter } from './notifications'
 import { roomContextRouter } from './roomContext'
@@ -51,6 +52,7 @@ export const appRouter = router({
   system: systemRouter,
   capabilities: capabilitiesRouter,
   comfort: comfortRouter,
+  comfortLimit: comfortLimitRouter,
   controls: controlsRouter,
   notifications: notificationsRouter,
   roomContext: roomContextRouter,

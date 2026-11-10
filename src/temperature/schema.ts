@@ -1,6 +1,8 @@
 import { z } from 'zod'
+import { comfortLimitDecisionSchema } from './limits'
 
 export const temperatureControlStatusSchema = z.object({
+  comfortLimit: comfortLimitDecisionSchema.optional(),
   source: z.enum(['manual', 'run-once', 'autopilot', 'schedule']).nullable(),
   requestId: z.string().nullable(),
   targetTemperature: z.number().nullable(),

@@ -461,3 +461,79 @@ it.each(['off', 'follow', 'independent'] as const)('solo setup uses the %s unuse
   expect(controller.status('right').targetTemperature).toBe(81)
   expect(db.select().from(temperatureSchedules).all()).toHaveLength(3)
 })
+
+describe('persisted comfort range and real alarm spans', () => {
+  const config = { enabled: true, minF: 68, maxF: 72 }
+  async function configure(side: 'left' | 'right' = 'left') {
+    const { saveComfortLimit } = await import('../limitInstance')
+    return saveComfortLimit(side, side, 0, config)
+  }
+  function alarm() {
+    db.insert(alarmSchedules).values({ side: 'left', dayOfWeek: 'tuesday', time: '07:00',
+      vibrationIntensity: 40, vibrationPattern: 'rise', duration: 20, alarmTemperature: 105, enabled: true }).run()
+  }
+  it('keeps the hotter routine within range until 06:30, allows the 105°F alarm, and restores the range afterward', async () => {
+    await configure()
+    alarm()
+    db.update(temperatureSchedules).set({ temperature: 85 }).run()
+    const controller = getTemperatureController()
+    vi.setSystemTime(new Date('2026-09-29T06:29:59Z'))
+    await controller.reconcile('left')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 72)
+    vi.setSystemTime(new Date('2026-09-29T06:30:00Z'))
+    await controller.reconcile('left')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 105)
+    expect(controller.status('left').comfortLimit?.state).toBe('wake')
+    vi.setSystemTime(new Date('2026-09-29T07:16:00Z'))
+    await controller.reconcile('left')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 72)
+    expect(readTemperatureApplications(sqlite, 'left').items[0]).toMatchObject({ targetF: 72, comfortLimit: { requestedF: 85, state: 'limited' } })
+  })
+  it('does not grant alarm authority to an automation using an alarm ID', async () => {
+    await configure()
+    alarm()
+    vi.setSystemTime(new Date('2026-09-29T06:40:00Z'))
+    await getTemperatureController().submit('left', { id: 'alarm:1', source: 'autopilot', temperature: 105,
+      startsAt: Date.now(), expiresAt: Date.now() + 60_000, createdAt: Date.now(), priority: 100 })
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 72)
+  })
+  it('follows the same solo source as the schedule and rejects an outdated source assignment', async () => {
+    await configure()
+    db.update(deviceSettings).set({ bedMode: 'solo-left', unusedZoneMode: 'follow' }).run()
+    db.update(temperatureSchedules).set({ temperature: 85 }).run()
+    const { readComfortLimit, saveComfortLimit } = await import('../limitInstance')
+    expect(readComfortLimit('right')).toMatchObject({ sourceSide: 'left', revision: 1 })
+    await getTemperatureController().reconcile('right')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('right', 72)
+    db.update(deviceSettings).set({ bedMode: 'two' }).run()
+    expect(() => saveComfortLimit('right', 'left', 1, config)).toThrow('arrangement changed')
+  })
+  it('revokes a wake exception before dispatch when its alarm was disabled while queued', async () => {
+    await configure()
+    alarm()
+    vi.setSystemTime(new Date('2026-09-29T06:40:00Z'))
+    const { beforeControlWrite } = await import('@/src/controls/context')
+    hardware.setTemperature.mockImplementationOnce(async () => {
+      db.update(alarmSchedules).set({ enabled: false }).run()
+      beforeControlWrite()
+    })
+    await expect(getTemperatureController().reconcile('left')).rejects.toThrow('no longer permit')
+    expect(readTemperatureApplications(sqlite, 'left').items[0].outcome).toBe('unknown')
+  })
+  it('persists through reopen and keeps a corrupt limit from becoming an unbounded automatic target', async () => {
+    await configure()
+    fileDatabase.reopenForTest()
+    delete (globalThis as Record<string, unknown>).__sp_temperatureController
+    db.update(temperatureSchedules).set({ temperature: 85 }).run()
+    await getTemperatureController().reconcile('left')
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 72)
+    hardware.setTemperature.mockClear()
+    sqlite.prepare('UPDATE temperature_limits SET config = ?').run('broken')
+    await getTemperatureController().reconcile('left', true)
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+    await getTemperatureController().setManual('left', 70)
+    expect(hardware.setTemperature).toHaveBeenLastCalledWith('left', 70)
+    await getTemperatureController().powerOff('left')
+    expect(hardware.setPower).toHaveBeenLastCalledWith('left', false)
+  })
+})

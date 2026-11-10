@@ -34,6 +34,7 @@ const m = vi.hoisted(() => ({
   noticesEnabled: [] as boolean[],
 }))
 
+vi.mock('../ComfortLimitCard', () => ({ ComfortLimitCard: () => null }))
 vi.mock('@/src/utils/trpc', () => ({
   trpc: {
     useUtils: () => ({ settings: { getAll: { invalidate: m.invalidateSettings } } }),
