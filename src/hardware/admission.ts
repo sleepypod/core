@@ -128,6 +128,14 @@ export async function waitForHardwareDrain(holdId: string, timeoutMs = 10_000): 
   if (runtime.active !== 0) throw new Error('A Stop command is still completing; keep admission held and check again')
 }
 
+/** Recheck inside the synchronous configuration transaction after the asynchronous drain. */
+export function assertHardwareDrained(holdId: string, expectedRevision: number): void {
+  const runtime = shared.__sp_hardwareAdmission
+  if (!runtime || runtime.active !== 0) throw new HardwareAdmissionError()
+  const current = read(runtime)
+  if (!holdId || current.holdId !== holdId || current.revision !== expectedRevision) throw new HardwareAdmissionError()
+}
+
 /** Match the complete wire message. Neutral temperature is not a power-off command. */
 export function classifyDacAdmission(message: string): 'read' | 'stop' | 'change' {
   if (message === '0' || message === '14') return 'read'

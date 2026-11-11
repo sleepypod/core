@@ -42,7 +42,7 @@ priority and acceptance; it does not introduce an additional approval gate.
 | 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 merged after hosted checks; native explanation timeline consolidated in PR 69; live acceptance remains |
 | 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Core and native PR 69 provide the clear plan and app-owned backup workflow; physical alarm and selected accessory acceptance remain |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Core PR 98 merged after hosted checks; native PR 69 includes reviewed Pod and app-owned phone coordination with fresh phone-state reconciliation. Qualified house devices and live acceptance remain |
-| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99 and 100 merged reviewed recording-source identity, bounded completed-presence import and the durable command boundary. Continuous ingestion and older-record audits passed local validation; hosted promotion and atomic arrangement activation remain pending |
+| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99–101 merged reviewed source identity, bounded continuous presence import/audits and the durable command boundary. Atomic arrangement storage passed 9,328 local tests (19 existing skips); hosted promotion, runtime recovery, private learning migration and native/web activation remain pending |
 | 17 | Quiet and temporary arrangements | Explicit partner-resting/guest/side-swap state; shared-action arbitration and ambiguous-night training exclusion | Pending |
 | 18 | In-app practice | Illustrated guide reused, interactive temperature/alarm/Stop practice; secure invitation without owner key | Pending |
 | 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | Pending |
@@ -150,3 +150,30 @@ priority and acceptance; it does not introduce an additional approval gate.
 - **16 — transition command admission:** [dispatch and recovery contract](HARDWARE_ADMISSION.md) describes the durable hold, queued-intent revisions, explicit Stop and reply drain. The upcoming arrangement coordinator still owns reviewed activation and recovery. No live hold or arrangement was changed.
 - **16 — command boundary release:** Core PR 100 merged as `8f262979ec5fd21e2c9edda61859b533a313c60b` after all hosted checks passed. Its tree (`4aaf2d5f916497d7faa6a9c51fada8bceca18351`) equals tested head `c80a7e9c3eb07715e1c24927ef5fbc8f6c63ffb3`. Local full validation passed 9,266 tests with 19 existing skips; hosted unit/browser checks, typecheck, lint and builds also passed. No live controller update was performed.
 - **16 — continuous personal history:** [worker lifecycle and source boundaries](PERSONAL_HISTORY_SOURCE.md#continuous-ingestion-and-revalidation) describe independently bounded new-record and audit scans, restart replay, capped retries and privacy-preserving invalidation. Startup never claims unassigned history or changes the household arrangement. Final local validation passed 9,293 tests (19 existing skips), TypeScript, full ESLint and the production build; no live import was enabled.
+
+### Continuous personal history — merged PR 101
+
+- Tested head `cffac88f60a45734ba2a8a6a0902ef8081a6c5e6`; merged main
+  `f8a3c8bd1049a3d8b618c4e5cc6868f3852e414e` on November 11, 2026.
+- Both have tree `a79b7223951c9852a543e54f1013c75d726c705f`.
+- Local full suite: **9,293 passed, 19 existing skips**. Pre-push related suite:
+  **7,637 passed, 17 existing skips**. Types, lint, production build, generated
+  migration checks and all hosted PR checks passed.
+- Main package, release, OpenAPI, ref-collision and back-merge workflows passed. No live deployment,
+  household flag, source binding, routine or hardware change was made.
+
+### Reviewed arrangement commit — local implementation
+
+See [the storage and recovery contract](HOUSEHOLD_ARRANGEMENT_COMMIT.md). A durable
+hold and receipt now share one transaction; another transaction consumes both
+approvals and changes both weeks, identities and control state atomically. The
+old solo attribution interval closes at commit; the reload gap remains unassigned
+until a separately verified runtime cutover. Public activation stays unavailable.
+
+Focused household/admission tests passed **409 cases**, including SQL failure
+rollback, private history preservation, in-flight Stop, stale observations, source
+replacement and database reopening. Final full suite: **9,328 passed, 19 existing
+skips**. TypeScript, full ESLint, both migration checks and production build pass.
+The initial full-run failure was two omitted schema-contract expectations for the
+new receipt table; both were updated and the complete suite passed afterward.
+Hosted checks and the complete runtime recovery path remain separate gates.

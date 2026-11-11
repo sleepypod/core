@@ -23,6 +23,33 @@ afterEach(() => {
 })
 
 describe('persisted hardware hold', () => {
+  it('commits a synchronous receipt with the hold and rolls both back if either write fails', () => {
+    database.exec('CREATE TABLE test_receipt (id TEXT PRIMARY KEY, revision INTEGER NOT NULL)')
+    const operationId = randomUUID()
+    expect(() => store.holdWithReceipt(operationId, (admission) => {
+      database.prepare('INSERT INTO test_receipt VALUES (?, ?)').run(operationId, admission.revision)
+      throw new Error('receipt write interrupted')
+    })).toThrow('receipt write interrupted')
+    expect(store.read()).toEqual({ revision: 1, holdId: null })
+    expect(database.prepare('SELECT * FROM test_receipt').all()).toEqual([])
+    store.holdWithReceipt(operationId, admission => database.prepare('INSERT INTO test_receipt VALUES (?, ?)').run(operationId, admission.revision))
+    expect(database.prepare('SELECT revision FROM test_receipt').get()).toEqual({ revision: 2 })
+    expect(store.holdWithReceipt(operationId, admission => admission.revision)).toEqual({ admission: { revision: 2, holdId: operationId }, result: 2 })
+  })
+  it('requires the exact hold across the complete configuration transaction', () => {
+    database.pragma('synchronous = NORMAL')
+    const operationId = randomUUID()
+    store.hold(operationId)
+    expect(() => store.transactionWhileHeld(operationId, 1, () => undefined)).toThrow()
+    expect(() => store.transactionWhileHeld(randomUUID(), 2, () => undefined)).toThrow()
+    expect(() => store.transactionWhileHeld(operationId, 2, () => {
+      database.prepare('UPDATE hardware_admission SET hold_id = NULL, held_at = NULL').run()
+    })).toThrow()
+    expect(store.read()).toEqual({ revision: 2, holdId: operationId })
+    expect(() => store.transactionWhileHeld(operationId, 2, () => Promise.resolve())).toThrow('synchronous')
+    expect(store.transactionWhileHeld(operationId, 2, () => 'saved').result).toBe('saved')
+    expect(database.pragma('synchronous', { simple: true })).not.toBe(2)
+  })
   it('starts open exactly once and survives restart without reopening an unresolved hold', () => {
     expect(store.read()).toEqual({ revision: 1, holdId: null })
     const operationId = randomUUID()

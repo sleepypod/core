@@ -32,16 +32,38 @@ export class HardwareAdmissionStore {
 
   /** Exact replay retains the revision. Another coordinator cannot take over an unresolved hold. */
   hold(operationId: string): HardwareAdmissionSnapshot {
+    return this.holdWithReceipt(operationId, () => undefined).admission
+  }
+
+  /** Persist the caller's receipt in the same commit as admission closes. Callbacks must be synchronous. */
+  holdWithReceipt<Result>(operationId: string, operation: (admission: HardwareAdmissionSnapshot, created: boolean) => Result) {
     identity.parse(operationId)
     return this.durable(() => {
       const current = this.read()
-      if (current.holdId === operationId) return current
-      if (current.holdId !== null || current.revision >= Number.MAX_SAFE_INTEGER) throw new HardwareAdmissionError()
-      const heldAt = z.number().int().positive().max(8_640_000_000_000_000).parse(this.now())
-      this.database.prepare('UPDATE hardware_admission SET revision = ?, hold_id = ?, held_at = ? WHERE id = 1')
-        .run(current.revision + 1, operationId, heldAt)
-      return this.read()
+      if (current.holdId !== operationId) {
+        if (current.holdId !== null || current.revision >= Number.MAX_SAFE_INTEGER) throw new HardwareAdmissionError()
+        const heldAt = z.number().int().positive().max(8_640_000_000_000_000).parse(this.now())
+        this.database.prepare('UPDATE hardware_admission SET revision = ?, hold_id = ?, held_at = ? WHERE id = 1')
+          .run(current.revision + 1, operationId, heldAt)
+      }
+      return this.performWhileHeld(operationId, this.read().revision, admission => operation(admission, current.holdId !== operationId))
     })
+  }
+
+  /** Commit configuration and its receipt while preserving the exact unresolved hold. */
+  transactionWhileHeld<Result>(operationId: string, expectedRevision: number, operation: (admission: HardwareAdmissionSnapshot) => Result) {
+    identity.parse(operationId)
+    return this.durable(() => this.performWhileHeld(operationId, expectedRevision, operation))
+  }
+
+  private performWhileHeld<Result>(operationId: string, expectedRevision: number, operation: (admission: HardwareAdmissionSnapshot) => Result) {
+    const admission = this.read()
+    if (admission.holdId !== operationId || admission.revision !== expectedRevision) throw new HardwareAdmissionError()
+    const result = operation({ ...admission })
+    if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('Admission receipt callbacks must be synchronous')
+    const after = this.read()
+    if (after.holdId !== operationId || after.revision !== expectedRevision) throw new HardwareAdmissionError()
+    return { admission, result }
   }
 
   /** Internal recovery primitive, not an endpoint. A coordinator must reconcile its receipt before release. */

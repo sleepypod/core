@@ -510,7 +510,7 @@ describe('db schema definitions', () => {
       'roomContextSettings', 'roomContextLatest', 'roomContextHistory',
       'bedroomSettings', 'bedroomLatest', 'bedroomHistory',
       'households', 'householdAccounts', 'householdBrowserScopes', 'householdDevices', 'householdInvitations', 'householdPersonalSettings', 'householdMutationReceipts', 'householdArrangementReviews', 'householdArrangementApprovals',
-      'householdHistoryState', 'householdHistorySources', 'householdAttributionEpochs', 'householdPersonRecords', 'householdControlReceipts',
+      'householdHistoryState', 'householdHistorySources', 'householdAttributionEpochs', 'householdPersonRecords', 'householdControlReceipts', 'householdArrangementTransitions',
     ].sort())
   })
 })

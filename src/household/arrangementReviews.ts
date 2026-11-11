@@ -35,7 +35,7 @@ interface Participant {
   preferences: z.infer<typeof personPreferencesSchema>
   week: Week
 }
-interface Snapshot {
+export interface ApprovedArrangementSnapshot {
   householdId: string
   podId: string
   householdRevision: number
@@ -47,6 +47,7 @@ interface Snapshot {
   liveRevision: string
   configurationRevision: string
 }
+type Snapshot = ApprovedArrangementSnapshot
 interface ReviewRow {
   id: string
   household_id: string
@@ -208,6 +209,23 @@ export class ArrangementReviewService {
       const session = this.dependencies.identities.session(credential)
       return this.project(session, this.row(session, reviewId))
     })()
+  }
+
+  /** Internal transaction boundary only. Never serialize this two-person plan to either client. */
+  approvedForCommit(credential: HouseholdCredential, input: { reviewId: string, expectedSessionRevision: number, expectedAssignmentRevision: number }): ApprovedArrangementSnapshot {
+    if (!this.dependencies.database.inTransaction) throw new Error('Read the approved arrangement inside its configuration transaction')
+    const session = this.context(credential, input)
+    if (!this.dependencies.enabled() || session.role !== 'owner') throw unavailable()
+    const row = this.row(session, input.reviewId)
+    if (this.project(session, row).state !== 'approved_for_separate_activation') throw unavailable()
+    return this.snapshot(session, (JSON.parse(row.payload) as Snapshot).ownerSide)
+  }
+
+  /** Consume only with the same current approvals and the caller's atomic configuration commit. */
+  consumeForCommit(credential: HouseholdCredential, input: { reviewId: string, expectedSessionRevision: number, expectedAssignmentRevision: number }): void {
+    this.approvedForCommit(credential, input)
+    const result = this.dependencies.database.prepare('UPDATE household_arrangement_reviews SET state = \'consumed\' WHERE id = ? AND state = \'open\'').run(input.reviewId)
+    if (result.changes !== 1) throw unavailable()
   }
 
   propose(credential: HouseholdCredential, input: unknown): ArrangementReview {

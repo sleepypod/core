@@ -851,6 +851,26 @@ export const householdArrangementApprovals = sqliteTable('household_arrangement_
   createdAt: integer('created_at').notNull(),
 }, table => [uniqueIndex('idx_household_arrangement_approval').on(table.reviewId, table.accountId)])
 
+// Private transition receipt and recovery archive commit with the hardware hold.
+// A committed arrangement stays held until a separate runtime recovery verifies it.
+export const householdArrangementTransitions = sqliteTable('household_arrangement_transitions', {
+  id: text('id').primaryKey(),
+  householdId: text('household_id').notNull().references(() => households.id),
+  reviewId: text('review_id').notNull().unique().references(() => householdArrangementReviews.id),
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  deviceId: text('device_id').notNull().references(() => householdDevices.id),
+  requestHash: text('request_hash').notNull(),
+  request: text('request').notNull(),
+  runId: text('run_id').notNull(),
+  admissionRevision: integer('admission_revision').notNull(),
+  state: text('state', { enum: ['held', 'committed'] }).notNull(),
+  createdAt: integer('created_at').notNull(),
+  committedAt: integer('committed_at'),
+  context: text('context').notNull(),
+  archive: text('archive'),
+  committedHash: text('committed_hash'),
+}, table => [index('idx_household_arrangement_transitions').on(table.householdId, table.createdAt)])
+
 // Persist the latest browser identity independently of response arrival order.
 // Only hashes are retained; this table cannot recreate a browser credential.
 export const householdBrowserScopes = sqliteTable('household_browser_scopes', {

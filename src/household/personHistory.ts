@@ -137,6 +137,28 @@ export class PersonHistoryStore {
     }).immediate()
   }
 
+  /** Close attribution within an activation transaction. The reload interval stays
+   * unassigned until a later verified runtime starts a new reviewed epoch. */
+  closeReviewedEpoch(previousEpochId: string, input: unknown) {
+    if (!this.database.inTransaction) throw new Error('Close attribution inside its reviewed configuration transaction')
+    householdIdSchema.parse(previousEpochId)
+    const parsed = attributionEpochSchema.parse(input)
+    this.source.verify(parsed.householdId, parsed.datasetId)
+    this.validateReviewer(parsed)
+    const previous = this.database.prepare('SELECT * FROM household_attribution_epochs WHERE id = ? AND household_id = ? AND dataset_id = ?')
+      .get(previousEpochId, parsed.householdId, parsed.datasetId) as EpochRow | undefined
+    if (!previous || previous.ends_at !== null || previous.revoked_at !== null || parsed.endsAt === null
+      || previous.starts_at !== parsed.startsAt || previous.mode !== parsed.mode
+      || digest(JSON.parse(previous.assignments)) !== digest(parsed.assignments)
+      || this.revision(parsed.householdId) !== parsed.expectedAttributionRevision
+      || parsed.basis !== 'verified_arrangement') throw conflict('The current attribution interval changed. Review it again.')
+    const crosses = this.database.prepare('SELECT id FROM household_person_records WHERE epoch_id = ? AND ends_at > ? LIMIT 1').get(previousEpochId, parsed.endsAt)
+    if (crosses) throw conflict('This transition would change already-attributed records.')
+    this.database.prepare('UPDATE household_attribution_epochs SET ends_at = ? WHERE id = ?').run(parsed.endsAt, previousEpochId)
+    this.bumpRevision(parsed.householdId)
+    return { epochId: previousEpochId, attributionRevision: this.revision(parsed.householdId) }
+  }
+
   /** Ingest one complete observation. Unknown ownership is withheld, never
    * inferred from the current side picker or a matching display name. */
   admitObservation(input: unknown) {
