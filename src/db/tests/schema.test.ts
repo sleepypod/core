@@ -502,7 +502,7 @@ describe('db schema definitions', () => {
     // Biometric, comfort and bedtime tables are pinned by the exhaustive snapshot below
     // and exercised against real migrations by their repository tests.
     expect(actualTableExports).toEqual([...Object.keys(expectedTables),
-      'alarmOverrides', 'alarmOccurrences', 'journalEntries', 'bedtimeRoutines', 'controlReceipts', 'biometricProfileRevisions', 'biometricProfileBindings', 'sideStageModels', 'stageModelLibrary',
+      'controllerConnectionIdentity', 'alarmOverrides', 'alarmOccurrences', 'journalEntries', 'bedtimeRoutines', 'controlReceipts', 'biometricProfileRevisions', 'biometricProfileBindings', 'sideStageModels', 'stageModelLibrary',
       'biometricActivationEvents', 'biometricConfigOutbox',
       'comfortEvents', 'comfortFeedback', 'comfortStates', 'comfortReviews', 'comfortModels', 'thermalForecasts', 'targetResponseModels',
       'comfortActivations', 'comfortOwnerReviews', 'comfortQualifications', 'comfortResolutions',
