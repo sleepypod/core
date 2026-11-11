@@ -41,9 +41,15 @@ type Side = 'left' | 'right'
 export function DashboardPanel({ thermal, onJump }: { thermal: ThermalData | undefined, onJump: (s: DiagSection) => void }) {
   // One side away: the sleeper's side only.
   const shown = useShownSides()
+  const language = langFromPath(usePathname())
   return (
     <>
       <StatusLine />
+      <Link href={`/${language}/system?tab=care`} className="inline-flex min-h-11 items-center gap-2 text-sm text-fg underline underline-offset-4">
+        Bed care: water, recording and backups
+        {' '}
+        <ArrowRight size={16} aria-hidden="true" />
+      </Link>
       <AttentionCard />
       <PumpAlertsCard />
       <TonightCard onJump={onJump} />

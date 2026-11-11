@@ -45,7 +45,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 20 | Endel bedtime ritual | Supported Shortcuts/AirPlay flow, selected volume/duration, actual route state and tested tap-to-finish fallback | Pending |
 | 21 | Watch, ESP32 and widgets | Temperature/Stop/next alarm, person assignment and freshness parity; simulator and physical verification | Pending |
 | 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Pending |
-| 23 | Bed-care center | Actionable real telemetry, backup age and recovery walkthrough; unavailable leak detection stays unavailable | Pending |
+| 23 | Bed-care center | Actionable real telemetry, backup age and recovery walkthrough; unavailable leak detection stays unavailable | Read-only Core report and web care view implemented; native parity and validation in progress |
 | 24 | Base and snoring assistance | Attended movement/Stop/position qualification first; trustworthy snore signal and whole-bed partner constraints before automation | Pending |
 
 ## Cross-cutting contracts
@@ -91,3 +91,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 - **03 — Tonight:** [everyday plan and evidence](TONIGHT_OVERVIEW.md) describes fresh control mode, range, wake occurrence, morning entry, side ownership and responsive layouts. No live routine was changed.
 
 - **14 — clear wake plan:** [contract and boundaries](CLEAR_WAKE_PLAN.md) documents authoritative warming, a simpler editor and explicit app-owned system backup. Home coordination and physical delivery remain separate acceptance gates.
+
+- **23 — bed care:** [read-only sources and recovery boundaries](BED_CARE.md)
+  preserves independent observation freshness and distinguishes a server export
+  from a verified off-Pod backup. It cannot detect physical leaks or insert age.

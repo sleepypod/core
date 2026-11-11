@@ -1,8 +1,9 @@
-export type SystemTab = 'dashboard' | 'calibration' | 'databases' | 'hardware' | 'health' | 'logs' | 'scheduler' | 'sensors' | 'storage' | 'thermal'
+export type SystemTab = 'dashboard' | 'care' | 'calibration' | 'databases' | 'hardware' | 'health' | 'logs' | 'scheduler' | 'sensors' | 'storage' | 'thermal'
 
 /** Dashboard is the landing page and stays first; the rest are A–Z. */
 export const SYSTEM_TABS: ReadonlyArray<{ id: SystemTab, label: string }> = [
   { id: 'dashboard', label: 'Dashboard' },
+  { id: 'care', label: 'Bed care' },
   { id: 'calibration', label: 'Calibration' },
   { id: 'databases', label: 'Databases' },
   { id: 'hardware', label: 'Hardware' },

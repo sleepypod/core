@@ -28,6 +28,10 @@ const DatabasesTab = dynamic(
   () => import('./DatabasesTab').then(m => m.DatabasesTab),
   { ssr: false, loading: TabLoading },
 )
+const BedCarePanel = dynamic(
+  () => import('./BedCarePanel').then(m => m.BedCarePanel),
+  { ssr: false, loading: TabLoading },
+)
 const HapticsTestCard = dynamic(
   () => import('@/src/components/diagnostics/HapticsTestCard').then(m => m.HapticsTestCard),
   { ssr: false, loading: TabLoading },
@@ -126,6 +130,7 @@ export function SystemScreen() {
         {tab === 'logs' && <SystemLogViewer />}
         {tab === 'storage' && <StorageTab />}
         {tab === 'databases' && <DatabasesTab />}
+        {tab === 'care' && <BedCarePanel />}
         {tab === 'hardware' && <HapticsTestCard />}
       </div>
     </PullToRefresh>

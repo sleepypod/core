@@ -52,7 +52,7 @@ describe('resolveSystemTab', () => {
   })
 
   it('resolves every tab', () => {
-    for (const t of ['calibration', 'health', 'logs', 'scheduler', 'sensors', 'storage', 'thermal']) {
+    for (const t of ['care', 'calibration', 'health', 'logs', 'scheduler', 'sensors', 'storage', 'thermal']) {
       expect(resolveSystemTab(t)).toBe(t)
     }
   })
@@ -72,7 +72,7 @@ describe('resolveSystemTab', () => {
 describe('SystemScreen', () => {
   it('lists Dashboard first then the rest A–Z, with Dashboard selected by default', () => {
     render(<SystemScreen />)
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Calibration', 'Databases', 'Hardware', 'Health', 'Logs', 'Scheduler', 'Sensors', 'Storage', 'Thermal'])
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Dashboard', 'Bed care', 'Calibration', 'Databases', 'Hardware', 'Health', 'Logs', 'Scheduler', 'Sensors', 'Storage', 'Thermal'])
     expect(screen.getByRole('tab', { name: 'Dashboard' }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('dynamic-tab')).toBeTruthy()
     expect(document.title).toBe('Dashboard · System · sleepypod')

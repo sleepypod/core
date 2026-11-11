@@ -4,6 +4,7 @@ import { DAY, HOUR, MINUTE, hashSeed, randomBetween, seededRandom } from '../uti
 import { getDemoDeviceStatus } from './device'
 import { DEMO_UPTIME_START } from './system'
 import { evaluateRecordingHealth } from '@/src/recording-health/evaluate'
+import { evaluateBedCare } from '@/src/bed-care/evaluate'
 
 type Side = 'left' | 'right'
 type ThermalHistory = RouterOutputs['health']['thermalHistory']
@@ -298,6 +299,13 @@ function history(): History {
 }
 
 export const health: DemoHandlers<'health'> = {
+  care: () => {
+    const now = Date.now()
+    return evaluateBedCare({ now, hardware: { at: now, water: 'ok', priming: false }, blockedSides: [], protectionEnabled: true,
+      recording: evaluateRecordingHealth({ now, path: dataPath(), history: history(),
+        storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true }),
+      lastExportAt: now - DAY })
+  },
   recording: () => evaluateRecordingHealth({ now: Date.now(), path: dataPath(), history: history(),
     storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true }),
   performance: () => {
