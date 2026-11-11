@@ -99,7 +99,8 @@ export function Chart3D({ spec, state, data, aspect, label, message, onRetry, cl
     else s.setState(state === 'ready' ? 'empty' : state)
   }, [state, data])
 
-  const overlay = state === 'empty' || state === 'error'
+  // Ready with nothing to draw is the empty state, as in the scene.
+  const overlay = state === 'empty' || state === 'error' || (state === 'ready' && !data)
   return (
     <div className={cn('relative w-full', className)} style={{ aspectRatio: aspect }} role="img" aria-label={label} aria-busy={state === 'loading'}>
       <div ref={host} className="absolute inset-0" />
