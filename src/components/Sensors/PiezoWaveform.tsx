@@ -14,8 +14,9 @@ const MAX_SAMPLES = 10_000
 const RENDER_TARGET_POINTS = 200
 /** Minimum samples before rendering a trace (matching iOS guard). */
 const MIN_SAMPLES = 20
-/** Canvas height in CSS pixels. */
+/** Canvas height in CSS pixels: one lane, or Left and Right stacked in two. */
 const CANVAS_HEIGHT = 96
+const TWO_LANE_HEIGHT = 144
 /** Seconds of signal one sweep spans. The stream keeps ~11 s, so a sweep plus the lag fits. */
 const SWEEP_SECONDS = 8
 /**
@@ -135,7 +136,7 @@ function bucketAverages(ch: Channel, first: number, count: number, size: number,
 }
 
 /**
- * Shared vertical range from the 0.5th–99.5th percentiles of the visible samples, padded
+ * Vertical range from the 0.5th–99.5th percentiles of the given channels' samples, padded
  * 15%. Percentiles keep one movement spike from squashing the rest of the trace.
  */
 function robustRange(channels: Channel[], fromN: number): [number, number] | null {
@@ -217,7 +218,7 @@ function drawCatmullRomTrace(
 // Grid drawing
 // ---------------------------------------------------------------------------
 
-function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: number, colors: WaveColors) {
+function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: number, colors: WaveColors, lanes = 1) {
   // Minor grid lines (matching iOS: dynamic column count, 8 rows)
   ctx.strokeStyle = colors.grid
   ctx.lineWidth = 0.5 * dpr
@@ -245,12 +246,14 @@ function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: numb
   ctx.strokeStyle = colors.gridMajor
   ctx.lineWidth = 0.8 * dpr
 
-  // Horizontal center
-  const cy = Math.round(h / 2) + 0.5
-  ctx.beginPath()
-  ctx.moveTo(0, cy)
-  ctx.lineTo(w, cy)
-  ctx.stroke()
+  // Horizontal centre of each lane, and the line between lanes
+  for (let i = 0; i < lanes * 2 - 1; i++) {
+    const cy = Math.round(((i + 1) / (lanes * 2)) * h) + 0.5
+    ctx.beginPath()
+    ctx.moveTo(0, cy)
+    ctx.lineTo(w, cy)
+    ctx.stroke()
+  }
 
   // Vertical center
   const cx = Math.round(w / 2) + 0.5
@@ -303,12 +306,13 @@ function formatTime(epochSeconds: number, timeFormat: TimeFormat = '12h'): strin
  *
  * Live data draws in sweep mode, like a bedside monitor: the traces stay put while a
  * cursor sweeps left to right, writing new signal over the previous sweep behind a
- * small gap. Nothing already drawn moves sideways. The shared vertical scale comes
- * from robust percentiles and eases toward its target, growing fast and shrinking
- * slowly, so the traces don't lurch every time a frame lands.
+ * small gap. Nothing already drawn moves sideways. With both channels on, Left and
+ * Right get a lane each with its own vertical scale, so the traces never cross. Each
+ * scale comes from robust percentiles and eases toward its target, growing fast and
+ * shrinking slowly, so the traces don't lurch every time a frame lands.
  *
- * Replay draws the fetched window statically. Both channels share one Y scale and use
- * bucket-averaged, Catmull-Rom interpolated traces (matching iOS PiezoWaveformView).
+ * Replay draws the fetched window statically. Traces are bucket-averaged, Catmull-Rom
+ * interpolated (matching iOS PiezoWaveformView).
  */
 export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean, className?: string }) {
   const timeFormat = useTimeFormat()
@@ -324,7 +328,7 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
   const animFrameRef = useRef<number>(0)
   // Sweep cursor (a fractional absolute sample number) and the displayed vertical
   // range. Kept across render-loop restarts so a channel toggle doesn't reset them.
-  const sweepRef = useRef<{ play: number | null, mode: 'live' | 'replay' | null, shown: [number, number] | null }>({ play: null, mode: null, shown: null })
+  const sweepRef = useRef<{ play: number | null, mode: 'live' | 'replay' | null, shown: Partial<Record<'left' | 'right', [number, number]>> }>({ play: null, mode: null, shown: {} })
 
   // Track visibility for channel toggles
   const [showLeft, setShowLeft] = useState(true)
@@ -445,8 +449,8 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
     let tick = 0
     let lastTime: number | null = null
     const sweepState = sweepRef.current
-    // Target vertical range, recomputed when the data or the visible channels change
-    let target: [number, number] | null = null
+    // Each lane's target vertical range, recomputed when the data or the visible channels change
+    let targets: Partial<Record<'left' | 'right', [number, number] | null>> = {}
     let targetVersion = -1
 
     function render(time: number) {
@@ -464,12 +468,13 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
       if (container) {
         const rect = container.getBoundingClientRect()
         const newWidth = Math.floor(rect.width * dpr)
-        const newHeight = CANVAS_HEIGHT * dpr
+        const cssHeight = showLeft && showRight ? TWO_LANE_HEIGHT : CANVAS_HEIGHT
+        const newHeight = cssHeight * dpr
         if (canvas.width !== newWidth || canvas.height !== newHeight) {
           canvas.width = newWidth
           canvas.height = newHeight
           canvas.style.width = `${rect.width}px`
-          canvas.style.height = `${CANVAS_HEIGHT}px`
+          canvas.style.height = `${cssHeight}px`
         }
       }
 
@@ -477,7 +482,9 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
       const h = canvas.height
 
       ctx.clearRect(0, 0, w, h)
-      drawGrid(ctx, w, h, dpr, colors)
+      // Left and Right each get their own lane and scale, so the traces never cross.
+      const lanes = ([['left', showLeft], ['right', showRight]] as const).filter(([, on]) => on).map(([key]) => key)
+      drawGrid(ctx, w, h, dpr, colors, Math.max(1, lanes.length))
 
       const trace = traceRef.current
       if (!trace) {
@@ -507,7 +514,8 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
       // Advance the sweep cursor in real time, trimming its rate toward a fixed lag
       // behind the newest sample. It never runs past the data, and it jumps only after
       // a long gap (a hidden tab or a reconnect).
-      let { play, shown } = sweepState
+      let { play } = sweepState
+      let { shown } = sweepState
       if (mode === 'live') {
         const end = trace.last + 1
         const goal = Math.max(trace.first, end - LAG_SECONDS * trace.hz)
@@ -518,32 +526,39 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
         }
         play = Math.min(play, end)
       }
-      if (sweepState.mode !== mode) shown = null
+      if (sweepState.mode !== mode) shown = {}
       sweepState.mode = mode
       sweepState.play = play
 
-      if (targetVersion !== versionRef.current || !target) {
-        target = robustRange(visible, mode === 'live' ? trace.last - sweep : -Infinity)
+      const from = mode === 'live' ? trace.last - sweep : -Infinity
+      if (targetVersion !== versionRef.current) {
+        targets = Object.fromEntries(lanes.map(key => [key, robustRange([trace[key]], from)]))
         targetVersion = versionRef.current
       }
-      if (!target) {
-        animFrameRef.current = requestAnimationFrame(render)
-        return
-      }
-      if (!shown) shown = [target[0], target[1]]
-      else {
-        const ease = (from: number, to: number, grow: boolean) => from + (to - from) * (1 - Math.exp(-dt / (grow ? RANGE_GROW_TAU : RANGE_SHRINK_TAU)))
-        shown = [ease(shown[0], target[0], target[0] < shown[0]), ease(shown[1], target[1], target[1] > shown[1])]
-      }
+      const ease = (a: number, b: number, grow: boolean) => a + (b - a) * (1 - Math.exp(-dt / (grow ? RANGE_GROW_TAU : RANGE_SHRINK_TAU)))
+      const laneH = h / Math.max(1, lanes.length)
+      const pad = 4 * dpr
+      const yOfs: Partial<Record<'left' | 'right', (v: number) => number>> = {}
+      lanes.forEach((key, i) => {
+        targets[key] ??= robustRange([trace[key]], from)
+        const target = targets[key]
+        if (!target) return
+        const prev = shown[key]
+        const next: [number, number] = prev
+          ? [ease(prev[0], target[0], target[0] < prev[0]), ease(prev[1], target[1], target[1] > prev[1])]
+          : [target[0], target[1]]
+        shown[key] = next
+        const [rMin, rMax] = next
+        const top = i * laneH + pad
+        const height = laneH - 2 * pad
+        yOfs[key] = (v: number) => {
+          const y = top + height * (1 - (v - rMin) / (rMax - rMin))
+          return Number.isFinite(y) ? Math.min(Math.max(y, top), top + height) : top + height / 2
+        }
+      })
       sweepState.shown = shown
-      const [rMin, rMax] = shown
-      const range = rMax - rMin
-      const yOf = (v: number) => {
-        const y = h * (1 - (v - rMin) / range)
-        return Number.isFinite(y) ? Math.min(Math.max(y, 0), h) : h / 2
-      }
 
-      const runs = (ch: Channel): Point[][] => {
+      const runs = (ch: Channel, yOf: (v: number) => number): Point[][] => {
         const out: Point[][] = []
         if (mode === 'live' && play !== null) {
           const cursor = Math.floor(play / size)
@@ -568,12 +583,18 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
         return out
       }
 
-      if (showLeft && trace.left.n.length >= MIN_SAMPLES) {
-        for (const run of runs(trace.left)) drawCatmullRomTrace(ctx, run, colors.left, dpr)
-      }
-      if (showRight && trace.right.n.length >= MIN_SAMPLES) {
-        for (const run of runs(trace.right)) drawCatmullRomTrace(ctx, run, colors.right, dpr)
-      }
+      lanes.forEach((key, i) => {
+        const yOf = yOfs[key]
+        if (yOf && trace[key].n.length >= MIN_SAMPLES) {
+          for (const run of runs(trace[key], yOf)) drawCatmullRomTrace(ctx, run, key === 'left' ? colors.left : colors.right, dpr)
+        }
+        if (lanes.length > 1) {
+          ctx.fillStyle = colors.text
+          ctx.font = `${10 * dpr}px ui-monospace, monospace`
+          ctx.textAlign = 'left'
+          ctx.fillText(key === 'left' ? 'L' : 'R', 4 * dpr, i * laneH + 13 * dpr)
+        }
+      })
 
       if (mode === 'live' && play !== null) {
         viewRef.current = { mode: 'live', play, size, points, gap, hz: trace.hz }
@@ -620,7 +641,7 @@ export function PiezoWaveform({ enabled = true, className }: { enabled?: boolean
       <div ref={containerRef} className="relative overflow-hidden" onPointerMove={onHover} onPointerLeave={() => setReadout(null)}>
         <canvas
           ref={canvasRef}
-          style={{ width: '100%', height: `${CANVAS_HEIGHT}px`, display: 'block' }}
+          style={{ width: '100%', height: `${showLeft && showRight ? TWO_LANE_HEIGHT : CANVAS_HEIGHT}px`, display: 'block' }}
         />
         {readout && <HoverMark pct={readout.pct} label={readout.label} />}
       </div>

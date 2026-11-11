@@ -225,11 +225,12 @@ describe('PiezoWaveform', () => {
     stream.waveform = [frame(97), spiky, frame(99)]
     render(<PiezoWaveform />)
     draw(0)
-    // The spike clips at the top. Left averages 4.5 and right -4.5, and they stay well
-    // apart; scaling to the spike would have flattened both onto one line near the bottom.
-    const ys = ctx.bezierCurveTo.mock.calls.map(call => call[5] as number).filter(y => y > 0 && y < 96)
-    expect(ctx.bezierCurveTo.mock.calls.some(call => call[5] === 0)).toBe(true)
-    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(30)
+    // Two 72 px lanes with 4 px padding. The spike clips at the top of the left lane, and
+    // the rest of the left trace (averaging 4.5) stays near mid-lane; scaling to the spike
+    // would have flattened it onto the lane's floor.
+    const left = ctx.bezierCurveTo.mock.calls.map(call => call[5] as number).filter(y => y < 72)
+    expect(left).toContain(4)
+    for (const y of left.filter(y => y !== 4)) expect(Math.abs(y - 36)).toBeLessThan(4)
   })
 
   it('draws a replay window statically and reads out the replayed sample under the pointer', () => {
@@ -269,17 +270,19 @@ describe('PiezoWaveform', () => {
     rerender(<PiezoWaveform />)
     ctx.fillText.mockClear()
     draw(16)
-    expect(ctx.fillText).not.toHaveBeenCalled()
+    expect(ctx.fillText).not.toHaveBeenCalledWith('Waiting for piezo data', expect.any(Number), expect.any(Number))
+    expect(ctx.fillText).toHaveBeenCalledWith('L', expect.any(Number), expect.any(Number))
     expect(ctx.bezierCurveTo).toHaveBeenCalled()
   })
 
-  it('draws a flat signal mid-canvas and skips drawing when no sample is finite', () => {
+  it('draws a flat signal mid-lane and skips drawing when no sample is finite', () => {
     const flat = (ts: number) => ({ ...frame(ts), left1: Array<number>(500).fill(3), right1: Array<number>(500).fill(3) })
     stream.waveform = [flat(99), flat(100)]
     const { rerender } = render(<PiezoWaveform />)
     draw(0)
     const ys = new Set(ctx.bezierCurveTo.mock.calls.map(call => call[5]))
-    expect(ys).toEqual(new Set([48]))
+    // Left and right each sit in the middle of their own lane.
+    expect(ys).toEqual(new Set([36, 108]))
     const nan = (ts: number) => ({ ...frame(ts), left1: Array<number>(500).fill(Number.NaN), right1: Array<number>(500).fill(Number.NaN) })
     stream.waveform = [nan(101), nan(102)]
     rerender(<PiezoWaveform />)
