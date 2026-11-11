@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
 
 // Migration seeds one open row; startup must never recreate a missing hold.
@@ -828,6 +828,18 @@ export const householdMutationReceipts = sqliteTable('household_mutation_receipt
   result: text('result').notNull(),
   createdAt: integer('created_at').notNull(),
 })
+
+// A self-reported check-in belongs to a person, never to their current mattress zone.
+export const householdJournalEntries = sqliteTable('household_journal_entries', {
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  sleeperId: text('sleeper_id').notNull(),
+  localDate: text('local_date').notNull(),
+  revision: text('revision').notNull(),
+  timeZone: text('time_zone').notNull(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+  fields: text('fields'),
+}, table => [primaryKey({ columns: [table.accountId, table.localDate] })])
 
 // An inert shared-arrangement review, with independently approved private plans.
 // Creating or approving it never changes physical assignments or live routines.

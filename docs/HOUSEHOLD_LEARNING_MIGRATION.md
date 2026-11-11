@@ -128,11 +128,16 @@ sharing consent remains separate.
 - An explicit deletion flow must reconcile preserved copies, original personal
   records and affected derived models. The storage format reserves verified
   redaction tombstones; no deletion endpoint is exposed by this change.
-- New feedback, journal and training paths must use verified person attribution
-  and compatible physical-zone provenance. The archive is never a ready-made
-  training dataset.
-- The web library is implemented below. Native library screens and explicit local
-  Health-owner enrollment remain.
+- [Person-owned check-ins](PERSONAL_JOURNAL.md) now have separate storage and a
+  personally authenticated HTTP contract. Web/native editors, learning enrollment
+  and compatible physical-zone provenance remain. The archive is never a
+  ready-made training dataset.
+- The web library is merged in Core PR 110 (`31b034d56d5c7d832705276e60b92223d943d5d7`),
+  with the same tree as tested `68760eca8738b8719986f3e47d60ba63c2a9ef96` and all seven
+  hosted checks passing. Native library screens passed local phone/tablet tests
+  and independent finish review and are included in native integration PR 69.
+  Native hosted integration, distribution and explicit local Health-owner
+  enrollment remain.
 - Public activation, installed-device verification and the attended migration
   remain separate from this source change.
 

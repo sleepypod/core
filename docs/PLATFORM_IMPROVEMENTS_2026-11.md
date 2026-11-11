@@ -37,12 +37,12 @@ priority and acceptance; it does not introduce an additional approval gate.
 | 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Core PRs 93 and 94 merged evidence audit and response-model research; native parity is consolidated in PR 69. Prospective target-changing control remains pending |
 | 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Native owner-scoped context import and review consolidated in PR 69; local tests passed, hosted release and physical delivery remain |
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
-| 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Core PR 95 merged; native journal timing, quantity, missingness and comfort comparisons consolidated in PR 69 after local validation and design review |
+| 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Core PR 95 merged owner/legacy comparisons; native parity is consolidated in PR 69. Person-owned journal editors are in Core PR 111 and native PR 71; private saved-only habit comparisons pass local source/browser checks and the independent review correction; hosted delivery and native parity remain |
 | 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Native morning brief consolidated in PR 69, preserving its local test and independent design-review evidence. Web parity, hosted release and physical delivery remain |
 | 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 merged after hosted checks; native explanation timeline consolidated in PR 69; live acceptance remains |
 | 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Core and native PR 69 provide the clear plan and app-owned backup workflow; physical alarm and selected accessory acceptance remain |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Core PR 98 merged after hosted checks; native PR 69 includes reviewed Pod and app-owned phone coordination with fresh phone-state reconciliation. Qualified house devices and live acceptance remain |
-| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99–109 integrate identity, history ingestion, command admission, reviewed storage/recovery, web maintenance and private learning preservation/read APIs. The personal browser library is locally tested; deletion, personal learning/enrollment, native release, public activation and physical acceptance remain. Live solo behavior is unchanged |
+| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99–110 integrate identity, history ingestion, command admission, reviewed storage/recovery, web maintenance and the private learning library. Native maintenance/library work is consolidated in PR 69 after local phone/tablet checks. Person-owned check-in storage/API and web editor are tested in Core PR 111; the matching native editor is tested in stacked PR 71. Both await hosted checks and merge. Archived-copy deletion, personal learning/enrollment, native release, public activation and physical acceptance remain. Live solo behavior is unchanged |
 | 17 | Quiet and temporary arrangements | Explicit partner-resting/guest/side-swap state; shared-action arbitration and ambiguous-night training exclusion | Pending |
 | 18 | In-app practice | Illustrated guide reused, interactive temperature/alarm/Stop practice; secure invitation without owner key | Pending |
 | 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | Pending |
@@ -245,3 +245,17 @@ focused suite, generated schema and migration preservation checks, full lint,
 production build and post-build TypeScript check pass. The first stalled build
 and its generated cache remain preserved; the fresh-cache build is the passing
 result. Hosted checks and the attended client workflow remain separate work.
+
+- **11/16 — private personal journal:** Core PR 111 contains the person-owned
+  editor, scoped storage and API, with 9,766 passing source tests (19 existing
+  skips) and 106 passing production-browser scenarios. Native PR 71 is stacked
+  on PR 69; its 1,314 model/application tests pass (nine existing skips), focused
+  iPhone/iPad UI scenarios pass and an independent full design review returned
+  `ship`. Neither release is represented as deployed.
+- **11/16 — private habit comparisons:** the follow-up branch reuses the existing
+  descriptive comparisons for saved personal journals, grouping by retained
+  time zone without pooling people, legacy records or unsaved drafts. Seventy
+  focused contract/HTTP/state tests and all six browser scenarios pass. The
+  independent reviewer scored the exclusion-order correction resolved after
+  recapture; hosted release and native parity remain in progress. The
+  findings never train a model or change hardware.

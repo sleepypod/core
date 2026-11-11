@@ -9,7 +9,7 @@ import { join } from 'node:path'
 
 const serverOnlyTestStub = '\0server-only-test-stub'
 const thermalForecastIntegration = 'src/comfort/tests/thermal-forecast-integration.test.ts'
-const shellIntegration = ['scripts/tests/diagnosticCli.test.ts', 'tests/updateDeploy.test.ts']
+const shellIntegration = ['scripts/tests/diagnosticCli.test.ts', 'scripts/tests/biometricsArchiver.test.ts', 'tests/updateDeploy.test.ts', 'tests/fixtureCommand.test.ts']
 
 export default defineConfig({
   plugins: [{
@@ -74,10 +74,13 @@ export default defineConfig({
         test: {
           name: 'shell-integration',
           include: shellIntegration,
-          // Real command bundles fork many processes. Keep the same five-second guards without worker contention.
+          // Real process bundles have a separate budget; fixtureCommand also kills
+          // stalled children after 10s. Unit tests retain their normal 5s limit.
           sequence: { groupOrder: 2 },
           fileParallelism: false,
           maxWorkers: 1,
+          environment: 'node',
+          testTimeout: 20_000,
         },
       },
     ],

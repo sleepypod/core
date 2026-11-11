@@ -10,6 +10,8 @@ import { PersonHistorySource } from './historySource'
 import { PersonalHistoryApi } from './historyApi'
 import { PersonalLearningApi } from './learningApi'
 import { PersonalLearningLibrary } from './learningLibrary'
+import { PersonalJournalApi } from './personalJournalApi'
+import { PersonalJournalStore } from './personalJournal'
 import { ArrangementCoordinator } from './arrangementCoordinator'
 import { assertControlCurrent } from '@/src/controls/context'
 import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
@@ -22,6 +24,7 @@ const shared = globalThis as typeof globalThis & {
     arrangementReviews?: ArrangementReviewService
     personalHistory?: PersonalHistoryApi
     personalLearning?: PersonalLearningApi
+    personalJournal?: PersonalJournalApi
     arrangementCoordinator?: ArrangementCoordinator
     runId?: string
     publicAttempts: number
@@ -75,6 +78,11 @@ export async function handleHouseholdRequest(request: Request) {
   runtime.personalLearning ??= new PersonalLearningApi({ identities: runtime.store,
     library: new PersonalLearningLibrary(sqlite, runtime.store),
     enabled: () => preparationEnabled() && process.env.SLEEPYPOD_PERSONAL_HISTORY === '1' })
+  runtime.personalJournal ??= new PersonalJournalApi({ identities: runtime.store,
+    journal: new PersonalJournalStore(sqlite, runtime.store, () => {
+      const settings = sqlite.prepare('SELECT timezone FROM device_settings LIMIT 1').get() as { timezone: string } | undefined
+      return settings?.timezone ?? ''
+    }), enabled: () => preparationEnabled() && process.env.SLEEPYPOD_PERSONAL_JOURNAL === '1' })
   const historySource = new PersonHistorySource(sqlite, biometricsDb.$client)
   runtime.arrangementCoordinator ??= new ArrangementCoordinator({ database: sqlite, biometrics: biometricsDb.$client,
     identities: runtime.store, reviews: runtime.arrangementReviews, historySource,
@@ -90,6 +98,7 @@ export async function handleHouseholdRequest(request: Request) {
     arrangementReviews: runtime.arrangementReviews,
     personalHistory: runtime.personalHistory,
     personalLearning: runtime.personalLearning,
+    personalJournal: runtime.personalJournal,
     arrangementCoordinator: runtime.arrangementCoordinator,
     verifySoloConfiguration: (side) => {
       const row = sqlite.prepare('SELECT bed_mode, unused_zone_mode FROM device_settings LIMIT 1').get() as {

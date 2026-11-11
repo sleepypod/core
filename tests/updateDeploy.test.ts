@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync, symlinkSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { fixtureCommand as spawnSync } from './helpers/fixtureCommand'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const repo = process.cwd()

@@ -7,7 +7,7 @@ import { JournalError, journalRecordSchema, journalSelectionSchema, journalWrite
 import { contextTimesAreValid, journalHabits } from './context'
 
 /** Older clients preserve unknown detail, but changing a habit clears its now-incompatible timing. */
-function mergedFields(fields: JournalFields, previous?: JournalFields): JournalFields {
+export function mergedJournalFields(fields: JournalFields, previous?: JournalFields): JournalFields {
   if (fields.context !== undefined || !previous?.context) return fields
   const context = structuredClone(previous.context)
   for (const habit of journalHabits) {
@@ -49,7 +49,7 @@ export function createJournalStore(database: Database.Database) {
         if (input.expectedTimeZone !== undefined && input.expectedTimeZone !== recordZone) {
           throw new JournalError('The journal time zone changed. Your draft is kept; refresh and review its times before saving.', 'CONFLICT')
         }
-        const fields = input.fields ? mergedFields(input.fields, current.record?.fields) : null
+        const fields = input.fields ? mergedJournalFields(input.fields, current.record?.fields) : null
         if (fields?.context && !contextTimesAreValid(fields.context, input.date, recordZone, now)) {
           throw new JournalError('Habit times must be in the preceding day or wake date, in this entry’s time zone, and cannot be in the future.', 'BAD_REQUEST')
         }

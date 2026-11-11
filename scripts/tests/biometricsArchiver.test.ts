@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { spawnSync } from 'node:child_process'
+import { fixtureCommand as spawnSync } from '../../tests/helpers/fixtureCommand'
 import {
   appendFileSync,
   existsSync,

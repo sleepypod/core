@@ -12,6 +12,7 @@ import type { PersonalRoutineService } from './personalRoutines'
 import type { ArrangementReviewService } from './arrangementReviews'
 import type { PersonalHistoryApi } from './historyApi'
 import type { PersonalLearningApi } from './learningApi'
+import type { PersonalJournalApi } from './personalJournalApi'
 import type { ArrangementCoordinator } from './arrangementCoordinator'
 const MAX_BODY_BYTES = 128 * 1024
 const privacyHeaders = { 'Cache-Control': 'private, no-store', 'Vary': 'Authorization, Cookie', 'X-Content-Type-Options': 'nosniff' }
@@ -50,6 +51,7 @@ export interface HouseholdHttpDependencies {
   arrangementReviews?: ArrangementReviewService
   personalHistory?: PersonalHistoryApi
   personalLearning?: PersonalLearningApi
+  personalJournal?: PersonalJournalApi
   arrangementCoordinator?: ArrangementCoordinator
 }
 /** This namespace authorizes every route itself; personal credentials never enter legacy APIs. */
@@ -60,7 +62,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const routines = dependencies.personalRoutines?.present(current) ?? current
     const arrangement = dependencies.arrangementReviews?.present(routines) ?? routines
     const history = dependencies.personalHistory?.present(arrangement) ?? arrangement
-    return dependencies.personalLearning?.present(history) ?? history
+    const learning = dependencies.personalLearning?.present(history) ?? history
+    return dependencies.personalJournal?.present(learning) ?? learning
   }
   const url = new URL(request.url)
   const path = url.pathname.replace(/\/$/, '')
@@ -145,6 +148,9 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     if (dependencies.personalLearning && ['GET', 'HEAD'].includes(method)
       && /^\/api\/v1\/me\/learning\/(archives|records(?:\/[^/]+)?)$/.test(path))
       return dependencies.personalLearning.response(request, credential, assertRequestCurrent)
+    if (dependencies.personalJournal && ['GET', 'HEAD', 'POST'].includes(method)
+      && (path === '/api/v1/me/journal' || (method !== 'POST' && (path === '/api/v1/me/journal/patterns' || /^\/api\/v1\/me\/journal\/requests\/[^/]+$/.test(path)))))
+      return dependencies.personalJournal.response(request, credential, mutationBody, assertRequestCurrent)
     if (dependencies.arrangementCoordinator) {
       const coordinator = dependencies.arrangementCoordinator
       if (path === '/api/v1/household/transition' && method === 'GET')
