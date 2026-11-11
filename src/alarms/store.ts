@@ -4,6 +4,8 @@ import type { Side } from '@/src/hardware/types'
 import { activeSleeperSides, type BedConfiguration } from '@/src/lib/singleSleeper'
 import { alarmWarmupMinutes } from '@/src/temperature/baseline'
 import { NextAlarmError, nextAlarmSchema, nextAlarmWriteSchema, type NextAlarm, type NextAlarmWrite } from './contract'
+import { laterAlarmPreviewInputSchema, laterAlarmPreviewSchema, type LaterAlarmPreview, type LaterAlarmPreviewInput } from './contract'
+import { previewLaterAlarm } from './preview'
 import { alarmClock, alarmDigest, alarmHoldEnd, alarmPlan, alarmRowSchema, consistentAlarm, nextRoutineAlarm, occurrenceAt, overrideSchema,
   resolveAlarmClock, selectedAlarm, type AlarmContext, type AlarmExecution, type AlarmOccurrence, type AlarmOverride } from './model'
 
@@ -97,8 +99,30 @@ export function createAlarmStore(database: Database.Database) {
     return now >= earliest && now <= live.at + 60_000
   }
   const eligible = (side: Side, candidate: AlarmOccurrence, now: number, early: boolean) => matches(side, candidate, now, early) && execution(side, candidate) === null
-  return {
+  const store = {
     context, execution, page, eligible,
+    previewLater(request: LaterAlarmPreviewInput, now: number) {
+      // All reads share one SQLite snapshot; preview never writes an override or starts the scheduler.
+      return database.transaction(() => previewLaterAlarm(context(request.side), page(request.side, now), request, now))()
+    },
+    applyLater(review: LaterAlarmPreview, now: number): NextAlarm {
+      const preview = laterAlarmPreviewSchema.parse(review)
+      // Validate the entire displayed plan and its deadline in the same write transaction.
+      return database.transaction(() => {
+        const generatedAt = Date.parse(preview.generatedAt)
+        if (!Number.isSafeInteger(now) || now < generatedAt || now >= Date.parse(preview.expiresAt)) {
+          throw new NextAlarmError('This wake preview expired. Review the current plan again before saving.', 'CONFLICT')
+        }
+        const request = { side: preview.before.side, time: preview.proposed.time,
+          expectedRevision: preview.before.revision, expectedAt: preview.before.alarm?.at }
+        const validated = previewLaterAlarm(context(preview.before.side), page(preview.before.side, now),
+          laterAlarmPreviewInputSchema.parse(request), generatedAt)
+        if (alarmDigest(validated) !== alarmDigest(preview)) {
+          throw new NextAlarmError('The wake plan no longer matches this preview. Review it again before saving.', 'CONFLICT')
+        }
+        return store.write(validated.request, now)
+      }).immediate()
+    },
     dispatchable: (side: Side, candidate: AlarmOccurrence, now: number, early: boolean) => matches(side, candidate, now, early) && execution(side, candidate) === 'attempting',
     write(request: NextAlarmWrite, now: number): NextAlarm {
       const input = nextAlarmWriteSchema.parse(request)
@@ -147,4 +171,5 @@ export function createAlarmStore(database: Database.Database) {
       }).immediate()
     },
   }
+  return store
 }

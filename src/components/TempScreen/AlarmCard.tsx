@@ -11,6 +11,7 @@ import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
 import { trpc } from '@/src/utils/trpc'
 import { useNow } from './TonightCard'
 import { currentTonightRead } from './tonightSummary'
+import { LaterWakeReview } from './LaterWakeReview'
 
 /** Temp edits one wake occurrence. The separate weekly editor keeps its original job. */
 export function AlarmCard({ side }: { side: Side }) {
@@ -26,13 +27,15 @@ function NextAlarmCard({ side }: { side: Side }) {
   const [draft, setDraft] = useState<{ base: NextAlarm, time: string } | null>(null)
   const [message, setMessage] = useState('')
   const [uncertain, setUncertain] = useState(false)
+  const [confirmedRefresh, setConfirmedRefresh] = useState(0)
   const [editorOpen, setEditorOpen] = useState(false)
+  const [laterReview, setLaterReview] = useState<NextAlarm | null>(null)
   const current = currentTonightRead(query.dataUpdatedAt, query.isError, now) && query.data?.side === side ? query.data : undefined
   if (query.isLoading) return <Skeleton className="h-[100px]" />
   const alarm = current?.alarm
   const group = groupAlarms(schedules.data?.alarm ?? []).find(item => item.ids.some(id => alarm?.scheduleIds.includes(id))) ?? null
   const changedDraft = draft && current?.revision !== draft.base.revision
-  const pending = change.isPending || uncertain
+  const pending = change.isPending || uncertain || !!laterReview
   const localDate = (at: string) => new Intl.DateTimeFormat(undefined, { timeZone: current?.timeZone, weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(at))
   const clockAt = (at: string) => formatTime(new Intl.DateTimeFormat('en-GB', { timeZone: current?.timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)))
   const refresh = async () => {
@@ -41,6 +44,7 @@ function NextAlarmCard({ side }: { side: Side }) {
       setMessage('The saved alarm could not be refreshed. Changes remain unavailable until it is confirmed.')
       return
     }
+    if (uncertain) setConfirmedRefresh(value => value + 1)
     setUncertain(false)
     setMessage('Latest alarm loaded. Review it before making another change.')
   }
@@ -123,6 +127,19 @@ function NextAlarmCard({ side }: { side: Side }) {
         )}
         {alarm && current && (
           <div className="flex flex-wrap gap-2">
+            {current.state === 'scheduled' && (
+              <Button
+                size="sm"
+                disabled={pending || !current.canChange || !current.warming || Date.parse(current.warming.startsAt) <= now}
+                onClick={() => {
+                  setLaterReview(current)
+                  setDraft(null)
+                  setMessage('')
+                }}
+              >
+                Wake later once
+              </Button>
+            )}
             {current.state !== 'skipped' && <Button size="sm" disabled={pending || !current.canChange} onClick={() => void save({ side, action: 'skip', expectedRevision: current.revision, expectedAt: alarm.at })}>Skip this alarm</Button>}
             <Button
               size="sm"
@@ -139,6 +156,22 @@ function NextAlarmCard({ side }: { side: Side }) {
           </div>
         )}
         {!alarm && current?.change && <Button size="sm" disabled={pending} onClick={() => void save({ side, action: 'restore', expectedRevision: current.revision, expectedExpiresAt: current.change?.expiresAt })}>Clear expired change</Button>}
+        {laterReview && (
+          <LaterWakeReview
+            base={laterReview}
+            current={current}
+            now={now}
+            unavailable={uncertain || !current}
+            confirmedRefresh={confirmedRefresh}
+            onClose={() => setLaterReview(null)}
+            onUncertain={() => setUncertain(true)}
+            onSaved={(result) => {
+              utils.nextAlarm.get.setData({ side }, result)
+              setLaterReview(null)
+              setMessage(result.schedulerUpdated ? 'Later wake saved on your Pod. Weekly routines are unchanged.' : 'Later wake saved; timer registration is pending and has not yet been confirmed.')
+            }}
+          />
+        )}
         {draft && (
           <div className="flex flex-col gap-2 border-t border-border pt-3">
             <label className="flex items-center justify-between gap-3 text-sm">

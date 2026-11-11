@@ -32,6 +32,23 @@ export const nextAlarmSchema = z.object({
   }).nullable(),
 })
 export type NextAlarm = z.infer<typeof nextAlarmSchema>
+export const laterAlarmPreviewInputSchema = z.object({
+  side, expectedRevision: revision, expectedAt: instant,
+  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+}).strict()
+export type LaterAlarmPreviewInput = z.infer<typeof laterAlarmPreviewInputSchema>
+export const laterAlarmPreviewSchema = z.object({
+  apiVersion: z.literal(1), effect: z.literal('preview_only'), generatedAt: instant, expiresAt: instant,
+  before: nextAlarmSchema,
+  proposed: z.object({
+    at: instant, time: z.string(), duration: z.number(), wakeWindow: z.number(), targetF: z.number(),
+    warmingStartsAt: instant, earliestVibrationAt: instant, warmingEndsAt: instant, changeExpiresAt: instant,
+  }),
+  request: nextAlarmWriteSchema,
+  weeklyScheduleChanged: z.literal(false), externalDevices: z.literal('not_included'),
+})
+export type LaterAlarmPreview = z.infer<typeof laterAlarmPreviewSchema>
+export const laterAlarmApplySchema = z.object({ preview: laterAlarmPreviewSchema }).strict()
 export class NextAlarmError extends Error {
   constructor(message: string, readonly code: 'BAD_REQUEST' | 'CONFLICT' | 'PRECONDITION_FAILED') { super(message) }
 }
