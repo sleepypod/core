@@ -385,6 +385,17 @@ export const biometricRuntimeReceipts = sqliteTable('biometric_runtime_receipts'
   heartbeatAtMs: integer('heartbeat_at_ms').notNull(),
 }, t => [uniqueIndex('uq_biometric_runtime_receipt').on(t.side, t.component, t.generation)])
 
+// Actual daemon acknowledgments of a reviewed arrangement, after discarding old routing windows.
+export const householdProcessingReceipts = sqliteTable('household_processing_receipts', {
+  operationId: text('operation_id').notNull(),
+  component: text('component', { enum: ['sleep-detector', 'piezo-processor'] }).notNull(),
+  processId: text('process_id').notNull(),
+  intentHash: text('intent_hash').notNull(),
+  firstSampleMs: integer('first_sample_ms').notNull(),
+  latestSampleMs: integer('latest_sample_ms').notNull(),
+  heartbeatAtMs: integer('heartbeat_at_ms').notNull(),
+}, table => [uniqueIndex('uq_household_processing_receipt').on(table.operationId, table.component)])
+
 export const biometricProcessingRuns = sqliteTable('biometric_processing_runs', {
   id: text('id').primaryKey(),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

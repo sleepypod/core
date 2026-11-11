@@ -35,7 +35,8 @@ const context = (key = fixture.ownerKey) => {
 }
 const state = () => ['hardware_admission', 'households', 'household_accounts', 'side_settings', 'device_settings', 'household_personal_settings',
   'bedtime_routines', 'power_schedules', 'temperature_schedules', 'alarm_schedules', 'temperature_limits', 'comfort_states',
-  'household_arrangement_reviews', 'household_arrangement_transitions', 'household_attribution_epochs', 'household_history_state']
+  'household_arrangement_reviews', 'household_arrangement_transitions', 'household_attribution_epochs', 'household_history_state',
+  'biometric_profile_bindings', 'biometric_profile_revisions', 'biometric_activation_events', 'biometric_config_outbox']
   .map(table => fixture.database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
 const makeStore = (runtimeId = runId) => new ArrangementTransitionStore({ database: fixture.database, identities: fixture.identities,
   reviews, history, historySource: source.source, enabled: () => enabled, observe: () => proof, runId: runtimeId, now: () => fixture.clock.now })

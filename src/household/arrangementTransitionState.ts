@@ -24,6 +24,7 @@ export function readArrangementArchive(database: Database.Database) {
   const archive = { ...rows,
     routineWeeks: (['left', 'right'] as const).map(side => ({ side, records: readBedtimeRoutineState(store, side).records })),
     stageModels: database.prepare('SELECT side, active, version, model_hash FROM side_stage_models ORDER BY side').all(),
+    profileBindings: database.prepare('SELECT * FROM biometric_profile_bindings ORDER BY side').all(),
     device: database.prepare('SELECT id, bed_mode, unused_zone_mode, autopilot_enabled FROM device_settings ORDER BY id').all(),
     activeRuns: database.prepare('SELECT * FROM run_once_sessions WHERE status = \'active\' ORDER BY id LIMIT 1001').all(),
     activations: database.prepare('SELECT * FROM comfort_activations WHERE revoked_at IS NULL ORDER BY id LIMIT 1001').all(),
@@ -41,6 +42,7 @@ export function arrangementPolicyDigest(database: Database.Database) {
     limits: { left: limits.read('left'), right: limits.read('right') },
     comfort: states.map(row => ({ side: row.side, config: comfortStateSchema.parse(JSON.parse(row.state)).config })),
     device: database.prepare('SELECT id, autopilot_enabled FROM device_settings ORDER BY id').all(),
+    profiles: database.prepare('SELECT * FROM biometric_profile_bindings ORDER BY side').all(),
     base: database.prepare('SELECT * FROM base_schedules ORDER BY id').all(),
   })
 }

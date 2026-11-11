@@ -1,0 +1,1 @@
+ALTER TABLE `household_arrangement_transitions` ADD `processing` text;

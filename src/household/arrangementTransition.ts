@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { z } from 'zod'
+import { prepareArrangementProcessing } from './arrangementProcessing'
 import { assertHardwareDrained } from '@/src/hardware/admission'
 import { HardwareAdmissionStore } from '@/src/hardware/admissionStore'
 import { householdIdSchema, revisionSchema } from './contract'
@@ -170,6 +171,7 @@ export class ArrangementTransitionStore {
         mode: 'solo_merged', assignments: [{ sleeperId: session.selfSleeperId, recordedSide: plan.sourceSide }],
         basis: 'verified_arrangement', reviewReceiptId: current.id, reviewedBy: session.accountId,
       })
+      const processing = prepareArrangementProcessing(database, plan, current.id, context.history.datasetId, now)
       resetArrangementControls(database, plan, now)
       for (const person of plan.participants) {
         revisionSchema.parse(person.sessionRevision + 1)
@@ -182,8 +184,8 @@ export class ArrangementTransitionStore {
       const changed = database.prepare('UPDATE households SET mode = \'assigned\', revision = revision + 1, assignment_revision = assignment_revision + 1, effective_at = ? WHERE id = ? AND revision = ? AND assignment_revision = ? AND mode = \'solo-anywhere\'')
         .run(now, session.householdId, plan.householdRevision, plan.assignmentRevision)
       if (changed.changes !== 1) throw reject()
-      database.prepare('UPDATE household_arrangement_transitions SET state = \'committed\', committed_at = ?, archive = ?, committed_hash = ? WHERE id = ?')
-        .run(now, archive, committedArrangementDigest(database, session.householdId), current.id)
+      database.prepare('UPDATE household_arrangement_transitions SET state = \'committed\', committed_at = ?, archive = ?, committed_hash = ?, processing = ? WHERE id = ?')
+        .run(now, archive, committedArrangementDigest(database, session.householdId), JSON.stringify(processing), current.id)
       const saved = this.row(current.id)
       if (!saved) throw reject()
       return this.receipt(saved)

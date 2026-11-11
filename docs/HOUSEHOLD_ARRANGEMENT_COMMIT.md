@@ -50,6 +50,8 @@ The single commit:
   cancels active one-off sessions, and revokes existing personal-control leases;
 - leaves personal learning off, side-specific stage models inactive, shared
   reactive automation off and base schedules disabled pending household review;
+- preserves prior algorithm revisions and publishes fresh default generations
+  for both assigned sides, with the exact expected processing intent in the receipt;
 - preserves model/history tables, device credentials, pairings and sensor
   calibration; it does not turn a network acknowledgment into physical proof;
 - closes the solo attribution epoch and saves a committed-state fingerprint.
@@ -71,6 +73,38 @@ to withhold intervals without exactly one eligible reviewed epoch. A later
 recovery coordinator must explicitly append the assigned epoch after verifying
 both the live pipeline configuration and physical arrangement.
 
+### Processing acknowledgments
+
+The committed intent identifies the reviewed dataset, assignment revision,
+operation, commit time and both expected algorithm generations/hashes. Each live
+Python consumer reads the current configuration from a single read-only SQLite
+snapshot. An absent intent is compatible only with an unassigned legacy/solo
+installation; an assigned installation with absent, malformed or changed intent
+cannot silently continue as legacy processing.
+
+The sleep detector closes existing sessions at their last observed presence,
+retains completed rows and physical baselines, and persists a new routing marker
+before accepting new samples. A matching checkpoint can resume the same
+arrangement after restart. Failed session writes or checkpoint writes cannot
+produce an adoption acknowledgment.
+
+The piezo processor finishes queued candidates with their original provenance,
+clears unfinished numerical windows and installs both exact requested profiles.
+It cannot acknowledge an old restored generation or only one installed side.
+Each consumer records its own process identity and fresh firmware sample boundary
+only after actually processing usable input. Both current receipts, the exact
+intent hash and unchanged source identity are required. Receipt/source reads do
+not create history epochs or reopen hardware admission.
+
+Old merged output and restart/reload gaps remain unassigned. The later of the two
+observed sample boundaries is only an earliest possible boundary for the future
+release coordinator; it is not permission to assign records crossing that gap.
+Ordinary solo processing, stored calibration and historical model artifacts are
+preserved. No existing installation is changed by generating the migrations.
+The biometric source manifest and generated browser-worker identity change with
+this code. Prior profile artifacts stay retained; existing compatibility checks
+must still pass before an artifact can be used with the changed engine.
+
 ## Recovery integration still required
 
 A committed storage transaction is **not completed physical activation**. Before
@@ -82,8 +116,9 @@ exposing activation in either app, implement and test:
 3. Producer shutdown/reload: scheduler, keepalives, auto-on/off, temperature
    requests, comfort leases, reactive rules, base queues and alarm restoration.
    Old callbacks must not capture fresh admission using stale in-memory policy.
-4. Biometric algorithm identity review and propagation. Calibration belongs to
-   physical sensors; personal algorithm bindings must not migrate by side alone.
+4. Reconcile the actual processing receipts with the committed fingerprint and
+   review any later personal-profile migration. The implemented default reset and
+   sample-boundary acknowledgments are prerequisites, not completed activation.
 5. Exact committed-state reconciliation, fresh independent observations, a new
    reviewed assigned recording epoch, and a durable release receipt coupled to
    admission reopening. Neither time passing nor drain completion releases it.
@@ -98,10 +133,26 @@ projection, exact request replay, revoked credentials, changed plans/source,
 independent stale/future observations, in-flight Stop, SQL failure rollback,
 orphaned/corrupt receipts, database reopening and unassigned reload intervals.
 
-Final local validation: **9,328 passed, 19 existing skips**; 409 focused
+The original atomic-storage release passed **9,328 tests, 19 existing skips**; 409 focused
 household/admission cases and 44 post-archive checks passed. TypeScript, full
 ESLint, both migration checks and production build passed. The first full run
 caught two omitted schema-contract updates for the new table; the original
 failure receipt is retained and the complete final suite passed afterward.
 Hosted promotion is tracked separately. No physical operation, actual overnight
 improvement or live activation is established by these tests.
+
+The processing-boundary follow-up passes **9,342 Core tests, 19 existing skips**,
+plus **477 shared Python tests (5 existing skips), 225 piezo tests and 141
+sleep-detector tests**, using the modules' locked dependencies. It includes real
+SQLite publication/rollback and the actual piezo main loop, both-profile adoption,
+old-session closure, failed checkpoint/receipt writes, malformed/future/stale
+samples, source replacement, restart receipts, and Swift's uppercase UUIDs.
+TypeScript, full ESLint, both generated migration checks and the production build pass.
+
+Retained intermediate failures caught the stale numerical source manifest and
+its generated browser-worker fingerprint. A later run hit four five-second
+timeouts in unchanged diagnostic/updater tests under full concurrency. The final
+complete run used six workers and preserved every timeout and assertion; it
+passed. An in-progress four-worker run was interrupted to fix the UUID contract
+mismatch before starting that final run. No failed or interrupted run is counted
+as a passing validation.

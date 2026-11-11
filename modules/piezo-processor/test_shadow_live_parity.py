@@ -64,6 +64,10 @@ def test_real_live_loop_and_shadow_match_event_seconds_values_and_gap_recovery(m
     connection.executescript(mechanical_migration.read_text())
     state = SimpleNamespace(observed=START, context=RecordedContext(('left',), True, True, True))
     monkeypatch.setattr(main, 'BIOMETRICS_DB', database)
+    config_path = tmp_path / 'config.db'
+    with sqlite3.connect(config_path) as config_connection:
+        config_connection.execute('CREATE TABLE side_settings(side TEXT)')
+    monkeypatch.setattr(main, 'SLEEPYPOD_DB', config_path)
     monkeypatch.setattr(main, 'open_biometrics_db', lambda: connection)
     monkeypatch.setattr(main, 'report_health', lambda *args: None)
     monkeypatch.setattr(main.time, 'time', lambda: state.observed / 1000)

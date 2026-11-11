@@ -520,6 +520,26 @@ exports[`complete Drizzle schema contracts > pins every biometrics table, column
   {
     "checks": 0,
     "columns": [
+      "operation_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "component | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:sleep-detector,piezo-processor",
+      "process_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "intent_hash | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "first_sample_ms | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "latest_sample_ms | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "heartbeat_at_ms | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "householdProcessingReceipts",
+    "foreignKeys": [],
+    "indexes": [
+      "uq_household_processing_receipt | unique | columns:operation_id,component | where:none",
+    ],
+    "name": "household_processing_receipts",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
       "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
       "timestamp | sql:integer | logical:date/SQLiteTimestamp | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
@@ -1541,6 +1561,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "context | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "archive | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "committed_hash | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "processing | sql:text | logical:string/SQLiteText | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
     ],
     "exportName": "householdArrangementTransitions",
     "foreignKeys": [
