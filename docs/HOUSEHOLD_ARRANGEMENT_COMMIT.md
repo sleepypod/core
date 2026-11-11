@@ -107,6 +107,18 @@ must still pass before an artifact can be used with the changed engine.
 
 ## Recovery integration still required
 
+A read-only Linux service-generation reader verifies the current process against
+systemd's active MainPID and invocation, the kernel boot identity and `/proc`
+process-start counter. It rechecks service properties after reading process
+identity, bounds reads, and rejects stale or future observations. Within the same
+boot, recovery requires both a new invocation and a strictly later process start;
+an application UUID, changed environment value or reused PID alone is insufficient.
+
+`HardwareAdmissionStore.releaseWithReceipt` can save the coordinator's synchronous
+reconciliation and release in one FULL-durability transaction. Wrong revisions,
+failed receipt writes, failed admission writes and callback changes to the hold
+roll back together. It is internal, and no recovery coordinator calls it yet.
+
 A committed storage transaction is **not completed physical activation**. Before
 exposing activation in either app, implement and test:
 
@@ -156,3 +168,17 @@ complete run used six workers and preserved every timeout and assertion; it
 passed. An in-progress four-worker run was interrupted to fix the UUID contract
 mismatch before starting that final run. No failed or interrupted run is counted
 as a passing validation.
+
+The service-generation and atomic-release prerequisites pass **9,373 Core tests,
+19 existing skips**, including 42 focused cases for identity verification,
+replay rejection and release rollback. Production build, TypeScript and full
+ESLint pass. These tests mock Linux service/proc observations; they do not prove
+the reader works on a particular installed Pod.
+
+An initial full run exceeded the unchanged five-second diagnostic bundle guard
+under parallel worker load. The two real-shell integration files now run
+sequentially after the other suites, preserving all assertions and timeouts.
+Discovery verified the same 671 files exactly once; all 57 shell cases and the
+complete final suite passed. An overlapping build/typecheck removed generated
+Next type files during that check; the retained failure was followed by a clean
+typecheck after the production build completed.

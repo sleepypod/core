@@ -68,14 +68,22 @@ export class HardwareAdmissionStore {
 
   /** Internal recovery primitive, not an endpoint. A coordinator must reconcile its receipt before release. */
   release(operationId: string, expectedRevision: number): HardwareAdmissionSnapshot {
+    return this.releaseWithReceipt(operationId, expectedRevision, () => undefined).admission
+  }
+
+  /** Reconcile and save recovery before opening admission, in the same durable commit. */
+  releaseWithReceipt<Result>(operationId: string, expectedRevision: number, operation: (admission: HardwareAdmissionSnapshot) => Result) {
     identity.parse(operationId)
     return this.durable(() => {
       const current = this.read()
       if (current.holdId !== operationId || current.revision !== expectedRevision || current.revision >= Number.MAX_SAFE_INTEGER)
         throw new HardwareAdmissionError()
+      const { result } = this.performWhileHeld(operationId, expectedRevision, operation)
       this.database.prepare('UPDATE hardware_admission SET revision = ?, hold_id = NULL, held_at = NULL WHERE id = 1')
         .run(current.revision + 1)
-      return this.read()
+      const admission = this.read()
+      if (admission.holdId !== null || admission.revision !== current.revision + 1) throw new HardwareAdmissionError()
+      return { admission, result }
     })
   }
 }

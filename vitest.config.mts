@@ -9,6 +9,7 @@ import { join } from 'node:path'
 
 const serverOnlyTestStub = '\0server-only-test-stub'
 const thermalForecastIntegration = 'src/comfort/tests/thermal-forecast-integration.test.ts'
+const shellIntegration = ['scripts/tests/diagnosticCli.test.ts', 'tests/updateDeploy.test.ts']
 
 export default defineConfig({
   plugins: [{
@@ -52,7 +53,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'unit',
-          exclude: [thermalForecastIntegration],
+          exclude: [thermalForecastIntegration, ...shellIntegration],
           sequence: { groupOrder: 0 },
         },
       },
@@ -64,6 +65,17 @@ export default defineConfig({
           // Full-night provenance audits need a worker without competing test files.
           // Keep the existing fixture, timeout and assertions, with shared coverage.
           sequence: { groupOrder: 1 },
+          fileParallelism: false,
+          maxWorkers: 1,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'shell-integration',
+          include: shellIntegration,
+          // Real command bundles fork many processes. Keep the same five-second guards without worker contention.
+          sequence: { groupOrder: 2 },
           fileParallelism: false,
           maxWorkers: 1,
         },

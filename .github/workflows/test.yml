@@ -19,6 +19,12 @@ jobs:
     name: ${{ matrix.task.name }}
     # Locked Playwright 1.58.2 supports Ubuntu 24.04, not the newer latest image.
     runs-on: ${{ matrix.task.name == 'Browser Tests' && 'ubuntu-24.04' || 'ubuntu-latest' }}
+    # Official version-matched image includes Chromium and all system dependencies.
+    # Avoid an apt mirror dependency before the browser suite can even start.
+    container: ${{ matrix.task.container || null }}
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
       packages: read
@@ -33,7 +39,11 @@ jobs:
           - { name: "Unit Tests", cmd: "VITEST_MAX_WORKERS=2 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 pnpm test run --coverage --passWithNoTests" }
           # Build workers must not open the same on-disk SQLite file. The browser
           # runner creates and migrates its own isolated databases after the build.
-          - { name: "Browser Tests", cmd: "NODE_ENV=production CI=1 DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: pnpm build && pnpm test:browser" }
+          - name: Browser Tests
+            cmd: "NODE_ENV=production CI=1 DATABASE_URL=:memory: BIOMETRICS_DATABASE_URL=:memory: pnpm build && pnpm test:browser"
+            container:
+              image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+              options: --init --ipc=host
 
     steps:
       - name: Checkout
@@ -73,9 +83,20 @@ jobs:
         working-directory: modules/piezo-processor
         run: uv sync --locked --no-install-project
 
-      - name: Install browser
+      - name: Verify version-matched browser
         if: matrix.task.name == 'Browser Tests'
-        run: pnpm exec playwright install --with-deps chromium
+        run: |
+          node --input-type=module -e '
+            import { chromium } from "@playwright/test";
+            import { createRequire } from "node:module";
+            const require = createRequire(import.meta.url);
+            if (require("@playwright/test/package.json").version !== "1.58.2") {
+              throw new Error("Update the pinned Playwright container with the package version");
+            }
+            const browser = await chromium.launch({ headless: true });
+            console.log(`Chromium ready: ${browser.version()}`);
+            await browser.close();
+          '
 
       - name: Cache Assets (Vitest)
         id: asset-cache

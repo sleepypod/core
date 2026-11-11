@@ -23,6 +23,52 @@ afterEach(() => {
 })
 
 describe('persisted hardware hold', () => {
+  it('commits release and its reconciliation receipt together and retains both after reopening', () => {
+    const operationId = randomUUID()
+    database.exec('CREATE TABLE recovery_receipt (operation_id TEXT PRIMARY KEY, released_revision INTEGER NOT NULL)')
+    store.hold(operationId)
+    const result = store.releaseWithReceipt(operationId, 2, (held) => {
+      expect(store.read()).toEqual({ revision: 2, holdId: operationId })
+      expect(database.pragma('synchronous', { simple: true })).toBe(2)
+      database.prepare('INSERT INTO recovery_receipt VALUES (?, ?)').run(operationId, held.revision + 1)
+      return 'reconciled'
+    })
+    expect(result).toEqual({ admission: { revision: 3, holdId: null }, result: 'reconciled' })
+    database.close()
+    database = new Database(path.join(folder, 'configuration.db'))
+    expect(new HardwareAdmissionStore(database).read()).toEqual(result.admission)
+    expect(database.prepare('SELECT * FROM recovery_receipt').all()).toEqual([{ operation_id: operationId, released_revision: 3 }])
+  })
+
+  it.each(['receipt', 'release', 'tamper', 'async'] as const)('keeps the original hold and rolls back recovery writes on %s failure', (failure) => {
+    const operationId = randomUUID()
+    database.exec('CREATE TABLE recovery_receipt (operation_id TEXT PRIMARY KEY)')
+    store.hold(operationId)
+    if (failure === 'release') database.exec('CREATE TRIGGER refuse_release BEFORE UPDATE ON hardware_admission BEGIN SELECT RAISE(ABORT, \'write interrupted\'); END')
+    expect(() => store.releaseWithReceipt(operationId, 2, () => {
+      database.prepare('INSERT INTO recovery_receipt VALUES (?)').run(operationId)
+      if (failure === 'receipt') throw new Error('receipt interrupted')
+      if (failure === 'tamper') database.exec('UPDATE hardware_admission SET revision = 4')
+      if (failure === 'async') return Promise.resolve('not synchronous')
+    })).toThrow()
+    expect(store.read()).toEqual({ revision: 2, holdId: operationId })
+    expect(database.prepare('SELECT * FROM recovery_receipt').all()).toEqual([])
+  })
+
+  it('rejects stale or overflowing release before running reconciliation', () => {
+    const operationId = randomUUID()
+    store.hold(operationId)
+    let reconciled = false
+    const reconcile = () => {
+      reconciled = true
+    }
+    expect(() => store.releaseWithReceipt(randomUUID(), 2, reconcile)).toThrow()
+    expect(() => store.releaseWithReceipt(operationId, 1, reconcile)).toThrow()
+    database.prepare('UPDATE hardware_admission SET revision = ?').run(Number.MAX_SAFE_INTEGER)
+    expect(() => store.releaseWithReceipt(operationId, Number.MAX_SAFE_INTEGER, reconcile)).toThrow()
+    expect(reconciled).toBe(false)
+  })
+
   it('commits a synchronous receipt with the hold and rolls both back if either write fails', () => {
     database.exec('CREATE TABLE test_receipt (id TEXT PRIMARY KEY, revision INTEGER NOT NULL)')
     const operationId = randomUUID()
