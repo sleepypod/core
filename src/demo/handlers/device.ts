@@ -1,5 +1,6 @@
 import type { DemoHandlers, RouterOutputs } from '../types'
 import { MINUTE, toCelsius } from '../util'
+import { nightWindow } from '@/src/night/window'
 
 type Side = 'left' | 'right'
 type Status = RouterOutputs['device']['getStatus']
@@ -111,6 +112,13 @@ export function getDemoDeviceStatus(unit: 'F' | 'C' = 'F'): Status {
 }
 
 export const device: DemoHandlers<'device'> = {
+  nightExplanation: (input) => {
+    const generatedAt = now()
+    return { apiVersion: 1, generatedAt, side: input.side, ...nightWindow('America/Los_Angeles', generatedAt, input.wakeDate),
+      attribution: 'physical_zone_only', events: [], eventsTruncated: false, thermal: [], room: [], roomSampleIntervalMs: 300_000, roomTruncated: false,
+      sources: (['applications', 'decisions', 'rules', 'thermal', 'room'] as const).map(key => ({ key, status: 'unavailable' as const,
+        rowsRead: 0, discarded: 0, truncated: false, note: 'Demonstration only. No actual controller or overnight journals are connected.' })) }
+  },
   getCooling: input => ({ apiVersion: 1, side: input.side, generatedAt: now(), observedAt: null,
     state: 'unavailable', reason: 'Temporary cooling requires a connected Pod; practice does not send hardware commands.',
     proposal: null, lease: null, physicalVerification: 'unverified' }),

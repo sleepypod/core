@@ -8,6 +8,7 @@ import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, NoticeStack, PageHeader, Skeleton } from '@/src/components/ds'
 import { TemporaryCooling } from './TemporaryCooling'
+import { NightExplanation } from './NightExplanation'
 import { TonightOverview } from './TonightOverview'
 import { morningInPodZone } from './tonightSummary'
 import { ComfortLimitCard } from './ComfortLimitCard'
@@ -218,6 +219,7 @@ export const TempScreen = () => {
       <TemporaryCooling unit={unit} side={controlSide} name={sideName(controlSide)} timeZone={settings?.device?.timezone} />
     </>
   )
+  const history = <NightExplanation side={controlSide} unit={unit} />
   const details = (
     <details className="my-5 rounded-card border border-line p-4">
       <summary className="min-h-11 cursor-pointer py-2 font-medium">Comfort limits and recording checks</summary>
@@ -236,6 +238,7 @@ export const TempScreen = () => {
         }}
         onInspectSide={setInspectedSide}
       />
+      {history}
       {details}
     </>
   )
@@ -256,6 +259,7 @@ export const TempScreen = () => {
             <AlarmCard side={contextSide} />
           </div>
         </div>
+        {history}
         {details}
       </>
     )
@@ -337,6 +341,7 @@ export const TempScreen = () => {
       </div>
 
       <ScheduleTimeline unit={unit} sides={shown} className="max-[899px]:hidden" />
+      {history}
       {details}
     </>
   )

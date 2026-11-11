@@ -472,6 +472,7 @@ const expectedTables: Record<string, TableSpec> = {
     ],
     indexes: [
       { name: 'idx_automation_runs_automation_fired', unique: false, columns: ['automation_id', 'fired_at'] },
+      { name: 'idx_automation_runs_fired', unique: false, columns: ['fired_at', 'id'] },
     ],
   },
 }

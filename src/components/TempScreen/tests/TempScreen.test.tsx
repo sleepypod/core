@@ -101,6 +101,7 @@ vi.mock('../ScheduleTimeline', () => ({
 }))
 vi.mock('../TemporaryCooling', () => ({ TemporaryCooling: ({ side }: { side: string }) => <div data-testid="cooling-side">{side}</div> }))
 vi.mock('../TonightOverview', () => ({ TonightOverview: ({ side }: { side: string }) => <div data-testid="overview-side">{side}</div> }))
+vi.mock('../NightExplanation', () => ({ NightExplanation: ({ side }: { side: string }) => <div data-testid="night-explanation">{side}</div> }))
 vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => <div data-testid="next-alarm-card" /> }))
 vi.mock('../useTempNotices', async (importOriginal) => {

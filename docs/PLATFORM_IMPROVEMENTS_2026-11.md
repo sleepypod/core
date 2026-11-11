@@ -35,7 +35,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
 | 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Pending |
 | 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Pending |
-| 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Pending |
+| 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Read-only Core/web implementation tested; native timeline and live release in progress |
 | 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Source implementation and tests in progress; physical alarm and accessories remain unqualified |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Pending |
 | 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Pending |
@@ -44,7 +44,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | Pending |
 | 20 | Endel bedtime ritual | Supported Shortcuts/AirPlay flow, selected volume/duration, actual route state and tested tap-to-finish fallback | Pending |
 | 21 | Watch, ESP32 and widgets | Temperature/Stop/next alarm, person assignment and freshness parity; simulator and physical verification | Pending |
-| 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Shared authority and web flow implemented and tested; native validation and release in progress |
+| 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Core PR 90 passed hosted checks and merged; native PR 65 passed local validation and awaits hosted checks; live release remains |
 | 23 | Bed-care center | Actionable real telemetry, backup age and recovery walkthrough; unavailable leak detection stays unavailable | Core PR 89 passed all hosted checks and merged; native consolidated PR 64 awaiting hosted checks; live deployment remains |
 | 24 | Base and snoring assistance | Attended movement/Stop/position qualification first; trustworthy snore signal and whole-bed partner constraints before automation | Pending |
 
@@ -103,3 +103,11 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
   firmware countdown and one-time guarded return. Policy/storage/context/UI tests
   and authenticated mobile/tablet browser flows cover normal and uncertain replies.
   No live cooling request, wake routine or personal adaptation mode was changed.
+  Core PR 90 merged as `a6f0798e` after all hosted checks passed. Native PR 65
+  adds the matching reviewed proposal, expiry, cancellation and uncertain-request
+  recovery. Signed iPhone/iPad tests and an independent design verdict passed;
+  hosted checks, TestFlight and physical acceptance remain separate.
+- **13 — overnight explanations:** [source semantics and validation](NIGHT_EXPLANATION.md)
+  records read-only source boundaries, DST windows, gap-preserving charts,
+  controller/Preview distinctions and cached room clocks. Native parity and
+  actual overnight verification are in progress.

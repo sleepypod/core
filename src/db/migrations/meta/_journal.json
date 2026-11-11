@@ -407,6 +407,13 @@
       "when": 1794359590732,
       "tag": "0057_temporary_cooling",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1794362344454,
+      "tag": "0058_night_explanation_index",
+      "breakpoints": true
     }
   ]
 }

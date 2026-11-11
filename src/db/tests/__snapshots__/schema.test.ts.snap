@@ -894,6 +894,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
     ],
     "indexes": [
       "idx_automation_runs_automation_fired | non-unique | columns:automation_id,fired_at | where:none",
+      "idx_automation_runs_fired | non-unique | columns:fired_at,id | where:none",
     ],
     "name": "automation_runs",
     "primaryKeys": [],

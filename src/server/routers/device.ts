@@ -2,7 +2,9 @@ import { coolingPageSchema } from '@/src/temperature/cooling'
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
-import { db, sqlite } from '@/src/db'
+import { db, sqlite, biometricsDb } from '@/src/db'
+import { nightQuerySchema, nightExplanationSchema } from '@/src/night/contract'
+import { readNightExplanation } from '@/src/night/reader'
 import { readTemperatureApplications, temperatureApplicationQuerySchema, temperatureApplicationsSchema } from '@/src/temperature/applications'
 import { deviceState } from '@/src/db/schema'
 import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
@@ -116,6 +118,16 @@ const pendingTemps = new Map<string, PendingTemp>()
  * polling, consider caching device state from database instead.
  */
 export const deviceRouter = router({
+  nightExplanation: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/device/night-explanation', tags: ['Device'] } })
+    .input(nightQuerySchema)
+    .output(nightExplanationSchema)
+    .query(({ input }) => {
+      try {
+        return readNightExplanation(sqlite, biometricsDb.$client, input.side, input.wakeDate)
+      }
+      catch { throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Night evidence is unavailable. Check the device time zone and choose a started night within the last 30 days.' }) }
+    }),
   temperatureApplications: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/v1/device/temperature/applications', tags: ['Device'] } })
     .input(temperatureApplicationQuerySchema)

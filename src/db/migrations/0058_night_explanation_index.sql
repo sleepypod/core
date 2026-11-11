@@ -1,0 +1,1 @@
+CREATE INDEX `idx_automation_runs_fired` ON `automation_runs` (`fired_at`,`id`);

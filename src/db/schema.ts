@@ -611,6 +611,7 @@ export const automationRuns = sqliteTable('automation_runs', {
   detail: text('detail', { mode: 'json' }), // evaluated values + action result
 }, t => [
   index('idx_automation_runs_automation_fired').on(t.automationId, t.firedAt),
+  index('idx_automation_runs_fired').on(t.firedAt, t.id),
 ])
 
 // Indexes are now defined inline within each table definition above using index()

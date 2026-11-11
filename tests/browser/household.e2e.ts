@@ -162,7 +162,7 @@ test('real personal API keeps two browser accounts separate and routine drafts i
     expect((await request.get(`/api/v1/me/routines/publications/${requestId}`, { headers: memberHeaders })).status()).toBe(404)
     expect(await (await request.get('/api/v1/household/session', { headers: memberHeaders })).json())
       .toMatchObject({ capabilities: { personalRoutinePublication: false } })
-    for (const path of ['/api/settings', '/api/biometrics/sleep?side=left', '/api/trpc/settings.get', '/api/db-backup', '/api/v1/controls']) expect((await request.get(path, { headers: memberHeaders })).status()).toBe(401)
+    for (const path of ['/api/settings', '/api/biometrics/sleep?side=left', '/api/trpc/settings.get', '/api/db-backup', '/api/v1/controls', '/api/v1/device/night-explanation?side=left', '/api/trpc/device.nightExplanation']) expect((await request.get(path, { headers: memberHeaders })).status()).toBe(401)
     expect((await request.get('/api/system/databases/rows?db=sleepypod&table=household_personal_settings', { headers: ownerHeaders })).status()).toBe(403)
     expect((await request.get('/api/db-backup', { headers: ownerHeaders })).status()).toBe(403)
     const context = { requestId: randomUUID(), expectedSessionRevision: 1, expectedAssignmentRevision: 1 }
