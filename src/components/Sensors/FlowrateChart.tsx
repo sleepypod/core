@@ -7,6 +7,9 @@ import { useMemo, useState } from 'react'
 import { trpc } from '@/src/utils/trpc'
 import { useSensorFrame } from '@/src/hooks/useSensorStream'
 import { Card, InlineError, LineChart, SectionLabel, SegmentedControl, SelectValue, Skeleton } from '@/src/components/ds'
+import { Chart3D } from '@/src/components/Chart3D/Chart3D'
+import { chartState, timeSeries3D, useChartStyle } from '@/src/components/Chart3D/chart3dData'
+import type { Chart3DSpec } from '@/src/components/Chart3D/chart3dScene'
 
 interface FlowChartDataPoint {
   time: number
@@ -17,6 +20,8 @@ interface FlowChartDataPoint {
 }
 
 type ViewMode = 'flowrate' | 'rpm'
+
+const SPEC_3D: Chart3DSpec = { series: [{ kind: 'ribbon', label: 'L' }, { kind: 'ribbon', label: 'R' }] }
 
 const HOUR_OPTIONS = [
   { value: 1, label: '1h' },
@@ -35,6 +40,7 @@ export function FlowrateChart() {
   const timeFormat = useTimeFormat()
   const [hours, setHours] = useState<number>(6)
   const [viewMode, setViewMode] = useState<ViewMode>('flowrate')
+  const [chartStyle] = useChartStyle()
 
   const frzHealth = useSensorFrame('frzHealth')
 
@@ -79,6 +85,20 @@ export function FlowrateChart() {
   const leftKey = viewMode === 'flowrate' ? 'leftFlow' as const : 'leftRpm' as const
   const rightKey = viewMode === 'flowrate' ? 'rightFlow' as const : 'rightRpm' as const
 
+  const data3d = useMemo(() => {
+    if (chartData.length < 2) return null
+    const left = chartData.map(d => d[leftKey])
+    const right = chartData.map(d => d[rightKey])
+    const all = [...left, ...right].filter((v): v is number => v != null)
+    if (all.length === 0) return null
+    const lo = Math.min(0, ...all)
+    const hi = Math.max(...all) * 1.1 || 1
+    return timeSeries3D(chartData.map(d => d.time), [
+      { values: left, color: 'var(--accent-cool)' },
+      { values: right, color: 'var(--accent-warm)' },
+    ], lo, hi, t => formatClock(new Date(t), timeFormat, { hour: 'numeric', minute: '2-digit' }))
+  }, [chartData, leftKey, rightKey, timeFormat])
+
   const live = frzHealth
     ? viewMode === 'flowrate'
       ? {
@@ -120,23 +140,35 @@ export function FlowrateChart() {
         </div>
       </div>
 
-      {flowQuery.isLoading
-        ? <Skeleton className="h-14" />
-        : flowQuery.isError
-          ? <InlineError>Failed to load flow data</InlineError>
-          : chartData.length < 2
-            ? <p className="text-xs text-fg-3">No flow history</p>
-            : (
-                <LineChart
-                  height={56}
-                  series={[
-                    { data: chartData.map(d => d[leftKey] ?? Number.NaN), color: 'var(--accent-cool)', width: 1.5 },
-                    { data: chartData.map(d => d[rightKey] ?? Number.NaN), color: 'var(--accent-warm)', width: 1.5 },
-                  ]}
-                  xLabel={i => formatClock(new Date(chartData[i].time), timeFormat, { hour: 'numeric', minute: '2-digit' })}
-                  format={v => (viewMode === 'flowrate' ? v.toFixed(2) : Math.round(v).toLocaleString())}
-                />
-              )}
+      {chartStyle === '3d'
+        ? (
+            <Chart3D
+              spec={SPEC_3D}
+              state={chartState(flowQuery, !data3d)}
+              data={data3d}
+              aspect={3.4}
+              label={viewMode === 'flowrate' ? 'Flow rate history' : 'Pump rpm history'}
+              message={flowQuery.isError ? 'Failed to load flow data' : 'No flow history'}
+              onRetry={() => void flowQuery.refetch()}
+            />
+          )
+        : flowQuery.isLoading
+          ? <Skeleton className="h-14" />
+          : flowQuery.isError
+            ? <InlineError>Failed to load flow data</InlineError>
+            : chartData.length < 2
+              ? <p className="text-xs text-fg-3">No flow history</p>
+              : (
+                  <LineChart
+                    height={56}
+                    series={[
+                      { data: chartData.map(d => d[leftKey] ?? Number.NaN), color: 'var(--accent-cool)', width: 1.5 },
+                      { data: chartData.map(d => d[rightKey] ?? Number.NaN), color: 'var(--accent-warm)', width: 1.5 },
+                    ]}
+                    xLabel={i => formatClock(new Date(chartData[i].time), timeFormat, { hour: 'numeric', minute: '2-digit' })}
+                    format={v => (viewMode === 'flowrate' ? v.toFixed(2) : Math.round(v).toLocaleString())}
+                  />
+                )}
     </Card>
   )
 }

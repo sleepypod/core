@@ -6,7 +6,10 @@ import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { trpc } from '@/src/utils/trpc'
 import { useBiometricsSide } from '@/src/hooks/useBiometricsSide'
 import { useWeekNavigator } from '@/src/hooks/useWeekNavigator'
-import { Card, InlineError, SectionLabel } from '@/src/components/ds'
+import { Card, InlineError, SectionLabel, Skeleton } from '@/src/components/ds'
+import { Chart3D } from '@/src/components/Chart3D/Chart3D'
+import { useChartStyle } from '@/src/components/Chart3D/chart3dData'
+import type { Chart3DData, Chart3DSpec } from '@/src/components/Chart3D/chart3dScene'
 import { cn } from '@/lib/utils'
 import { useMemo } from 'react'
 import {
@@ -206,6 +209,25 @@ function MovementTooltip({ active, payload, bucketSeconds }: MovementTooltipProp
   )
 }
 
+const SPEC_3D: Chart3DSpec = { series: [{ kind: 'bars' }], reserve: { yTicks: true }, skeletonBars: 48, yaw: 0.22 }
+
+/** Bars at (i + ½) / n, heights over the busiest bucket; weekday or clock ticks. */
+function toChart3D(chartData: ChartDataPoint[], isMultiDay: boolean, timeFormat: TimeFormat): Chart3DData {
+  const n = chartData.length
+  const max = Math.max(1, ...chartData.map(d => d.movement ?? 0))
+  const barX = (i: number) => (i + 0.5) / n
+  const keys = pickTickKeys(chartData, isMultiDay)
+  const every = Math.max(1, Math.ceil(n / 6))
+  const xTicks = chartData.flatMap((d, i) => (keys ? keys.includes(d.time) : i % every === 0)
+    ? [{ x: barX(i), label: formatTickLabel(d.time, isMultiDay, timeFormat) }]
+    : [])
+  return {
+    series: [{ color: 'var(--accent-warm)', points: chartData.map((d, i) => ({ x: barX(i), y: (d.movement ?? 0) / max })) }],
+    xTicks,
+    yTicks: [{ y: 0.5, label: `${Math.round(max / 2)}` }, { y: 1, label: `${max}/hr` }],
+  }
+}
+
 const RESTLESS_TONE = { Low: 'text-ok', Medium: 'text-warn', High: 'text-danger' } as const
 const AXIS_TICK = { fontSize: 10, fill: 'var(--text-3)', fontFamily: 'var(--font-mono)' }
 
@@ -219,6 +241,7 @@ const AXIS_TICK = { fontSize: 10, fill: 'var(--text-3)', fontFamily: 'var(--font
  */
 export function MovementChart() {
   const timeFormat = useTimeFormat()
+  const [chartStyle] = useChartStyle()
   const { side } = useBiometricsSide()
   const { weekStart, weekEnd } = useWeekNavigator()
 
@@ -285,6 +308,8 @@ export function MovementChart() {
 
   const isLoading = bucketsQuery.isLoading || summaryQuery.isLoading
   const hasError = Boolean(bucketsQuery.error || summaryQuery.error)
+  const data3d = useMemo(() => (chartData.length > 0 ? toChart3D(chartData, isMultiDay, timeFormat) : null), [chartData, isMultiDay, timeFormat])
+  const statsLoading = chartStyle === '3d' && !hasWatch && isLoading
 
   return (
     <Card>
@@ -293,48 +318,64 @@ export function MovementChart() {
       </SectionLabel>
 
       <div className="grid grid-cols-3 gap-3">
-        <StatItem value={String(stats.positionChanges)} label="Position changes" />
-        <StatItem value={`${stats.timeStillPercent}%`} label="Time still" />
-        <StatItem value={stats.restlessnessLevel} label="Restlessness" valueClassName={RESTLESS_TONE[stats.restlessnessLevel]} />
+        <StatItem loading={statsLoading} value={String(stats.positionChanges)} label="Position changes" />
+        <StatItem loading={statsLoading} value={`${stats.timeStillPercent}%`} label="Time still" />
+        <StatItem loading={statsLoading} value={stats.restlessnessLevel} label="Restlessness" valueClassName={RESTLESS_TONE[stats.restlessnessLevel]} />
       </div>
 
-      {isLoading
-        ? <div className="h-[140px] animate-pulse rounded-ctl bg-active" />
-        : hasError
-          ? <InlineError>Failed to load movement data</InlineError>
-          : chartData.length === 0
-            ? (
-                <div className="flex h-[140px] items-center justify-center text-[13px] text-fg-2">
-                  No movement data this week
-                </div>
-              )
-            : (
-                <div className="h-[140px] w-full">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                    <Chart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} barCategoryGap="15%">
-                      <CartesianGrid stroke="var(--border-grid)" vertical={false} />
-                      <XAxis
-                        dataKey="time"
-                        tick={AXIS_TICK}
-                        tickLine={false}
-                        axisLine={false}
-                        interval={tickInterval}
-                        ticks={tickKeys}
-                        tickFormatter={(t: string) => formatTickLabel(t, isMultiDay, timeFormat)}
-                        padding={{ left: 8, right: 8 }}
-                      />
-                      <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={44} unit="/hr" allowDecimals={false} />
-                      <Tooltip
-                        content={<MovementTooltip bucketSeconds={bucketSeconds} />}
-                        cursor={{ fill: 'var(--surface-active)' }}
-                      />
-                      <Bar dataKey="movement" fill="var(--accent-warm)" radius={[2, 2, 0, 0]} maxBarSize={12} isAnimationActive={false} />
-                      {hasWatch && <YAxis yAxisId="watch" hide domain={[0, WATCH_MAX_SCALE]} />}
-                      {hasWatch && <Line yAxisId="watch" dataKey="watch" stroke="var(--accent-cool)" strokeWidth={1.25} dot={false} connectNulls={false} isAnimationActive={false} />}
-                    </Chart>
-                  </ResponsiveContainer>
-                </div>
-              )}
+      {/* The 3D bars don't draw the Apple Watch overlay, so nights with Watch data stay flat. */}
+      {chartStyle === '3d' && !hasWatch
+        ? (
+            <Chart3D
+              spec={SPEC_3D}
+              state={isLoading ? 'loading' : hasError ? 'error' : data3d ? 'ready' : 'empty'}
+              data={data3d}
+              aspect={3.4}
+              label="Movement per hour"
+              message={hasError ? 'Failed to load movement data' : 'No movement data this week'}
+              onRetry={() => {
+                void bucketsQuery.refetch()
+                void summaryQuery.refetch()
+              }}
+            />
+          )
+        : isLoading
+          ? <div className="h-[140px] animate-pulse rounded-ctl bg-active" />
+          : hasError
+            ? <InlineError>Failed to load movement data</InlineError>
+            : chartData.length === 0
+              ? (
+                  <div className="flex h-[140px] items-center justify-center text-[13px] text-fg-2">
+                    No movement data this week
+                  </div>
+                )
+              : (
+                  <div className="h-[140px] w-full">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                      <Chart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} barCategoryGap="15%">
+                        <CartesianGrid stroke="var(--border-grid)" vertical={false} />
+                        <XAxis
+                          dataKey="time"
+                          tick={AXIS_TICK}
+                          tickLine={false}
+                          axisLine={false}
+                          interval={tickInterval}
+                          ticks={tickKeys}
+                          tickFormatter={(t: string) => formatTickLabel(t, isMultiDay, timeFormat)}
+                          padding={{ left: 8, right: 8 }}
+                        />
+                        <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={44} unit="/hr" allowDecimals={false} />
+                        <Tooltip
+                          content={<MovementTooltip bucketSeconds={bucketSeconds} />}
+                          cursor={{ fill: 'var(--surface-active)' }}
+                        />
+                        <Bar dataKey="movement" fill="var(--accent-warm)" radius={[2, 2, 0, 0]} maxBarSize={12} isAnimationActive={false} />
+                        {hasWatch && <YAxis yAxisId="watch" hide domain={[0, WATCH_MAX_SCALE]} />}
+                        {hasWatch && <Line yAxisId="watch" dataKey="watch" stroke="var(--accent-cool)" strokeWidth={1.25} dot={false} connectNulls={false} isAnimationActive={false} />}
+                      </Chart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
       {hasWatch && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-fg-2" data-testid="movement-watch-legend">
           <span className="flex items-center gap-2">
@@ -351,11 +392,13 @@ export function MovementChart() {
   )
 }
 
-function StatItem({ value, label, valueClassName }: { value: string, label: string, valueClassName?: string }) {
+function StatItem({ value, label, valueClassName, loading }: { value: string, label: string, valueClassName?: string, loading?: boolean }) {
   return (
     <div className="min-w-0">
       <div className="text-xs text-fg-2">{label}</div>
-      <div className={cn('font-mono text-sm', valueClassName)}>{value}</div>
+      {loading
+        ? <Skeleton className="my-0.5 h-4 w-12 rounded-ctl" />
+        : <div className={cn('font-mono text-sm', valueClassName)}>{value}</div>}
     </div>
   )
 }
