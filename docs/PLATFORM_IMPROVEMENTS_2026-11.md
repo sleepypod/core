@@ -19,6 +19,10 @@ Controller releases preserve data and require a current attended maintenance win
 Preview, physical qualification and reviewed-night gates remain real evidence gates.
 No synthetic data or ordinary successful wake replaces a missing qualification.
 
+The [product review](PLATFORM_PRODUCT_REVIEW_2026-11.md) connects these 24 approved
+items to the current app source and official competitor documentation. It refines
+priority and acceptance; it does not introduce an additional approval gate.
+
 ## Requirement and acceptance ledger
 
 | ID | Approved improvement | Acceptance evidence required | State |
@@ -121,3 +125,4 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 
 - **11 — habit discoveries:** Core PR 95 merged as `bf7622f64dc6d837beb1a5de10f2eb49d1a3687d`; its tree equals tested head `a29b0b5657db1ad6303ab7a7589bcd93f6a540a0`. Native implementation is committed as `b42d646`, with 1,314 passing regression tests, nine existing skips, focused iPhone/iPad UI checks and an independent visual review. It has not been distributed.
 - **01 — connection enrollment:** [installation identity and transport boundaries](CONTROLLER_CONNECTION_IDENTITY.md) records an authenticated persistent logical-installation identifier and a fresh request challenge. Native enrollment is being tested independently. Automatic routing, gateway setup and work-network/cellular verification remain pending.
+- **01 — verified connection delivery:** Core PR 96 merged as `565c030ef5018796b7d84213c7512bb796d62242`; its tree equals tested head `c42c61981a093f9a5b249a0f6d5982078a414043`. Native verify-before-save enrollment is committed as `a974be5` with 1,284 passing unit/framework tests, nine existing skips, ten passing phone/tablet UI scenarios and an independent design-review pass. Native `37558ad` adds a separately tested identity/route-selection foundation (22 focused tests); it is not wired into automatic reconnection. Native hosted integration, stable data/alarm ownership, gateway setup and physical work-network/cellular checks remain.
