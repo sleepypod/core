@@ -20,6 +20,7 @@
  */
 
 import { assertControlDeadline } from '@/src/controls/context'
+import { withinHardwareIntent } from './admission'
 
 type Side = 'left' | 'right'
 
@@ -36,18 +37,20 @@ function getSideLocks(): Record<Side, Promise<void>> {
 }
 
 export async function withSideLock<T>(side: Side, fn: () => Promise<T>): Promise<T> {
-  const sideLocks = getSideLocks()
-  const prev = sideLocks[side]
-  let release!: () => void
-  sideLocks[side] = new Promise<void>((resolve) => {
-    release = resolve
+  return withinHardwareIntent(async () => {
+    const sideLocks = getSideLocks()
+    const prev = sideLocks[side]
+    let release!: () => void
+    sideLocks[side] = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    try {
+      await prev
+      assertControlDeadline()
+      return await fn()
+    }
+    finally {
+      release()
+    }
   })
-  try {
-    await prev
-    assertControlDeadline()
-    return await fn()
-  }
-  finally {
-    release()
-  }
 }

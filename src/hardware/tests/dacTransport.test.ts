@@ -17,6 +17,9 @@ import { getStatusRevision } from '../statusRevision'
 import { installMechanicalObserver } from '@/src/biometrics/mechanical/dispatch'
 import { ControlDeadlineError, ControlGuardError, withinControlRequest, withinDispatchGuard } from '@/src/controls/context'
 import { testScope } from '@/src/controls/tests/fixtures'
+import { admissionFixture } from './admissionFixture'
+import { HardwareAdmissionError, waitForHardwareDrain } from '../admission'
+import { getSharedHardwareClient } from '../sharedClient'
 import { promises as fs } from 'fs'
 import {
   connectDac,
@@ -89,8 +92,10 @@ function handleCommands(socket: Socket, responses: Record<string, string> = {}) 
 describe('dacTransport', () => {
   let socketPath: string
   let mockFranken: Socket | undefined
+  let admission: ReturnType<typeof admissionFixture>
 
   beforeEach(() => {
+    admission = admissionFixture()
     socketPath = createTestSocketPath()
   })
 
@@ -100,6 +105,7 @@ describe('dacTransport', () => {
       await disconnectDac()
     }
     finally {
+      admission.uninstall()
       mockFranken = undefined
       vi.useRealTimers()
       vi.restoreAllMocks()
@@ -190,6 +196,80 @@ describe('dacTransport', () => {
     expect(bytes).toEqual(['14\n\n'])
     expect(scope.beforeDispatch).not.toHaveBeenCalled()
     expect(isDacConnected()).toBe(true)
+  })
+
+  test('rejects queued writes after hold and release, preserves reads and exact Stop, and drains replies', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.stat(socketPath))
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    const received = Promise.withResolvers<undefined>()
+    const bytes: string[] = []
+    mockFranken.on('data', (chunk) => {
+      bytes.push(chunk.toString())
+      received.resolve(undefined)
+    })
+    const first = sendCommand('11', '20')
+    await received.promise
+    const scope = testScope()
+    const queued = expect(withinControlRequest(scope, () => sendCommand('12', '20'))).rejects.toThrow(HardwareAdmissionError)
+    const holdId = '00000000-0000-4000-8000-000000000001'
+    admission.set({ revision: 2, holdId })
+    let drained = false
+    const draining = waitForHardwareDrain(holdId).then(() => {
+      drained = true
+    })
+    await Promise.resolve()
+    expect(drained).toBe(false)
+    mockFranken.write('OK\n\n')
+    await first
+    await draining
+    admission.set({ revision: 3, holdId: null })
+    await queued
+    expect(scope.beforeDispatch).not.toHaveBeenCalled()
+    expect(bytes).toEqual(['11\n20\n\n'])
+    handleCommands(mockFranken, { 9: 'OK', 10: 'OK', 16: 'OK' })
+    admission.set({ revision: 4, holdId })
+    await sendCommand('14')
+    await sendCommand('16', '0')
+    await sendCommand('16', '1')
+    await getSharedHardwareClient().setPower('left', false)
+    await getSharedHardwareClient().setPower('right', false)
+    await expect(sendCommand('11', '0')).rejects.toThrow(HardwareAdmissionError)
+    await expect(sendCommand('13')).rejects.toThrow(HardwareAdmissionError)
+    expect(bytes.slice(1)).toEqual(['14\n\n', '16\n0\n\n', '16\n1\n\n', '9\n0\n\n', '10\n0\n\n'])
+    expect(isDacConnected()).toBe(true)
+  })
+
+  test('does not finish an old temperature sequence after a transition between firmware replies', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.stat(socketPath))
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    const bytes: string[] = []
+    mockFranken.on('data', (chunk) => {
+      bytes.push(chunk.toString())
+      admission.set({ revision: 3, holdId: null })
+      mockFranken?.write('OK\n\n')
+    })
+    await expect(getSharedHardwareClient().setTemperature('left', 70)).rejects.toThrow(HardwareAdmissionError)
+    expect(bytes).toHaveLength(1)
+    expect(bytes[0]).toMatch(/^11\n/)
+    expect(isDacConnected()).toBe(true)
+  })
+
+  test('rechecks a hold changed by durable command bookkeeping before sending any bytes', async () => {
+    const connecting = connectDac(socketPath)
+    await vi.waitFor(() => fs.stat(socketPath))
+    mockFranken = await connectAsFrankenfirmware(socketPath)
+    await connecting
+    const received = vi.fn()
+    mockFranken.on('data', received)
+    const scope = testScope()
+    scope.beforeDispatch = () => admission.set({ revision: 2, holdId: '00000000-0000-4000-8000-000000000001' })
+    await expect(withinControlRequest(scope, () => sendCommand('11', '20'))).rejects.toThrow(HardwareAdmissionError)
+    await waitForHardwareDrain('00000000-0000-4000-8000-000000000001')
+    expect(received).not.toHaveBeenCalled()
   })
 
   test('rechecks policy permission at FIFO dispatch after another command finishes', async () => {

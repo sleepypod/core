@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BluezTransport } from '../bluez'
 import { ControlDeadlineError, withinControlRequest } from '@/src/controls/context'
 import { testScope } from '@/src/controls/tests/fixtures'
+import { admissionFixture } from '../../tests/admissionFixture'
+import { HardwareAdmissionError, waitForHardwareDrain, withinHardwareIntent } from '../../admission'
+import { positionPacket, stopPacket } from '../protocol'
 
 const device = '/org/bluez/hci1/dev_AA_BB_CC_DD_EE_FF'
 const notify = `${device}/service0042/char0043`
@@ -27,9 +30,11 @@ class FakeBus extends EventEmitter {
 }
 let bus: FakeBus
 let transport: BluezTransport
+let admission: ReturnType<typeof admissionFixture>
 const data = vi.fn()
 const disconnected = vi.fn()
 beforeEach(() => {
+  admission = admissionFixture()
   vi.useFakeTimers()
   vi.clearAllMocks()
   bus = new FakeBus()
@@ -37,6 +42,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   transport.close()
+  admission.uninstall()
   vi.useRealTimers()
 })
 function signal(path: string, changed: Record<string, Variant<unknown>>, sender = ':1.7', iface = 'org.bluez.GattCharacteristic1') {
@@ -44,6 +50,53 @@ function signal(path: string, changed: Record<string, Variant<unknown>>, sender 
 }
 
 describe('BlueZ D-Bus adapter', () => {
+  it('rechecks admission after request bookkeeping before the D-Bus write', async () => {
+    await transport.connect(config, data, disconnected)
+    bus.call.mockClear()
+    const scope = testScope()
+    const holdId = '00000000-0000-4000-8000-000000000001'
+    scope.beforeDispatch = () => admission.set({ revision: 2, holdId })
+    await expect(withinControlRequest(scope, () => transport.write(positionPacket('head', 2, 50)))).rejects.toThrow(HardwareAdmissionError)
+    await waitForHardwareDrain(holdId)
+    expect(bus.call).not.toHaveBeenCalled()
+  })
+  it('keeps Stop available through a hold and rejects old movement after release without losing Bluetooth', async () => {
+    await transport.connect(config, data, disconnected)
+    bus.call.mockClear()
+    const holdId = '00000000-0000-4000-8000-000000000001'
+    await withinHardwareIntent(async () => {
+      admission.set({ revision: 2, holdId })
+      await expect(transport.write(positionPacket('head', 2, 50))).rejects.toThrow(HardwareAdmissionError)
+      expect(bus.call).not.toHaveBeenCalled()
+      await transport.write(stopPacket())
+      await waitForHardwareDrain(holdId)
+      admission.set({ revision: 3, holdId: null })
+      await expect(transport.write(positionPacket('feet', 2, 50))).rejects.toThrow(HardwareAdmissionError)
+    })
+    await transport.write(positionPacket('head', 2, 50))
+    expect(bus.call).toHaveBeenCalledTimes(2)
+    expect(disconnected).not.toHaveBeenCalled()
+  })
+  it('counts GATT writes until the corresponding reply, including rejected replies', async () => {
+    await transport.connect(config, data, disconnected)
+    let reject!: (error: Error) => void
+    bus.call.mockImplementationOnce(() => new Promise((_resolve, fail) => {
+      reject = fail
+    }))
+    const pending = expect(transport.write(positionPacket('head', 2, 50))).rejects.toThrow('rejected')
+    const holdId = '00000000-0000-4000-8000-000000000001'
+    admission.set({ revision: 2, holdId })
+    let drained = false
+    const drain = waitForHardwareDrain(holdId).then(() => {
+      drained = true
+    })
+    await Promise.resolve()
+    expect(drained).toBe(false)
+    reject(new Error('rejected'))
+    await pending
+    await drain
+    expect(drained).toBe(true)
+  })
   it('checks the deadline and durable barrier immediately before GATT writes', async () => {
     await transport.connect(config, data, disconnected)
     const scope = testScope()

@@ -7,7 +7,8 @@
  * so the initializer executes with the active mutant, then pin the exact
  * bytes on the wire.
  */
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { admissionFixture } from './admissionFixture'
 import { Socket } from 'net'
 import { promises as fs } from 'fs'
 // Type-only: erased at compile time, so the module still loads fresh per test.
@@ -41,6 +42,10 @@ describe('dacTransport wire framing (fresh import per mutant)', () => {
   let socketPath = ''
   let mockFranken: Socket | undefined
   let mod: typeof DacTransportModule | undefined
+  let admission: ReturnType<typeof admissionFixture>
+  beforeEach(() => {
+    admission = admissionFixture()
+  })
 
   afterEach(async () => {
     try {
@@ -48,6 +53,7 @@ describe('dacTransport wire framing (fresh import per mutant)', () => {
       await mod?.disconnectDac()
     }
     finally {
+      admission.uninstall()
       mockFranken = undefined
       mod = undefined
       delete process.env.DAC_MESSAGE_RESPONSE_TIMEOUT_MS

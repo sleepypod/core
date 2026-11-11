@@ -474,9 +474,13 @@ export async function registerNodeInstrumentation(): Promise<void> {
   await runMigrations()
   await seedDefaultData()
   recordStartupPhase('migrations-ready', migrationsStartedAt)
-  const [{ db, biometricsDb }, { startBiometricRuntime }] = await Promise.all([
+  const [{ db, sqlite, biometricsDb }, { startBiometricRuntime }] = await Promise.all([
     import('@/src/db'), import('@/src/biometrics/profiles/runtime-host'),
   ])
+  const { startHardwareAdmission } = await import('@/src/hardware/admissionRuntime')
+  // Install before alarm restoration, schedulers or keepalives. A persisted hold
+  // stays closed across restart; unreadable storage still permits explicit Stop.
+  startHardwareAdmission(sqlite)
   startBiometricRuntime(db, biometricsDb)
 
   // Skip hardware initialization in CI — no dac.sock, no sensors, no scheduler needed.

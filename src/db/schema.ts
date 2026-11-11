@@ -2,6 +2,12 @@ import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
 
+// Migration seeds one open row; startup must never recreate a missing hold.
+export const hardwareAdmission = sqliteTable('hardware_admission', {
+  id: integer('id').primaryKey(), revision: integer('revision').notNull(),
+  holdId: text('hold_id'), heldAt: integer('held_at'),
+})
+
 // Logical installation identity survives restarts and restore; never use hardware serials for route matching.
 export const controllerConnectionIdentity = sqliteTable('controller_connection_identity', {
   id: integer('id').primaryKey(), installationId: text('installation_id').notNull().unique(), createdAt: integer('created_at').notNull(),

@@ -1,4 +1,5 @@
 import { withSideLock } from '../sideLock'
+import { HardwareAdmissionError } from '../admission'
 import { ControlDeadlineError } from '@/src/controls/context'
 import { recordMechanicalCommand } from '@/src/biometrics/mechanical/dispatch'
 import { PositionDecoder, positionPacket, stopPacket } from './protocol'
@@ -144,7 +145,7 @@ export class BaseController {
         await this.transport.write(packet)
       }
       catch (error) {
-        if (error instanceof ControlDeadlineError) throw error
+        if (error instanceof ControlDeadlineError || error instanceof HardwareAdmissionError) throw error
         this.disconnected(error instanceof Error ? error : new Error('Bluetooth write failed'))
         throw new BaseError('unavailable', 'Bluetooth write failed; movement was not confirmed')
       }

@@ -4,6 +4,7 @@ import * as fsPromisesModule from 'node:fs/promises'
 import * as netModule from 'node:net'
 import type { Transform } from 'node:stream'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { admissionFixture } from './admissionFixture'
 
 interface TransportModule {
   backoffDelayMs: (attempt: number) => number
@@ -126,6 +127,7 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 let transport: TransportModule
+let admission: ReturnType<typeof admissionFixture>
 
 function enoent(): Error & { code: string } {
   return Object.assign(new Error('socket path does not exist'), { code: 'ENOENT' })
@@ -184,6 +186,7 @@ describe('dacTransport private transport contracts through the public API', () =
   })
 
   beforeEach(() => {
+    admission = admissionFixture()
     harness.listenError = null
     harness.prequeuedSocket = null
     harness.servers.length = 0
@@ -198,6 +201,7 @@ describe('dacTransport private transport contracts through the public API', () =
   })
 
   afterEach(async () => {
+    admission.uninstall()
     try {
       await transport.disconnectDac()
     }

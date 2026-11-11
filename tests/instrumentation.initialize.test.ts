@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  startHardwareAdmission: vi.fn(),
   getBaseController: vi.fn(),
   startMechanicalContext: vi.fn(),
   stopMechanicalContext: vi.fn(),
@@ -113,10 +114,13 @@ vi.mock('@/src/biometrics/profiles/runtime-host', () => ({
   startBiometricRuntime: mocks.startBiometricRuntime, stopBiometricRuntime: mocks.stopBiometricRuntime,
 }))
 vi.mock('@/src/db', () => ({
+  sqlite: { admissionDatabase: true },
   db: {}, biometricsDb: {},
   closeDatabase: mocks.closeDatabase,
   closeBiometricsDatabase: mocks.closeBiometricsDatabase,
 }))
+
+vi.mock('@/src/hardware/admissionRuntime', () => ({ startHardwareAdmission: mocks.startHardwareAdmission }))
 vi.mock('@/src/db/retention', () => ({
   startBiometricsRetention: mocks.startBiometricsRetention,
   stopBiometricsRetention: mocks.stopBiometricsRetention,
@@ -404,6 +408,7 @@ describe('register()', () => {
     const pending = register()
     await vi.waitFor(() => expect(mocks.runMigrations).toHaveBeenCalledOnce())
     expect(mocks.startBiometricRuntime).not.toHaveBeenCalled()
+    expect(mocks.startHardwareAdmission).not.toHaveBeenCalled()
 
     expect(mocks.seedDefaultData).not.toHaveBeenCalled()
     expect(mocks.startDacServer).not.toHaveBeenCalled()
@@ -411,8 +416,22 @@ describe('register()', () => {
     release()
     await pending
     expect(mocks.startBiometricRuntime).toHaveBeenCalledOnce()
+    expect(mocks.startHardwareAdmission).toHaveBeenCalledExactlyOnceWith({ admissionDatabase: true })
+    expect(mocks.startHardwareAdmission.mock.invocationCallOrder[0]).toBeLessThan(mocks.startDacServer.mock.invocationCallOrder[0])
     await initializeScheduler()
     expect(mocks.startPiezoStreamServer).toHaveBeenCalledOnce()
+  })
+
+  it('does not initialize hardware or restore alarms when admission initialization fails', async () => {
+    mocks.startHardwareAdmission.mockImplementationOnce(() => {
+      throw new Error('admission unavailable')
+    })
+    const { register } = await fresh()
+    await expect(register()).rejects.toThrow('admission unavailable')
+    expect(mocks.startDacServer).not.toHaveBeenCalled()
+    expect(mocks.getDacMonitor).not.toHaveBeenCalled()
+    expect(mocks.startTemperatureController).not.toHaveBeenCalled()
+    expect(mocks.initializeKeepalives).not.toHaveBeenCalled()
   })
 
   it('allows HTTP and hardware readiness while the scheduler waits for the clock', async () => {

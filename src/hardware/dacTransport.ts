@@ -21,6 +21,7 @@ import type { Transform } from 'stream'
 import { beginStatusChange } from './statusRevision'
 import { beforeControlWrite } from '@/src/controls/context'
 import { recordMechanicalCommand } from '@/src/biometrics/mechanical/dispatch'
+import { assertHardwareWriteCurrent, beginHardwareWrite, captureHardwareIntent, classifyDacAdmission } from './admission'
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -262,7 +263,7 @@ class DacTransport {
     private readonly sequentialQueue: SequentialQueue,
   ) {}
 
-  public async sendMessage(message: string) {
+  public async sendMessage(message: string, intent = captureHardwareIntent()) {
     return this.sequentialQueue.exec(async () => {
       // A response to an earlier timed-out command may have arrived after its
       // read was abandoned; it must not be paired with this command. (A stale
@@ -276,41 +277,47 @@ class DacTransport {
 
       const requestBytes = Buffer.concat([Buffer.from(message), SEPARATOR])
       const command = message.split('\n', 1)[0]
-      if (command !== '0' && command !== '14') beforeControlWrite()
-      // Record at the actual FIFO dispatch boundary, including raw/legacy callers.
-      // A conservative maximum avoids trusting malformed or firmware-specific payloads.
-      const mechanicalOpcode = Number.parseInt(command, 10)
-      if ([2, 5, 6, 17].includes(mechanicalOpcode)) recordMechanicalCommand('vibration', 180_000)
-      if (mechanicalOpcode === 16) recordMechanicalCommand('vibration', 0, true)
-      if (mechanicalOpcode === 13) recordMechanicalCommand('priming')
-      await this.write(requestBytes)
-
-      const timeoutMs = messageResponseTimeoutMs()
-      const abort = new AbortController()
-      const timeout = setTimeout(() => abort.abort(), timeoutMs)
-
+      const admission = classifyDacAdmission(message)
+      const finishAdmission = admission === 'read' ? () => {} : beginHardwareWrite(intent, admission === 'stop')
       try {
-        const resp = await this.messageStream.readMessage(abort.signal)
-        if (RESPONSE_DELAY_MS > 0) {
-          await wait(RESPONSE_DELAY_MS)
+        if (admission !== 'read') beforeControlWrite()
+        // Record at the actual FIFO dispatch boundary, including raw/legacy callers.
+        // A conservative maximum avoids trusting malformed or firmware-specific payloads.
+        const mechanicalOpcode = Number.parseInt(command, 10)
+        if ([2, 5, 6, 17].includes(mechanicalOpcode)) recordMechanicalCommand('vibration', 180_000)
+        if (mechanicalOpcode === 16) recordMechanicalCommand('vibration', 0, true)
+        if (mechanicalOpcode === 13) recordMechanicalCommand('priming')
+        if (admission !== 'read') assertHardwareWriteCurrent(intent, admission === 'stop')
+        await this.write(requestBytes)
+
+        const timeoutMs = messageResponseTimeoutMs()
+        const abort = new AbortController()
+        const timeout = setTimeout(() => abort.abort(), timeoutMs)
+
+        try {
+          const resp = await this.messageStream.readMessage(abort.signal)
+          if (RESPONSE_DELAY_MS > 0) {
+            await wait(RESPONSE_DELAY_MS)
+          }
+          return resp.toString()
         }
-        return resp.toString()
-      }
-      catch (error) {
-        if (abort.signal.aborted) {
-          throw new MessageResponseTimeoutError(timeoutMs)
+        catch (error) {
+          if (abort.signal.aborted) {
+            throw new MessageResponseTimeoutError(timeoutMs)
+          }
+          throw error
         }
-        throw error
+        finally {
+          clearTimeout(timeout)
+        }
       }
-      finally {
-        clearTimeout(timeout)
-      }
+      finally { finishAdmission() }
     })
   }
 
-  public async callFunction(commandNumber: string, arg: string): Promise<string> {
+  public async callFunction(commandNumber: string, arg: string, intent = captureHardwareIntent()): Promise<string> {
     const cleanedArg = arg.indexOf('\n') >= 0 ? arg.replace(/\n/gm, '') : arg
-    return this.sendMessage(`${commandNumber}\n${cleanedArg}`)
+    return this.sendMessage(`${commandNumber}\n${cleanedArg}`, intent)
   }
 
   public isConnected(): boolean {
@@ -550,6 +557,7 @@ export async function connectDac(socketPath: string): Promise<void> {
  * @returns Raw response string from firmware
  */
 export async function sendCommand(command: string, arg?: string): Promise<string> {
+  const intent = captureHardwareIntent()
   if (!isDacConnected() && state.socketPath) {
     await connectDac(state.socketPath)
   }
@@ -563,8 +571,8 @@ export async function sendCommand(command: string, arg?: string): Promise<string
   const finish = command === '0' || command === '14' ? undefined : beginStatusChange()
   try {
     return await (arg === undefined || arg === ''
-      ? transport.sendMessage(command)
-      : transport.callFunction(command, arg))
+      ? transport.sendMessage(command, intent)
+      : transport.callFunction(command, arg, intent))
   }
   finally {
     finish?.()

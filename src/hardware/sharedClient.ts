@@ -18,6 +18,7 @@ import { beginPrimingCommand } from './primeNotification'
 import { encodeAlarmPayload } from './alarmPayload'
 import { parseDeviceStatus, parseSimpleResponse } from './responseParser'
 import type { HardwareClient } from './client'
+import { HardwareAdmissionError, withinHardwareIntent } from './admission'
 import {
   type AlarmConfig,
   type DeviceStatus,
@@ -61,28 +62,30 @@ class DacHardwareClient {
   }
 
   async setTemperature(side: Side, temperature: number, duration?: number): Promise<void> {
-    if (temperature < MIN_TEMP || temperature > MAX_TEMP) {
-      throw new HardwareError(`Temperature must be between ${MIN_TEMP}°F and ${MAX_TEMP}°F`)
-    }
+    return withinHardwareIntent(async () => {
+      if (temperature < MIN_TEMP || temperature > MAX_TEMP) {
+        throw new HardwareError(`Temperature must be between ${MIN_TEMP}°F and ${MAX_TEMP}°F`)
+      }
 
-    const level = fahrenheitToLevel(temperature)
+      const level = fahrenheitToLevel(temperature)
 
-    const levelCommand = side === 'left'
-      ? HardwareCommand.TEMP_LEVEL_LEFT
-      : HardwareCommand.TEMP_LEVEL_RIGHT
+      const levelCommand = side === 'left'
+        ? HardwareCommand.TEMP_LEVEL_LEFT
+        : HardwareCommand.TEMP_LEVEL_RIGHT
 
-    const levelResponse = parseSimpleResponse(await sendCommand(levelCommand, level.toString()))
-    if (!levelResponse.success) throw new HardwareError(`Failed to set temperature: ${levelResponse.message}`)
+      const levelResponse = parseSimpleResponse(await sendCommand(levelCommand, level.toString()))
+      if (!levelResponse.success) throw new HardwareError(`Failed to set temperature: ${levelResponse.message}`)
 
-    const durationCommand = side === 'left'
-      ? HardwareCommand.LEFT_TEMP_DURATION
-      : HardwareCommand.RIGHT_TEMP_DURATION
+      const durationCommand = side === 'left'
+        ? HardwareCommand.LEFT_TEMP_DURATION
+        : HardwareCommand.RIGHT_TEMP_DURATION
 
-    const seconds = duration ?? DEFAULT_HEATING_DURATION
-    const durationResponse = parseSimpleResponse(await sendCommand(durationCommand, seconds.toString()))
-    if (!durationResponse.success) throw new HardwareError(`Failed to set duration: ${durationResponse.message}`)
-    recordHeatingSession(side, level !== 0 && seconds > 0)
-    if (level !== 0 && seconds > 0) confirmPumpRun(side)
+      const seconds = duration ?? DEFAULT_HEATING_DURATION
+      const durationResponse = parseSimpleResponse(await sendCommand(durationCommand, seconds.toString()))
+      if (!durationResponse.success) throw new HardwareError(`Failed to set duration: ${durationResponse.message}`)
+      recordHeatingSession(side, level !== 0 && seconds > 0)
+      if (level !== 0 && seconds > 0) confirmPumpRun(side)
+    })
   }
 
   async setAlarm(side: Side, config: AlarmConfig): Promise<void> {
@@ -134,35 +137,47 @@ class DacHardwareClient {
   }
 
   async setPower(side: Side, powered: boolean, temperature?: number): Promise<void> {
-    if (powered) {
-      const temp = temperature ?? POWER_ON_FALLBACK_F
-      await this.setTemperature(side, temp)
-    }
-    else {
-      // Clear the firmware timer before setting the neutral level. Pod 5
-      // retains the previous duration when only the level is reset.
-      const durationCommand = side === 'left'
-        ? HardwareCommand.LEFT_TEMP_DURATION
-        : HardwareCommand.RIGHT_TEMP_DURATION
-      const durationResponse = await sendCommand(durationCommand, '0')
-      const durationParsed = parseSimpleResponse(durationResponse)
-
-      if (!durationParsed.success) {
-        throw new HardwareError(`Failed to power off: ${durationParsed.message}`)
+    return withinHardwareIntent(async () => {
+      if (powered) {
+        const temp = temperature ?? POWER_ON_FALLBACK_F
+        await this.setTemperature(side, temp)
       }
-      recordHeatingSession(side, false)
+      else {
+        // Clear the firmware timer before setting the neutral level. Pod 5
+        // retains the previous duration when only the level is reset.
+        const durationCommand = side === 'left'
+          ? HardwareCommand.LEFT_TEMP_DURATION
+          : HardwareCommand.RIGHT_TEMP_DURATION
+        const durationResponse = await sendCommand(durationCommand, '0')
+        const durationParsed = parseSimpleResponse(durationResponse)
 
-      const levelCommand = side === 'left'
-        ? HardwareCommand.TEMP_LEVEL_LEFT
-        : HardwareCommand.TEMP_LEVEL_RIGHT
+        if (!durationParsed.success) {
+          throw new HardwareError(`Failed to power off: ${durationParsed.message}`)
+        }
+        recordHeatingSession(side, false)
 
-      const response = await sendCommand(levelCommand, '0')
-      const parsed = parseSimpleResponse(response)
+        const levelCommand = side === 'left'
+          ? HardwareCommand.TEMP_LEVEL_LEFT
+          : HardwareCommand.TEMP_LEVEL_RIGHT
 
-      if (!parsed.success) {
-        throw new HardwareError(`Failed to power off: ${parsed.message}`)
+        // The acknowledged zero-duration command already stopped circulation.
+        // During an arrangement hold, skip the optional neutral target reset;
+        // a raw level-zero command must never be mistaken for power-off.
+        let response: string
+        try {
+          response = await sendCommand(levelCommand, '0')
+        }
+        catch (error) {
+          if (error instanceof HardwareAdmissionError) return
+          throw error
+        }
+        const parsed = parseSimpleResponse(response)
+
+        if (!parsed.success) {
+          throw new HardwareError(`Failed to power off: ${parsed.message}`)
+        }
       }
-    }
+    })
   }
 
   isConnected(): boolean {
@@ -172,10 +187,12 @@ class DacHardwareClient {
   // DEBUG passthrough for device.execute. Keep connection setup and raw
   // commands on the shared client, alongside the typed hardware operations.
   async sendRaw(command: string, args?: string): Promise<string> {
-    if (!isDacConnected()) {
-      await connectDac(DAC_SOCK_PATH)
-    }
-    return sendCommand(command, args)
+    return withinHardwareIntent(async () => {
+      if (!isDacConnected()) {
+        await connectDac(DAC_SOCK_PATH)
+      }
+      return sendCommand(command, args)
+    })
   }
 
   disconnect(): void {

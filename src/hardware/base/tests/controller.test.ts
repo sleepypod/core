@@ -4,6 +4,9 @@ import { BaseController } from '../controller'
 import type { BaseTransport } from '../types'
 import { telemetry } from './fixtures'
 import { installMechanicalObserver } from '@/src/biometrics/mechanical/dispatch'
+import { admissionFixture } from '../../tests/admissionFixture'
+import { beginHardwareWrite, captureHardwareIntent, HardwareAdmissionError } from '../../admission'
+import { stopPacket } from '../protocol'
 
 let onData: (data: Uint8Array) => void
 let onDisconnect: (error: Error) => void
@@ -38,6 +41,33 @@ async function ready() {
 }
 
 describe('whole-bed controller', () => {
+  it('withdraws the delayed leg movement across arrangement revisions without closing Bluetooth or losing Stop', async () => {
+    const admission = admissionFixture()
+    const accepted: Uint8Array[] = []
+    vi.mocked(transport.write).mockImplementation(async (packet) => {
+      const finish = beginHardwareWrite(captureHardwareIntent(), Buffer.from(packet).equals(Buffer.from(stopPacket())))
+      try {
+        accepted.push(packet)
+      }
+      finally { finish() }
+    })
+    try {
+      await ready()
+      const moving = expect(controller.setPosition(target)).rejects.toThrow(HardwareAdmissionError)
+      await flush()
+      expect(accepted).toHaveLength(1)
+      admission.set({ revision: 3, holdId: null })
+      await vi.advanceTimersByTimeAsync(500)
+      await moving
+      expect(accepted).toHaveLength(1)
+      expect(controller.status()).toMatchObject({ state: 'connected', busy: false })
+      admission.set({ revision: 4, holdId: '00000000-0000-4000-8000-000000000001' })
+      await controller.stop()
+      expect(accepted).toHaveLength(2)
+      expect(accepted[1]).toEqual(stopPacket())
+    }
+    finally { admission.uninstall() }
+  })
   it('blocks movement when its interference record fails while preserving Stop', async () => {
     await ready()
     const command = vi.fn(() => {

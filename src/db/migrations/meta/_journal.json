@@ -435,6 +435,13 @@
       "when": 1794396893912,
       "tag": "0061_household_history_source",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1794398866484,
+      "tag": "0062_hardware_admission",
+      "breakpoints": true
     }
   ]
 }

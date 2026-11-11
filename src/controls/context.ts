@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { outsideHardwareIntent, withinHardwareIntent } from '@/src/hardware/admission'
 
 export interface ControlDispatchScope {
   issuedAt: number
@@ -89,7 +90,7 @@ export function beforeControlWrite(): void {
 }
 
 export async function withinControlRequest<T>(scope: ControlDispatchScope, execute: () => Promise<T>): Promise<T> {
-  return storage.run(scope, async () => {
+  return withinHardwareIntent(() => storage.run(scope, async () => {
     try {
       assertControlDeadline()
       return await execute()
@@ -97,10 +98,10 @@ export async function withinControlRequest<T>(scope: ControlDispatchScope, execu
     finally {
       scope.closed = true
     }
-  })
+  }))
 }
 
 /** Long-lived schedulers must not inherit the request that first initializes them. */
 export function outsideControlRequest<T>(execute: () => T): T {
-  return storage.exit(() => guards.exit(execute))
+  return storage.exit(() => guards.exit(() => outsideHardwareIntent(execute)))
 }
