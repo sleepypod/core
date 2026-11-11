@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { MAX_CONTROL_LIFETIME_MS } from '@/src/controls/contract'
-import { controllerGenerationSchema } from '@/src/server/controllerGeneration'
+import { controllerGenerationSchema } from '@/src/lib/controllerGenerationContract'
 import { householdContextSchema, householdIdSchema, revisionSchema } from './contract'
 
 const instant = z.number().int().positive().max(8_640_000_000_000_000)
@@ -22,6 +22,12 @@ export const arrangementCancellationReceiptSchema = z.object({
   hardware: z.literal('admission_released'), physicalMovement: z.literal('not_requested'),
 }).strict()
 export type ArrangementCancellationReceipt = z.infer<typeof arrangementCancellationReceiptSchema>
+
+export const arrangementCancellationPreviewSchema = z.object({
+  operationId: householdIdSchema, expectedSessionRevision: revisionSchema, expectedAssignmentRevision: revisionSchema,
+  controlDigest: digest, observedAt: instant,
+}).strict()
+export type ArrangementCancellationPreview = z.infer<typeof arrangementCancellationPreviewSchema>
 
 export const savedArrangementCancellationSchema = z.object({
   request: arrangementCancellationRequestSchema, requestHash: digest,

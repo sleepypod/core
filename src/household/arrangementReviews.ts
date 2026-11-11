@@ -85,7 +85,8 @@ export class ArrangementReviewService {
   }
 
   present(session: HouseholdSession): HouseholdSession {
-    return { ...session, capabilities: { ...session.capabilities, arrangementReview: this.dependencies.enabled(), activateArrangement: false } }
+    return { ...session, capabilities: { ...session.capabilities, arrangementReview: this.dependencies.enabled(),
+      arrangementMaintenance: session.role === 'owner', activateArrangement: false } }
   }
 
   private durable<Result>(operation: () => Result): Result {

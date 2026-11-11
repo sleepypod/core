@@ -41,7 +41,7 @@ export const arrangementReviewSchema = z.object({
   }).strict(),
   // Shared names, physical sides and readiness only. No partner routine/Health data.
   partner: z.object({ displayName: z.string(), proposedSide: householdSideSchema, approved: z.boolean() }).strict(),
-  canApprove: z.boolean(), canActivate: z.literal(false),
+  canApprove: z.boolean(), canActivate: z.boolean(),
   effect: z.literal('review_only_bed_unchanged'),
 }).strict()
 export type ArrangementReview = z.infer<typeof arrangementReviewSchema>

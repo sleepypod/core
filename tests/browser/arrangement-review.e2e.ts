@@ -102,7 +102,7 @@ test('member sees only their draft with readable phone and tablet side-review la
   await panel.getByLabel('I reviewed my temperatures, nights and wake alarms.').check()
   await panel.getByLabel('I understand that switching the bed needs a separate activation.').check()
   await panel.getByRole('button', { name: 'Approve my side and routine' }).click()
-  await expect(panel).toContainText('Switching to two sleepers is not available in this release.')
+  await expect(panel).toContainText('Switching to two sleepers is not available on this Pod yet.')
   for (const size of [{ width: 390, height: 844 }, { width: 1024, height: 1366 }]) {
     await page.setViewportSize(size)
     await page.emulateMedia({ colorScheme: size.width === 390 ? 'dark' : 'light', reducedMotion: 'reduce' })

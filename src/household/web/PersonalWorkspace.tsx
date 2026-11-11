@@ -4,9 +4,12 @@ import { RoutineEditor } from './RoutineEditor'
 import { ArrangementReviewPanel } from './ArrangementReviewPanel'
 import { HistoryPanel } from './HistoryPanel'
 import type { PersonalHistoryWorkspace } from './history'
-export function PersonalWorkspace({ workspace, history, preferredTemperatureF, displayUnit }: {
+import { ArrangementMaintenancePanel } from './ArrangementMaintenancePanel'
+import type { HouseholdMaintenanceWorkspace } from './maintenance'
+export function PersonalWorkspace({ workspace, history, maintenance, preferredTemperatureF, displayUnit }: {
   workspace: PersonalWebWorkspace
   history: PersonalHistoryWorkspace
+  maintenance?: HouseholdMaintenanceWorkspace
   preferredTemperatureF: number
   displayUnit: 'F' | 'C'
 }) {
@@ -138,6 +141,7 @@ export function PersonalWorkspace({ workspace, history, preferredTemperatureF, d
       <HistoryPanel history={history} />
       {state.drafts && <RoutineEditor key={`${state.drafts.revision}:${state.draftLoad}`} workspace={workspace} state={state} preferredTemperatureF={preferredTemperatureF} />}
       <ArrangementReviewPanel workspace={workspace} state={state} />
+      {maintenance && <ArrangementMaintenancePanel workspace={maintenance} review={state.arrangementLoaded ? state.arrangement : null} />}
     </div>
   )
 }

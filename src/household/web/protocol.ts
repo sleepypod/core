@@ -86,6 +86,7 @@ export function readArrangementReview(input: unknown, session: HouseholdSession)
     || new Set(review.self.week.map(night => night.dayOfWeek)).size !== review.self.week.length
     || review.expiresAt <= review.createdAt
     || (review.canApprove && (review.state !== 'awaiting_approval' || review.self.approved))
+    || (review.canActivate && (!owner || !session.capabilities.activateArrangement || review.state !== 'approved_for_separate_activation'))
     || (review.state === 'approved_for_separate_activation' && (!review.self.approved || !review.partner.approved)))
     throw new PersonalWebError('invalid', 'The side review is inconsistent with your personal account.')
   return review

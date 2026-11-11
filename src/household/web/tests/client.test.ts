@@ -18,6 +18,23 @@ describe('personal-only transport', () => {
     const client = new PersonalBrowserClient(session, vi.fn(async () => new Response('a'.repeat(524289), { headers: { 'Content-Length': '1' } })))
     await expect(client.read('me/bed')).rejects.toThrow('too large')
   })
+  it('pins maintenance to the personal sleeper and never retries a lost restart', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('{}'))
+    const client = new PersonalBrowserClient(session, fetcher)
+    const operationId = '10000000-0000-4000-8000-000000000001'
+    await client.read(`household/transition?operationId=${operationId}`)
+    await client.read(`household/transition/cancellation-preview?operationId=${operationId}`)
+    fetcher.mockRejectedValueOnce(new Error('lost reply'))
+    await expect(client.read('household/transition/restart', 'POST', { operationId })).rejects.toThrow('not be resent')
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    expect(fetcher.mock.calls[2]).toEqual(['/api/v1/household/transition/restart', expect.objectContaining({
+      method: 'POST', redirect: 'error', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-Sleepypod-Sleeper-Id': session.selfSleeperId },
+    })])
+    for (const path of ['household/transition?side=right', 'household/transition/restart?command=reboot', 'household/transition/cancel'])
+      await expect(client.read(path)).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
   it('admits only validated read-only history routes and preserves an opaque encoded cursor', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response('{}'))
     const client = new PersonalBrowserClient(session, fetcher)

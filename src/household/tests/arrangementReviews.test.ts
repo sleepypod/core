@@ -174,7 +174,8 @@ describe('independent shared-arrangement review', () => {
   it('keeps review mutations disabled separately from personal controls', () => {
     expect(service.present(fixture.identities.session(fixture.ownerKey)).capabilities).toMatchObject({ arrangementReview: true, activateArrangement: false })
     enabled = false
-    expect(service.present(fixture.identities.session(fixture.ownerKey)).capabilities.arrangementReview).toBe(false)
+    expect(service.present(fixture.identities.session(fixture.ownerKey)).capabilities).toMatchObject({ arrangementReview: false, arrangementMaintenance: true })
+    expect(service.present(fixture.identities.session(fixture.memberKey)).capabilities.arrangementMaintenance).toBe(false)
     expect(() => propose()).toThrow('unavailable')
     enabled = true
     const review = propose()

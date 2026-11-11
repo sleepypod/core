@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { MAX_CONTROL_LIFETIME_MS } from '@/src/controls/contract'
-import { controllerGenerationSchema } from '@/src/server/controllerGeneration'
+import { controllerGenerationSchema } from '@/src/lib/controllerGenerationContract'
 import { householdContextSchema, householdIdSchema, revisionSchema } from './contract'
 
 const instant = z.number().int().positive().max(8_640_000_000_000_000)

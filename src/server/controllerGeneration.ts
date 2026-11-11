@@ -1,16 +1,9 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
-import { z } from 'zod'
-
-const instant = z.number().int().positive().max(8_640_000_000_000_000)
-const invocation = z.string().regex(/^[a-f0-9]{32}$/)
-export const controllerGenerationSchema = z.object({
-  version: z.literal(1), invocationId: invocation, bootId: z.uuid(),
-  pid: z.number().int().min(2).max(2_147_483_647),
-  startTicks: z.string().refine(value => /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) <= 18_446_744_073_709_551_615n), observedAt: instant,
-}).strict()
-export type ControllerGeneration = z.infer<typeof controllerGenerationSchema>
+import { controllerGenerationSchema, controllerGenerationInstantSchema as instant,
+  controllerInvocationIdSchema as invocation, type ControllerGeneration } from '@/src/lib/controllerGenerationContract'
+export { controllerGenerationSchema, type ControllerGeneration } from '@/src/lib/controllerGenerationContract'
 
 const properties = ['MainPID', 'ActiveState', 'SubState', 'InvocationID'] as const
 const argumentsForShow = ['show', 'sleepypod.service', '--no-pager', `--property=${properties.join(',')}`]

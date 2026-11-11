@@ -2,6 +2,7 @@
 import { mountPersonalWorkspace, contextKey } from './personal-runtime.js'
 let personalWorkspace = null
 let personalContext = null
+let maintenanceActive = false
 const element = id => document.getElementById(id)
 let session = null
 let preferences = null
@@ -29,6 +30,8 @@ function message(text, error = false) {
   element('message').dataset.error = String(error)
 }
 async function request(path, method = 'GET', body, token, expectedSleeper = session?.selfSleeperId) {
+  if (maintenanceActive && method !== 'GET' && path !== 'household/session')
+    throw new Error('Finish the side change before editing your account or preferences.')
   const requestGeneration = generation
   const controller = new AbortController()
   activeRequests.add(controller)
@@ -95,6 +98,7 @@ function context() {
 }
 function clearPersonalView() {
   generation += 1
+  maintenanceActive = false
   personalWorkspace?.dispose()
   personalWorkspace = null
   personalContext = null
@@ -137,13 +141,14 @@ function addItem(parent, title, subtitle, buttonLabel, operation) {
   parent.append(row)
 }
 async function refresh() {
+  if (maintenanceActive) return
   const currentGeneration = ++generation
   const currentSession = await request('household/session')
   const readPersonal = path => request(path, 'GET', undefined, undefined, currentSession.selfSleeperId)
   const results = await Promise.all([
     readPersonal('me/preferences'), readPersonal('me/routines'), readPersonal('household/devices'), readPersonal('household/invitations'),
   ])
-  if (currentGeneration !== generation)
+  if (currentGeneration !== generation || maintenanceActive)
     return
   if (results[0].sleeperId !== currentSession.selfSleeperId || results[1].sleeperId !== currentSession.selfSleeperId)
     throw new Error('The personal account changed. Reconnect before continuing.')
@@ -155,6 +160,9 @@ async function refresh() {
   preferences = results[0]
   element('connect').hidden = true
   element('workspace').hidden = false
+  element('personal-editors').hidden = false
+  element('personal-editors').inert = false
+  element('personal-account-notice').hidden = false
   element('greeting').textContent = `Hello, ${session.self.displayName}.`
   element('assignment').textContent = session.self.assignment === 'solo' ? 'Sole current sleeper · either side' : session.self.assignment === 'unassigned' ? 'Your account is ready to prepare · no active bed side assigned yet' : `Your assigned side: ${session.self.assignment}`
   element('preference-temperature').value = preferences.preferences.preferredTemperatureF
@@ -197,6 +205,35 @@ async function refresh() {
     personalWorkspace = mountPersonalWorkspace(element('personal-runtime'), session, preferences.preferences, () => {
       clearPersonalView()
       message('Your personal account or assignment changed. Reconnect to review it.', true)
+    }, {
+      maintenanceModeChanged: (mode) => {
+        maintenanceActive = mode !== 'ordinary'
+        element('personal-editors').hidden = maintenanceActive
+        element('personal-editors').inert = maintenanceActive
+        element('personal-account-notice').hidden = maintenanceActive
+        if (!maintenanceActive) return
+        generation += 1
+        for (const controller of activeRequests) controller.abort()
+        element('invitation-link').value = ''
+        // The maintenance panel owns loading feedback; preserve account-save results here.
+        if (mode === 'checking') return
+        element('assignment').textContent = 'Side change in progress · check the saved transition below'
+        message('Finish the attended side change before using ordinary bed controls.')
+      },
+      maintenanceFinished: () => action(async () => {
+        personalWorkspace?.dispose()
+        personalWorkspace = null
+        personalContext = null
+        maintenanceActive = false
+        try {
+          await refresh()
+          message('Your personal workspace was reopened using the current account and side assignment.')
+        }
+        catch (error) {
+          clearPersonalView()
+          throw error
+        }
+      }),
     })
     personalContext = nextContext
   }

@@ -125,7 +125,7 @@ export function ArrangementReviewPanel({ workspace, state }: { workspace: Person
           <button className="primary" type="submit" disabled={busy || !preserve}>Prepare shared side review</button>
         </form>
       )}
-      <p className="notice">This step saves a proposal and approvals only. Switching to two sleepers is not available in this release.</p>
+      <p className="notice">{review?.canActivate ? 'Both approvals are saved. The owner can start the separate attended side change below.' : 'This step saves a proposal and approvals only. Switching to two sleepers is not available on this Pod yet.'}</p>
     </article>
   )
 }
