@@ -25,6 +25,25 @@ function restore(now = fixture.now) {
 }
 
 describe('persisted next-alarm occurrences', () => {
+  it('reports the same warm-up span as arbitration and moves it with one wake occurrence', () => {
+    const before = fixture.store.page('left', fixture.now)
+    expect(before.warming).toEqual({ startsAt: '2026-10-26T06:30:00.000Z', endsAt: '2026-10-26T07:16:00.000Z', earliestVibrationAt: '2026-10-26T07:00:00.000Z', targetF: 80 })
+    const changed = change('time', '08:00')
+    expect(changed.warming?.startsAt).toBe('2026-10-26T07:30:00.000Z')
+    const target = effectiveAlarmTargets(fixture.store.context('left'), timestamp('07:40'))[0]
+    expect(target.startsAt).toBe(Date.parse(required(changed.warming, 'wake warming').startsAt))
+    expect(target.expiresAt).toBe(Date.parse(required(changed.warming, 'wake warming').endsAt))
+    expect(change('skip').warming).toBeNull()
+    expect(restore().warming).toEqual(before.warming)
+  })
+  it('covers an extended movement window and withholds conflicting or inactive plans', () => {
+    fixture.database.exec('UPDATE alarm_schedules SET wake_window=60')
+    expect(fixture.store.page('left', fixture.now).warming).toMatchObject({ startsAt: '2026-10-26T06:00:00.000Z', earliestVibrationAt: '2026-10-26T06:00:00.000Z' })
+    insertAlarm(fixture.database)
+    expect(fixture.store.page('left', fixture.now).warming).toBeNull()
+    fixture.database.exec('UPDATE side_settings SET away_mode=1 WHERE side=\'left\'')
+    expect(fixture.store.page('left', fixture.now).warming).toBeNull()
+  })
   it('skips just one event, restores without weekly mutations, and rejects replay after restore', () => {
     const { database, store, now } = fixture
     const rows = database.prepare('SELECT * FROM alarm_schedules').all()

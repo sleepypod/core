@@ -9,6 +9,8 @@ import type { Side } from '@/src/providers/SideProvider'
 import type { NextAlarm, NextAlarmWrite } from '@/src/alarms/contract'
 import { useTimeFormatter } from '@/src/hooks/useTimeFormatter'
 import { trpc } from '@/src/utils/trpc'
+import { useNow } from './TonightCard'
+import { currentTonightRead } from './tonightSummary'
 
 /** Temp edits one wake occurrence. The separate weekly editor keeps its original job. */
 export function AlarmCard({ side }: { side: Side }) {
@@ -16,28 +18,39 @@ export function AlarmCard({ side }: { side: Side }) {
 }
 function NextAlarmCard({ side }: { side: Side }) {
   const { formatTime } = useTimeFormatter()
+  const now = useNow(1000).getTime()
   const utils = trpc.useUtils()
-  const query = trpc.nextAlarm.get.useQuery({ side }, { refetchInterval: 30_000 })
+  const query = trpc.nextAlarm.get.useQuery({ side }, { refetchInterval: 30_000, retry: false })
   const schedules = trpc.schedules.getAll.useQuery({ side })
   const change = trpc.nextAlarm.change.useMutation({ retry: false })
   const [draft, setDraft] = useState<{ base: NextAlarm, time: string } | null>(null)
   const [message, setMessage] = useState('')
   const [uncertain, setUncertain] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
-  const current = query.data
+  const current = currentTonightRead(query.dataUpdatedAt, query.isError, now) && query.data?.side === side ? query.data : undefined
   if (query.isLoading) return <Skeleton className="h-[100px]" />
   const alarm = current?.alarm
   const group = groupAlarms(schedules.data?.alarm ?? []).find(item => item.ids.some(id => alarm?.scheduleIds.includes(id))) ?? null
   const changedDraft = draft && current?.revision !== draft.base.revision
   const pending = change.isPending || uncertain
   const localDate = (at: string) => new Intl.DateTimeFormat(undefined, { timeZone: current?.timeZone, weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(at))
+  const clockAt = (at: string) => formatTime(new Intl.DateTimeFormat('en-GB', { timeZone: current?.timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)))
   const refresh = async () => {
-    await query.refetch()
+    const refreshed = await query.refetch()
+    if (!refreshed.data || refreshed.isError) {
+      setMessage('The saved alarm could not be refreshed. Changes remain unavailable until it is confirmed.')
+      return
+    }
     setUncertain(false)
     setMessage('Latest alarm loaded. Review it before making another change.')
   }
   const save = async (input: NextAlarmWrite) => {
     setMessage('')
+    if (!current || current.revision !== input.expectedRevision || !currentTonightRead(query.dataUpdatedAt, query.isError, Date.now())) {
+      setUncertain(true)
+      setMessage('Refresh the saved alarm before making a change.')
+      return
+    }
     try {
       const result = await change.mutateAsync(input)
       utils.nextAlarm.get.setData({ side }, result)
@@ -56,10 +69,7 @@ function NextAlarmCard({ side }: { side: Side }) {
         <div className="flex items-start gap-2.5">
           <Bell size={16} className="mt-1 shrink-0 text-warn" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs text-fg-2">
-              Next alarm ·
-              {side}
-            </p>
+            <p className="text-sm font-medium">{`${side === 'left' ? 'Left' : 'Right'} wake plan`}</p>
             {alarm && current
               ? (
                   <>
@@ -79,11 +89,26 @@ function NextAlarmCard({ side }: { side: Side }) {
                     </p>
                   </>
                 )
-              : <p className="text-sm text-fg-2">{query.error ? 'Alarm unavailable' : 'No alarm set'}</p>}
+              : <p className="text-sm text-fg-2">{!current ? 'Alarm unavailable' : 'No alarm set'}</p>}
           </div>
-          {!alarm && <Button icon={Plus} size="sm" disabled={!schedules.data || pending} onClick={() => setEditorOpen(true)}>Add alarm</Button>}
+          {!alarm && <Button icon={Plus} size="sm" disabled={!current || !schedules.data || pending} onClick={() => setEditorOpen(true)}>Add alarm</Button>}
         </div>
         {query.error && <InlineError>{query.error.message}</InlineError>}
+        {current?.state === 'scheduled' && alarm && (
+          current.warming
+            ? (
+                <div className="space-y-2 text-sm">
+                  <p>{`Warming starts ${clockAt(current.warming.startsAt)} toward ${current.warming.targetF}°F.`}</p>
+                  <p>{`Vibration at ${formatTime(alarm.time)} for ${alarm.duration} seconds.`}</p>
+                  {alarm.wakeWindow > 0 && <p className="text-xs text-fg-2">{`Movement may start vibration from ${clockAt(current.warming.earliestVibrationAt)}.`}</p>}
+                  <details className="text-xs text-fg-2">
+                    <summary className="min-h-11 cursor-pointer py-3">Wake details</summary>
+                    <p>{`Warm hold ends ${clockAt(current.warming.endsAt)}. Saved commands do not confirm physical warming or vibration.`}</p>
+                  </details>
+                </div>
+              )
+            : <p className="text-xs text-fg-2">Warming time is not confirmed. Refresh or update the controller to see its exact warm-up plan.</p>
+        )}
         {current?.reason && <p className="text-xs text-fg-2">{current.reason}</p>}
         {current?.execution && <p className="text-xs text-fg-2">{`Command ${current.execution}; physical vibration has not been verified.`}</p>}
         {current?.change && (
@@ -143,7 +168,11 @@ function NextAlarmCard({ side }: { side: Side }) {
           </div>
         )}
         {message && <p role="status" className="text-xs text-fg-2">{message}</p>}
-        <button type="button" disabled={change.isPending} className="self-start text-xs text-fg-2 underline" onClick={() => void refresh()}>Refresh saved alarm</button>
+        <button type="button" disabled={change.isPending} className="min-h-11 self-start text-xs text-fg-2 underline" onClick={() => void refresh()}>Refresh saved alarm</button>
+        <details className="text-xs text-fg-2">
+          <summary className="min-h-11 cursor-pointer py-3">Phone backup and wake devices</summary>
+          <p>Add an optional one-time system backup from this wake plan in the iPhone or iPad app. Existing Clock alarms stay unchanged. Review qualified lights, shades and audio routines in Home; this screen does not confirm their delivery.</p>
+        </details>
       </section>
       <AlarmEditor
         open={editorOpen}

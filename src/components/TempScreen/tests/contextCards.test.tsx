@@ -15,7 +15,7 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: {
   settings: { getAll: { useQuery: () => ({ data: { device: { timezone: 'UTC' } } }) } },
   useUtils: () => ({ nextAlarm: { get: { setData: mock.setAlarmData, invalidate: mock.invalidate } }, schedules: { getAll: { invalidate: mock.invalidate } } }),
   schedules: { getAll: { useQuery: () => ({ data: mock.schedule, isLoading: mock.loading, error: mock.error }) }, updateAlarmSchedule: { useMutation: () => ({ mutateAsync: mock.mutate, error: mock.mutationError }) } },
-  nextAlarm: { get: { useQuery: () => ({ data: mock.nextAlarm, isLoading: mock.loading, error: mock.error, refetch: mock.refresh }) }, change: { useMutation: () => ({ mutateAsync: mock.mutate, isPending: false }) } },
+  nextAlarm: { get: { useQuery: () => ({ data: mock.nextAlarm, dataUpdatedAt: Date.now(), isError: !!mock.error, isLoading: mock.loading, error: mock.error, refetch: mock.refresh }) }, change: { useMutation: () => ({ mutateAsync: mock.mutate, isPending: false }) } },
   biometrics: {
     getSleepStages: { useQuery: () => ({ data: mock.latest, isLoading: mock.loading, error: mock.error }) },
     getVitalsSummary: { useQuery: (input: unknown) => {
@@ -29,12 +29,24 @@ beforeEach(() => {
   vi.clearAllMocks()
   Object.assign(mock, { nextAlarm: undefined, schedule: { alarm: [] }, latest: undefined, vitals: undefined, loading: false, error: null, mutationError: null })
   mock.mutate.mockResolvedValue({})
+  mock.refresh.mockResolvedValue({ data: nextAlarm, isError: false })
 })
 afterEach(() => vi.useRealTimers())
 
 const nextAlarm: NextAlarm = { apiVersion: 1, side: 'left', timeZone: 'UTC', revision: 'a'.repeat(64), state: 'scheduled',
   alarm: { scheduleIds: [1], at: '2026-10-27T07:00:00.000Z', originalAt: '2026-10-27T07:00:00.000Z', time: '07:00', source: 'routine', duration: 10, wakeWindow: 0, alarmTemperatureF: 80 },
   followingAt: null, canChange: true, reason: '', execution: null, acknowledgment: 'accepted_not_physically_verified', change: null }
+
+it('shows an authoritative warm-up span and withdraws it when the refresh fails', () => {
+  if (!nextAlarm.alarm) throw new Error('Missing alarm fixture')
+  mock.nextAlarm = { ...nextAlarm, alarm: { ...nextAlarm.alarm, alarmTemperatureF: 105 }, warming: { startsAt: '2026-10-27T06:30:00Z', endsAt: '2026-10-27T07:15:10Z', earliestVibrationAt: '2026-10-27T07:00:00Z', targetF: 105 } }
+  const view = render(<AlarmCard side="left" />)
+  expect(screen.getByText('Warming starts 6:30 AM toward 105°F.')).toBeTruthy()
+  mock.error = new Error('Offline')
+  view.rerender(<AlarmCard side="left" />)
+  expect(screen.queryByText('Warming starts 6:30 AM toward 105°F.')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Skip this alarm' })).toBeNull()
+})
 
 it('skips the displayed occurrence without sending weekly row updates', async () => {
   mock.nextAlarm = nextAlarm
@@ -77,6 +89,7 @@ it('shows loading, empty and error states for each card', () => {
   const { rerender } = render(cards)
   expect(screen.queryByText('No alarm set')).toBeNull()
   mock.loading = false
+  mock.nextAlarm = { ...nextAlarm, state: 'none', alarm: null, canChange: false }
   rerender(<>{cards}</>)
   // Give each mocked query a fresh render after its response changes.
   rerender(<div>{cards}</div>)

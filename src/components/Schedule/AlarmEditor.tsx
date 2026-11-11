@@ -321,80 +321,6 @@ export function AlarmEditor({
         </div>
       </div>
 
-      <div className="flex flex-col gap-2 border-t border-line pt-3.5">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="flex-1 text-sm">Wake window</span>
-          <SegmentedControl<WakeWindowOption>
-            size="sm"
-            ariaLabel="Wake window"
-            value={String(wakeWindow) as WakeWindowOption}
-            onChange={v => setWakeWindow(Number(v))}
-            options={WAKE_WINDOW_OPTIONS}
-          />
-        </div>
-        <span className="text-xs leading-[1.4] text-fg-3">
-          {wakeWindow > 0
-            ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
-            : 'Goes off at the set time.'}
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-3 border-t border-line pt-3.5">
-        <span className="text-xs text-fg-2">Snooze</span>
-        <div className="flex items-center gap-3">
-          <span className="flex-1 text-sm">Snooze for</span>
-          <Stepper
-            value={snoozeMinutes}
-            onChange={minutes => setSnoozeDuration(Math.round(minutes * 60))}
-            min={1}
-            max={MAX_SNOOZE_MINUTES}
-            format={v => `${v} min`}
-            label="snooze length"
-          />
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="flex-1 whitespace-nowrap text-sm">Snooze taper</span>
-          <SegmentedControl<SnoozeTaperOption>
-            size="sm"
-            ariaLabel="Snooze taper"
-            value={String(snoozeTaper) as SnoozeTaperOption}
-            onChange={v => setSnoozeTaper(Number(v))}
-            options={SNOOZE_TAPER_OPTIONS}
-          />
-        </div>
-        <span className="text-xs leading-[1.4] text-fg-3">
-          {snoozeTaper > 0
-            ? `Each snooze is ${snoozeTaper}% shorter than the last, so you ease out of bed instead of drifting back off: ${snoozeTaperPreview(snoozeMinutes, snoozeTaper)}…`
-            : `Every snooze lasts ${snoozeMinutes} min. Snooze taper makes each one shorter than the last.`}
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-3 border-t border-line pt-3.5">
-        <span className="text-xs text-fg-2">Vibration</span>
-        <div className="flex items-center gap-3">
-          <span className="w-[76px] shrink-0 text-sm">Pattern</span>
-          <SegmentedControl
-            ariaLabel="Vibration pattern"
-            value={pattern}
-            onChange={setPattern}
-            options={[{ value: 'rise', label: 'Rise' }, { value: 'double', label: 'Double' }]}
-          />
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="w-[76px] shrink-0 text-sm">Intensity</span>
-          <Slider value={intensity} onChange={setIntensity} min={1} max={100} label="Vibration intensity" />
-          <span className="w-9 text-right font-mono text-xs">{`${intensity}%`}</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="w-[76px] shrink-0 text-sm">Duration</span>
-          <Slider value={duration} onChange={setDuration} min={MIN_DURATION} max={MAX_DURATION} label="Vibration duration" />
-          <span className="w-9 text-right font-mono text-xs">{`${duration} s`}</span>
-        </div>
-        <span className="text-xs leading-[1.4] text-fg-3">
-          Pod 5 covers ignore pattern and intensity — duration is what you feel.
-        </span>
-      </div>
-
       <div className="flex items-center gap-3 border-t border-line pt-3.5">
         <span className="flex-1 text-sm">Bed temperature at wake</span>
         <Stepper
@@ -405,6 +331,87 @@ export function AlarmEditor({
           label="bed temperature at wake"
         />
       </div>
+
+      <div className="flex flex-col gap-3 border-t border-line pt-3.5">
+        <span className="text-sm">Vibration duration</span>
+        <div className="flex items-center gap-3">
+          <span className="w-[76px] shrink-0 text-sm">Duration</span>
+          <Slider value={duration} onChange={setDuration} min={MIN_DURATION} max={MAX_DURATION} label="Vibration duration" />
+          <span className="w-9 text-right font-mono text-xs">{`${duration} s`}</span>
+        </div>
+      </div>
+
+      <details className="space-y-3 border-t border-line pt-2">
+        <summary className="min-h-11 cursor-pointer py-3 text-sm">Advanced wake options</summary>
+        <div className="flex flex-col gap-2 border-t border-line pt-3.5">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="flex-1 text-sm">Wake window</span>
+            <SegmentedControl<WakeWindowOption>
+              size="sm"
+              ariaLabel="Wake window"
+              value={String(wakeWindow) as WakeWindowOption}
+              onChange={v => setWakeWindow(Number(v))}
+              options={WAKE_WINDOW_OPTIONS}
+            />
+          </div>
+          <span className="text-xs leading-[1.4] text-fg-3">
+            {wakeWindow > 0
+              ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
+              : 'Goes off at the set time.'}
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-line pt-3.5">
+          <span className="text-xs text-fg-2">Snooze</span>
+          <div className="flex items-center gap-3">
+            <span className="flex-1 text-sm">Snooze for</span>
+            <Stepper
+              value={snoozeMinutes}
+              onChange={minutes => setSnoozeDuration(Math.round(minutes * 60))}
+              min={1}
+              max={MAX_SNOOZE_MINUTES}
+              format={v => `${v} min`}
+              label="snooze length"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="flex-1 whitespace-nowrap text-sm">Snooze taper</span>
+            <SegmentedControl<SnoozeTaperOption>
+              size="sm"
+              ariaLabel="Snooze taper"
+              value={String(snoozeTaper) as SnoozeTaperOption}
+              onChange={v => setSnoozeTaper(Number(v))}
+              options={SNOOZE_TAPER_OPTIONS}
+            />
+          </div>
+          <span className="text-xs leading-[1.4] text-fg-3">
+            {snoozeTaper > 0
+              ? `Each snooze is ${snoozeTaper}% shorter than the last, so you ease out of bed instead of drifting back off: ${snoozeTaperPreview(snoozeMinutes, snoozeTaper)}…`
+              : `Every snooze lasts ${snoozeMinutes} min. Snooze taper makes each one shorter than the last.`}
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-line pt-3.5">
+          <span className="text-xs text-fg-2">Vibration</span>
+          <div className="flex items-center gap-3">
+            <span className="w-[76px] shrink-0 text-sm">Pattern</span>
+            <SegmentedControl
+              ariaLabel="Vibration pattern"
+              value={pattern}
+              onChange={setPattern}
+              options={[{ value: 'rise', label: 'Rise' }, { value: 'double', label: 'Double' }]}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="w-[76px] shrink-0 text-sm">Intensity</span>
+            <Slider value={intensity} onChange={setIntensity} min={1} max={100} label="Vibration intensity" />
+            <span className="w-9 text-right font-mono text-xs">{`${intensity}%`}</span>
+          </div>
+          <span className="text-xs leading-[1.4] text-fg-3">
+            Pattern and intensity depend on cover firmware. Use an attended test to confirm what yours supports.
+          </span>
+        </div>
+      </details>
 
       {testAlarm.error && <InlineError>{testAlarm.error.message}</InlineError>}
       {saveError && <InlineError>{saveError}</InlineError>}

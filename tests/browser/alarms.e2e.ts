@@ -17,6 +17,8 @@ test('next-alarm REST requires authentication and preserves weekly rows through 
     const response = await request.get(read, { headers: headers() })
     expect(response.headers()['cache-control']).toContain('no-store')
     const before = await response.json()
+    expect(before.warming.targetF).toBe(80)
+    expect(Date.parse(before.alarm.at) - Date.parse(before.warming.startsAt)).toBe(30 * 60_000)
     const skip = { side: 'left', action: 'skip', expectedRevision: before.revision, expectedAt: before.alarm.at }
     const skipped = await request.post(change, { headers: headers(), data: skip })
     expect(skipped.status()).toBe(200)
@@ -51,6 +53,8 @@ test('Temp shows one-time controls on desktop and phone and retains drafts after
     await page.getByRole('button', { name: 'Cards', exact: true }).click()
     const card = page.getByRole('region', { name: 'Next alarm' })
     await expect(card.getByRole('button', { name: 'Skip this alarm' })).toBeEnabled()
+    await expect(card).toContainText('Warming starts')
+    await expect(card).toContainText('Vibration at 11:59 PM for 30 seconds.')
     await card.getByRole('button', { name: 'Change this time' }).click()
     await card.getByLabel('One-time wake time').fill('23:58')
     await page.route('**/api/trpc/nextAlarm.change**', async (route) => {
@@ -83,3 +87,26 @@ test('Temp shows one-time controls on desktop and phone and retains drafts after
     expect(deleted.status(), await deleted.text()).toBe(200)
   }
 })
+
+for (const viewport of [{ width: 390, height: 844 }, { width: 1024, height: 768 }]) {
+  test(`wake editor exposes everyday controls before advanced options at ${viewport.width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.goto('/en/schedule')
+    await page.getByRole('button', { name: 'Add alarm', exact: true }).first().click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByLabel('Wake at')).toBeVisible()
+    await expect(dialog.getByRole('tablist', { name: 'Wake window' })).not.toBeVisible()
+    await dialog.getByRole('slider', { name: 'Vibration duration' }).scrollIntoViewIfNeeded()
+    await expect(dialog.getByRole('slider', { name: 'Vibration duration' })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Increase bed temperature at wake' })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('simple-wake-editor.png') })
+    await dialog.getByText('Advanced wake options', { exact: true }).click()
+    await dialog.getByRole('tablist', { name: 'Wake window' }).scrollIntoViewIfNeeded()
+    await expect(dialog.getByRole('tablist', { name: 'Wake window' })).toBeVisible()
+    await expect(dialog.getByRole('tablist', { name: 'Snooze taper' })).toBeVisible()
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath('advanced-wake-editor.png') })
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  })
+}

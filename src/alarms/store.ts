@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { Side } from '@/src/hardware/types'
 import { activeSleeperSides, type BedConfiguration } from '@/src/lib/singleSleeper'
+import { alarmWarmupMinutes } from '@/src/temperature/baseline'
 import { NextAlarmError, nextAlarmSchema, nextAlarmWriteSchema, type NextAlarm, type NextAlarmWrite } from './contract'
 import { alarmClock, alarmDigest, alarmHoldEnd, alarmPlan, alarmRowSchema, consistentAlarm, nextRoutineAlarm, occurrenceAt, overrideSchema,
   resolveAlarmClock, selectedAlarm, type AlarmContext, type AlarmExecution, type AlarmOccurrence, type AlarmOverride } from './model'
@@ -77,6 +78,14 @@ export function createAlarmStore(database: Database.Database) {
             wakeWindow: selected.rows[0].wakeWindow, alarmTemperatureF: selected.rows[0].alarmTemperature }
         : null,
       followingAt: following ? new Date(following.at).toISOString() : null,
+      // Use the same effective occurrence and warm-up policy as arbitration.
+      // An inactive, skipped, conflicting or consumed alarm has no proposed warming.
+      warming: current.available && selected && !selected.skipped && !status && selected.at > now && consistentAlarm(selected)
+        ? { startsAt: new Date(selected.at - alarmWarmupMinutes(selected.rows[0].wakeWindow) * 60_000).toISOString(),
+            endsAt: new Date(alarmHoldEnd(selected.at, selected.rows)).toISOString(),
+            earliestVibrationAt: new Date(selected.at - selected.rows[0].wakeWindow * 60_000).toISOString(),
+            targetF: selected.rows[0].alarmTemperature }
+        : null,
       canChange: reason === '', reason, execution: status, acknowledgment: 'accepted_not_physically_verified', change })
   }
   const matches = (side: Side, candidate: AlarmOccurrence, now: number, early: boolean) => {

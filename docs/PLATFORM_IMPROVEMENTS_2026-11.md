@@ -36,7 +36,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Pending |
 | 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Pending |
 | 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Pending |
-| 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Pending |
+| 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Source implementation and tests in progress; physical alarm and accessories remain unqualified |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Pending |
 | 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Pending |
 | 17 | Quiet and temporary arrangements | Explicit partner-resting/guest/side-swap state; shared-action arbitration and ambiguous-night training exclusion | Pending |
@@ -89,3 +89,5 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
   mobile/desktop browser checks passed; native and live release remain separate.
 
 - **03 — Tonight:** [everyday plan and evidence](TONIGHT_OVERVIEW.md) describes fresh control mode, range, wake occurrence, morning entry, side ownership and responsive layouts. No live routine was changed.
+
+- **14 — clear wake plan:** [contract and boundaries](CLEAR_WAKE_PLAN.md) documents authoritative warming, a simpler editor and explicit app-owned system backup. Home coordination and physical delivery remain separate acceptance gates.

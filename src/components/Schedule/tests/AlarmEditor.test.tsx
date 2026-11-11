@@ -48,6 +48,17 @@ afterEach(cleanup)
 const saveButton = (s: ReturnType<typeof render>) => s.getByRole('button', { name: 'Save alarm' }) as HTMLButtonElement
 
 describe('AlarmEditor', () => {
+  it('keeps temperature and duration visible while preserving advanced values on a simple save', async () => {
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    expect(s.getByRole('slider', { name: 'Vibration duration' })).toBeTruthy()
+    expect(s.getByRole('button', { name: 'Increase bed temperature at wake' })).toBeTruthy()
+    expect(s.getByText('Advanced wake options').closest('details')?.hasAttribute('open')).toBe(false)
+    fireEvent.click(saveButton(s))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
+    expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0]).toMatchObject({ wakeWindow: 20, snoozeTaper: 30, vibrationPattern: 'double' })
+    expect(m.setAlarm.mutateAsync).not.toHaveBeenCalled()
+  })
+
   it('creates one row per day for a new alarm and closes', async () => {
     const onClose = vi.fn()
     const onSaved = vi.fn()
@@ -85,6 +96,7 @@ describe('AlarmEditor', () => {
 
   it('edits an existing group: replaces its rows, keeps paused state and writes both sides', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByText('Advanced wake options'))
     expect(s.getByText('Edit alarm')).toBeTruthy()
     expect(s.getByRole('button', { name: 'Weekends' }).getAttribute('aria-pressed')).toBe('true')
     expect(s.getByRole('tab', { name: 'Double' }).getAttribute('aria-selected')).toBe('true')
@@ -160,6 +172,7 @@ describe('AlarmEditor', () => {
 
   it('shows and saves the wake window', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByText('Advanced wake options'))
     const wakeWindow = within(s.getByRole('tablist', { name: 'Wake window' }))
     expect(wakeWindow.getByRole('tab', { name: '20' }).getAttribute('aria-selected')).toBe('true')
     expect(s.getByText(/up to 20 min early, the first time you move after 7:40 AM\. Otherwise it goes off at 8:00 AM/)).toBeTruthy()
@@ -173,6 +186,7 @@ describe('AlarmEditor', () => {
 
   it('wraps the window start across midnight and turns off', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, time: '00:10' }} />)
+    fireEvent.click(s.getByText('Advanced wake options'))
     expect(s.getByText(/first time you move after 11:50 PM/)).toBeTruthy()
     fireEvent.click(within(s.getByRole('tablist', { name: 'Wake window' })).getByRole('tab', { name: 'Off' }))
     expect(s.getByText('Goes off at the set time.')).toBeTruthy()
@@ -183,6 +197,7 @@ describe('AlarmEditor', () => {
 
   it('shows and saves the snooze length and Snooze taper', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByText('Advanced wake options'))
     const taper = within(s.getByRole('tablist', { name: 'Snooze taper' }))
     expect(taper.getByRole('tab', { name: '30' }).getAttribute('aria-selected')).toBe('true')
     expect(taper.queryByRole('tab', { name: '20' })).toBeNull()
@@ -198,6 +213,7 @@ describe('AlarmEditor', () => {
 
   it('a new alarm snoozes 5 minutes with no taper', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" />)
+    fireEvent.click(s.getByText('Advanced wake options'))
     expect(s.getByText('Every snooze lasts 5 min. Snooze taper makes each one shorter than the last.')).toBeTruthy()
   })
 
@@ -267,6 +283,7 @@ it.each([90, 61, 1799])('preserves a %s-second snooze when editing only alarm ti
 })
 it('increments a fractional-minute snooze by one minute when explicitly changed', async () => {
   const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, snoozeDuration: 90 }} />)
+  fireEvent.click(s.getByText('Advanced wake options'))
   expect(s.getByText('1.5 min')).toBeTruthy()
   fireEvent.click(s.getByRole('button', { name: 'Increase snooze length' }))
   expect(s.getByText('2.5 min')).toBeTruthy()

@@ -24,6 +24,7 @@ export const nextAlarmSchema = z.object({
   alarm: occurrenceSchema.nullable(), followingAt: instant.nullable(),
   canChange: z.boolean(), reason: z.string(),
   execution: z.enum(['attempting', 'acknowledged', 'unknown']).nullable(),
+  warming: z.object({ startsAt: instant, endsAt: instant, earliestVibrationAt: instant, targetF: z.number().min(55).max(110) }).nullable().optional(),
   acknowledgment: z.literal('accepted_not_physically_verified'),
   change: z.object({
     revision: z.uuid(), status: z.enum(['active', 'expired', 'invalidated']),
