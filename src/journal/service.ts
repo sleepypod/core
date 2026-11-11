@@ -5,6 +5,7 @@ import { JournalError, journalPageSchema, journalReadSchema, journalWriteSchema,
 import type { createJournalStore } from './store'
 import type { JournalPresence } from './presence'
 import { journalPatterns } from './patterns'
+import { journalContextPatterns } from './contextPatterns'
 
 interface JournalDependencies {
   store: ReturnType<typeof createJournalStore>
@@ -26,8 +27,9 @@ export class JournalService {
     const candidate = shiftHistoryDate(through, 1 - input.days)
     const from = candidate < '1970-01-01' ? '1970-01-01' : candidate
     const entries = this.deps.store.list(input.side, from, through)
-    return journalPageSchema.parse({ apiVersion: 1, side: input.side, timeZone, deviceDate, from, through,
+    return journalPageSchema.parse({ apiVersion: 1, contextVersion: 1, side: input.side, timeZone, deviceDate, from, through,
       selected: this.deps.store.read(input.side, through), entries,
+      contextPatterns: journalContextPatterns(entries, this.deps.now()),
       patterns: journalPatterns(entries, this.deps.presence(input.side, from, through, timeZone)) })
   }
 

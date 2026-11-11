@@ -43,7 +43,7 @@ test('morning journal retains drafts and resolves conflicts on desktop and phone
   await expect(notes).toHaveValue('My unsaved left-side draft')
   await page.getByLabel('Restfulness', { exact: true }).selectOption('5')
   await page.getByLabel('Temperature comfort', { exact: true }).selectOption('cold')
-  await page.getByLabel(/caffeine.*during the previous day/i).check()
+  await page.getByLabel('Caffeine status', { exact: true }).selectOption('yes')
   await page.getByRole('button', { name: 'Save check-in', exact: true }).click()
   await expect(page.getByRole('region', { name: 'Morning check-in' }).getByRole('status')).toContainText('saved on your Pod')
   const url = `/api/v1/journal?side=left&date=${date}`

@@ -2,7 +2,23 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { Side } from '@/src/hardware/types'
 import { comfortEvent } from '@/src/comfort/event'
-import { JournalError, journalRecordSchema, journalSelectionSchema, journalWriteSchema, type JournalRecord, type JournalSelection, type JournalWrite } from './contract'
+import { JournalError, journalRecordSchema, journalSelectionSchema, journalWriteSchema, type JournalFields, type JournalRecord, type JournalSelection, type JournalWrite } from './contract'
+
+import { contextTimesAreValid, journalHabits } from './context'
+
+/** Older clients preserve unknown detail, but changing a habit clears its now-incompatible timing. */
+function mergedFields(fields: JournalFields, previous?: JournalFields): JournalFields {
+  if (fields.context !== undefined || !previous?.context) return fields
+  const context = structuredClone(previous.context)
+  for (const habit of journalHabits) {
+    if (fields[habit] !== previous[habit]) {
+      context[habit].status = fields[habit] ? 'yes' : 'none'
+      delete context[habit].amount
+      delete context[habit].lastAt
+    }
+  }
+  return { ...fields, context }
+}
 
 interface JournalRow { revision: string, record: string | null }
 function selection(side: Side, date: string, row?: JournalRow): JournalSelection {
@@ -29,10 +45,18 @@ export function createJournalStore(database: Database.Database) {
       return database.transaction(() => {
         const current = read(input.side, input.date)
         if (current.revision !== input.expectedRevision) throw new JournalError('This check-in changed on another device. Your draft is still here; reload the saved entry before replacing it.', 'CONFLICT')
-        const record: JournalRecord | null = input.fields
+        const recordZone = current.record?.timeZone ?? timeZone
+        if (input.expectedTimeZone !== undefined && input.expectedTimeZone !== recordZone) {
+          throw new JournalError('The journal time zone changed. Your draft is kept; refresh and review its times before saving.', 'CONFLICT')
+        }
+        const fields = input.fields ? mergedFields(input.fields, current.record?.fields) : null
+        if (fields?.context && !contextTimesAreValid(fields.context, input.date, recordZone, now)) {
+          throw new JournalError('Habit times must be in the preceding day or wake date, in this entry’s time zone, and cannot be in the future.', 'BAD_REQUEST')
+        }
+        const record: JournalRecord | null = fields
           ? journalRecordSchema.parse({
-              side: input.side, date: input.date, fields: input.fields,
-              timeZone: current.record?.timeZone ?? timeZone, origin: current.record?.origin ?? 'sleepypod',
+              side: input.side, date: input.date, fields,
+              timeZone: recordZone, origin: current.record?.origin ?? 'sleepypod',
               createdAt: current.record ? current.record.createdAt : now, importedAt: current.record?.importedAt ?? null, updatedAt: now,
             })
           : null

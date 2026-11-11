@@ -7,13 +7,17 @@ import { getQueryKey } from '@trpc/react-query'
 import { trpc } from '@/src/utils/trpc'
 import type { Side } from '@/src/hardware/types'
 import type { JournalFields, JournalPage, JournalSelection } from '@/src/journal/contract'
+import { journalContextDraft, parseJournalContextDraft, type JournalContextDraft } from '@/src/journal/contextDraft'
+import { JournalContextEditor, JournalContextSummary } from './JournalContextEditor'
+import { JournalContextPatterns } from './JournalContextPatterns'
 
 const fieldClass = 'w-full rounded-ctl border border-line bg-surface px-3 py-2 text-sm text-fg'
 const emptyFields: JournalFields = { restfulness: 3, comfort: 'comfortable', caffeine: false, alcohol: false, exercise: false, notes: '' }
-interface Draft { fields: JournalFields, expectedRevision: string | null }
+interface Draft { fields: JournalFields, expectedRevision: string | null, contextDraft?: JournalContextDraft, contextTimeZone?: string }
 const entryKey = (side: Side, date: string) => `${side}:${date}`
 
 export function MorningJournal({ sectionSwitch }: { sectionSwitch?: ReactNode }) {
+  const [editedAt, setEditedAt] = useState(0)
   const [side, setSide] = useState<Side>('left')
   const [date, setDate] = useState<string>()
   const [days, setDays] = useState(30)
@@ -41,21 +45,40 @@ export function MorningJournal({ sectionSwitch }: { sectionSwitch?: ReactNode })
   const key = selected ? entryKey(selected.side, selected.date) : ''
   const draft = drafts[key]
   const fields = draft?.fields ?? selected?.record?.fields ?? emptyFields
-  const conflict = Boolean(draft && selected && draft.expectedRevision !== selected.revision)
+  const savedTimeZone = selected?.record?.timeZone ?? data?.timeZone ?? 'UTC'
+  const timeZone = draft?.contextTimeZone ?? savedTimeZone
+  const timeZoneConflict = Boolean(draft?.contextDraft && draft.contextTimeZone !== savedTimeZone)
+  const contextDraft = draft?.contextDraft ?? journalContextDraft(fields, timeZone)
+  const contextResult = data?.contextVersion === 1 && selected ? parseJournalContextDraft(contextDraft, selected.date, timeZone, Math.max(query.dataUpdatedAt, editedAt)) : undefined
+  const conflict = Boolean(draft && selected && (draft.expectedRevision !== selected.revision || timeZoneConflict))
   const update = (next: Partial<JournalFields>) => {
     if (!selected) return
-    setDrafts(current => ({ ...current, [key]: { fields: { ...fields, ...next }, expectedRevision: draft ? draft.expectedRevision : selected.revision } }))
+    setDrafts(current => ({ ...current, [key]: { fields: { ...fields, ...next }, contextDraft: draft?.contextDraft, contextTimeZone: draft?.contextTimeZone, expectedRevision: draft ? draft.expectedRevision : selected.revision } }))
+    setMessages(current => ({ ...current, [key]: undefined }))
+    setDeleteKey(undefined)
+  }
+  const updateContext = (value: JournalContextDraft) => {
+    if (!selected) return
+    setEditedAt(Date.now())
+    setDrafts(current => ({ ...current, [key]: { fields, contextDraft: value, contextTimeZone: timeZone, expectedRevision: draft ? draft.expectedRevision : selected.revision } }))
     setMessages(current => ({ ...current, [key]: undefined }))
     setDeleteKey(undefined)
   }
   const save = (remove = false) => {
-    if (!selected) return
-    mutation.mutate({ side: selected.side, date: selected.date,
-      expectedRevision: remove && deleteKey ? deleteKey.revision : draft ? draft.expectedRevision : selected.revision, fields: remove ? null : fields })
+    if (!selected || conflict || (!remove && contextResult?.error)) return
+    const checked = data?.contextVersion === 1 ? parseJournalContextDraft(contextDraft, selected.date, timeZone, Date.now()) : undefined
+    if (!remove && checked?.error) {
+      setMessages(current => ({ ...current, [key]: checked.error }))
+      return
+    }
+    const context = checked?.context
+    const nextFields = context ? { ...fields, context, caffeine: context.caffeine.status === 'yes', alcohol: context.alcohol.status === 'yes', exercise: context.exercise.status === 'yes' } : fields
+    mutation.mutate({ side: selected.side, date: selected.date, expectedTimeZone: data?.contextVersion === 1 ? timeZone : undefined,
+      expectedRevision: remove && deleteKey ? deleteKey.revision : draft ? draft.expectedRevision : selected.revision, fields: remove ? null : nextFields })
   }
   const resolveConflict = (keepDraft: boolean) => {
     if (!selected) return
-    setDrafts(current => ({ ...current, [key]: keepDraft ? { fields, expectedRevision: selected.revision } : undefined }))
+    setDrafts(current => ({ ...current, [key]: keepDraft ? { fields, contextDraft: draft?.contextDraft, contextTimeZone: savedTimeZone, expectedRevision: selected.revision } : undefined }))
     setMessages(current => ({ ...current, [key]: keepDraft ? 'Draft kept. Save when ready.' : 'Saved entry loaded.' }))
     setDeleteKey(undefined)
   }
@@ -160,16 +183,22 @@ export function MorningJournal({ sectionSwitch }: { sectionSwitch?: ReactNode })
                 </select>
               </label>
             </div>
-            <div className="flex flex-wrap gap-x-6 gap-y-3">
-              {(['caffeine', 'alcohol', 'exercise'] as const).map(habit => (
-                <label className="flex items-center gap-2 text-sm" key={habit}>
-                  <input type="checkbox" checked={fields[habit]} onChange={event => update({ [habit]: event.target.checked })} />
-                  <span className="capitalize">{habit}</span>
-                  <span className="sr-only">during the previous day</span>
-                </label>
-              ))}
-            </div>
-            <p className="text-xs text-fg-2">Habits describe the day before this morning.</p>
+            {data?.contextVersion === 1
+              ? <JournalContextEditor draft={contextDraft} timeZone={timeZone} error={contextResult?.error} onChange={updateContext} />
+              : (
+                  <>
+                    <div className="flex flex-wrap gap-x-6 gap-y-3">
+                      {(['caffeine', 'alcohol', 'exercise'] as const).map(habit => (
+                        <label className="flex items-center gap-2 text-sm" key={habit}>
+                          <input type="checkbox" checked={fields[habit]} onChange={event => update({ [habit]: event.target.checked })} />
+                          <span className="capitalize">{habit}</span>
+                          <span className="sr-only">during the previous day</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-xs text-fg-2">Habits describe the day before this morning.</p>
+                  </>
+                )}
             <label className="block space-y-2 text-sm">
               <span>Private notes</span>
               <textarea aria-label="Private notes" className={`${fieldClass} min-h-28 resize-y`} maxLength={500} value={fields.notes} onChange={event => update({ notes: event.target.value })} />
@@ -181,17 +210,17 @@ export function MorningJournal({ sectionSwitch }: { sectionSwitch?: ReactNode })
           </fieldset>
           {conflict && (
             <div role="alert" className="space-y-3 rounded-ctl border border-line p-4 text-sm">
-              <p>The saved entry changed. Your draft has been kept. Compare both before saving again.</p>
+              <p>{timeZoneConflict ? `The entry’s time zone changed from ${timeZone} to ${savedTimeZone}. Your draft still uses ${timeZone}. Keeping it in the new zone will reinterpret the entered clock times; review them before saving.` : 'The saved entry changed. Your draft has been kept. Compare both before saving again.'}</p>
               <SavedEntry entry={selected} />
               <div className="flex flex-wrap gap-2">
                 <Button disabled={mutation.isPending || Boolean(query.error)} onClick={() => resolveConflict(false)}>Use saved entry</Button>
-                <Button disabled={mutation.isPending || Boolean(query.error)} onClick={() => resolveConflict(true)}>Keep my draft for this revision</Button>
+                <Button disabled={mutation.isPending || Boolean(query.error)} onClick={() => resolveConflict(true)}>{timeZoneConflict ? 'Keep draft in new time zone' : 'Keep my draft for this revision'}</Button>
               </div>
             </div>
           )}
           {messages[key] && <p role="status" className="text-sm text-fg-2">{messages[key]}</p>}
           <div className="flex flex-wrap gap-2">
-            <Button variant="primary" disabled={mutation.isPending || Boolean(query.error) || conflict} onClick={() => save()}>Save check-in</Button>
+            <Button variant="primary" disabled={mutation.isPending || Boolean(query.error) || conflict || Boolean(contextResult?.error)} onClick={() => save()}>Save check-in</Button>
             <Button variant="ghost" disabled={mutation.isPending} onClick={() => void query.refetch()}>Refresh saved entry</Button>
             {selected.record && <Button variant="ghost" disabled={mutation.isPending || Boolean(query.error) || conflict} onClick={() => setDeleteKey({ key, revision: selected.revision })}>Remove check-in</Button>}
           </div>
@@ -219,8 +248,9 @@ function SavedEntry({ entry }: { entry: JournalSelection }) {
         ? (
             <div className="mt-2 space-y-2 text-fg-2">
               <p>{`Restfulness ${fields.restfulness}/5 · ${fields.comfort}`}</p>
-              <p>{`Caffeine: ${fields.caffeine ? 'yes' : 'no'} · Alcohol: ${fields.alcohol ? 'yes' : 'no'} · Exercise: ${fields.exercise ? 'yes' : 'no'}`}</p>
+              {!fields.context && <p>{`Caffeine: ${fields.caffeine ? 'yes' : 'no'} · Alcohol: ${fields.alcohol ? 'yes' : 'no'} · Exercise: ${fields.exercise ? 'yes' : 'no'}`}</p>}
               <p className="whitespace-pre-wrap break-words">{fields.notes || 'No notes.'}</p>
+              {fields.context && entry.record && <JournalContextSummary context={fields.context} timeZone={entry.record.timeZone} />}
             </div>
           )
         : <p className="mt-2">No saved entry for this date.</p>}
@@ -247,6 +277,7 @@ function JournalPatterns({ data, days, setDays, selectDate }: { data: JournalPag
             <p className="text-sm">{`Last ${data.patterns.recentEntries} ${data.patterns.recentEntries === 1 ? 'check-in' : 'check-ins'} in this range: restfulness ${data.patterns.averageRestfulness}/5 · ${data.patterns.warmCount} too warm · ${data.patterns.coldCount} too cold.`}</p>
           )
         : <p className="text-sm text-fg-2">No check-ins in this range yet.</p>}
+      {data.contextPatterns && <JournalContextPatterns patterns={data.contextPatterns} />}
       {data.patterns.cohorts.map(cohort => (
         <div key={cohort.source} className="space-y-2 border-t border-line pt-4 text-sm">
           <h3 className="font-medium">{cohort.source === 'free-sleep' ? 'Imported Free Sleep presence' : 'Core bed-presence recordings'}</h3>

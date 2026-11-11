@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { journalContextSchema, journalHabits } from './context'
+import { journalContextPatternsSchema } from './contextPatterns'
 
 export const journalDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value =>
   value >= '1970-01-01' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value,
@@ -9,7 +11,12 @@ export const journalFieldsSchema = z.object({
   comfort: z.enum(['cold', 'comfortable', 'warm']),
   caffeine: z.boolean(), alcohol: z.boolean(), exercise: z.boolean(),
   notes: z.string().trim().max(500),
-}).strict()
+  // Omitted preserves a newer client's detail; null explicitly removes it.
+  context: journalContextSchema.nullable().optional(),
+}).strict().refine((fields) => {
+  const context = fields.context
+  return !context || journalHabits.every(habit => fields[habit] === (context[habit].status === 'yes'))
+}, 'Habit switches and detailed logging must agree')
 export type JournalFields = z.infer<typeof journalFieldsSchema>
 const milliseconds = z.number().int().nonnegative().max(253402300799000)
 const timeZone = z.string().min(1).max(100).refine((value) => {
@@ -34,6 +41,7 @@ export const journalReadSchema = z.object({
 }).strict()
 export const journalWriteSchema = z.object({
   side: journalSideSchema, date: journalDateSchema, expectedRevision: z.uuid().nullable(),
+  expectedTimeZone: timeZone.optional(),
   // Null deletes only this entry; its tombstone prevents stale recreation.
   fields: journalFieldsSchema.nullable(),
 }).strict()
@@ -49,9 +57,10 @@ export const journalCohortSchema = z.object({
 })
 export type JournalCohort = z.infer<typeof journalCohortSchema>
 export const journalPageSchema = z.object({
-  apiVersion: z.literal(1), side: journalSideSchema, timeZone, deviceDate: journalDateSchema,
+  apiVersion: z.literal(1), contextVersion: z.literal(1).optional(), side: journalSideSchema, timeZone, deviceDate: journalDateSchema,
   from: journalDateSchema, through: journalDateSchema, selected: journalSelectionSchema,
   entries: z.array(journalSelectionSchema).max(90),
+  contextPatterns: journalContextPatternsSchema.optional(),
   patterns: z.object({
     recentEntries: z.number().int().min(0).max(7), averageRestfulness: z.number().nullable(), warmCount: z.number().int(), coldCount: z.number().int(),
     cohorts: z.array(journalCohortSchema).max(2),

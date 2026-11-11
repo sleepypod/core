@@ -13,7 +13,7 @@ export function journalPatterns(entries: JournalSelection[], sources: Array<{ so
     const associations: JournalCohort['associations'] = []
     for (const habit of ['caffeine', 'alcohol', 'exercise'] as const) {
       const withHabit = matched.filter(item => item.record.fields[habit])
-      const withoutHabit = matched.filter(item => !item.record.fields[habit])
+      const withoutHabit = matched.filter(item => !item.record.fields[habit] && item.record.fields.context?.[habit].status !== 'not_logged')
       if (withHabit.length < 5 || withoutHabit.length < 5) continue
       const average = (group: typeof matched) => group.reduce((sum, item) => sum + item.minutes, 0) / group.length
       associations.push({ habit, withCount: withHabit.length, withoutCount: withoutHabit.length,
@@ -28,6 +28,6 @@ export function journalPatterns(entries: JournalSelection[], sources: Array<{ so
     warmCount: recent.filter(record => record.fields.comfort === 'warm').length,
     coldCount: recent.filter(record => record.fields.comfort === 'cold').length,
     cohorts,
-    note: 'Each comparison needs five distinct dates with and five without the habit in one source and time zone. Missing or malformed presence is excluded. Bed presence is not sleep duration; these associations do not establish cause. Imported records remain unqualified. Notes are not used in these calculations.',
+    note: 'Each comparison needs five distinct dates with and five without the habit in one source and time zone. Missing or malformed presence and habits explicitly marked not logged are excluded. Bed presence is not sleep duration; these associations do not establish cause. Imported records remain unqualified. Notes are not used in these calculations.',
   }
 }
