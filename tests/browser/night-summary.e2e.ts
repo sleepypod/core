@@ -59,7 +59,8 @@ test('Tonight and Sleep retain every fragment and leave gaps unclassified', asyn
 
     await page.goto('/en')
     await page.getByRole('button', { name: 'Cards', exact: true }).click()
-    const tonight = page.locator('a[href="/en/sleep"]').filter({ hasText: 'Last night' })
+    const tonight = page.locator('a[href="/en/sleep"]').filter({ hasText: 'Latest night' })
+    await expect(tonight).toHaveCount(1)
     await expect(tonight).toContainText('6h')
     await expect(tonight).toContainText('3 segments')
     await tonight.click()

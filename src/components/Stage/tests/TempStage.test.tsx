@@ -444,6 +444,24 @@ describe('TempStage', () => {
     expect((panel.getByRole('button', { name: 'Warmer' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('does not intercept buttons, links or overview keyboard input as bed commands', async () => {
+    const inspected = vi.fn()
+    render(
+      <>
+        <button type="button">Review wake plan</button>
+        <TempStage onExit={() => {}} onInspectSide={inspected} />
+      </>
+    )
+    await act(async () => {})
+    fireEvent.keyDown(window, { key: '2' })
+    expect(inspected).toHaveBeenCalledWith('right')
+    m.setPower.mockClear()
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Review wake plan' }), { key: ' ' })
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Review wake plan' }), { key: 'ArrowUp' })
+    expect(m.setPower).not.toHaveBeenCalled()
+    expect(m.setTemp).not.toHaveBeenCalled()
+  })
+
   it('makes the paused panel inert, so Resume and the dial take no input', async () => {
     m.notices = [{ id: 'pump-stall:left', kind: 'action', tone: 'danger', icon: Link2, title: 'Stall', blocksSides: ['left'] }]
     m.status = {

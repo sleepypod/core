@@ -4,11 +4,13 @@ import { BedroomSummary } from '@/src/components/Home/BedroomSummary'
 
 export const metadata: Metadata = { title: 'Schedule' }
 
-export default function Schedule() {
+export default async function Schedule({ searchParams }: { searchParams: Promise<{ side?: string | string[] }> }) {
+  const { side } = await searchParams
+  const initialSide = side === 'left' || side === 'right' || side === 'both' ? side : undefined
   return (
     <>
       <BedroomSummary />
-      <SchedulePage />
+      <SchedulePage initialSide={initialSide} />
     </>
   )
 }

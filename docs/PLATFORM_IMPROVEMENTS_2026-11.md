@@ -25,11 +25,11 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | --- | --- | --- | --- |
 | 01 | Automatic home/away connection | Verified-origin pairing, authenticated route selection, credential isolation, expired access and work-network/cellular tests; no mutation replay | Pending |
 | 02 | Useful offline app | Encrypted identity-scoped records, reports and confirmed schedules; timestamps; account-switch/revocation tests; offline phone/iPad walkthrough | In progress: owner offline library |
-| 03 | Tonight main screen | Bed, temperature, next wake and actual control mode; morning brief; accessible web/native layouts | Pending |
+| 03 | Tonight main screen | Bed, temperature, next wake and actual control mode; morning brief; accessible web/native layouts | Web source validated; native implementation and release checks in progress |
 | 04 | Overnight comfort envelope | Persisted narrow overnight range, explicit wake exception start, arbitration/override/DST tests and live acknowledged policy | In progress: shared automatic range and explicit wake exception |
 | 05 | Recording health | Freshness, dropout, storage and processing checks; actionable messages; failed-source fixtures and live verification | In progress: authenticated read-only checks and web cards |
 | 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Native implementation tested; hosted checks and actual Watch delivery pending |
-| 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Web implemented and tested; native validation in progress |
+| 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Core PR 86 merged; native PR 62 tested locally and awaiting hosted checks |
 | 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Pending |
 | 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Pending |
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
@@ -70,7 +70,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 ## Validation and release records
 
 - **02 — owner offline library:** [native PR 58](https://github.com/lucaandrea/sleepypod-ios/pull/58)
-  adds encrypted, identity-scoped records, reports and schedules. Local signed
+  merged after all hosted checks and adds encrypted, identity-scoped records, reports and schedules. Local signed
   simulator checks passed on iPhone and iPad; physical and personal-account work
   remains. Detailed receipts are in native `Integration/parity/OFFLINE_LIBRARY.md`.
 - **05 — recording readiness:** [implementation and validation](RECORDING_READINESS.md)
@@ -87,3 +87,5 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 - **07 — guided learning:** [scope and evidence](GUIDED_LEARNING.md) separates
   stages, private baseline and temperature learning. Web unit, production-build and
   mobile/desktop browser checks passed; native and live release remain separate.
+
+- **03 — Tonight:** [everyday plan and evidence](TONIGHT_OVERVIEW.md) describes fresh control mode, range, wake occurrence, morning entry, side ownership and responsive layouts. No live routine was changed.

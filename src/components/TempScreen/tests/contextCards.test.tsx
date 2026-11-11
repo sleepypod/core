@@ -12,6 +12,7 @@ const mock = vi.hoisted(() => ({
 }))
 vi.mock('next/navigation', () => ({ usePathname: () => '/de' }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
+  settings: { getAll: { useQuery: () => ({ data: { device: { timezone: 'UTC' } } }) } },
   useUtils: () => ({ nextAlarm: { get: { setData: mock.setAlarmData, invalidate: mock.invalidate } }, schedules: { getAll: { invalidate: mock.invalidate } } }),
   schedules: { getAll: { useQuery: () => ({ data: mock.schedule, isLoading: mock.loading, error: mock.error }) }, updateAlarmSchedule: { useMutation: () => ({ mutateAsync: mock.mutate, error: mock.mutationError }) } },
   nextAlarm: { get: { useQuery: () => ({ data: mock.nextAlarm, isLoading: mock.loading, error: mock.error, refetch: mock.refresh }) }, change: { useMutation: () => ({ mutateAsync: mock.mutate, isPending: false }) } },

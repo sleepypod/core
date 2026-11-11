@@ -101,7 +101,7 @@ function Readout({ label, value, testId }: { label: string, value: string, testI
  * setTemperature / setPower, schedules, surface sensors); the canvas is decorative and
  * every readout and action also exists as DOM text and keyboard.
  */
-export function TempStage({ onExit }: { onExit: () => void }) {
+export function TempStage({ onExit, onInspectSide }: { onExit: () => void, onInspectSide?: (side: StageSide) => void }) {
   const { isLinked, toggleLink } = useSide()
   const { control: controlStyle, tempDisplay: display } = usePrefs()
   const { sideName } = useSideNames()
@@ -195,7 +195,10 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     }
     toggleLink()
   }
-  const handleSelect = (side: StageSide) => setSelected(current => current === side ? null : side)
+  const handleSelect = (side: StageSide) => {
+    setSelected(current => current === side ? null : side)
+    onInspectSide?.(side)
+  }
   /** A drag on the bed turns the side on and previews the target under the pointer. */
   const handleDrag = (side: StageSide, f: number) => {
     for (const s of targetsFor(side)) {
@@ -216,10 +219,10 @@ export function TempStage({ onExit }: { onExit: () => void }) {
   const onStageKey = (event: KeyboardEvent): boolean => {
     switch (event.key) {
       case '1':
-        setSelected(s => s === 'left' ? null : 'left')
+        handleSelect('left')
         return true
       case '2':
-        setSelected(s => s === 'right' ? null : 'right')
+        handleSelect('right')
         return true
       case 'l':
       case 'L':
@@ -256,7 +259,8 @@ export function TempStage({ onExit }: { onExit: () => void }) {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (event.metaKey || event.ctrlKey || event.altKey) return
-      if (target && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName))) return
+      if (target && (target.isContentEditable || target.closest?.('a,button,input,select,textarea,[role=button]'))) return
+      if (target instanceof HTMLElement && target !== document.body && !target.closest('[data-testid=temp-stage]')) return
       if (keys.current(event)) event.preventDefault()
     }
     window.addEventListener('keydown', onKey)
@@ -316,11 +320,11 @@ export function TempStage({ onExit }: { onExit: () => void }) {
       data-testid="temp-stage"
       data-no-swipe
       className={cn(
-        'fixed inset-0 z-30 select-none bg-[#0b0b0c] font-sans text-[#ececec] min-[900px]:left-[224px] max-[899px]:bottom-[var(--phone-nav-height,76px)]',
-        mode === '2d' ? 'flex flex-col gap-6 overflow-y-auto py-6' : 'overflow-hidden',
+        '@container relative isolate select-none rounded-card max-[899px]:-mx-5 max-[899px]:rounded-none bg-[#0b0b0c] font-sans text-[#ececec]',
+        mode === '2d' ? 'flex flex-col gap-6 py-6' : 'h-[650px] overflow-hidden min-[900px]:h-[740px]',
       )}
     >
-      <h1 className="sr-only">Temperature</h1>
+      <h2 className="sr-only">Bed temperatures</h2>
       {limitsOpen && (
         <Modal open onClose={() => setLimitsOpen(false)} title={`${names[panelSide]} comfort limit`}>
           <ComfortLimitCard side={panelSide} />
@@ -428,7 +432,7 @@ export function TempStage({ onExit }: { onExit: () => void }) {
       </div>
 
       {/* Room readouts, top right, once there is room beside the centred pills. */}
-      <div className={cn('z-10 hidden gap-7 rounded-xl border px-[18px] py-3 min-[1200px]:flex', mode === '2d' ? 'relative mx-7 self-center' : 'absolute right-7 top-6')} style={{ ...GLASS, borderColor: STAGE.line }}>
+      <div className={cn('z-10 hidden gap-7 rounded-xl border px-[18px] py-3 @min-[1100px]:flex', mode === '2d' ? 'relative mx-7 self-center' : 'absolute right-7 top-[84px]')} style={{ ...GLASS, borderColor: STAGE.line }}>
         <Readout label="Room" value={roomText} testId="stage-room" />
         <Readout label="Humidity" value={humidityText} testId="stage-humidity" />
         <Readout label="Bed air" value={bedAirText} testId="stage-bed-air" />

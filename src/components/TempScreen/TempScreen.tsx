@@ -7,7 +7,8 @@ import dynamic from 'next/dynamic'
 import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, NoticeStack, PageHeader, Skeleton } from '@/src/components/ds'
-import { AutopilotStatusChip } from '@/src/components/Autopilot/AutopilotStatusChip'
+import { TonightOverview } from './TonightOverview'
+import { morningInPodZone } from './tonightSummary'
 import { ComfortLimitCard } from './ComfortLimitCard'
 import { RecordingHealthCard } from '@/src/components/Sleep/RecordingHealthCard'
 import { EnvironmentInfoPanel } from '@/src/components/EnvironmentInfo/EnvironmentInfoPanel'
@@ -32,7 +33,7 @@ import { useNightPhases } from './useNightPhases'
 import { useSideTemperature } from './useSideTemperature'
 import { useTempNotices } from './useTempNotices'
 
-const TempStage = dynamic(() => import('../Stage/TempStage').then(m => m.TempStage), { ssr: false, loading: () => <div aria-hidden="true" className="fixed inset-0 z-30 bg-[#0b0b0c] min-[900px]:left-[224px]" /> })
+const TempStage = dynamic(() => import('../Stage/TempStage').then(m => m.TempStage), { ssr: false, loading: () => <div aria-hidden="true" className="h-[600px] rounded-card bg-[#0b0b0c]" /> })
 
 const SIDES: Side[] = ['left', 'right']
 
@@ -73,8 +74,9 @@ const CONTEXT = 'grid content-start gap-3.5 min-[900px]:gap-3 min-[900px]:@min-[
  * controls which zones receive the user's temperature and power adjustments.
  */
 export const TempScreen = () => {
-  const { isLinked, toggleLink, primarySide, singleSleeperSide } = useSide()
+  const { isLinked, toggleLink, primarySide, singleSleeperSide, singleScheduleSide } = useSide()
   const shown = useShownSides()
+  const [inspectedSide, setInspectedSide] = useState<Side | null>(null)
   // One side away: the sleeper's schedule, context and timeline.
   const contextSide = singleSleeperSide ?? primarySide
   const { control: variant, tempDisplay } = usePrefs()
@@ -100,9 +102,11 @@ export const TempScreen = () => {
   const unit: TempUnit = (settings?.device?.temperatureUnit as TempUnit) ?? 'F'
   const { data: occupancy } = trpc.biometrics.getOccupancy.useQuery(undefined, { refetchInterval: 30_000 })
 
-  // The stage replaces the card layout with the full-screen 3D bed; it has its own data wiring.
+  // The stage replaces the temperature cards; the same plan remains above either layout.
   const [view, setView] = useTempView()
   const showStage = view === 'stage'
+  const controlSide = (showStage ? inspectedSide : null) ?? primarySide
+  const overviewSide = singleScheduleSide ?? controlSide
   // v switches to the stage from the cards; the stage handles its own keys.
   useEffect(() => {
     if (showStage) return
@@ -132,6 +136,7 @@ export const TempScreen = () => {
   // Stepper variant: Night / Dawn read and edit tonight's schedule per side.
   const isStepper = variant === 'stepper'
   const now = useNow()
+  const morning = morningInPodZone(now.getTime(), settings?.device?.timezone)
   // Per side, so choosing Night on one card doesn't switch the other — unless linked.
   const [stepperTab, setStepperTab] = useState<Record<Side, StepperTab>>({ left: 'now', right: 'now' })
   const handleTabChange = (side: Side, tab: StepperTab) => {
@@ -186,10 +191,9 @@ export const TempScreen = () => {
 
   const header = (
     <PageHeader
-      title="Temperature"
+      title="Tonight"
       right={(
         <>
-          <AutopilotStatusChip className="no-underline" />
           <ViewSwitch view={view} onChange={setView} />
           <Button
             icon={Link2}
@@ -207,24 +211,46 @@ export const TempScreen = () => {
     />
   )
 
-  if (showStage) return <TempStage onExit={() => setView('cards')} />
+  const overview = <TonightOverview key={overviewSide} side={overviewSide} name={sideName(overviewSide)} sleepSide={contextSide} sleepName={sideName(contextSide)} morning={morning} timeZone={settings?.device?.timezone} />
+  const details = (
+    <details className="my-5 rounded-card border border-line p-4">
+      <summary className="min-h-11 cursor-pointer py-2 font-medium">Comfort limits and recording checks</summary>
+      <ComfortLimitCard side={controlSide} />
+      <RecordingHealthCard />
+    </details>
+  )
+  if (showStage) return (
+    <>
+      <PageHeader title="Tonight" />
+      {overview}
+      <TempStage
+        onExit={() => {
+          setInspectedSide(null)
+          setView('cards')
+        }}
+        onInspectSide={setInspectedSide}
+      />
+      {details}
+    </>
+  )
 
   if (statusLoading) {
     return (
       <>
         {header}
         <SideSelector className="mb-3" />
-        <ComfortLimitCard side={primarySide} />
+        {overview}
         <div className={GRID}>
           <Skeleton className="h-[200px] min-[900px]:h-[520px]" />
           <Skeleton className="h-[520px] max-[899px]:hidden" />
           <div className={`${CONTEXT} max-[899px]:order-first`}>
             <span className="sp-label" role="status">Connecting…</span>
             <p className="text-xs text-fg-2">Saved alarms remain available while hardware status reconnects.</p>
-            <LastNightCard side={contextSide} name={sideName(contextSide)} />
+            {!morning && <LastNightCard side={contextSide} name={sideName(contextSide)} />}
             <AlarmCard side={contextSide} />
           </div>
         </div>
+        {details}
       </>
     )
   }
@@ -234,8 +260,7 @@ export const TempScreen = () => {
       {header}
 
       <NoticeStack notices={notices} />
-      <RecordingHealthCard />
-      <ComfortLimitCard side={primarySide} />
+      {overview}
 
       <Link href="/settings?section=sides" className="mb-3 inline-flex rounded-ctl border border-line-2 px-3 py-2 text-sm text-fg-2 hover:text-fg" aria-label={`Manage sleepers: ${sleeperLabel}`}>
         {sleeperLabel}
@@ -300,12 +325,13 @@ export const TempScreen = () => {
             <TonightCard side={contextSide} unit={unit} />
           </div>
           <EnvironmentInfoPanel side={contextSide} unit={unit} />
-          <LastNightCard side={contextSide} name={sideName(contextSide)} />
+          {!morning && <LastNightCard side={contextSide} name={sideName(contextSide)} />}
           <AlarmCard side={contextSide} />
         </div>
       </div>
 
       <ScheduleTimeline unit={unit} sides={shown} className="max-[899px]:hidden" />
+      {details}
     </>
   )
 }

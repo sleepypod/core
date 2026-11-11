@@ -117,6 +117,18 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('SchedulePage', () => {
+  it('opens a Tonight side link without pinning later user selection', () => {
+    const view = render(<SchedulePage initialSide="right" />)
+    expect(m.side.selectSide).toHaveBeenCalledExactlyOnceWith('right')
+    m.side.selectedSide = 'left'
+    view.rerender(<SchedulePage initialSide="right" />)
+    expect(m.side.selectSide).toHaveBeenCalledOnce()
+  })
+  it('preserves the sole schedule owner when a side link names the unused zone', () => {
+    m.side.singleScheduleSide = 'left'
+    render(<SchedulePage initialSide="right" />)
+    expect(m.side.selectSide).not.toHaveBeenCalled()
+  })
   it('features today’s curve as active and lists the others with a create slot', () => {
     const s = render(<SchedulePage />)
     const featured = s.getByTestId('curve-card-featured')

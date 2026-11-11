@@ -56,7 +56,7 @@ describe('responsive navigation', () => {
   it('keeps the three phone destinations stable as base availability changes', () => {
     state.path = '/fr/schedule'
     const { rerender } = render(<TabBar />)
-    for (const name of ['Temp', 'Schedule', 'Sleep']) expect(screen.getByRole('link', { name })).toBeTruthy()
+    for (const name of ['Tonight', 'Schedule', 'Sleep']) expect(screen.getByRole('link', { name })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Schedule' }).getAttribute('aria-current')).toBe('page')
     state.base = { configured: true }
     rerender(<TabBar />)
@@ -108,7 +108,7 @@ describe('responsive navigation', () => {
     state.path = '/fr/data'
     const { rerender } = render(<TabBar />)
     expect(screen.getByRole('link', { name: 'Sleep' }).getAttribute('aria-current')).toBe('page')
-    expect(screen.getByRole('link', { name: 'Temp' }).getAttribute('href')).toBe('/fr')
+    expect(screen.getByRole('link', { name: 'Tonight' }).getAttribute('href')).toBe('/fr')
     state.active = false
     rerender(<TabBar />)
     expect(screen.getAllByRole('link')).toHaveLength(3)

@@ -21,7 +21,7 @@ const m = vi.hoisted(() => ({
   awaySaving: undefined as undefined | { side: 'left' | 'right', awayMode: boolean },
   refetch: vi.fn(),
   toggleLink: vi.fn(),
-  side: { isLinked: false, primarySide: 'left' as 'left' | 'right', singleSleeperSide: null as 'left' | 'right' | null },
+  side: { isLinked: false, primarySide: 'left' as 'left' | 'right', singleSleeperSide: null as 'left' | 'right' | null, singleScheduleSide: null as 'left' | 'right' | null },
   timelineSides: undefined as unknown,
   statusLoading: false,
   status: undefined as unknown,
@@ -99,6 +99,7 @@ vi.mock('../ScheduleTimeline', () => ({
     return null
   },
 }))
+vi.mock('../TonightOverview', () => ({ TonightOverview: ({ side }: { side: string }) => <div data-testid="overview-side">{side}</div> }))
 vi.mock('../LastNightCard', () => ({ LastNightCard: () => null }))
 vi.mock('../AlarmCard', () => ({ AlarmCard: () => <div data-testid="next-alarm-card" /> }))
 vi.mock('../useTempNotices', async (importOriginal) => {
@@ -113,7 +114,12 @@ vi.mock('../useTempNotices', async (importOriginal) => {
 })
 vi.mock('@/src/components/Autopilot/AutopilotStatusChip', () => ({ AutopilotStatusChip: () => null }))
 vi.mock('@/src/components/Stage/TempStage', () => ({
-  TempStage: ({ onExit }: { onExit: () => void }) => <button type="button" data-testid="temp-stage" onClick={onExit}>Back</button>,
+  TempStage: ({ onExit, onInspectSide }: { onExit: () => void, onInspectSide: (side: 'right') => void }) => (
+    <>
+      <button type="button" data-testid="temp-stage" onClick={onExit}>Back</button>
+      <button type="button" onClick={() => onInspectSide('right')}>Inspect Right</button>
+    </>
+  ),
 }))
 
 import { TempScreen } from '../TempScreen'
@@ -133,7 +139,7 @@ beforeEach(() => {
   m.updateSide.mockReset()
   m.invalidateSettings.mockReset()
   m.awaySaving = undefined
-  m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: null }
+  m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: null, singleScheduleSide: null }
   // The stage is the default; these cover the cards it toggles back to.
   localStorage.setItem('sleepypod.base.temp.view', 'cards')
   m.timelineSides = undefined
@@ -176,6 +182,28 @@ function tap(el: HTMLElement) {
 const card = (screen: ReturnType<typeof render>, name: string) => within(screen.getByRole('group', { name }))
 
 describe('TempScreen', () => {
+  it('keeps an independent zone plan separate from the solo sleep profile', () => {
+    m.side.primarySide = 'right'
+    m.side.singleSleeperSide = 'left'
+    const screen = render(<TempScreen />)
+    expect(screen.getByTestId('overview-side').textContent).toBe('right')
+    m.side.singleScheduleSide = 'left'
+    screen.rerender(<TempScreen />)
+    expect(screen.getByTestId('overview-side').textContent).toBe('left')
+  })
+  it('returns the plan to the cards selection after inspecting the other stage side', async () => {
+    localStorage.setItem('sleepypod.base.temp.view', 'stage')
+    const screen = render(<TempScreen />)
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect Right' }))
+    expect(screen.getByTestId('overview-side').textContent).toBe('right')
+    fireEvent.click(screen.getByTestId('temp-stage'))
+    expect(screen.getByTestId('overview-side').textContent).toBe('left')
+    expect(m.setTemp).not.toHaveBeenCalled()
+    expect(m.setPower).not.toHaveBeenCalled()
+  })
   it('opens on the stage by default and toggles between it and the cards', async () => {
     localStorage.removeItem('sleepypod.base.temp.view')
     const screen = render(<TempScreen />)
@@ -279,7 +307,7 @@ describe('TempScreen', () => {
   })
 
   it('keeps both cards, linked, when one side is away', () => {
-    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: 'left' }
+    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: 'left', singleScheduleSide: 'left' }
     m.settings = { ...(m.settings as object), device: { unusedZoneMode: 'follow' } }
     const screen = render(<TempScreen />)
     expect(card(screen, 'Jon (left)')).toBeTruthy()
@@ -320,7 +348,7 @@ describe('TempScreen', () => {
   })
 
   it('Link sides mirrors a change to both sides', () => {
-    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null }
+    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null, singleScheduleSide: null }
     const screen = render(<TempScreen />)
     tap(card(screen, 'Jon (left)').getByRole('button', { name: 'Warmer' }))
     expect(m.setTemp).toHaveBeenCalledTimes(2)
@@ -330,7 +358,7 @@ describe('TempScreen', () => {
   })
 
   it('Link sides mirrors power to both sides', () => {
-    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null }
+    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null, singleScheduleSide: null }
     const screen = render(<TempScreen />)
     fireEvent.click(card(screen, 'Heidi (right)').getByRole('button', { name: 'Turn off' }))
     expect(m.setPower).toHaveBeenCalledTimes(2)
@@ -375,7 +403,7 @@ describe('TempScreen', () => {
   })
 
   it('a linked change skips the side a notice blocks', () => {
-    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null }
+    m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null, singleScheduleSide: null }
     m.notices = [{ id: 'pump-stall:right', kind: 'action', tone: 'danger', icon: Droplets, title: 'Stall', blocksSides: ['right'] }]
     const screen = render(<TempScreen />)
     tap(card(screen, 'Jon (left)').getByRole('button', { name: 'Warmer' }))
@@ -480,7 +508,7 @@ describe('TempScreen', () => {
     })
 
     it('edits Night on the schedule, mirrored to both sides when linked', () => {
-      m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null }
+      m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: null, singleScheduleSide: null }
       const screen = render(<TempScreen />)
       const left = card(screen, 'Jon (left)')
       fireEvent.click(left.getByRole('tab', { name: /Night/ }))
@@ -494,7 +522,7 @@ describe('TempScreen', () => {
     })
 
     it('edits Night on the sleeper\'s schedule only when the other side is away, from either card', () => {
-      m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: 'left' }
+      m.side = { isLinked: true, primarySide: 'left', singleSleeperSide: 'left', singleScheduleSide: 'left' }
       m.settings = { ...(m.settings as object), device: { unusedZoneMode: 'follow' } }
       const screen = render(<TempScreen />)
       const right = card(screen, 'Heidi (right)')
@@ -540,7 +568,7 @@ describe('TempScreen', () => {
 
 it('exposes solo setup without linking temperature controls', () => {
   m.settings = { device: { bedMode: 'solo-left', unusedZoneMode: 'independent' }, sides: { left: { awayMode: false }, right: { awayMode: false } } }
-  m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: 'left' }
+  m.side = { isLinked: false, primarySide: 'left', singleSleeperSide: 'left', singleScheduleSide: 'left' }
   const screen = render(<TempScreen />)
   expect(screen.getByRole('link', { name: 'Manage sleepers: Solo sleeper · Jon' }).getAttribute('href')).toBe('/settings?section=sides')
   expect(screen.getByRole('button', { name: 'Link sides' })).toBeTruthy()

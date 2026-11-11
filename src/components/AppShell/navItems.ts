@@ -17,7 +17,7 @@ export const DOCS_URL = 'https://sleepypod.github.io/'
 
 /** Base is included only when local setup exists (or in the hosted demo). */
 export const NAV_ITEMS: NavItem[] = [
-  { id: 'temp', label: 'Temp', icon: Thermometer, href: '/' },
+  { id: 'temp', label: 'Tonight', icon: Thermometer, href: '/' },
   { id: 'base', label: 'Base', icon: BedDouble, href: '/base' },
   { id: 'autopilot', label: 'Autopilot', icon: Sparkles, href: '/autopilot' },
   { id: 'schedule', label: 'Schedule', icon: Calendar, href: '/schedule' },

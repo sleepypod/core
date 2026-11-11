@@ -14,7 +14,7 @@ test('SleepyPod phone navigation reaches secondary controls and owner sign-out',
 
   await page.setViewportSize({ width: 390, height: 844 })
   const tabs = page.locator('nav[aria-label="Main"]:visible')
-  await expect(tabs.getByRole('link')).toHaveText(['Temp', 'Schedule', 'Sleep'])
+  await expect(tabs.getByRole('link')).toHaveText(['Tonight', 'Schedule', 'Sleep'])
   await expect(tabs.getByRole('link', { name: 'Schedule', exact: true })).toHaveAttribute('aria-current', 'page')
   await page.getByRole('link', { name: /^Settings/ }).filter({ visible: true }).click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
@@ -30,7 +30,7 @@ test('SleepyPod phone navigation reaches secondary controls and owner sign-out',
   await page.goto('/en/more')
   await expect(page).toHaveURL(/\/en\/settings$/)
 
-  await tabs.getByRole('link', { name: 'Temp', exact: true }).click()
+  await tabs.getByRole('link', { name: 'Tonight', exact: true }).click()
   const stage = page.getByTestId('temp-stage')
   await expect(stage).toBeVisible()
   await expect(page.getByTestId('stage-fallback').locator(':scope > .text-fg')).toHaveCSS('color', 'rgb(17, 17, 19)')
@@ -61,10 +61,10 @@ test.describe('enlarged text near timeline edges', () => {
         await page.goto('/en/settings')
         await page.addStyleTag({ content: 'html { font-size: 200%; } [data-testid="temp-stage"] { scrollbar-gutter: stable; }' })
         const navigation = page.locator('nav[aria-label="Main"]:visible')
-        await expect(navigation.getByRole('link')).toHaveText(['Temp', 'Schedule', 'Sleep'])
+        await expect(navigation.getByRole('link')).toHaveText(['Tonight', 'Schedule', 'Sleep'])
         await expect(navigation).toHaveCSS('font-size', '22px')
         await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewportWidth)
-        for (const name of ['Temp', 'Schedule', 'Sleep']) {
+        for (const name of ['Tonight', 'Schedule', 'Sleep']) {
           const bounds = await navigation.getByRole('link', { name, exact: true }).boundingBox()
           expect(bounds?.width).toBeGreaterThanOrEqual(44)
           expect(bounds?.height).toBeGreaterThanOrEqual(44)
@@ -75,16 +75,19 @@ test.describe('enlarged text near timeline edges', () => {
         await expect(navigation.getByRole('link', { name: 'Sleep', exact: true })).toBeFocused()
         await page.keyboard.press('Enter')
         await expect(navigation.getByRole('link', { name: 'Sleep', exact: true })).toHaveAttribute('aria-current', 'page')
-        await navigation.getByRole('link', { name: 'Temp', exact: true }).click()
+        await navigation.getByRole('link', { name: 'Tonight', exact: true }).click()
         const stage = page.getByTestId('temp-stage')
         await expect(stage).toBeVisible()
         await expect(page.getByTestId('stage-fallback')).toBeVisible()
         await expect(stage.getByRole('link', { name: 'Settings', exact: true })).toBeVisible()
-        await expect.poll(async () => {
-          const bed = await stage.boundingBox()
-          const bar = await navigation.boundingBox()
-          return bed && bar ? Math.abs(bed.y + bed.height - bar.y) : Number.POSITIVE_INFINITY
-        }).toBeLessThanOrEqual(1)
+        // Tonight is a scrollable page; its fixed tabs must not pin or clip the bed.
+        const overview = await page.getByRole('region', { name: 'Tonight overview' }).boundingBox()
+        const bed = await stage.boundingBox()
+        const tabBar = await navigation.boundingBox()
+        if (!overview || !bed || !tabBar) throw new Error('Tonight layout is missing')
+        expect(bed.y).toBeGreaterThanOrEqual(overview.y + overview.height)
+        expect(tabBar.y + tabBar.height).toBeLessThanOrEqual(680)
+        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewportWidth)
         const toolbar = await page.getByTestId('stage-toolbar').boundingBox()
         const fallback = await page.getByTestId('stage-fallback').boundingBox()
         const timeline = await page.getByTestId('stage-timeline').boundingBox()

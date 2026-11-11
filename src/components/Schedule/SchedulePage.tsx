@@ -46,6 +46,8 @@ interface EditingCurve {
 }
 
 interface SchedulePageProps {
+  /** A Tonight link starts on this side, without locking later user selection. */
+  initialSide?: SideSelection
   /**
    * /schedule/<curve>: 'new', a library curve's id ('12'), or the days of a
    * schedule ('mon-tue-wed', which opens the library curve running them);
@@ -67,6 +69,9 @@ interface SchedulePageProps {
  */
 export function SchedulePage(props: SchedulePageProps = {}) {
   const { primarySide, selectedSide, singleScheduleSide, selectSide } = useSide()
+  useEffect(() => {
+    if (props.initialSide && !singleScheduleSide) selectSide(props.initialSide)
+  }, [props.initialSide, singleScheduleSide, selectSide])
   const side = singleScheduleSide ?? primarySide
   const otherSide = side === 'left' ? 'right' : 'left'
   const both = !singleScheduleSide && selectedSide === 'both'

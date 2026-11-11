@@ -23,6 +23,7 @@ export function LastNightCard({ side, name }: { side: Side, name: string }) {
     { refetchInterval: 60_000, staleTime: 30_000 },
   )
   const latest = latestQuery.data?.recording
+  const { data: settings } = trpc.settings.getAll.useQuery({})
   const epochs = latestQuery.data?.epochs ?? []
   const vitals = {
     avgHeartRate: average(epochs.map(epoch => epoch.heartRate)),
@@ -38,7 +39,7 @@ export function LastNightCard({ side, name }: { side: Side, name: string }) {
     <Link href={`/${lang}/sleep`} className="block rounded-card text-fg no-underline">
       <Card className="gap-2 transition-colors hover:bg-active">
         <SectionLabel right={<ChevronRight size={14} className="text-fg-2" />}>
-          {`Last night · ${name}`}
+          {`Latest night · ${name}`}
         </SectionLabel>
         {latestQuery.error
           ? <InlineError>{`Could not load sleep: ${latestQuery.error.message}`}</InlineError>
@@ -47,6 +48,7 @@ export function LastNightCard({ side, name }: { side: Side, name: string }) {
               : (
                   <>
                     <div className="font-mono text-2xl font-light">{formatSleepDuration(latest.durationMs / 1000)}</div>
+                    <div className="text-xs text-fg-2">{new Date(latest.end).toLocaleDateString(undefined, { timeZone: settings?.device?.timezone, weekday: 'short', month: 'short', day: 'numeric' })}</div>
                     <div className="font-mono text-xs text-fg-2">
                       {`${clock(new Date(latest.start))} → ${clock(new Date(latest.end))} · ${exits} ${exits === 1 ? 'exit' : 'exits'}`}
                     </div>
