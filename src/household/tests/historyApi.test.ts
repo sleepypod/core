@@ -10,11 +10,13 @@ import { householdHttp } from '../http'
 import { personalHistoryDetailSchema, personalHistoryPageSchema } from '../historyApiContract'
 import { issuePersonalSession, PERSONAL_COOKIE } from '../browserSession'
 import { bindBrowserScope } from '@/src/auth/browserScope'
+import { historySourceFixture } from './historySourceFixture'
 
 const hour = 3600_000
 let fixture: ReturnType<typeof personalRuntimeFixture>, history: PersonHistoryStore, api: PersonalHistoryApi
 let startedAt: number, datasetId: string, enabled: boolean
 let directory: string
+let sourceFixture: ReturnType<typeof historySourceFixture>
 const query = () => new URLSearchParams({ startsAt: String(startedAt), endsAt: String(startedAt + 10 * 24 * hour), kind: 'presence', limit: '1' })
 const request = (path = `me/sleep?${query()}`, key: string | null = fixture.ownerKey, headers: Record<string, string> = {}, signal?: AbortSignal) => new Request(`http://pod.test/api/v1/${path}`, {
   headers: { host: 'pod.test', ...(key ? { authorization: `Bearer ${key}` } : {}), ...headers }, signal,
@@ -40,13 +42,15 @@ beforeEach(() => {
   fixture = personalRuntimeFixture(databasePath)
   startedAt = fixture.clock.now
   fixture.clock.now += 10 * 24 * hour
-  datasetId = randomUUID()
+  sourceFixture = historySourceFixture(fixture.database, fixture.owner, () => fixture.clock.now)
+  datasetId = sourceFixture.identity.datasetId
   enabled = true
-  history = new PersonHistoryStore(fixture.database, fixture.identities, () => fixture.clock.now)
+  history = new PersonHistoryStore(fixture.database, fixture.identities, sourceFixture.source, () => fixture.clock.now)
   api = new PersonalHistoryApi({ identities: fixture.identities, history, enabled: () => enabled, now: () => fixture.clock.now })
   vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', randomBytes(32).toString('base64url'))
 })
 afterEach(() => {
+  sourceFixture.biometrics.close()
   fixture.database.close()
   rmSync(directory, { recursive: true, force: true })
   vi.unstubAllEnvs()

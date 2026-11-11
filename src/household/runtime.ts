@@ -1,10 +1,11 @@
-import { sqlite } from '@/src/db'
+import { sqlite, biometricsDb } from '@/src/db'
 import { HouseholdStore } from './store'
 import { householdHttp } from './http'
 import { PersonalRuntime } from './personalRuntime'
 import { PersonalRoutineService } from './personalRoutines'
 import { ArrangementReviewService } from './arrangementReviews'
 import { PersonHistoryStore } from './personHistory'
+import { PersonHistorySource } from './historySource'
 import { PersonalHistoryApi } from './historyApi'
 import { assertControlCurrent } from '@/src/controls/context'
 import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
@@ -60,7 +61,8 @@ export async function handleHouseholdRequest(request: Request) {
   })
   runtime.arrangementReviews ??= new ArrangementReviewService({ database: sqlite, identities: runtime.store,
     enabled: () => process.env.SLEEPYPOD_ARRANGEMENT_REVIEW === '1' })
-  runtime.personalHistory ??= new PersonalHistoryApi({ identities: runtime.store, history: new PersonHistoryStore(sqlite, runtime.store),
+  runtime.personalHistory ??= new PersonalHistoryApi({ identities: runtime.store,
+    history: new PersonHistoryStore(sqlite, runtime.store, new PersonHistorySource(sqlite, biometricsDb.$client)),
     enabled: () => preparationEnabled() && process.env.SLEEPYPOD_PERSONAL_HISTORY === '1' })
   return householdHttp(request, {
     store: runtime.store,

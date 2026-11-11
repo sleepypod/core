@@ -24,6 +24,11 @@ export const attributionEpochSchema = z.object({
 })
 export type AttributionEpochInput = z.infer<typeof attributionEpochSchema>
 
+export const historySourceRecordSchema = z.object({
+  householdId: householdIdSchema, datasetId: householdIdSchema,
+  sourceRecordKey: z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/), kind: historyKindSchema,
+}).strict()
+
 const presenceSchema = z.object({
   kind: z.literal('presence'),
   reportedPresenceSeconds: z.number().finite().nonnegative().max(86400),
@@ -44,6 +49,9 @@ export const personalHistoryPayloadSchema = z.discriminatedUnion('kind', [presen
 export const sourceObservationSchema = z.object({
   householdId: householdIdSchema, datasetId: householdIdSchema,
   sourceRecordKey: z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/),
+  // Production adapters hash the complete source row, including interval detail
+  // that a concise personal payload does not expose. A changed row is withheld.
+  sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   recordedSide: householdSideSchema, startsAt: historyTimeSchema, endsAt: historyTimeSchema,
   payload: personalHistoryPayloadSchema,
 }).strict().superRefine((value, context) => {

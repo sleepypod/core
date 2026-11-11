@@ -167,6 +167,20 @@ exports[`complete Drizzle schema contracts > pins every biometrics table, column
   {
     "checks": 0,
     "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | not-autoincrement | enum:none",
+      "dataset_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | unique:biometric_history_identity_dataset_id_unique | not-autoincrement | enum:none",
+      "created_at_ms | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "biometricHistoryIdentity",
+    "foreignKeys": [],
+    "indexes": [],
+    "name": "biometric_history_identity",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
       "job_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
@@ -1582,6 +1596,25 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
     ],
     "indexes": [],
     "name": "household_devices",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "household_id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
+      "dataset_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | unique:household_history_sources_dataset_id_unique | not-autoincrement | enum:none",
+      "review_receipt_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | unique:household_history_sources_review_receipt_id_unique | not-autoincrement | enum:none",
+      "reviewed_by | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "bound_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "householdHistorySources",
+    "foreignKeys": [
+      "household_history_sources_household_id_households_id_fk | columns:household_id | references:households(id) | on-delete:none | on-update:none",
+      "household_history_sources_reviewed_by_household_accounts_id_fk | columns:reviewed_by | references:household_accounts(id) | on-delete:none | on-update:none",
+    ],
+    "indexes": [],
+    "name": "household_history_sources",
     "primaryKeys": [],
     "uniqueConstraints": [],
   },

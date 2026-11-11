@@ -2,8 +2,9 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import type Database from 'better-sqlite3'
 import { z } from 'zod'
 import { householdIdSchema } from './contract'
+import type { PersonHistorySource } from './historySource'
 import { HouseholdError, type HouseholdCredential, type HouseholdStore } from './store'
-import { attributionEpochSchema, historyTimeSchema, personalHistoryQuerySchema, personalHistoryRecordSchema, sourceObservationSchema, type AttributionEpochInput, type PersonalHistoryQuery, type SourceObservation } from './historyContract'
+import { attributionEpochSchema, historyTimeSchema, historySourceRecordSchema, personalHistoryQuerySchema, personalHistoryRecordSchema, sourceObservationSchema, type AttributionEpochInput, type PersonalHistoryQuery, type SourceObservation } from './historyContract'
 
 interface EpochRow {
   id: string
@@ -46,7 +47,8 @@ export class PersonHistoryStore {
   // Cursors expire when this singleton restarts. They carry no reusable account
   // credential; signatures prevent clients from changing snapshot watermarks.
   private cursorKey = randomBytes(32)
-  constructor(private database: Database.Database, private identities: HouseholdStore, private now = () => Date.now()) {}
+  constructor(private database: Database.Database, private identities: HouseholdStore,
+    private source: Pick<PersonHistorySource, 'verify'>, private now = () => Date.now()) {}
 
   private revision(householdId: string) {
     const row = this.database.prepare('SELECT attribution_revision AS revision FROM household_history_state WHERE household_id = ?').get(householdId) as { revision: number } | undefined
@@ -85,6 +87,7 @@ export class PersonHistoryStore {
   }
 
   private insertEpoch(parsed: AttributionEpochInput, previousEpochId: string | null = null) {
+    this.source.verify(parsed.householdId, parsed.datasetId)
     this.validateReviewer(parsed)
     const requestHash = digest({ ...parsed, previousEpochId })
     const existing = this.database.prepare('SELECT * FROM household_attribution_epochs WHERE review_receipt_id = ?').get(parsed.reviewReceiptId) as EpochRow | undefined
@@ -116,6 +119,7 @@ export class PersonHistoryStore {
     householdIdSchema.parse(previousEpochId)
     const parsed = attributionEpochSchema.parse(input)
     return this.database.transaction(() => {
+      this.source.verify(parsed.householdId, parsed.datasetId)
       this.validateReviewer(parsed)
       const replay = this.database.prepare('SELECT id FROM household_attribution_epochs WHERE review_receipt_id = ?').get(parsed.reviewReceiptId)
       if (replay) return this.insertEpoch(parsed, previousEpochId)
@@ -139,6 +143,7 @@ export class PersonHistoryStore {
     const parsed = sourceObservationSchema.parse(input)
     if (parsed.endsAt > this.now()) throw conflict('Future or incomplete observations are not personal history.')
     return this.database.transaction(() => {
+      this.source.verify(parsed.householdId, parsed.datasetId)
       const contentHash = digest(parsed)
       const existing = this.database.prepare('SELECT * FROM household_person_records WHERE dataset_id = ? AND source_kind = ? AND source_record_key = ?')
         .get(parsed.datasetId, parsed.payload.kind, parsed.sourceRecordKey) as RecordRow | undefined
@@ -180,6 +185,20 @@ export class PersonHistoryStore {
   private overlappingPresence(input: SourceObservation, sleeperId: string) {
     return this.database.prepare(`SELECT id FROM household_person_records WHERE household_id = ? AND sleeper_id = ?
       AND source_kind = 'presence' AND starts_at < ? AND ends_at > ? LIMIT 1`).get(input.householdId, sleeperId, input.endsAt, input.startsAt) !== undefined
+  }
+
+  /** A source adapter found that a formerly usable row is now malformed. Keep
+   * its private copy for audit, but never display or reassign it after rejection. */
+  rejectSourceObservation(input: unknown) {
+    const parsed = historySourceRecordSchema.parse(input)
+    return this.database.transaction(() => {
+      this.source.verify(parsed.householdId, parsed.datasetId)
+      const updated = this.database.prepare(`UPDATE household_person_records SET invalidated_at = ?
+        WHERE household_id = ? AND dataset_id = ? AND source_kind = ? AND source_record_key = ? AND invalidated_at IS NULL`)
+        .run(this.now(), parsed.householdId, parsed.datasetId, parsed.kind, parsed.sourceRecordKey)
+      if (updated.changes > 0) this.bumpRevision(parsed.householdId)
+      return { invalidated: updated.changes > 0 }
+    }).immediate()
   }
 
   private project(row: RecordRow) {

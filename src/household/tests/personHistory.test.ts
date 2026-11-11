@@ -5,6 +5,7 @@ import { migratedComfortDatabase } from '@/src/comfort/tests/databaseFixture'
 import { HouseholdStore } from '../store'
 import { PersonHistoryStore } from '../personHistory'
 import type { AttributionEpochInput, SourceObservation } from '../historyContract'
+import { historySourceFixture } from './historySourceFixture'
 
 const hour = 3600_000
 const day = 24 * hour
@@ -15,6 +16,7 @@ function requiredValue(value: string | null | undefined): string {
   return value
 }
 let database: Database.Database, identities: HouseholdStore, history: PersonHistoryStore
+let sourceFixture: ReturnType<typeof historySourceFixture>
 let ownerKey: string, memberKey: string, datasetId: string, now: number
 let householdId: string, ownerId: string, ownerSleeper: string, memberSleeper: string
 const context = () => ({ requestId: randomUUID(), expectedSessionRevision: 1, expectedAssignmentRevision: 1 })
@@ -41,7 +43,6 @@ beforeEach(() => {
   identities = new HouseholdStore(database, () => now)
   ownerKey = secret()
   memberKey = secret()
-  datasetId = randomUUID()
   const owner = identities.setup({ requestId: randomUUID(), displayName: 'Owner', deviceName: 'Owner phone', deviceSecret: ownerKey,
     currentMode: 'solo-anywhere', sourceSide: 'left', acknowledgeExistingOwner: true })
   householdId = owner.householdId
@@ -49,10 +50,15 @@ beforeEach(() => {
   ownerSleeper = owner.selfSleeperId
   const invitation = identities.createInvitation(ownerKey, { ...context(), invitation: secret(), kind: 'new_person', expiresInMinutes: 30 })
   memberSleeper = identities.join({ invitation: invitation.invitation, deviceSecret: memberKey, deviceName: 'Member phone', displayName: 'Member' }).selfSleeperId
-  history = new PersonHistoryStore(database, identities, () => now)
+  sourceFixture = historySourceFixture(database, owner, () => now)
+  datasetId = sourceFixture.identity.datasetId
+  history = new PersonHistoryStore(database, identities, sourceFixture.source, () => now)
   now = setupAt + 10 * day
 })
-afterEach(() => database.close())
+afterEach(() => {
+  sourceFixture.biometrics.close()
+  database.close()
+})
 
 describe('dated private history ownership', () => {
   it('does not claim raw history or change live settings when either person signs up', () => {
@@ -170,7 +176,7 @@ describe('dated private history ownership', () => {
     const forged = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
     forged.watermark += 100
     expect(() => history.records(ownerKey, { ...pageQuery, cursor: `${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${signature}` })).toThrow('expired')
-    expect(() => new PersonHistoryStore(database, identities).records(ownerKey, { ...pageQuery, cursor: first.nextCursor })).toThrow('expired')
+    expect(() => new PersonHistoryStore(database, identities, sourceFixture.source).records(ownerKey, { ...pageQuery, cursor: first.nextCursor })).toThrow('expired')
     history.admitObservation({ ...incoming, payload: { kind: 'presence', exits: 3, interpretation: 'bed_presence_not_sleep', reportedPresenceSeconds: 3600 } })
     expect(() => history.records(ownerKey, { ...pageQuery, cursor: second.nextCursor })).toThrow('expired')
   })

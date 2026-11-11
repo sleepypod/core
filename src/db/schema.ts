@@ -864,6 +864,14 @@ export const householdPrivacyBoundary = sqliteTable('household_privacy_boundary'
 
 // Reviewed source intervals describe attribution, not physical sensor identity.
 // They never change the hardware arrangement or claim old rows during signup.
+export const householdHistorySources = sqliteTable('household_history_sources', {
+  householdId: text('household_id').primaryKey().references(() => households.id),
+  datasetId: text('dataset_id').notNull().unique(),
+  reviewReceiptId: text('review_receipt_id').notNull().unique(),
+  reviewedBy: text('reviewed_by').notNull().references(() => householdAccounts.id),
+  boundAt: integer('bound_at').notNull(),
+})
+
 export const householdHistoryState = sqliteTable('household_history_state', {
   householdId: text('household_id').primaryKey().references(() => households.id),
   attributionRevision: integer('attribution_revision').notNull().default(1),

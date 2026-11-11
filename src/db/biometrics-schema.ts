@@ -14,6 +14,14 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  * at typical write frequencies (~60s for vitals).
  */
 
+// This identity travels with the biometrics database through backup/restore.
+// A new database has a new identity, independent of its path or current sleeper.
+export const biometricHistoryIdentity = sqliteTable('biometric_history_identity', {
+  id: integer('id').primaryKey(),
+  datasetId: text('dataset_id').notNull().unique(),
+  createdAtMs: integer('created_at_ms').notNull(),
+})
+
 export const vitals = sqliteTable('vitals', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

@@ -27,29 +27,29 @@ priority and acceptance; it does not introduce an additional approval gate.
 
 | ID | Approved improvement | Acceptance evidence required | State |
 | --- | --- | --- | --- |
-| 01 | Automatic home/away connection | Verified-origin pairing, authenticated route selection, credential isolation, expired access and work-network/cellular tests; no mutation replay | Native PR 67 includes verified enrollment and automatic selection of approved origins; hosted release, authenticated remote gateway deployment and work-network/cellular acceptance remain |
-| 02 | Useful offline app | Encrypted identity-scoped records, reports and confirmed schedules; timestamps; account-switch/revocation tests; offline phone/iPad walkthrough | In progress: owner offline library |
-| 03 | Tonight main screen | Bed, temperature, next wake and actual control mode; morning brief; accessible web/native layouts | Web source validated; native implementation and release checks in progress |
-| 04 | Overnight comfort envelope | Persisted narrow overnight range, explicit wake exception start, arbitration/override/DST tests and live acknowledged policy | In progress: shared automatic range and explicit wake exception |
+| 01 | Automatic home/away connection | Verified-origin pairing, authenticated route selection, credential isolation, expired access and work-network/cellular tests; no mutation replay | Native PR 69 consolidates verified enrollment and automatic selection of approved origins; hosted checks, gateway deployment and work-network/cellular acceptance remain |
+| 02 | Useful offline app | Encrypted identity-scoped records, reports and confirmed schedules; timestamps; account-switch/revocation tests; offline phone/iPad walkthrough | Owner offline reading merged in native PR 58; integrated release is PR 69. Personal-account offline reading and physical acceptance remain |
+| 03 | Tonight main screen | Bed, temperature, next wake and actual control mode; morning brief; accessible web/native layouts | Web source validated; native Tonight and morning entry consolidated in PR 69 with local phone/tablet validation; release and live acceptance remain |
+| 04 | Overnight comfort envelope | Persisted narrow overnight range, explicit wake exception start, arbitration/override/DST tests and live acknowledged policy | Shared range and wake exception implemented in Core and native PR 69; live policy acceptance remains |
 | 05 | Recording health | Freshness, dropout, storage and processing checks; actionable messages; failed-source fixtures and live verification | Read-only checks shipped in source; completed-interval interruption review in validation; live qualification pending |
-| 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Native implementation tested; hosted checks and actual Watch delivery pending |
-| 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Core PR 86 merged; native PR 62 tested locally and awaiting hosted checks |
-| 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Core PRs 93 and 94 merged the evidence audit and response-model fitting/research preview; native parity is in PR 67. Prospective target-changing control remains pending |
-| 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Native owner-scoped import and review passed local tests; hosted release, physical delivery and comfort associations remain |
+| 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Native PR 69 includes the tested import and coverage assistant; hosted checks and actual Watch delivery remain |
+| 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Core PR 86 merged; native guided learning is consolidated and locally tested in PR 69 |
+| 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Core PRs 93 and 94 merged evidence audit and response-model research; native parity is consolidated in PR 69. Prospective target-changing control remains pending |
+| 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Native owner-scoped context import and review consolidated in PR 69; local tests passed, hosted release and physical delivery remain |
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
-| 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Core PR 95 merged; native timing, quantity, explicit missingness and comfort comparisons passed local tests and design review; hosted native release and live delivery remain |
-| 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Native PR 68 passed 1,380 model/application tests, phone/tablet walkthroughs and a fresh independent full review of all 60 captures. Web parity, hosted release and physical delivery remain |
-| 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 passed all hosted checks and merged; native timeline and live release in progress |
-| 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Source implementation and tests in progress; physical alarm and accessories remain unqualified |
-| 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Authenticated Pod-only preview/application and web review passed local tests and independent correction review; native backup-alarm coordination, qualified home devices and live acceptance remain |
-| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Pending |
+| 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Core PR 95 merged; native journal timing, quantity, missingness and comfort comparisons consolidated in PR 69 after local validation and design review |
+| 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Native morning brief consolidated in PR 69, preserving its local test and independent design-review evidence. Web parity, hosted release and physical delivery remain |
+| 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 merged after hosted checks; native explanation timeline consolidated in PR 69; live acceptance remains |
+| 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Core and native PR 69 provide the clear plan and app-owned backup workflow; physical alarm and selected accessory acceptance remain |
+| 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Core PR 98 merged after hosted checks; native PR 69 includes reviewed Pod and app-owned phone coordination with fresh phone-state reconciliation. Qualified house devices and live acceptance remain |
+| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Private account/review/history preparation exists. Reviewed recording-source identity and bounded completed-presence importer are in local validation; atomic arrangement activation and continuous ingestion remain pending |
 | 17 | Quiet and temporary arrangements | Explicit partner-resting/guest/side-swap state; shared-action arbitration and ambiguous-night training exclusion | Pending |
 | 18 | In-app practice | Illustrated guide reused, interactive temperature/alarm/Stop practice; secure invitation without owner key | Pending |
 | 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | Pending |
 | 20 | Endel bedtime ritual | Supported Shortcuts/AirPlay flow, selected volume/duration, actual route state and tested tap-to-finish fallback | Pending |
 | 21 | Watch, ESP32 and widgets | Temperature/Stop/next alarm, person assignment and freshness parity; simulator and physical verification | Pending |
-| 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Core PR 90 passed hosted checks and merged; native changes are consolidated in PR 64, with local validation passed and hosted checks pending; live release remains |
-| 23 | Bed-care center | Actionable real telemetry, backup age and recovery walkthrough; unavailable leak detection stays unavailable | Core PR 89 passed all hosted checks and merged; native consolidated PR 64 awaiting hosted checks; live deployment remains |
+| 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Core PR 90 merged after hosted checks; native cooling flow consolidated in PR 69 with local phone/tablet review; live release remains |
+| 23 | Bed-care center | Actionable real telemetry, backup age and recovery walkthrough; unavailable leak detection stays unavailable | Core PR 89 merged after hosted checks; native bed-care flow consolidated in PR 69 with local validation; live deployment remains |
 | 24 | Base and snoring assistance | Attended movement/Stop/position qualification first; trustworthy snore signal and whole-bed partner constraints before automation | Pending |
 
 ## Cross-cutting contracts
@@ -128,3 +128,20 @@ priority and acceptance; it does not introduce an additional approval gate.
 - **01 — verified connection delivery:** Core PR 96 merged as `565c030ef5018796b7d84213c7512bb796d62242`; its tree equals tested head `c42c61981a093f9a5b249a0f6d5982078a414043`. Native verify-before-save enrollment is committed as `a974be5` with 1,284 passing unit/framework tests, nine existing skips, ten passing phone/tablet UI scenarios and an independent design-review pass. Native `37558ad` adds a separately tested identity/route-selection foundation (22 focused tests); it is not wired into automatic reconnection. Native hosted integration, stable data/alarm ownership, gateway setup and physical work-network/cellular checks remain.
 
 - **15 — later wake:** [review and application contract](LATER_WAKE_REVIEW.md) documents authenticated, expiring, revision-checked Pod-only preview and save. Cross-device coordination remains separate work; no live alarm changed.
+
+- **Integrated native delivery:** [native PR 69](https://github.com/lucaandrea/sleepypod-ios/pull/69)
+  consolidates the tested connection, Tonight, learning, context, morning, wake,
+  cooling and care work. Its `d2a22c4` head passed 1,400 local model/application
+  tests (nine existing skips), nine iPhone and nine iPad wake-flow scenarios,
+  strict SwiftLint and build-for-testing. The independent reviewer resolved all
+  three wake-flow findings: action-local errors, persistent restore boundaries
+  and reconciliation against current phone alarms. Hosted checks, TestFlight
+  distribution and live hardware acceptance are still distinct and pending.
+- **15 — Core later wake release:** Core PR 98 merged as
+  `0933e901b87011f2dcbf9adaadb1b88da8e54718`, with the same tree as tested
+  `63d0642846d3de062c7230ab27181302fdb9831f`. Hosted checks and main packaging
+  passed. No live alarm or home automation was changed.
+- **16 — personal recording identity:** [source and import boundary](PERSONAL_HISTORY_SOURCE.md)
+  describes the reviewed database binding, private immutable attribution and
+  bounded completed-presence importer. These are prerequisites for the remaining
+  activation coordinator, not a claim that the shared-bed transition is enabled.
