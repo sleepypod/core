@@ -1,3 +1,4 @@
+import { getTemperatureController } from '@/src/temperature/instance'
 import { randomUUID } from 'node:crypto'
 import { sqlite } from '@/src/db'
 import { deviceRouter } from '@/src/server/routers/device'
@@ -11,6 +12,8 @@ export async function executeControlAction(action: ControlAction): Promise<unkno
   const device = deviceRouter.createCaller({})
   const base = baseRouter.createCaller({})
   switch (action.kind) {
+    case 'cooling.start': return getTemperatureController().startCooling(action.side, action.coolingId, action.expectedScope, action.expectedTargetF, action.expectedExpiresAt)
+    case 'cooling.cancel': return getTemperatureController().cancelCooling(action.side, action.coolingId)
     case 'temperature': return device.setTemperature({ side: action.side, temperature: action.temperature, holdMinutes: action.holdMinutes })
     case 'power': return device.setPower({ side: action.side, powered: action.powered, temperature: action.temperature })
     case 'vibration': return device.setAlarm({ side: action.side, vibrationIntensity: action.intensity, vibrationPattern: action.pattern, duration: action.duration })

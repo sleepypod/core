@@ -160,6 +160,24 @@ function describeSchema(module: Record<string, unknown>) {
 }
 
 const expectedTables: Record<string, TableSpec> = {
+  temporaryCooling: {
+    name: 'temporary_cooling',
+    columns: [
+      { name: 'side', notNull: true, default: undefined },
+      { name: 'record', notNull: true, default: undefined },
+    ],
+    indexes: [],
+  },
+  comfortMoments: {
+    name: 'comfort_moments',
+    columns: [
+      { name: 'id', notNull: true, default: undefined },
+      { name: 'side', notNull: true, default: undefined },
+      { name: 'recorded_at', notNull: true, default: undefined },
+      { name: 'record', notNull: true, default: undefined },
+    ],
+    indexes: [{ name: 'idx_comfort_moments_side_recorded', unique: false, columns: ['side', 'recorded_at'] }],
+  },
   householdPrivacyBoundary: {
     name: 'household_privacy_boundary',
     columns: [

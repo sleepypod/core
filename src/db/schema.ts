@@ -400,6 +400,20 @@ export const temperatureHolds = sqliteTable('temperature_holds', {
   expiresAt: integer('expires_at').notNull(),
 })
 
+/** One temporary cooling intent per physical zone; explicit feedback is retained separately. */
+export const temporaryCooling = sqliteTable('temporary_cooling', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  record: text('record').notNull(),
+})
+
+/** A warm-button event is explicit feedback, not measured sleep or a morning comfort label. */
+export const comfortMoments = sqliteTable('comfort_moments', {
+  id: text('id').primaryKey(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  record: text('record').notNull(),
+}, table => [index('idx_comfort_moments_side_recorded').on(table.side, table.recordedAt)])
+
 /** Automatic limits are independent of personal learning mode and wake-alarm temperature. */
 export const temperatureLimits = sqliteTable('temperature_limits', {
   side: text('side', { enum: ['left', 'right'] }).primaryKey(),

@@ -1196,6 +1196,23 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
     "checks": 0,
     "columns": [
       "id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
+      "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
+      "recorded_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "record | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "comfortMoments",
+    "foreignKeys": [],
+    "indexes": [
+      "idx_comfort_moments_side_recorded | non-unique | columns:side,recorded_at | where:none",
+    ],
+    "name": "comfort_moments",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
       "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "created_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "expires_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
@@ -2048,6 +2065,19 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "idx_temp_schedules_side_day_time | non-unique | columns:side,day_of_week,time | where:none",
     ],
     "name": "temperature_schedules",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "side | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:left,right",
+      "record | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "temporaryCooling",
+    "foreignKeys": [],
+    "indexes": [],
+    "name": "temporary_cooling",
     "primaryKeys": [],
     "uniqueConstraints": [],
   },

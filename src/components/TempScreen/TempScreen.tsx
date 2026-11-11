@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic'
 import { Link2, Power } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, NoticeStack, PageHeader, Skeleton } from '@/src/components/ds'
+import { TemporaryCooling } from './TemporaryCooling'
 import { TonightOverview } from './TonightOverview'
 import { morningInPodZone } from './tonightSummary'
 import { ComfortLimitCard } from './ComfortLimitCard'
@@ -211,7 +212,12 @@ export const TempScreen = () => {
     />
   )
 
-  const overview = <TonightOverview key={overviewSide} side={overviewSide} name={sideName(overviewSide)} sleepSide={contextSide} sleepName={sideName(contextSide)} morning={morning} timeZone={settings?.device?.timezone} />
+  const overview = (
+    <>
+      <TonightOverview key={overviewSide} side={overviewSide} name={sideName(overviewSide)} sleepSide={contextSide} sleepName={sideName(contextSide)} morning={morning} timeZone={settings?.device?.timezone} />
+      <TemporaryCooling unit={unit} side={controlSide} name={sideName(controlSide)} timeZone={settings?.device?.timezone} />
+    </>
+  )
   const details = (
     <details className="my-5 rounded-card border border-line p-4">
       <summary className="min-h-11 cursor-pointer py-2 font-medium">Comfort limits and recording checks</summary>

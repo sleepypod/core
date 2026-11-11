@@ -44,8 +44,8 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | Pending |
 | 20 | Endel bedtime ritual | Supported Shortcuts/AirPlay flow, selected volume/duration, actual route state and tested tap-to-finish fallback | Pending |
 | 21 | Watch, ESP32 and widgets | Temperature/Stop/next alarm, person assignment and freshness parity; simulator and physical verification | Pending |
-| 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Pending |
-| 23 | Bed-care center | Actionable real telemetry, backup age and recovery walkthrough; unavailable leak detection stays unavailable | Read-only Core report and web care view implemented; native parity and validation in progress |
+| 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Shared authority and web flow implemented and tested; native validation and release in progress |
+| 23 | Bed-care center | Actionable real telemetry, backup age and recovery walkthrough; unavailable leak detection stays unavailable | Core PR 89 passed all hosted checks and merged; native consolidated PR 64 awaiting hosted checks; live deployment remains |
 | 24 | Base and snoring assistance | Attended movement/Stop/position qualification first; trustworthy snore signal and whole-bed partner constraints before automation | Pending |
 
 ## Cross-cutting contracts
@@ -95,3 +95,11 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 - **23 — bed care:** [read-only sources and recovery boundaries](BED_CARE.md)
   preserves independent observation freshness and distinguishes a server export
   from a verified off-Pod backup. It cannot detect physical leaks or insert age.
+  Core PR 89 merged as `0a1b6360` after all hosted checks passed. The first unit
+  run timed out in existing notification retention; its isolated coverage check
+  and the complete failed-job rerun passed. The original failure is retained.
+- **22 — temporary cooling:** [authority and recovery behavior](TEMPORARY_COOLING.md)
+  documents the expiring physical-zone lease, explicit moment feedback, preserved
+  firmware countdown and one-time guarded return. Policy/storage/context/UI tests
+  and authenticated mobile/tablet browser flows cover normal and uncertain replies.
+  No live cooling request, wake routine or personal adaptation mode was changed.

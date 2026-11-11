@@ -1,3 +1,4 @@
+import { COOLING_RETURN_WINDOW_MS, coolingLeaseSchema, coolingProposal, freshCoolingContext, type CoolingLease, type CoolingPage, type CoolingPersistence } from './cooling'
 import type { ComfortLimitDecision } from './limits'
 import { MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
 import { assertControlCurrent, ControlGuardError, withinDispatchGuard } from '@/src/controls/context'
@@ -50,6 +51,7 @@ export type PolicyApplication = (input: TemperatureApplicationInput,
 
 export interface TemperatureControllerDeps {
   now: () => number
+  cooling?: CoolingPersistence
   withSideLock: <T>(side: Side, fn: () => Promise<T>) => Promise<T>
   /** Synchronous DB access inside the side lock. Throws on persistence failure. */
   readHold: (side: Side) => TemperatureRequest | null
@@ -175,7 +177,7 @@ export class TemperatureController {
       source: selected?.source ?? null,
       requestId: selected?.id ?? null,
       targetTemperature: selected ? this.target(side, selected, selected.temperature) : null,
-      holdUntil: hold && isLiveRequest(hold, now) ? hold.expiresAt : null,
+      holdUntil: selected?.id.startsWith('cooling:') ? selected.expiresAt : hold && isLiveRequest(hold, now) ? hold.expiresAt : null,
       blocked: this.deps.isBlocked(side) ? 'safety' : this.isPowered(side) ? null : 'off',
     }
   }
@@ -183,10 +185,188 @@ export class TemperatureController {
   private select(side: Side, now: number, hold = this.deps.readHold(side)): TemperatureRequest | null {
     return selectTemperatureRequest([
       ...(hold ? [hold] : []),
+      ...this.coolingRequests(side, now),
       ...this.deps.readBaseline(side, now),
       ...this.requests[side].values(),
       ...this.livePolicyRequests(side, now),
     ], now)
+  }
+
+  private coolingRequests(side: Side, now: number): TemperatureRequest[] {
+    const lease = this.deps.cooling?.read(side)
+    if (!lease || lease.phase !== 'active' || now < lease.startedAt || now >= lease.expiresAt
+      || this.deps.cooling?.context(side, now).scope !== lease.scope) return []
+    return [{ id: `cooling:${lease.id}`, source: 'manual', temperature: lease.targetF,
+      startsAt: lease.startedAt, expiresAt: lease.expiresAt, createdAt: lease.startedAt, priority: 1 }]
+  }
+
+  /** Replaces only this temporary intent; existing manual holds and routines remain intact. */
+  private supersedeCooling(side: Side): void {
+    if (this.deps.cooling?.read(side)) this.deps.cooling.write(side, null)
+  }
+
+  coolingStatus(side: Side): CoolingPage {
+    const now = this.deps.now(), storage = this.deps.cooling
+    const context = storage?.context(side, now)
+    const lease = storage?.read(side) ?? null
+    const ready = !!context && freshCoolingContext(context, now) && this.isPowered(side) && !this.deps.isBlocked(side)
+    const proposal = ready && context && !lease ? coolingProposal(context, this.deps.readCurrentTarget(side), now) : null
+    const uncertain = lease && lease.phase !== 'active'
+    const current = lease && context?.scope === lease.scope && now >= lease.startedAt
+    return { apiVersion: 1, side, generatedAt: now, observedAt: context?.observedAt ?? null,
+      state: uncertain ? 'unknown' : lease ? (current && ready && now < lease.expiresAt ? 'cooling' : 'waiting') : proposal ? 'ready' : 'unavailable',
+      reason: uncertain
+        ? 'The last change is unconfirmed. Read the current target before cancelling or choosing a new temperature.'
+        : lease
+          ? 'Returns to the current prior plan only if no newer manual change or Stop has replaced this request.'
+          : proposal
+            ? 'Cool this zone by up to 2°F for up to 20 minutes. Your wake plan stays unchanged.'
+            : context?.reason || 'Fresh, powered Pod readings are required. Cooling cannot overlap wake warming.',
+      proposal, lease, physicalVerification: 'unverified' }
+  }
+
+  async startCooling(side: Side, id: string, expectedScope: string, expectedTargetF: number, expectedExpiresAt?: number): Promise<CoolingPage> {
+    return this.deps.withSideLock(side, async () => {
+      const storage = this.deps.cooling
+      if (!storage) throw new Error('Temporary cooling is unavailable')
+      await this.deps.connect()
+      const now = this.deps.now(), context = storage.context(side, now)
+      const proposal = coolingProposal(context, this.deps.readCurrentTarget(side), now)
+      if (!proposal || context.sessionEndsAt === null || proposal.scope !== expectedScope || proposal.fromTargetF !== expectedTargetF
+        || (expectedExpiresAt !== undefined && (!Number.isSafeInteger(expectedExpiresAt) || expectedExpiresAt - now < 60_000))
+        || storage.read(side) || !this.isPowered(side) || this.deps.isBlocked(side)) throw new ControlGuardError()
+      assertControlCurrent()
+      const sessionEndsAt = Math.min(context.sessionEndsAt, this.deps.readHardwareDeadline(side) ?? Infinity)
+      if (sessionEndsAt - now < 60_000) throw new ControlGuardError()
+      const lease = coolingLeaseSchema.parse({ version: 1, id, side,
+        ...proposal, startedAt: now, expiresAt: Math.min(proposal.expiresAt, sessionEndsAt, expectedExpiresAt ?? Infinity), sessionEndsAt, phase: 'prepared' })
+      storage.begin(lease)
+      // Capture the existing firmware countdown, never reset it to a new eight-hour session.
+      this.deps.writeHardwareDeadline(side, sessionEndsAt)
+      this.deps.onManualControl?.(side)
+      const request: TemperatureRequest = { id: `cooling:${id}`, source: 'manual', temperature: lease.targetF,
+        startsAt: now, expiresAt: lease.expiresAt, createdAt: now, priority: 1 }
+      try {
+        await withinDispatchGuard(() => {
+          const at = this.deps.now(), current = storage.context(side, at)
+          if (storage.read(side)?.id !== id || !freshCoolingContext(current, at) || current.scope !== lease.scope
+            || at < now || at >= lease.expiresAt || (current.wakeStartsAt !== null && at >= current.wakeStartsAt)
+            || !this.isPowered(side) || this.deps.isBlocked(side)) throw new ControlGuardError()
+        }, () => this.recordApplication(side, lease.targetF, Math.floor((sessionEndsAt - this.deps.now()) / 1_000), request, 'manual',
+          () => this.deps.apply(side, lease.targetF, Math.floor((sessionEndsAt - this.deps.now()) / 1_000))))
+        storage.write(side, { ...lease, phase: 'active' })
+        this.applied[side] = lease.targetF
+        this.appliedDeadline[side] = sessionEndsAt
+      }
+      catch (error) {
+        // A prepared/unknown request is never automatically dispatched after recovery.
+        try {
+          storage.write(side, { ...lease, phase: 'unknown' })
+        }
+        catch { /* Prepared remains unconfirmed. */ }
+        this.invalidate(side)
+        throw error
+      }
+      this.publishStatus(side, this.status(side))
+      return this.coolingStatus(side)
+    })
+  }
+
+  async cancelCooling(side: Side, id: string): Promise<CoolingPage> {
+    return this.deps.withSideLock(side, async () => {
+      assertControlCurrent()
+      const storage = this.deps.cooling
+      const lease = storage?.read(side)
+      if (!storage || !lease || lease.id !== id) return this.coolingStatus(side)
+      const context = storage.context(side, this.deps.now())
+      if (context.scope !== lease.scope || (freshCoolingContext(context, this.deps.now())
+        && (!this.isPowered(side) || this.deps.readCurrentTarget(side) !== lease.targetF))) {
+        this.supersedeCooling(side)
+        return this.coolingStatus(side)
+      }
+      await this.finishCoolingLocked(side, lease, true)
+      return this.coolingStatus(side)
+    })
+  }
+
+  /** One bounded return attempt, guarded again at the FIFO. Unknown writes are not replayed. */
+  private async finishCoolingLocked(side: Side, lease: CoolingLease, explicit = false): Promise<void> {
+    const storage = this.deps.cooling
+    if (!storage) return
+    const valid = () => {
+      const now = this.deps.now(), context = storage.context(side, now)
+      return storage.read(side)?.id === lease.id && context.scope === lease.scope && freshCoolingContext(context, now)
+        && now >= lease.startedAt && (explicit || now < lease.expiresAt + COOLING_RETURN_WINDOW_MS)
+        && this.deps.readHardwareDeadline(side) === lease.sessionEndsAt && this.isPowered(side) && !this.deps.isBlocked(side)
+        && this.deps.readCurrentTarget(side) === lease.targetF
+    }
+    if (!valid()) return
+    await this.deps.connect()
+    if (!valid()) return
+    assertControlCurrent()
+    storage.write(side, { ...lease, phase: 'returning' })
+    // Removing the cooling lease from arbitration reveals the original hold or the latest plan.
+    const selected = this.select(side, this.deps.now())
+    const targetF = this.target(side, selected, lease.fromTargetF)
+    if (targetF === null) {
+      storage.write(side, { ...lease, phase: 'unknown' })
+      return
+    }
+    const duration = Math.floor((lease.sessionEndsAt - this.deps.now()) / 1_000)
+    try {
+      await withinDispatchGuard(() => {
+        if (!valid()) throw new ControlGuardError()
+      },
+      () => this.recordApplication(side, targetF, duration, selected, 'reconcile',
+        () => this.deps.apply(side, targetF, Math.floor((lease.sessionEndsAt - this.deps.now()) / 1_000)), lease.fromTargetF))
+      storage.write(side, null)
+      this.applied[side] = targetF
+      this.appliedDeadline[side] = lease.sessionEndsAt
+    }
+    catch (error) {
+      try {
+        storage.write(side, { ...lease, phase: 'unknown' })
+      }
+      catch { /* Returning remains unconfirmed. */ }
+      this.invalidate(side)
+      throw error
+    }
+    this.publishStatus(side, this.status(side))
+  }
+
+  /** Hold the requested target without replaying the original command on reconnect/restart. */
+  private async reconcileCoolingLocked(side: Side): Promise<boolean> {
+    const storage = this.deps.cooling, lease = storage?.read(side)
+    if (!storage || !lease) return false
+    const now = this.deps.now(), context = storage.context(side, now)
+    if (context.scope !== lease.scope || now < lease.startedAt || !this.isPowered(side) || this.deps.isBlocked(side)
+      || this.deps.readHardwareDeadline(side) !== lease.sessionEndsAt) {
+      storage.write(side, null)
+      return false
+    }
+    // An unacknowledged cooling request cannot suppress the saved wake or ongoing plan.
+    // It is excluded from arbitration, so only independently configured owners may apply.
+    if (lease.phase !== 'active') return false
+    if (!freshCoolingContext(context, now)) {
+      // Stale observations cannot authorize a guessed return, but a bounded cooling
+      // request must not keep the independently saved wake/normal plan suspended.
+      if (now >= lease.expiresAt + COOLING_RETURN_WINDOW_MS || (context.wakeStartsAt !== null && now >= context.wakeStartsAt)) {
+        storage.write(side, { ...lease, phase: 'unknown' })
+        return false
+      }
+      return true
+    }
+    if (this.deps.readCurrentTarget(side) !== lease.targetF) {
+      storage.write(side, null)
+      return false
+    }
+    if (now >= lease.expiresAt || (context.wakeStartsAt !== null && now >= context.wakeStartsAt)) {
+      if (now >= lease.expiresAt + COOLING_RETURN_WINDOW_MS) {
+        storage.write(side, { ...lease, phase: 'unknown' })
+      }
+      else await this.finishCoolingLocked(side, lease)
+    }
+    return true
   }
 
   /** Invalid input revokes a lease permanently; fresh data needs a new evaluation. */
@@ -268,6 +448,7 @@ export class TemperatureController {
     validateBeforeApply?.()
     assertControlCurrent()
     this.deps.onManualControl?.(side)
+    this.supersedeCooling(side)
     const now = this.deps.now()
     const previous = this.deps.readHold(side)
     const previousDeadline = this.deps.readHardwareDeadline(side)
@@ -299,6 +480,7 @@ export class TemperatureController {
     return this.deps.withSideLock(side, async () => {
       assertControlCurrent()
       this.deps.onManualControl?.(side)
+      this.supersedeCooling(side)
       this.deps.writeHold(side, null)
       return this.reconcileLocked(side)
     })
@@ -307,6 +489,7 @@ export class TemperatureController {
   /** Explicit shutdown ends the hold; it must never reconcile an energizing target. */
   clearHoldLocked(side: Side): void {
     assertControlCurrent()
+    this.supersedeCooling(side)
     this.deps.writeHold(side, null)
     this.invalidate(side)
   }
@@ -317,7 +500,14 @@ export class TemperatureController {
     if (this.deps.isBlocked(side)) throw new TemperatureBlockedError()
     if (!isCurrent()) return this.status(side)
     assertControlCurrent()
-    if (manual) this.deps.onManualControl?.(side)
+    if (manual) {
+      this.deps.onManualControl?.(side)
+      this.supersedeCooling(side)
+    }
+    else if (await this.reconcileCoolingLocked(side)) {
+      // An already-powered temporary session never needs a second ON command.
+      return this.status(side)
+    }
     const selected = this.select(side, this.deps.now())
     const temperature = this.target(side, selected, fallback)
     if (temperature === null) throw new Error('Automatic comfort limit is unavailable; inspect configuration before powering on')
@@ -353,6 +543,7 @@ export class TemperatureController {
     this.poweredOff[side] = true
     this.invalidate(side)
     await this.deps.powerOff(side)
+    this.supersedeCooling(side)
     this.deps.writeHold(side, null)
     this.deps.writeHardwareDeadline(side, null)
     this.publishStatus(side, this.status(side))
@@ -419,6 +610,7 @@ export class TemperatureController {
 
   /** Guard recovery owns the bounded hardware duration; it resolves only the target here. */
   recoveryTargetLocked(side: Side, fallback: number): number {
+    this.supersedeCooling(side)
     const target = this.target(side, this.select(side, this.deps.now()), fallback)
     if (target === null) throw new Error('Automatic comfort limit is unavailable')
     return target
@@ -455,6 +647,11 @@ export class TemperatureController {
     if (deadline !== null && deadline <= now) {
       await this.powerOffLocked(side)
       return this.status(side)
+    }
+    if (await this.reconcileCoolingLocked(side)) {
+      const status = this.status(side)
+      this.publishStatus(side, status)
+      return status
     }
     const hold = this.deps.readHold(side)
     if (hold && !isLiveRequest(hold, now)) this.deps.writeHold(side, null)

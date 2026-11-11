@@ -6,6 +6,8 @@ const side = z.enum(['left', 'right'])
 const temperature = z.number().int().min(55).max(110)
 
 export const controlActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('cooling.start'), side, coolingId: z.uuid(), expectedScope: z.string().regex(/^[a-f0-9]{64}$/), expectedTargetF: temperature, expectedExpiresAt: timestamp }).strict(),
+  z.object({ kind: z.literal('cooling.cancel'), side, coolingId: z.uuid() }).strict(),
   z.object({ kind: z.literal('temperature'), side, temperature, holdMinutes: z.number().int().min(1).max(1440).optional() }).strict(),
   z.object({ kind: z.literal('power'), side, powered: z.boolean(), temperature: temperature.optional() }).strict(),
   z.object({ kind: z.literal('vibration'), side, intensity: z.number().int().min(1).max(100), pattern: z.enum(['rise', 'double']), duration: z.number().int().min(10).max(180) }).strict(),

@@ -44,6 +44,7 @@ export const capabilitiesSchema = z.object({
     deviceTelemetry: featureSchema,
     temperatureControl: featureSchema,
     temperatureApplicationHistory: featureSchema.optional(),
+    temporaryCooling: featureSchema.optional(),
     basePosition: featureSchema,
     baseMovement: featureSchema,
     baseStop: featureSchema,
@@ -123,6 +124,7 @@ export function buildCapabilities(snapshot: CapabilitySnapshot): ControllerCapab
       deviceTelemetry: feature(deviceFresh ? 'ready' : 'not_ready', deviceFresh ? 'fresh_device_report' : 'device_report_unavailable'),
       temperatureControl: feature(thermalReady ? 'ready' : 'not_ready', thermalReason, true),
       temperatureApplicationHistory: feature('ready', 'read_only_attempt_history_check_storage_availability'),
+      temporaryCooling: feature('unknown', 'check_zone_cooling_preview_fresh_session_and_wake_guards', true),
       basePosition: feature(baseFresh ? 'ready' : 'not_ready', baseFresh ? 'fresh_base_report' : 'base_report_unavailable', true),
       baseMovement: feature(baseReady ? 'ready' : 'not_ready', baseReason, true),
       // Stop must remain visible and callable even when position is stale or motion is unknown.

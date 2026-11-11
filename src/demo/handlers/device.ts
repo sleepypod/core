@@ -111,6 +111,9 @@ export function getDemoDeviceStatus(unit: 'F' | 'C' = 'F'): Status {
 }
 
 export const device: DemoHandlers<'device'> = {
+  getCooling: input => ({ apiVersion: 1, side: input.side, generatedAt: now(), observedAt: null,
+    state: 'unavailable', reason: 'Temporary cooling requires a connected Pod; practice does not send hardware commands.',
+    proposal: null, lease: null, physicalVerification: 'unverified' }),
   getStatus: input => getDemoDeviceStatus(input.unit),
 
   getTemperatureControl: input => controlStatus(input.side),

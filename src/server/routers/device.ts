@@ -1,3 +1,4 @@
+import { coolingPageSchema } from '@/src/temperature/cooling'
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { publicProcedure, router } from '@/src/server/trpc'
@@ -279,6 +280,11 @@ export const deviceRouter = router({
     .input(z.object({ side: sideSchema }).strict())
     .output(temperatureControlStatusSchema)
     .query(({ input }) => getTemperatureController().status(input.side)),
+
+  getCooling: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/device/cooling', tags: ['Device'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(coolingPageSchema)
+    .query(({ input }) => getTemperatureController().coolingStatus(input.side)),
 
   resumeTemperature: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/device/temperature/resume', protect: false, tags: ['Device'] } })

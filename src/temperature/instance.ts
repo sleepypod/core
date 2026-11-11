@@ -1,3 +1,4 @@
+import { coolingPersistence } from './coolingInstance'
 import { resolvePersistedComfortLimit } from './limitInstance'
 import type { Statement } from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
@@ -121,6 +122,7 @@ export function getTemperatureController(): TemperatureController {
   if (!globalState.__sp_temperatureController) {
     globalState.__sp_temperatureController = new TemperatureController({
       now: Date.now,
+      cooling: coolingPersistence(),
       recordApplication: createTemperatureApplicationRecorder(sqlite),
       onManualControl: pauseComfortAfterManual,
       withSideLock,
