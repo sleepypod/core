@@ -11,8 +11,8 @@ import { historySourceFixture } from './historySourceFixture'
 import { personalRuntimeFixture } from './runtimeFixture'
 
 /** Real migrated configuration/biometric stores; only external services and live readings are simulated. */
-export function arrangementCoordinatorFixture() {
-  const fixture = personalRuntimeFixture()
+export function arrangementCoordinatorFixture(filename = ':memory:') {
+  const fixture = personalRuntimeFixture(filename)
   const source = historySourceFixture(fixture.database, fixture.owner, () => fixture.clock.now)
   const history = new PersonHistoryStore(fixture.database, fixture.identities, source.source, () => fixture.clock.now)
   history.appendReviewedEpoch({ householdId: fixture.owner.householdId, datasetId: source.identity.datasetId, expectedAttributionRevision: 1,
@@ -62,9 +62,14 @@ export function arrangementCoordinatorFixture() {
     if (admission.read().holdId !== null) throw new Error('Resume attempted before release')
     events.push('resume')
   })
+  const readGeneration = vi.fn(async () => ({ version: 1 as const, invocationId: runtime.invocationId, bootId: runtime.bootId,
+    pid: runtime.pid, startTicks: runtime.ticks, observedAt: fixture.clock.now }))
+  const restartService = vi.fn(async () => {
+    events.push('restart')
+  })
   const makeCoordinator = () => new ArrangementCoordinator({ database: fixture.database, biometrics: source.biometrics,
     identities: fixture.identities, reviews, historySource: source.source, history, enabled: () => fixture.clock.enabled,
-    runId: runtime.runId, now: () => fixture.clock.now, readEvidence, suspend, drainBase, drainHardware, resume })
+    runId: runtime.runId, now: () => fixture.clock.now, readEvidence, suspend, drainBase, drainHardware, resume, readGeneration, restartService })
   const restart = (withProcessing = true) => {
     fixture.clock.now += 2000
     runtime.runId = randomUUID()
@@ -83,7 +88,10 @@ export function arrangementCoordinatorFixture() {
     issuedAt: fixture.clock.now, expiresAt: fixture.clock.now + 30000,
     confirmEmptyAndAttended: true as const, confirmAssignedSides: true as const,
     acknowledgeRecordingGap: true as const, acknowledgeLearningRemainsOff: true as const })
-  return { ...fixture, source, history, context, request, events, admission, readEvidence, suspend, drainBase, drainHardware, resume,
+  const restartRequest = () => ({ ...context(), version: 1 as const, operationId: request.requestId,
+    issuedAt: fixture.clock.now, expiresAt: fixture.clock.now + 30000, confirmEmptyAndAttended: true as const,
+    acknowledgeConnectionWillClose: true as const, acknowledgeControlsRemainPaused: true as const })
+  return { ...fixture, source, history, reviews, context, request, events, admission, readEvidence, readGeneration, suspend, drainBase, drainHardware, resume, restartService, restartRequest,
     makeCoordinator, restart, recoveryRequest,
     close: () => {
       uninstall()

@@ -73,6 +73,16 @@ export class ArrangementRecoveryStore {
     return saved.receipt
   }
 
+  /** Read a validated completion without entering the release path, even if its request has expired. */
+  readReceipt(credential: HouseholdCredential, operationId: string): ArrangementRecoveryReceipt | null {
+    const row = readArrangementTransition(this.dependencies.database, operationId)
+    if (!row || row.state !== 'committed') throw reject()
+    this.authorize(credential, row)
+    if (row.recovery === null) return null
+    const saved = savedArrangementRecoverySchema.parse(JSON.parse(row.recovery))
+    return this.replay(row, saved.request)
+  }
+
   private current(credential: HouseholdCredential, row: ArrangementTransitionRow, request: ArrangementRecoveryRequest) {
     const session = this.authorize(credential, row)
     const observed = arrangementObservationSchema.parse(this.dependencies.observe())

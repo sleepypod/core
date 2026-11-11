@@ -470,6 +470,13 @@
       "when": 1794407313696,
       "tag": "0066_household_arrangement_cancellation",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "6",
+      "when": 1794413925566,
+      "tag": "0067_household_transition_restarts",
+      "breakpoints": true
     }
   ]
 }

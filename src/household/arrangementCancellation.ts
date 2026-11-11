@@ -67,6 +67,16 @@ export class ArrangementCancellationStore {
     return this.snapshot(credential, row)
   }
 
+  /** Receipt lookup cannot release a hold or resume services. */
+  readReceipt(credential: HouseholdCredential, operationId: string): ArrangementCancellationReceipt | null {
+    const row = readArrangementTransition(this.dependencies.database, operationId)
+    if (!row) throw reject()
+    this.authorize(credential, row)
+    if (row.state !== 'cancelled' || row.cancellation === null) return null
+    const saved = savedArrangementCancellationSchema.parse(JSON.parse(row.cancellation))
+    return this.replay(row, saved.request)
+  }
+
   private snapshot(credential: HouseholdCredential, row: ArrangementTransitionRow) {
     if (!this.dependencies.enabled()) throw reject()
     const session = this.authorize(credential, row)

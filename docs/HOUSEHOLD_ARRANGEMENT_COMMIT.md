@@ -1,22 +1,25 @@
 # Atomic shared-arrangement storage
 
-This is the storage boundary for the reviewed move from solo-anywhere to two
-assigned sleepers. `ArrangementTransitionStore` is **internal and not registered
-on HTTP/tRPC or startup**. Public `activateArrangement` and `canActivate` remain
-false. This source change does not alter an installation, its feature flags,
-people, schedules, hardware, or reviewed history.
+This is the storage and maintenance boundary for the reviewed move from
+solo-anywhere to two assigned sleepers. The internal stores are reached through
+the authenticated coordinator described below. Its mutating HTTP routes remain
+disabled by default; public `activateArrangement` and `canActivate` remain false.
+This source change does not alter an installation, its feature flags, people,
+schedules, hardware, or reviewed history.
 
 ## Internal runtime coordinator
 
 `ArrangementCoordinator` connects the transaction, recovery and cancellation
-stores to a serialized runtime operation. It remains internal: no route,
-startup activation or public capability is enabled by this implementation.
+stores to a serialized runtime operation. The household host registers its
+authenticated maintenance routes, but no startup activation or public activation
+capability is enabled by this implementation.
 Duplicate module instances share the operation exclusion for the same database.
 
 The coordinator reads evidence before placing a hold, suspends and drains
 automatic producers, waits for base writes and DAC replies, then reads every
 source again before committing. Expiry or failure leaves the durable hold in
-place. It never restarts the process itself. Separate attended recovery still
+place. Activation does not restart the process; a separate attended restart
+request is required. Separate attended recovery still
 requires a verified new controller generation and both processing receipts.
 Recovery and cancellation resume automatic services only after the release
 transaction succeeds. An exact historical replay does not read sensors, stop
@@ -37,7 +40,7 @@ and snoozes; it is never proof that vibration physically stopped. Missing,
 oversized or corrupt alarm persistence cannot become an empty record. The
 attended confirmation remains required.
 
-A failed automatic restart is returned separately from the successful durable
+A failed automatic-service resume is returned separately from the successful durable
 release receipt. The coordinator drains the partial runtime. If that drain also
 fails, admission rejects both old and new non-Stop commands until runtime
 replacement; Stop remains available. Replaying the release cannot retry startup.
@@ -46,8 +49,8 @@ Behavioral tests use real migrated configuration and biometric stores with
 simulated external observations. They cover drain ordering, failure and expiry,
 duplicate coordinators, replay, original-owner authorization, processing
 acknowledgments, cancellation and failed startup. These are source checks, not
-physical household qualification. Runtime registration, maintenance routes and
-the attended web/native workflow remain pending.
+physical household qualification. Runtime registration and maintenance routes
+are implemented; the attended web/native workflow remains pending.
 
 ## Transaction and interruption behavior
 
@@ -251,25 +254,95 @@ verify current processing and service-generation evidence before releasing a
 hold and requesting a resume. No live Pod, routine or household assignment was
 changed by this implementation.
 
-## Runtime integration still required
+## Authenticated maintenance API
+
+The household host now registers the coordinator once per process using the
+shared database, personal history services and a new runtime identity. Mutating
+activation, restart, recovery and cancellation require household preparation plus
+all five flags: `SLEEPYPOD_PERSONAL_RUNTIME`, `SLEEPYPOD_PERSONAL_ROUTINES`,
+`SLEEPYPOD_PERSONAL_HISTORY`, `SLEEPYPOD_ARRANGEMENT_REVIEW` and
+`SLEEPYPOD_ARRANGEMENT_ACTIVATION`. Activation remains disabled by default. The
+public arrangement review still returns `canActivate: false` until the complete
+client flow and private learning migration are released.
+
+Personal owner credentials authorize these endpoints; the legacy household key
+and a partner credential cannot perform maintenance. Only the original owner
+device can read or continue its transition. Responses are private/no-store and
+never include archived preferences, raw processor receipts or device secrets.
+Browser mutations require the current personal session, same origin and sleeper
+identity; all awaited boundaries recheck authority before continuing.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/household/transition?operationId=…` | Read the requested operation, or the latest operation from this owner device when omitted. |
+| `POST /api/v1/household/transition` | Hold and commit a separately approved arrangement using current attended evidence. |
+| `POST /api/v1/household/transition/restart` | Explicitly request one controller restart while retaining the hardware hold. |
+| `POST /api/v1/household/transition/recover` | Verify the new controller and processing receipts before releasing the committed arrangement. |
+| `GET /api/v1/household/transition/cancellation-preview?operationId=…` | Review the operating-control digest before cancelling an uncommitted hold. |
+| `POST /api/v1/household/transition/cancel` | Verify fresh attendance and preserve the solo arrangement while releasing an uncommitted hold. |
+
+Status reads never suspend, resume, release or restart anything. Missing, future
+or stale service-generation evidence yields `controllerRestarted: null`. A saved
+restart submission is not proof of restart, processing adoption or recovery.
+After a lost response, clients read status rather than automatically resending
+a mutation. Logout during final service work withholds the response while
+preserving any durable result already committed.
+
+### One explicit restart, with a durable outcome
+
+The restart request confirms an empty attended bed, connection loss and continued
+paused controls. Fresh server observations independently require empty sides,
+thermal power off, sufficient water, no priming or vibration and a stationary or
+unsupported base. A new controller generation already observed is not restarted
+again. The original owner device and current session/assignment revisions are
+rechecked after drains and before submission.
+
+Migration 0067 adds one restart record per transition. The original request,
+controller identity and `requested` receipt are saved with FULL durability before
+the fixed Linux command `/bin/systemctl --no-block restart sleepypod.service`.
+No client chooses a service name, shell command or extra argument. Completion
+records `submitted` or `unconfirmed`; process termination or a failed final write
+can leave `requested`. Exact retries read that receipt without dispatch. A new
+request ID for the same transition conflicts instead of restarting twice.
+
+If the process never returns with verifiable new generation evidence, the UI
+must explain that maintenance is still paused and direct the owner to diagnosis
+or support. It must not poll forever as if progress were guaranteed or silently
+retry the restart. The separate attended recovery/cancellation action remains
+necessary. Python consumers adopt the committed processing intent from SQLite;
+the restart request alone cannot manufacture their fresh acknowledgments.
+
+```mermaid
+flowchart LR
+  Review[Both people approve] --> Hold[Hold and commit]
+  Hold --> Intent[Save attended restart intent]
+  Intent --> Restart[Submit once]
+  Restart --> Read[Reconnect and read status]
+  Read --> Verify[Verify new process and fresh processors]
+  Verify --> Recover[Attended recovery]
+  Recover --> Resume[Release and resume]
+```
+
+## Client integration and acceptance still required
 
 A committed storage transaction is **not completed physical activation**. Before
 exposing activation in either app, implement and test:
 
 1. Shared native/web review of maintenance effects, private plans and limits.
-2. Wire the implemented cancellation/recovery receipts to a separately attended
-   recheck, including restart before commit and failure after commit.
-3. Connect the implemented automatic-service suspension/resume to the coordinator
-   and verify it together with base queues and actual processing acknowledgments.
-   Old callbacks must not capture fresh admission using stale in-memory policy.
+2. Wire the implemented HTTP cancellation/recovery receipts to a separately
+   attended client recheck, including restart before commit and failure after commit.
+3. Qualify the integrated automatic-service suspension/resume, base queues and
+   actual processing acknowledgments on the Pod. Old callbacks must not capture
+   fresh admission using stale in-memory policy.
 4. Reconcile the actual processing receipts with the committed fingerprint and
    review any later personal-profile migration. The implemented default reset and
    sample-boundary acknowledgments are prerequisites, not completed activation.
-5. Connect the implemented reconciliation/epoch/release transaction to the
-   coordinator and the separate attended recovery flow. Neither time passing,
+5. Complete the client experience for the integrated reconciliation/epoch/release
+   transaction and separate attended recovery flow. Neither time passing,
    an accepted restart request nor drain completion may trigger automatic release.
 
-There is no public API that can invoke these incomplete recovery steps today.
+The HTTP contract is implemented behind the activation flag; it is not an enabled
+public household setup experience or evidence of physical acceptance.
 
 ## Validation
 
@@ -356,3 +429,16 @@ seconds after; the final full suite measured 2.7 seconds for that test.
 The corrected full suite passes **9,512 tests, 19 existing skips**, including 11
 new timezone/DST/eviction checks. TypeScript, focused ESLint and the production
 build pass. These local results do not replace final hosted or live acceptance.
+
+The maintenance API and durable restart follow-up passes **9,594 tests, 19
+existing skips**, including 181 focused HTTP, restart, recovery and request-context
+checks. Coverage is 92.88% statements, 86.66% branches, 90.52% functions and 94.13%
+lines. The generated schema contract, migration preservation, full ESLint,
+production build and the subsequent TypeScript check pass.
+
+The first production build stalled without further output. Process sampling
+showed the owned build waiting on its local worker connection; that run was
+terminated, and its log, sample and generated Turbopack cache were preserved.
+A fresh-cache run of the unchanged production build completed successfully.
+The terminated run is not counted as passing. No live controller restart,
+household activation or physical behavior was tested by these checks.

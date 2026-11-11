@@ -8,7 +8,7 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { expect, it } from 'vitest'
 import { HouseholdStore } from '@/src/household/store'
 
-it('adds cancellation receipts without releasing holds or changing existing arrangement records', () => {
+it.each([65, 66])('upgrades maintenance receipts from migration %i without changing existing arrangements or holds', (lastMigration) => {
   const previous = mkdtempSync(path.join(tmpdir(), 'arrangement-cancellation-upgrade-'))
   const current = path.resolve('src/db/migrations')
   const database = new Database(':memory:')
@@ -17,7 +17,7 @@ it('adds cancellation receipts without releasing holds or changing existing arra
     cpSync(current, previous, { recursive: true })
     const journalPath = path.join(previous, 'meta/_journal.json')
     const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { idx: number }[] }
-    journal.entries = journal.entries.filter(entry => entry.idx <= 65)
+    journal.entries = journal.entries.filter(entry => entry.idx <= lastMigration)
     writeFileSync(journalPath, JSON.stringify(journal))
     migrate(drizzle(database), { migrationsFolder: previous })
     const identities = new HouseholdStore(database)
@@ -43,10 +43,20 @@ it('adds cancellation receipts without releasing holds or changing existing arra
     const before = database.prepare('SELECT * FROM household_arrangement_transitions ORDER BY rowid').all()
     migrate(drizzle(database), { migrationsFolder: current })
     expect(database.prepare('SELECT * FROM household_arrangement_transitions ORDER BY rowid').all())
-      .toEqual(before.map(row => ({ ...row as Record<string, unknown>, cancellation: null })))
+      .toEqual(lastMigration === 65 ? before.map(row => ({ ...row as Record<string, unknown>, cancellation: null })) : before)
     expect(tables.map(table => database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())).toEqual(preserved)
+    expect(database.prepare('SELECT * FROM household_arrangement_restarts').all()).toEqual([])
+    const operationIds = before.map(row => (row as { id: string }).id)
+    const requestId = randomUUID()
+    const insert = database.prepare(`INSERT INTO household_arrangement_restarts
+      (operation_id, request_id, request_hash, request, controller, receipt) VALUES (?, ?, ?, ?, ?, ?)`)
+    insert.run(operationIds[0], requestId, 'saved-hash', '{}', '{}', 'saved-restart-receipt')
+    expect(() => insert.run(operationIds[1], requestId, 'saved-hash', '{}', '{}', '{}')).toThrow(/UNIQUE/)
+    expect(() => insert.run(randomUUID(), randomUUID(), 'saved-hash', '{}', '{}', '{}')).toThrow(/FOREIGN KEY/)
+    const restartBefore = database.prepare('SELECT * FROM household_arrangement_restarts').all()
     expect(database.pragma('foreign_key_check')).toEqual([])
     expect(() => migrate(drizzle(database), { migrationsFolder: current })).not.toThrow()
+    expect(database.prepare('SELECT * FROM household_arrangement_restarts').all()).toEqual(restartBefore)
   }
   finally {
     database.close()

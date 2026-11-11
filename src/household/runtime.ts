@@ -1,4 +1,5 @@
 import { sqlite, biometricsDb } from '@/src/db'
+import { randomUUID } from 'node:crypto'
 import { HouseholdStore } from './store'
 import { householdHttp } from './http'
 import { PersonalRuntime } from './personalRuntime'
@@ -7,6 +8,7 @@ import { ArrangementReviewService } from './arrangementReviews'
 import { PersonHistoryStore } from './personHistory'
 import { PersonHistorySource } from './historySource'
 import { PersonalHistoryApi } from './historyApi'
+import { ArrangementCoordinator } from './arrangementCoordinator'
 import { assertControlCurrent } from '@/src/controls/context'
 import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
 import { withSideLock } from '@/src/hardware/sideLock'
@@ -17,6 +19,8 @@ const shared = globalThis as typeof globalThis & {
     personalRoutines?: PersonalRoutineService
     arrangementReviews?: ArrangementReviewService
     personalHistory?: PersonalHistoryApi
+    arrangementCoordinator?: ArrangementCoordinator
+    runId?: string
     publicAttempts: number
     windowStarted: number
   }
@@ -64,12 +68,22 @@ export async function handleHouseholdRequest(request: Request) {
   runtime.personalHistory ??= new PersonalHistoryApi({ identities: runtime.store,
     history: new PersonHistoryStore(sqlite, runtime.store, new PersonHistorySource(sqlite, biometricsDb.$client)),
     enabled: () => preparationEnabled() && process.env.SLEEPYPOD_PERSONAL_HISTORY === '1' })
+  runtime.runId ??= randomUUID()
+  const historySource = new PersonHistorySource(sqlite, biometricsDb.$client)
+  runtime.arrangementCoordinator ??= new ArrangementCoordinator({ database: sqlite, biometrics: biometricsDb.$client,
+    identities: runtime.store, reviews: runtime.arrangementReviews, historySource,
+    history: new PersonHistoryStore(sqlite, runtime.store, historySource), runId: runtime.runId,
+    // Disabled until the complete attended client flow and private learning migration are released.
+    enabled: () => preparationEnabled() && ['SLEEPYPOD_PERSONAL_RUNTIME', 'SLEEPYPOD_PERSONAL_ROUTINES',
+      'SLEEPYPOD_PERSONAL_HISTORY', 'SLEEPYPOD_ARRANGEMENT_REVIEW', 'SLEEPYPOD_ARRANGEMENT_ACTIVATION']
+      .every(name => process.env[name] === '1') })
   return householdHttp(request, {
     store: runtime.store,
     personalRuntime: runtime.personalRuntime,
     personalRoutines: runtime.personalRoutines,
     arrangementReviews: runtime.arrangementReviews,
     personalHistory: runtime.personalHistory,
+    arrangementCoordinator: runtime.arrangementCoordinator,
     verifySoloConfiguration: (side) => {
       const row = sqlite.prepare('SELECT bed_mode, unused_zone_mode FROM device_settings LIMIT 1').get() as {
         bed_mode: string

@@ -223,3 +223,25 @@ These are simulated-observation checks over real migrated stores; public
 activation remains unavailable. Production runtime registration, the attended
 web/native workflow, personal learning migration and physical acceptance remain.
 See [the coordinator contract](HOUSEHOLD_ARRANGEMENT_COMMIT.md).
+
+### Household maintenance API — locally validated
+
+Core PR 106 merged as `b41ff431cded68c2695ca3d0fb73fde361c778be` after all hosted
+checks passed. The merged tree matches tested `7ed4e87dfd1ebd684caa86c066fb62e0c47eed7c`.
+The follow-up registers the coordinator in the household host and adds personally
+authenticated status, activation, restart, recovery and cancellation endpoints.
+Restart intent is durable before a fixed controller-service submission; reconnect
+reads never dispatch another restart or release the hardware hold.
+
+All mutating maintenance paths retain the activation feature flag, off by default.
+Browser identity and device authorization are rechecked across awaited work.
+Source validation and migration preservation are recorded in the maintenance
+contract. Web/native review and recovery screens, private learning migration,
+two-person acceptance and attended Pod qualification remain required. No live
+Pod, alarm, account assignment, phone or home accessory changed in this work.
+
+The final local full suite passes 9,594 tests with 19 existing skips. The 181-test
+focused suite, generated schema and migration preservation checks, full lint,
+production build and post-build TypeScript check pass. The first stalled build
+and its generated cache remain preserved; the fresh-cache build is the passing
+result. Hosted checks and the attended client workflow remain separate work.

@@ -874,6 +874,16 @@ export const householdArrangementTransitions = sqliteTable('household_arrangemen
   cancellation: text('cancellation'),
 }, table => [index('idx_household_arrangement_transitions').on(table.householdId, table.createdAt)])
 
+// A durable dispatch intent prevents a lost restart response from issuing another restart.
+export const householdArrangementRestarts = sqliteTable('household_arrangement_restarts', {
+  operationId: text('operation_id').primaryKey().references(() => householdArrangementTransitions.id),
+  requestId: text('request_id').notNull().unique(),
+  requestHash: text('request_hash').notNull(),
+  request: text('request').notNull(),
+  controller: text('controller').notNull(),
+  receipt: text('receipt').notNull(),
+})
+
 // Persist the latest browser identity independently of response arrival order.
 // Only hashes are retained; this table cannot recreate a browser credential.
 export const householdBrowserScopes = sqliteTable('household_browser_scopes', {

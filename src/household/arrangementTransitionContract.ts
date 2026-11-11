@@ -3,7 +3,7 @@ import { MAX_CONTROL_LIFETIME_MS } from '@/src/controls/contract'
 import { householdContextSchema, householdIdSchema } from './contract'
 
 const instant = z.number().int().positive().max(8_640_000_000_000_000)
-/** Internal coordinator input. No route accepts this until runtime recovery and UI review are complete. */
+/** Attended coordinator input; runtime activation stays disabled until the client flow and migration are released. */
 export const arrangementTransitionRequestSchema = householdContextSchema.extend({
   version: z.literal(1), reviewId: householdIdSchema, issuedAt: instant, expiresAt: instant,
   confirmEmptyAndAttended: z.literal(true), confirmClearTemporaryActions: z.literal(true),
