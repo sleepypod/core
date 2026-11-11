@@ -32,7 +32,13 @@ import { capturePreviewEvidence } from './report-evidence'
 import { thermalObservation } from './thermal-observation'
 import { thermalConfiguration } from './thermal-dataset'
 import { createThermalForecasts } from './thermal-forecast-store'
+import { readResponseAudit } from './response-audit'
 import { previousForecastInput } from './thermal-forecast-input'
+
+/** Inspect retained evidence without starting the comfort runtime or sending hardware commands. */
+export function getTargetResponseAudit(side: Side) {
+  return readResponseAudit(sqlite, biometricsDb.$client, side, Date.now())
+}
 
 export function getThermalModels() {
   return createThermalModels(sqlite)

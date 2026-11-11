@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ownerStatusSchema } from '@/src/comfort/owner-contract'
 import { comfortStatusSchema } from '@/src/comfort/contract'
 import { thermalModelStatusSchema } from '@/src/comfort/thermal-model-store'
+import { responseAuditSchema } from '@/src/comfort/response-contract'
 import { forecastStatusSchema } from '@/src/comfort/thermal-forecast-store'
 import { resolveDemoCall } from '../handlers'
 
@@ -18,6 +19,9 @@ describe('personal comfort in the demo', () => {
     const model = thermalModelStatusSchema.parse(await resolveDemoCall('comfort.thermalModel', { side }))
     expect(model).toMatchObject({ side, completeNights: 0, canTrain: false, model: null })
     expect(await resolveDemoCall('comfort.thermalModelPreview', { side })).toMatchObject({ offsetF: null, rawDirection: null })
+    expect(responseAuditSchema.parse(await resolveDemoCall('comfort.targetResponse', { side }))).toMatchObject({
+      side, status: 'unavailable', responseNights: 0, warmingWindows: 0, coolingWindows: 0, modelAvailable: false, activationAvailable: false,
+    })
     const forecast = forecastStatusSchema.parse(await resolveDemoCall('comfort.waterForecast', { side }))
     expect(forecast).toMatchObject({ side, completeNights: 0, canTrain: false, model: null })
     expect(await resolveDemoCall('comfort.waterForecastPreview', { side })).toMatchObject({ predictions: [] })

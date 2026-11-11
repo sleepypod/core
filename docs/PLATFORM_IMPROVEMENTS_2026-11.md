@@ -30,7 +30,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 05 | Recording health | Freshness, dropout, storage and processing checks; actionable messages; failed-source fixtures and live verification | Read-only checks shipped in source; completed-interval interruption review in validation; live qualification pending |
 | 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Native implementation tested; hosted checks and actual Watch delivery pending |
 | 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Core PR 86 merged; native PR 62 tested locally and awaiting hosted checks |
-| 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Pending |
+| 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | In progress: read-only small-step response evidence; fitted response model, Preview and activation remain pending |
 | 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Pending |
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
 | 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Pending |
@@ -113,3 +113,6 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
   actual overnight verification are in progress. Core PR 91 merged as `01643599`
   after 8,977 unit tests (19 skips), hosted browser checks, typecheck, lint and
   builds passed. Its merged tree matches the tested source tree exactly.
+
+- **05 — repeated presence interruptions:** Core PR 92 passed every hosted check and merged as `122614d7ab8f94295d533c3f1ab0b8b8c9501154`; its tree equals tested head `65e2e1cb3df7b79b070688762185ecbe6e05f71c`. This is source integration, not live sensor qualification.
+- **08 — target-response evidence:** [data rules and research boundaries](TARGET_RESPONSE_EVIDENCE.md) explain the authenticated audit of actual 1°F changes, reviewed-night proofs and observed outcomes. The first delivery is evidence inspection; it does not fit or activate predictive control.

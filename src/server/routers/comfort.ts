@@ -3,7 +3,8 @@ import { PreviewReportError } from '@/src/comfort/report-summary'
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { comfortConfigSchema, comfortFeedbackSchema, comfortStatusSchema } from '@/src/comfort/contract'
-import { getComfortOwner, getComfortRuntime, getPreviewReports, getThermalModels, previewThermalModel, getThermalForecasts, previewWaterForecast } from '@/src/comfort/instance'
+import { getComfortOwner, getComfortRuntime, getPreviewReports, getThermalModels, previewThermalModel, getThermalForecasts, previewWaterForecast, getTargetResponseAudit } from '@/src/comfort/instance'
+import { responseAuditSchema } from '@/src/comfort/response-contract'
 import { forecastStatusSchema } from '@/src/comfort/thermal-forecast-store'
 import { thermalForecastPredictionSchema } from '@/src/comfort/thermal-forecast'
 import { thermalModelStatusSchema } from '@/src/comfort/thermal-model-store'
@@ -24,6 +25,10 @@ async function reportResult<Result>(work: () => Promise<Result>): Promise<Result
 }
 
 export const comfortRouter = router({
+  targetResponse: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/comfort/response', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(responseAuditSchema)
+    .query(({ input }) => getTargetResponseAudit(input.side)),
   waterForecast: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/v1/comfort/forecast', tags: ['Autopilot'] } })
     .input(z.object({ side: sideSchema }).strict()).output(forecastStatusSchema)

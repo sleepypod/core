@@ -1,3 +1,4 @@
+import { RESPONSE_POLICY } from '@/src/comfort/response-contract'
 import type { DemoHandlers } from '../types'
 import { COMFORT_ACTIVATION_REASON } from '@/src/comfort/contract'
 
@@ -9,6 +10,9 @@ function rejectDemoWrite(): never {
 }
 
 export const comfort: DemoHandlers<'comfort'> = {
+  targetResponse: ({ side }) => ({ apiVersion: 1, policy: RESPONSE_POLICY, generatedAt: Date.now(), side, attribution: 'physical_zone_only',
+    status: 'unavailable', reviewedNights: 0, responseNights: 0, coolingWindows: 0, warmingWindows: 0, requiredNights: 20,
+    datasetHash: '0'.repeat(64), modelAvailable: false, activationAvailable: false, exclusions: [], exclusionsTruncated: false, reason: unavailable }),
   waterForecast: ({ side }) => ({ apiVersion: 1, generatedAt: Date.now(), side, requiredNights: 20,
     completeNights: 0, datasetHash: '0'.repeat(64), canTrain: false, excluded: [], model: null, reason: unavailable }),
   waterForecastPreview: () => ({ predictions: [], reason: unavailable }),

@@ -5,8 +5,9 @@ import { PreviewReportError } from '@/src/comfort/report-summary'
 
 const runtime = vi.hoisted(() => ({ status: vi.fn(), configure: vi.fn(), setMode: vi.fn(), feedback: vi.fn() }))
 const owner = vi.hoisted(() => ({ status: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), retest: vi.fn() }))
+const targetResponse = vi.hoisted(() => vi.fn())
 const reports = vi.hoisted(() => ({ list: vi.fn(), detail: vi.fn(), review: vi.fn() }))
-vi.mock('@/src/comfort/instance', () => ({ getComfortRuntime: () => runtime, getPreviewReports: () => reports, getComfortOwner: () => owner }))
+vi.mock('@/src/comfort/instance', () => ({ getComfortRuntime: () => runtime, getPreviewReports: () => reports, getComfortOwner: () => owner, getTargetResponseAudit: targetResponse }))
 const { comfortRouter } = await import('../comfort')
 const caller = comfortRouter.createCaller({})
 
@@ -25,6 +26,19 @@ beforeEach(() => {
 })
 
 describe('personal comfort API contract', () => {
+  it('reads target response evidence without evaluating the controller and rejects extra input', async () => {
+    const result = { apiVersion: 1, policy: 'acknowledged-small-step-v1', generatedAt: 1, side: 'right', attribution: 'physical_zone_only',
+      status: 'read', reviewedNights: 0, responseNights: 0, coolingWindows: 0, warmingWindows: 0, requiredNights: 20,
+      datasetHash: '0'.repeat(64), modelAvailable: false, activationAvailable: false, exclusions: [], exclusionsTruncated: false, reason: 'No observations' }
+    targetResponse.mockReturnValue(result)
+    expect(await caller.targetResponse({ side: 'right' })).toEqual(result)
+    expect(targetResponse).toHaveBeenCalledWith('right')
+    await expect(caller.targetResponse({ side: 'left', activate: true } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(caller.targetResponse({ side: 'middle' } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(targetResponse).toHaveBeenCalledTimes(1)
+    expect(runtime.status).not.toHaveBeenCalled()
+    expect(runtime.configure).not.toHaveBeenCalled()
+  })
   it('accepts only server-issued owner review references and preserves gate failures', async () => {
     owner.prepare.mockRejectedValue(new PreviewReportError('Seven matching nights required', 'PRECONDITION_FAILED'))
     await expect(caller.prepareOwnerReview({ side: 'left', purpose: 'activation', kind: null })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })

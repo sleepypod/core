@@ -2,6 +2,7 @@
 
 import { trpc } from '@/src/utils/trpc'
 import type { Side } from '@/src/hardware/types'
+import { TargetResponseEvidence } from './TargetResponseEvidence'
 import { Button } from '@/src/components/ds'
 
 /** Forecast measurements stay separate from comfort suggestions and actuator controls. */
@@ -115,6 +116,7 @@ export function WaterForecastCard({ side }: { side: Side }) {
       {!data && query.error && <Button disabled={busy} onClick={() => { void query.refetch() }}>Retry forecast</Button>}
       {train.error && <p role="alert" className="text-sm text-danger">{train.error.message}</p>}
       {train.isSuccess && <p role="status" className="text-sm">Forecast evaluation finished. Review the results; your bed settings were not changed.</p>}
+      <TargetResponseEvidence key={side} side={side} />
       <p className="text-xs text-fg-2">Uses the same complete, reviewed thermal nights as comfort learning. Partial data, wake warming, unstable targets and long gaps are excluded. Predictions assume a steady target and similar room conditions; they do not establish the effect of changing a target.</p>
     </section>
   )
