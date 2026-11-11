@@ -107,7 +107,10 @@ whole page has only one live status region.
 
 After that correction, the rebuilt app passed the complete local browser suite:
 99 scenarios, including the real two-account API flow. The earlier hosted failure
-is retained as evidence; the corrected PR head still needs its own hosted checks.
+is retained as evidence. All hosted checks subsequently passed on final head
+`d31f28352a8ad2155545fd6308ad4cd2d9e1cce0`. PR 108 merged as
+`80f2ac344de52d376c1d297bd99e6df2711ce533`; both have tree
+`3774264489b7df27a742b64bff7d4be85d269c4c`.
 
 No live controller was restarted, no side assignment or routine was changed, and
 no physical activation or native delivery is established by these checks.

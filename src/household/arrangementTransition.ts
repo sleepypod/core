@@ -9,6 +9,7 @@ import type { ArrangementReviewService } from './arrangementReviews'
 import type { PersonHistorySource } from './historySource'
 import type { PersonHistoryStore } from './personHistory'
 import { attributionEpochSchema } from './historyContract'
+import { captureLearningArchive } from './learningArchive'
 import { arrangementObservationSchema, arrangementTransitionRequestSchema, type ArrangementTransitionRequest, type ArrangementTransitionReceipt } from './arrangementTransitionContract'
 import { arrangementDigest, arrangementPolicyDigest, commitArrangementWeeks, committedArrangementDigest, readArrangementArchive, resetArrangementControls } from './arrangementTransitionState'
 import { arrangementHistoryContextSchema as historyContextSchema, arrangementTransitionContextSchema as contextSchema,
@@ -107,7 +108,7 @@ export class ArrangementTransitionStore {
       const plan = this.dependencies.reviews.approvedForCommit(credential, request)
       // Validate every archive field before admitting this operation; retain the actual archive at commit.
       readArrangementArchive(this.dependencies.database)
-      const context = contextSchema.parse({ policy: arrangementPolicyDigest(this.dependencies.database), controller,
+      const context = contextSchema.parse({ policy: arrangementPolicyDigest(this.dependencies.database), controller, learningArchiveVersion: 1,
         history: this.historyContext(session.householdId, session.selfSleeperId, plan.sourceSide) })
       this.dependencies.database.prepare(`INSERT INTO household_arrangement_transitions
         (id, household_id, review_id, account_id, device_id, request_hash, request, run_id, admission_revision, state, created_at, context)
@@ -135,7 +136,8 @@ export class ArrangementTransitionStore {
       const controller = this.assertCurrent(request)
       assertHardwareDrained(current.id, current.admission_revision)
       const plan = this.dependencies.reviews.approvedForCommit(credential, request)
-      const context = contextSchema.parse(JSON.parse(current.context))
+      // A held operation from the previous release gains preservation before any settings are replaced.
+      const context = contextSchema.parse({ ...JSON.parse(current.context), learningArchiveVersion: 1 })
       if (arrangementDigest({ ...context.controller, observedAt: 0 }) !== arrangementDigest({ ...controller, observedAt: 0 })) throw reject()
       if (context.policy !== arrangementPolicyDigest(this.dependencies.database)
         || arrangementDigest(context.history) !== arrangementDigest(this.historyContext(session.householdId, session.selfSleeperId, plan.sourceSide))) throw reject()
@@ -143,6 +145,11 @@ export class ArrangementTransitionStore {
       const now = this.now()
       revisionSchema.parse(context.history.attributionRevision + 1)
       const archive = JSON.stringify(readArrangementArchive(database))
+      captureLearningArchive(database, { version: 1, operationId: current.id, householdId: session.householdId,
+        accountId: session.accountId, sleeperId: session.selfSleeperId, datasetId: context.history.datasetId,
+        epochId: context.history.epochId, capturedAt: now, soloStartsAt: context.history.startsAt,
+        sourceSide: plan.sourceSide, timeZone: plan.timeZone, sourceBindingHash: context.history.bindingHash,
+        soloEpochHash: context.history.epochHash, attribution: 'operator_custody_unreviewed', activation: 'historical_only' })
       // Consuming approval, both complete weeks, attribution and control reset share this transaction.
       this.dependencies.reviews.consumeForCommit(credential, request)
       commitArrangementWeeks(database, plan)
@@ -165,8 +172,8 @@ export class ArrangementTransitionStore {
       const changed = database.prepare('UPDATE households SET mode = \'assigned\', revision = revision + 1, assignment_revision = assignment_revision + 1, effective_at = ? WHERE id = ? AND revision = ? AND assignment_revision = ? AND mode = \'solo-anywhere\'')
         .run(now, session.householdId, plan.householdRevision, plan.assignmentRevision)
       if (changed.changes !== 1) throw reject()
-      database.prepare('UPDATE household_arrangement_transitions SET state = \'committed\', committed_at = ?, archive = ?, committed_hash = ?, processing = ? WHERE id = ?')
-        .run(now, archive, committedArrangementDigest(database, session.householdId), JSON.stringify(processing), current.id)
+      database.prepare('UPDATE household_arrangement_transitions SET state = \'committed\', committed_at = ?, archive = ?, committed_hash = ?, processing = ?, context = ? WHERE id = ?')
+        .run(now, archive, committedArrangementDigest(database, session.householdId), JSON.stringify(processing), JSON.stringify(context), current.id)
       const saved = this.row(current.id)
       if (!saved) throw reject()
       const finalController = this.assertCurrent(request)

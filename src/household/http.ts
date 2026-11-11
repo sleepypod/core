@@ -11,6 +11,7 @@ import type { PersonalRuntime } from './personalRuntime'
 import type { PersonalRoutineService } from './personalRoutines'
 import type { ArrangementReviewService } from './arrangementReviews'
 import type { PersonalHistoryApi } from './historyApi'
+import type { PersonalLearningApi } from './learningApi'
 import type { ArrangementCoordinator } from './arrangementCoordinator'
 const MAX_BODY_BYTES = 128 * 1024
 const privacyHeaders = { 'Cache-Control': 'private, no-store', 'Vary': 'Authorization, Cookie', 'X-Content-Type-Options': 'nosniff' }
@@ -48,6 +49,7 @@ export interface HouseholdHttpDependencies {
   personalRoutines?: PersonalRoutineService
   arrangementReviews?: ArrangementReviewService
   personalHistory?: PersonalHistoryApi
+  personalLearning?: PersonalLearningApi
   arrangementCoordinator?: ArrangementCoordinator
 }
 /** This namespace authorizes every route itself; personal credentials never enter legacy APIs. */
@@ -57,7 +59,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const current = dependencies.personalRuntime?.session(session) ?? session
     const routines = dependencies.personalRoutines?.present(current) ?? current
     const arrangement = dependencies.arrangementReviews?.present(routines) ?? routines
-    return dependencies.personalHistory?.present(arrangement) ?? arrangement
+    const history = dependencies.personalHistory?.present(arrangement) ?? arrangement
+    return dependencies.personalLearning?.present(history) ?? history
   }
   const url = new URL(request.url)
   const path = url.pathname.replace(/\/$/, '')
@@ -139,6 +142,9 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     if (dependencies.personalHistory && ['GET', 'HEAD'].includes(method)
       && (path === '/api/v1/me/sleep' || /^\/api\/v1\/me\/sleep\/[^/]+$/.test(path)))
       return dependencies.personalHistory.response(request, credential, assertRequestCurrent)
+    if (dependencies.personalLearning && ['GET', 'HEAD'].includes(method)
+      && /^\/api\/v1\/me\/learning\/(archives|records(?:\/[^/]+)?)$/.test(path))
+      return dependencies.personalLearning.response(request, credential, assertRequestCurrent)
     if (dependencies.arrangementCoordinator) {
       const coordinator = dependencies.arrangementCoordinator
       if (path === '/api/v1/household/transition' && method === 'GET')

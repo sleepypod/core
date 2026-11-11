@@ -11,6 +11,7 @@ import type { ControllerGeneration } from '@/src/server/controllerGeneration'
 import { ArrangementReviewService } from '../arrangementReviews'
 import { ArrangementTransitionStore } from '../arrangementTransition'
 import { ArrangementRecoveryStore } from '../arrangementRecovery'
+import { committedArrangementDigest } from '../arrangementTransitionState'
 import { PersonHistoryStore } from '../personHistory'
 import { historySourceFixture } from './historySourceFixture'
 import { personalRuntimeFixture } from './runtimeFixture'
@@ -103,6 +104,35 @@ afterEach(() => {
 })
 
 describe('attended arrangement recovery storage', () => {
+  it('recovers a receipt committed before learning archives without rewriting its historical evidence', () => {
+    const saved = fixture.database.prepare('SELECT context FROM household_arrangement_transitions').get() as { context: string }
+    const legacyContext = JSON.parse(saved.context)
+    delete legacyContext.learningArchiveVersion
+    fixture.database.prepare('DELETE FROM household_learning_archives WHERE operation_id = ?').run(activation.requestId)
+    fixture.database.prepare('UPDATE household_arrangement_transitions SET context = ?, committed_hash = ? WHERE id = ?')
+      .run(JSON.stringify(legacyContext), committedArrangementDigest(fixture.database, fixture.owner.householdId, 'legacy'), activation.requestId)
+    expect(recovery.recover(fixture.ownerKey, request)).toMatchObject({ state: 'completed', hardware: 'admission_released' })
+    expect(fixture.database.prepare('SELECT count(*) AS count FROM household_learning_archives').get()).toEqual({ count: 0 })
+  })
+
+  it.each(['version_only', 'version_and_archive'])('does not downgrade a new committed receipt when %s is missing', (change) => {
+    const saved = fixture.database.prepare('SELECT context FROM household_arrangement_transitions').get() as { context: string }
+    const changedContext = JSON.parse(saved.context)
+    delete changedContext.learningArchiveVersion
+    fixture.database.prepare('UPDATE household_arrangement_transitions SET context = ?').run(JSON.stringify(changedContext))
+    if (change === 'version_and_archive') fixture.database.prepare('DELETE FROM household_learning_archives').run()
+    expect(() => recovery.recover(fixture.ownerKey, request)).toThrow()
+    held()
+  })
+
+  it.each(['missing_archive', 'changed_count', 'changed_owner'])('keeps hardware held when learning preservation has %s', (failure) => {
+    if (failure === 'missing_archive') fixture.database.prepare('DELETE FROM household_learning_archives WHERE operation_id = ?').run(activation.requestId)
+    if (failure === 'changed_count') fixture.database.prepare('UPDATE household_learning_archives SET record_count = record_count + 1 WHERE operation_id = ?').run(activation.requestId)
+    if (failure === 'changed_owner') fixture.database.prepare('UPDATE household_learning_archives SET account_id = ? WHERE operation_id = ?').run(fixture.member.accountId, activation.requestId)
+    expect(() => recovery.recover(fixture.ownerKey, request)).toThrow()
+    held()
+  })
+
   it('commits separate attribution, a private recovery record and open admission together, surviving database reopen', () => {
     const receipt = recovery.recover(fixture.ownerKey, request)
     expect(receipt).toMatchObject({ operationId: activation.requestId, state: 'completed', admissionRevision: 3,

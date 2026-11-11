@@ -10,6 +10,7 @@ import { defaultComfortState } from '@/src/comfort/policy'
 import { comfortStateSchema } from '@/src/comfort/contract'
 import type { ApprovedArrangementSnapshot } from './arrangementReviews'
 import { HouseholdError } from './store'
+import { arrangementLearningDigests } from './learningArchive'
 
 export const arrangementDigest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const reject = () => new HouseholdError('not_ready', 409, 'The saved arrangement settings need review before changing sides.')
@@ -82,7 +83,7 @@ export function resetArrangementControls(database: Database.Database, plan: Appr
 }
 
 /** Stable committed fingerprint for a later recovery coordinator; no timestamps from live sensor polling. */
-export function committedArrangementDigest(database: Database.Database, householdId: string) {
+export function committedArrangementDigest(database: Database.Database, householdId: string, format: 'learning_v1' | 'legacy' = 'learning_v1') {
   const store = drizzle(database, { schema })
   return arrangementDigest({
     household: database.prepare('SELECT * FROM households WHERE id = ?').get(householdId),
@@ -91,5 +92,6 @@ export function committedArrangementDigest(database: Database.Database, househol
     policy: arrangementPolicyDigest(database), controlState: readArrangementArchive(database),
     personalSettings: database.prepare('SELECT settings.* FROM household_personal_settings settings JOIN household_accounts account ON account.id = settings.account_id WHERE account.household_id = ? ORDER BY settings.account_id').all(householdId),
     epochs: database.prepare('SELECT * FROM household_attribution_epochs WHERE household_id = ? ORDER BY starts_at, id').all(householdId),
+    ...(format === 'learning_v1' ? { learning: arrangementLearningDigests(database, householdId) } : {}),
   })
 }

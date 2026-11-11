@@ -127,8 +127,10 @@ export class ArrangementRecoveryStore {
       if (!row || row.state !== 'committed' || row.recovery !== null) throw reject()
       const initial = this.current(credential, row, request)
       const binding = this.dependencies.historySource.verify(row.household_id, initial.context.history.datasetId)
+      // Older committed receipts predate preservation. Never infer that format from a missing archive.
+      const digestFormat = initial.context.learningArchiveVersion === 1 ? 'learning_v1' : 'legacy'
       if (arrangementDigest(binding) !== initial.context.history.bindingHash
-        || committedArrangementDigest(this.dependencies.database, row.household_id) !== row.committed_hash) throw reject()
+        || committedArrangementDigest(this.dependencies.database, row.household_id, digestFormat) !== row.committed_hash) throw reject()
       const assignments = this.approvedAssignments(row)
       if (row.processing === null) throw reject()
       const intent = arrangementProcessingSchema.parse(JSON.parse(row.processing))

@@ -16,6 +16,7 @@ export const arrangementHistoryContextSchema = z.object({
 }).strict()
 export const arrangementTransitionContextSchema = z.object({
   policy: digest, history: arrangementHistoryContextSchema, controller: controllerGenerationSchema,
+  learningArchiveVersion: z.literal(1).optional(),
 }).strict()
 const rowSchema = z.object({
   id: householdIdSchema, household_id: householdIdSchema, review_id: householdIdSchema,

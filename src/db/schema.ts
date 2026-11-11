@@ -884,6 +884,39 @@ export const householdArrangementRestarts = sqliteTable('household_arrangement_r
   receipt: text('receipt').notNull(),
 })
 
+// Custody of legacy learning stays with its original operator; it is not a training attribution.
+export const householdLearningArchives = sqliteTable('household_learning_archives', {
+  operationId: text('operation_id').primaryKey().references(() => householdArrangementTransitions.id),
+  householdId: text('household_id').notNull().references(() => households.id),
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  sleeperId: text('sleeper_id').notNull(),
+  datasetId: text('dataset_id').notNull(),
+  epochId: text('epoch_id').notNull(),
+  capturedAt: integer('captured_at').notNull(),
+  binding: text('binding').notNull(),
+  sourceSchemas: text('source_schemas').notNull(),
+  recordCount: integer('record_count').notNull(),
+  payloadBytes: integer('payload_bytes').notNull(),
+  contentHash: text('content_hash').notNull(),
+}, table => [index('idx_household_learning_owner').on(table.householdId, table.accountId, table.capturedAt)])
+
+// Payloads are copied without parsing model JSON or retargeting their physical sensor side.
+export const householdLearningRecords = sqliteTable('household_learning_records', {
+  id: text('id').primaryKey(),
+  operationId: text('operation_id').notNull().references(() => householdLearningArchives.operationId),
+  ordinal: integer('ordinal').notNull(),
+  sourceTable: text('source_table').notNull(),
+  sourceKey: text('source_key').notNull(),
+  sourceSide: text('source_side').notNull(),
+  kind: text('kind').notNull(),
+  payload: text('payload'),
+  payloadBytes: integer('payload_bytes').notNull(),
+  payloadHash: text('payload_hash').notNull(),
+  recordHash: text('record_hash').notNull(),
+  redaction: text('redaction'),
+}, table => [uniqueIndex('uq_household_learning_order').on(table.operationId, table.ordinal),
+  uniqueIndex('uq_household_learning_source').on(table.operationId, table.sourceTable, table.sourceKey)])
+
 // Persist the latest browser identity independently of response arrival order.
 // Only hashes are retained; this table cannot recreate a browser credential.
 export const householdBrowserScopes = sqliteTable('household_browser_scopes', {

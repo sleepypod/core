@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as schema from '@/src/db/schema'
 import { installHardwareAdmission, beginHardwareWrite, captureHardwareIntent, waitForHardwareDrain } from '@/src/hardware/admission'
 import { HardwareAdmissionStore } from '@/src/hardware/admissionStore'
@@ -16,6 +16,13 @@ import { ArrangementReviewService } from '../arrangementReviews'
 import { ArrangementTransitionStore } from '../arrangementTransition'
 import { PersonHistoryStore } from '../personHistory'
 import { committedArrangementDigest } from '../arrangementTransitionState'
+import { verifyLearningArchive } from '../learningArchive'
+import { learningArchiveLimits } from '../learningArchiveContract'
+import { PersonalLearningLibrary } from '../learningLibrary'
+import { PersonalLearningApi } from '../learningApi'
+import { householdHttp } from '../http'
+import { issuePersonalSession, PERSONAL_COOKIE } from '../browserSession'
+import { bindBrowserScope, browserScopeRevision } from '@/src/auth/browserScope'
 import { historySourceFixture } from './historySourceFixture'
 import { personalRuntimeFixture } from './runtimeFixture'
 import type { ArrangementObservation, ArrangementTransitionRequest } from '../arrangementTransitionContract'
@@ -36,7 +43,8 @@ const context = (key = fixture.ownerKey) => {
 const state = () => ['hardware_admission', 'households', 'household_accounts', 'side_settings', 'device_settings', 'household_personal_settings',
   'bedtime_routines', 'power_schedules', 'temperature_schedules', 'alarm_schedules', 'temperature_limits', 'comfort_states',
   'household_arrangement_reviews', 'household_arrangement_transitions', 'household_attribution_epochs', 'household_history_state',
-  'biometric_profile_bindings', 'biometric_profile_revisions', 'biometric_activation_events', 'biometric_config_outbox']
+  'biometric_profile_bindings', 'biometric_profile_revisions', 'biometric_activation_events', 'biometric_config_outbox',
+  'household_learning_archives', 'household_learning_records']
   .map(table => fixture.database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
 const generation = () => ({ version: 1, invocationId: 'a'.repeat(32), bootId: runId, pid: 1234, startTicks: '1000', observedAt: fixture.clock.now })
 const makeStore = (runtimeId = runId, controllerGeneration: () => unknown = generation) => new ArrangementTransitionStore({ database: fixture.database, identities: fixture.identities,
@@ -87,9 +95,216 @@ afterEach(() => {
   source?.biometrics.close()
   fixture?.database.close()
   rmSync(folder, { recursive: true, force: true })
+  vi.unstubAllEnvs()
 })
 
 describe('atomic reviewed arrangement storage', () => {
+  const serveLearning = (incoming: Request, enabled = () => true) => householdHttp(incoming,
+    { store: fixture.identities, verifySoloConfiguration: () => true,
+      personalLearning: new PersonalLearningApi({ identities: fixture.identities,
+        library: new PersonalLearningLibrary(fixture.database, fixture.identities), enabled, now: () => fixture.clock.now }) })
+  const learningRequest = (route: string, key = fixture.ownerKey, enabled = () => true, signal?: AbortSignal) => serveLearning(
+    new Request(`http://pod.local/api/v1/me/learning/${route}`, { headers: { authorization: `Bearer ${key}` }, signal }), enabled)
+
+  it('preserves learning when committing an older held operation', () => {
+    transition.begin(fixture.ownerKey, request)
+    const saved = fixture.database.prepare('SELECT context FROM household_arrangement_transitions').get() as { context: string }
+    const legacyContext = JSON.parse(saved.context)
+    delete legacyContext.learningArchiveVersion
+    fixture.database.prepare('UPDATE household_arrangement_transitions SET context = ?').run(JSON.stringify(legacyContext))
+    transition.commit(fixture.ownerKey, request)
+    expect(verifyLearningArchive(fixture.database, request.requestId).recordCount).toBeGreaterThan(0)
+    const committed = fixture.database.prepare('SELECT context FROM household_arrangement_transitions').get() as { context: string }
+    expect(JSON.parse(committed.context).learningArchiveVersion).toBe(1)
+  })
+
+  it('requires the selected sleeper on browser reads and withdraws a response when that browser changes accounts', async () => {
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    vi.stubEnv('DATABASE_URL', path.join(folder, 'configuration.db'))
+    vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', randomUUID() + randomUUID())
+    const issued = issuePersonalSession(fixture.identities.deviceIdentity(fixture.ownerKey))
+    const url = 'http://pod.local/api/v1/me/learning/archives'
+    const scope = bindBrowserScope(new Request(url), 'personal', issued).split(';')[0]
+    const cookie = `${PERSONAL_COOKIE}=${issued}; ${scope}`
+    const incoming = (sleeperId?: string) => new Request(url, { headers: {
+      cookie, ...(sleeperId ? { 'x-sleepypod-sleeper-id': sleeperId } : {}),
+    } })
+    expect((await serveLearning(incoming())).status).toBe(409)
+    expect((await serveLearning(incoming(fixture.member.selfSleeperId))).status).toBe(409)
+    const response = await serveLearning(incoming(fixture.owner.selfSleeperId))
+    expect(response.status).toBe(200)
+    const member = issuePersonalSession(fixture.identities.deviceIdentity(fixture.memberKey))
+    const switching = incoming(fixture.owner.selfSleeperId)
+    switching.headers.set('x-sleepypod-browser-revision', browserScopeRevision(switching.headers) ?? '')
+    bindBrowserScope(switching, 'personal', member)
+    await expect(response.text()).rejects.toThrow('before delivery')
+  })
+
+  it('serves preserved learning only to its original account after sides change', async () => {
+    fixture.database.prepare('INSERT INTO journal_entries (side, local_date, revision, record) VALUES (?, ?, ?, ?)')
+      .run('left', '2026-10-30', randomUUID(), JSON.stringify({ note: 'Only the original owner can read this' }))
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    const ownResponse = await learningRequest('archives')
+    expect(ownResponse.status).toBe(200)
+    expect(ownResponse.headers.get('cache-control')).toBe('private, no-store')
+    const owner = await ownResponse.json()
+    expect(owner.scope).toMatchObject({ accountId: fixture.owner.accountId, sleeperId: fixture.owner.selfSleeperId, assignmentRevision: 2 })
+    expect(owner.archives).toMatchObject([{ archiveId: request.requestId, sourceSide: 'left', activation: 'historical_only' }])
+    const member = await (await learningRequest('archives', fixture.memberKey)).json()
+    expect(member.archives).toEqual([])
+    expect(member.nextCursor).toBeNull()
+    const first = await (await learningRequest(`records?archiveId=${request.requestId}&limit=1`)).json()
+    expect(first.records).toHaveLength(1)
+    expect(first.nextOrdinal).toBe(1)
+    expect(JSON.stringify(first)).not.toContain('Only the original owner')
+    const second = await (await learningRequest(`records?archiveId=${request.requestId}&after=${first.nextOrdinal}&limit=1`)).json()
+    expect(second.records[0].recordId).not.toBe(first.records[0].recordId)
+    const record = fixture.database.prepare('SELECT id FROM household_learning_records WHERE source_table = \'journal_entries\'').get() as { id: string }
+    const detail = await (await learningRequest(`records/${record.id}`)).json()
+    expect(detail.payload).toContain('Only the original owner')
+    expect(detail).toMatchObject({ sourceSide: 'left', attribution: 'operator_custody_unreviewed', activation: 'historical_only' })
+    for (const route of [`records?archiveId=${request.requestId}`, `records/${record.id}`, `archives?before=${request.requestId}`]) {
+      const denied = await learningRequest(route, fixture.memberKey)
+      expect(denied.status).toBe(404)
+      expect(await denied.text()).not.toContain('Only the original owner')
+    }
+  })
+
+  it.each(['limit=0', 'limit=51', 'limit=1&limit=2', 'limit=01', 'limit=1e1', 'side=left', 'accountId=guess', '__proto__=anything', 'constructor=anything'])('rejects ambiguous or unsafe library query %s', async (query) => {
+    expect((await learningRequest(`archives?${query}`)).status).toBe(400)
+  })
+
+  it.each([-1, 0, 51, Infinity, NaN, 1.5])('bounds private library reads even without the HTTP adapter: %s', (limit) => {
+    const library = new PersonalLearningLibrary(fixture.database, fixture.identities)
+    expect(() => library.archives(fixture.ownerKey, null, limit)).toThrow()
+    expect(() => library.records(fixture.ownerKey, request.requestId, 0, limit)).toThrow()
+  })
+
+  it.each([-1, 100_001, Infinity, NaN, 1.5])('rejects an invalid direct record cursor %s', (after) => {
+    expect(() => new PersonalLearningLibrary(fixture.database, fixture.identities).records(fixture.ownerKey, request.requestId, after, 20)).toThrow()
+  })
+
+  it('withholds corrupt stored metadata instead of returning a successful library page', async () => {
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    fixture.database.exec('UPDATE household_learning_records SET kind = \'physical\' WHERE source_table = \'comfort_states\'')
+    const response = await learningRequest(`records?archiveId=${request.requestId}`)
+    expect(response.status).toBe(503)
+    expect(await response.text()).not.toContain('offsetF')
+  })
+
+  it.each(['revocation', 'account', 'assignment', 'disabled', 'changed_payload', 'abort'])('withdraws buffered private model output after %s', async (kind) => {
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    const record = fixture.database.prepare('SELECT id FROM household_learning_records LIMIT 1').get() as { id: string }
+    let available = true
+    const abort = new AbortController()
+    const response = await learningRequest(`records/${record.id}`, fixture.ownerKey, () => available, abort.signal)
+    expect(response.status).toBe(200)
+    if (kind === 'revocation') fixture.database.prepare('UPDATE household_devices SET revoked_at = ? WHERE account_id = ?')
+      .run(fixture.clock.now, fixture.owner.accountId)
+    if (kind === 'disabled') available = false
+    if (kind === 'account') fixture.database.prepare('UPDATE household_accounts SET state = \'revoked\' WHERE id = ?').run(fixture.owner.accountId)
+    if (kind === 'assignment') fixture.database.prepare('UPDATE households SET assignment_revision = assignment_revision + 1').run()
+    if (kind === 'abort') abort.abort()
+    if (kind === 'changed_payload') fixture.database.prepare('UPDATE household_learning_records SET payload = \'{}\' WHERE id = ?').run(record.id)
+    await expect(response.text()).rejects.toThrow('Private learning access or records changed before delivery')
+  })
+
+  it('preserves original learning custody and physical provenance before clearing selected models', () => {
+    fixture.database.prepare('INSERT INTO journal_entries (side, local_date, revision, record) VALUES (?, ?, ?, ?)')
+      .run('left', '2026-10-30', randomUUID(), JSON.stringify({ note: 'Original private night', warmth: 'warm' }))
+    fixture.database.prepare('INSERT INTO side_stage_models (side, model, version, model_hash, uploaded_at, active) VALUES (?, ?, ?, ?, ?, 1)')
+      .run('left', JSON.stringify({ trainingSide: 'left', datasetHash: 'original-dataset' }), 'original-version', 'a'.repeat(64), 100)
+    fixture.database.prepare('INSERT INTO target_response_models (id, side, created_at, record) VALUES (?, ?, ?, ?)')
+      .run(randomUUID(), 'right', 200, JSON.stringify({ calibration: 'original-right-calibration' }))
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    const archive = verifyLearningArchive(fixture.database, request.requestId)
+    expect(archive.binding).toMatchObject({ accountId: fixture.owner.accountId, sleeperId: fixture.owner.selfSleeperId,
+      datasetId: source.identity.datasetId, sourceSide: 'left', attribution: 'operator_custody_unreviewed', activation: 'historical_only' })
+    const rows = fixture.database.prepare('SELECT source_table, source_side, kind, payload FROM household_learning_records ORDER BY ordinal').all()
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_table: 'side_stage_models', source_side: 'left', kind: 'processing', payload: expect.stringContaining('original-dataset') }),
+      expect.objectContaining({ source_table: 'target_response_models', source_side: 'right', kind: 'physical', payload: expect.stringContaining('original-right-calibration') }),
+      expect.objectContaining({ source_table: 'journal_entries', source_side: 'left', kind: 'personal', payload: expect.stringContaining('Original private night') }),
+      expect.objectContaining({ source_table: 'comfort_states', payload: expect.stringContaining('offsetF') }),
+    ]))
+    expect(JSON.stringify(rows)).not.toContain(fixture.ownerKey)
+    expect(JSON.stringify(rows)).not.toContain(fixture.memberKey)
+    expect(fixture.database.prepare('SELECT active FROM side_stage_models').get()).toEqual({ active: 0 })
+    expect(fixture.database.prepare('SELECT account_id FROM household_learning_archives').all()).toEqual([{ account_id: fixture.owner.accountId }])
+    expect(JSON.stringify(transition.readReceipt(fixture.ownerKey, request))).not.toContain('Original private night')
+    const reopened = new Database(path.join(folder, 'configuration.db'))
+    try {
+      expect(verifyLearningArchive(reopened, request.requestId)).toEqual(archive)
+    }
+    finally {
+      reopened.close()
+    }
+  })
+
+  it('keeps SQLite integer source IDs exact and does not copy later feedback on request replay', () => {
+    fixture.database.exec('INSERT INTO comfort_feedback (id, side, local_date, comfort, recorded_at) VALUES (9007199254740993, \'left\', \'2026-10-30\', \'warm\', 100)')
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    const before = verifyLearningArchive(fixture.database, request.requestId)
+    const feedback = fixture.database.prepare('SELECT source_key, payload FROM household_learning_records WHERE source_table = \'comfort_feedback\'').get() as { source_key: string, payload: string }
+    expect(feedback.source_key).toBe('[9007199254740993]')
+    expect(feedback.payload).toContain('"id":9007199254740993')
+    fixture.database.prepare('INSERT INTO comfort_feedback (side, local_date, comfort, recorded_at) VALUES (?, ?, ?, ?)').run('right', '2026-11-01', 'cold', 200)
+    const replay = transition.commit(fixture.ownerKey, request)
+    expect(replay.state).toBe('committed')
+    expect(verifyLearningArchive(fixture.database, request.requestId)).toEqual(before)
+  })
+
+  it('keeps a deleted journal revision without recreating its note', () => {
+    fixture.database.prepare('INSERT INTO journal_entries (side, local_date, revision, record) VALUES (?, ?, ?, NULL)')
+      .run('left', '2026-10-30', randomUUID())
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    const archived = fixture.database.prepare('SELECT payload FROM household_learning_records WHERE source_table = \'journal_entries\'').get() as { payload: string }
+    expect(JSON.parse(archived.payload)).toMatchObject({ record: null })
+    expect(verifyLearningArchive(fixture.database, request.requestId).recordCount).toBeGreaterThan(0)
+  })
+
+  it('leaves the original records and hold intact if one payload exceeds the preservation limit', () => {
+    fixture.database.prepare('INSERT INTO journal_entries (side, local_date, revision, record) VALUES (\'left\', \'2026-10-30\', ?, printf(\'%.*c\', ?, \'x\'))')
+      .run(randomUUID(), learningArchiveLimits.recordBytes + 1)
+    transition.begin(fixture.ownerKey, request)
+    const before = state()
+    expect(() => transition.commit(fixture.ownerKey, request)).toThrow('exceeds the archive limit')
+    expect(state()).toEqual(before)
+    expect(admission.read().holdId).toBe(request.requestId)
+    expect(fixture.database.prepare('SELECT length(record) AS length FROM journal_entries').get())
+      .toEqual({ length: learningArchiveLimits.recordBytes + 1 })
+  })
+
+  it('rolls back partial archive inserts together with the arrangement after a storage failure', () => {
+    fixture.database.prepare('INSERT INTO comfort_feedback (side, local_date, comfort, recorded_at) VALUES (?, ?, ?, ?)')
+      .run('left', '2026-10-30', 'warm', 100)
+    transition.begin(fixture.ownerKey, request)
+    const before = state()
+    fixture.database.exec('CREATE TRIGGER fail_archive BEFORE INSERT ON household_learning_records WHEN NEW.ordinal = 2 BEGIN SELECT RAISE(ABORT, \'archive_disk_failure\'); END')
+    expect(() => transition.commit(fixture.ownerKey, request)).toThrow('archive_disk_failure')
+    expect(state()).toEqual(before)
+    expect(fixture.identities.session(fixture.ownerKey).self.assignment).toBe('solo')
+  })
+
+  it.each(['payload', 'custody', 'missing_record', 'ordinal'])('detects %s corruption in preserved learning', (kind) => {
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    if (kind === 'payload') fixture.database.exec('UPDATE household_learning_records SET payload = \'{}\' WHERE ordinal = 1')
+    if (kind === 'custody') fixture.database.prepare('UPDATE household_learning_archives SET account_id = ?').run(fixture.member.accountId)
+    if (kind === 'missing_record') fixture.database.exec('DELETE FROM household_learning_records WHERE ordinal = 1')
+    if (kind === 'ordinal') fixture.database.exec('UPDATE household_learning_records SET ordinal = ordinal + 100')
+    expect(() => verifyLearningArchive(fixture.database, request.requestId)).toThrow()
+    expect(() => committedArrangementDigest(fixture.database, fixture.owner.householdId)).toThrow()
+    expect(admission.read().holdId).toBe(request.requestId)
+  })
+
   it.each(['missing', 'stale', 'future'])('requires %s controller proof to be corrected before holding', (problem) => {
     const controller = generation()
     if (problem === 'stale') controller.observedAt -= 5001
