@@ -27,7 +27,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 02 | Useful offline app | Encrypted identity-scoped records, reports and confirmed schedules; timestamps; account-switch/revocation tests; offline phone/iPad walkthrough | In progress: owner offline library |
 | 03 | Tonight main screen | Bed, temperature, next wake and actual control mode; morning brief; accessible web/native layouts | Web source validated; native implementation and release checks in progress |
 | 04 | Overnight comfort envelope | Persisted narrow overnight range, explicit wake exception start, arbitration/override/DST tests and live acknowledged policy | In progress: shared automatic range and explicit wake exception |
-| 05 | Recording health | Freshness, dropout, storage and processing checks; actionable messages; failed-source fixtures and live verification | In progress: authenticated read-only checks and web cards |
+| 05 | Recording health | Freshness, dropout, storage and processing checks; actionable messages; failed-source fixtures and live verification | Read-only checks shipped in source; completed-interval interruption review in validation; live qualification pending |
 | 06 | Watch recording assistant | Import receipt, coverage and uncertainty-aware troubleshooting; foreground/background tests with actual Watch history | Native implementation tested; hosted checks and actual Watch delivery pending |
 | 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Core PR 86 merged; native PR 62 tested locally and awaiting hosted checks |
 | 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Pending |
@@ -35,7 +35,7 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
 | 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Pending |
 | 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Pending |
-| 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Read-only Core/web implementation tested; native timeline and live release in progress |
+| 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 passed all hosted checks and merged; native timeline and live release in progress |
 | 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Source implementation and tests in progress; physical alarm and accessories remain unqualified |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Pending |
 | 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Pending |
@@ -110,4 +110,6 @@ No synthetic data or ordinary successful wake replaces a missing qualification.
 - **13 — overnight explanations:** [source semantics and validation](NIGHT_EXPLANATION.md)
   records read-only source boundaries, DST windows, gap-preserving charts,
   controller/Preview distinctions and cached room clocks. Native parity and
-  actual overnight verification are in progress.
+  actual overnight verification are in progress. Core PR 91 merged as `01643599`
+  after 8,977 unit tests (19 skips), hosted browser checks, typecheck, lint and
+  builds passed. Its merged tree matches the tested source tree exactly.

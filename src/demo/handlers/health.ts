@@ -5,6 +5,7 @@ import { getDemoDeviceStatus } from './device'
 import { DEMO_UPTIME_START } from './system'
 import { evaluateRecordingHealth } from '@/src/recording-health/evaluate'
 import { evaluateBedCare } from '@/src/bed-care/evaluate'
+import { assessPresenceBreaks } from '@/src/recording-health/fragmentation'
 
 type Side = 'left' | 'right'
 type ThermalHistory = RouterOutputs['health']['thermalHistory']
@@ -298,16 +299,24 @@ function history(): History {
   }
 }
 
+function recordingExample() {
+  const path = dataPath(), monitoringHistory = history()
+  const now = Date.now(), end = Math.floor(now / 1000) - 3600, start = end - 8 * 3600
+  const presenceBreaks = assessPresenceBreaks(SIDES.map(side => ({ side, start, end,
+    present: JSON.stringify([[start, end]]), absent: '[]' })), now)
+  return evaluateRecordingHealth({ now, path, history: monitoringHistory, presenceBreaks,
+    storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true })
+}
+
 export const health: DemoHandlers<'health'> = {
   care: () => {
+    const recording = recordingExample()
     const now = Date.now()
     return evaluateBedCare({ now, hardware: { at: now, water: 'ok', priming: false }, blockedSides: [], protectionEnabled: true,
-      recording: evaluateRecordingHealth({ now, path: dataPath(), history: history(),
-        storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true }),
+      recording,
       lastExportAt: now - DAY })
   },
-  recording: () => evaluateRecordingHealth({ now: Date.now(), path: dataPath(), history: history(),
-    storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true }),
+  recording: recordingExample,
   performance: () => {
     const rand = seededRandom(hashSeed(`perf:${Math.floor(Date.now() / 10_000)}`))
     return {

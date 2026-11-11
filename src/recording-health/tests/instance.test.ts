@@ -3,11 +3,12 @@ import type { RecordingHealth } from '../contract'
 import type * as Filesystem from 'node:fs/promises'
 
 const mocks = vi.hoisted(() => ({
-  get: vi.fn(), prepare: vi.fn(), path: vi.fn(), history: vi.fn(), statfs: vi.fn(),
+  get: vi.fn(), prepare: vi.fn(), path: vi.fn(), history: vi.fn(), statfs: vi.fn(), breaks: vi.fn(),
 }))
 vi.mock('@/src/db', () => ({ biometricsDb: { $client: { name: '/recordings/biometrics.db', prepare: mocks.prepare } } }))
 vi.mock('@/src/lib/dataPathCollect', () => ({ getObservedDataPath: mocks.path }))
 vi.mock('@/src/lib/healthHistory', () => ({ readHistory: mocks.history }))
+vi.mock('../fragmentation-read', () => ({ readPresenceBreaks: mocks.breaks }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof Filesystem>()
   return { ...actual, statfs: mocks.statfs, default: { ...actual, statfs: mocks.statfs } }
@@ -23,6 +24,7 @@ beforeEach(() => {
   mocks.prepare.mockReturnValue({ get: mocks.get })
   mocks.path.mockResolvedValue(null)
   mocks.history.mockReturnValue(null)
+  mocks.breaks.mockReturnValue({ observedAt: Date.now(), status: 'unavailable', sides: [] })
   mocks.statfs.mockResolvedValue({ bavail: 500_000, blocks: 2_000_000, bsize: 4096 })
 })
 afterEach(() => {
@@ -35,6 +37,7 @@ describe('recording health collection', () => {
     const report = await getRecordingHealth()
     expect(mocks.statfs).toHaveBeenCalledWith('/recordings/biometrics.db')
     expect(mocks.prepare).toHaveBeenCalledExactlyOnceWith('SELECT id FROM sleep_records LIMIT 1')
+    expect(mocks.breaks).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: '/recordings/biometrics.db' }), Date.now())
     expect(report.checks.find(check => check.id === 'recording-database')?.state).toBe('ok')
     expect(report.checks.find(check => check.id === 'storage')?.state).toBe('ok')
   })

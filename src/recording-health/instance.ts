@@ -4,6 +4,7 @@ import { getObservedDataPath } from '@/src/lib/dataPathCollect'
 import { readHistory, type HealthHistory } from '@/src/lib/healthHistory'
 import { evaluateRecordingHealth } from './evaluate'
 import type { RecordingHealth } from './contract'
+import { readPresenceBreaks } from './fragmentation-read'
 
 const globals = globalThis as typeof globalThis & {
   __sp_recordingHealth?: { saved?: RecordingHealth, pending?: Promise<RecordingHealth> }
@@ -48,5 +49,6 @@ async function collect(): Promise<RecordingHealth> {
       }
     : null
   return evaluateRecordingHealth({ now, storage, history, recordingDatabaseReadable,
+    presenceBreaks: readPresenceBreaks(database, now),
     path: path.status === 'fulfilled' ? path.value : null })
 }

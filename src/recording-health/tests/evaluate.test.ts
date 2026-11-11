@@ -3,6 +3,7 @@ import { NODES, type DataPathState } from '@/src/lib/dataPath'
 import type { HealthHistory } from '@/src/lib/healthHistory'
 import { evaluateRecordingHealth, MINIMUM_RECORDING_FREE_BYTES } from '../evaluate'
 import { recordingHealthSchema } from '../contract'
+import { assessPresenceBreaks } from '../fragmentation'
 
 const now = Date.UTC(2026, 10, 10, 22)
 function fixture() {
@@ -11,7 +12,9 @@ function fixture() {
     edges: [], verdict: { tone: 'ok', headline: 'Data flows', nodeId: null, lastGoodId: null, fix: null, also: [] } }
   const history: HealthHistory = { from: now - 24 * 3_600_000, to: now, recordedSince: now - 3_600_000,
     checks: [{ id: 'sensor-cap', label: 'Presence', runs: [], healthyShare: 1, incidents: 0 }], incidents: [], gaps: [] }
-  return { now, path, history, storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true }
+  const start = now / 1000 - 9 * 3600, end = now / 1000 - 3600
+  const presenceBreaks = assessPresenceBreaks([{ side: 'left', start, end, present: JSON.stringify([[start, end]]), absent: '[]' }], now)
+  return { now, path, history, presenceBreaks, storage: { availableBytes: 2 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }, recordingDatabaseReadable: true }
 }
 
 describe('recording readiness', () => {
@@ -103,5 +106,38 @@ describe('recording readiness', () => {
       input.history.to = timestamp
       expect(evaluateRecordingHealth(input).checks.at(-1)?.state).toBe('unknown')
     }
+  })
+
+  it('flags clustered explicit breaks even while the sensor stream remains healthy', () => {
+    const input = fixture()
+    input.presenceBreaks.sides[0].shortBreaks = 4
+    input.presenceBreaks.sides[0].mostInOneHour = 3
+    const result = recordingHealthSchema.parse(evaluateRecordingHealth(input))
+    expect(result.checks).toHaveLength(8)
+    expect(result.checks[0].state).toBe('ok')
+    expect(result.checks.at(-1)).toMatchObject({ state: 'attention', detail: expect.stringContaining('genuine exits and inconsistent sensing') })
+    expect(result.checks.at(-1)?.nextStep).toContain('changes neither')
+    expect(result.checks.at(-1)?.detail).toContain('solo-anywhere')
+  })
+
+  it.each([null, { ...fixture().presenceBreaks, status: 'unavailable' as const },
+    { ...fixture().presenceBreaks, status: 'partial' as const }, assessPresenceBreaks([], now)])('keeps incomplete interval review unknown (%j)', (presenceBreaks) => {
+    const result = evaluateRecordingHealth({ ...fixture(), presenceBreaks })
+    expect(result.checks.at(-1)?.state).toBe('unknown')
+    if (presenceBreaks?.status === 'partial') {
+      expect(result.checks.at(-1)?.detail).toContain('usable completed intervals')
+      expect(result.checks.at(-1)?.detail).toContain('Some interval evidence was excluded')
+    }
+    else { expect(result.checks.at(-1)?.detail).not.toContain('0 short reported breaks') }
+  })
+
+  it('withdraws expired or future interval analysis and expires at its original observation', () => {
+    const input = fixture()
+    for (const observedAt of [now - 60_001, now + 1]) {
+      input.presenceBreaks.observedAt = observedAt
+      expect(evaluateRecordingHealth(input).checks.at(-1)?.state).toBe('unknown')
+    }
+    input.presenceBreaks.observedAt = now - 20_000
+    expect(evaluateRecordingHealth(input).expiresAt).toBe(now + 40_000)
   })
 })

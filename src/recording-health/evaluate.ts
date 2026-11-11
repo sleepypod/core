@@ -1,6 +1,7 @@
 import type { DataPathState, NodeId } from '@/src/lib/dataPath'
 import type { HealthHistory } from '@/src/lib/healthHistory'
 import type { RecordingCheck, RecordingHealth } from './contract'
+import { PRESENCE_BREAK_REVIEW_COUNT, type PresenceBreakAssessment } from './fragmentation'
 
 export const RECORDING_CHECK_MAX_AGE_MS = 60_000
 export const MINIMUM_RECORDING_FREE_BYTES = 256 * 1024 * 1024
@@ -19,6 +20,7 @@ export function evaluateRecordingHealth(input: {
   history: HealthHistory | null
   storage: { availableBytes: number, totalBytes: number } | null
   recordingDatabaseReadable: boolean | null
+  presenceBreaks?: PresenceBreakAssessment | null
 }): RecordingHealth {
   const { now, path, history, storage } = input
   const current = path !== null && Number.isSafeInteger(path.at) && path.at <= now
@@ -66,15 +68,31 @@ export function evaluateRecordingHealth(input: {
   const repeated = disruptions >= 2
   const knownHistory = presence?.healthyShare != null && history?.recordedSince != null
     && Number.isSafeInteger(history.recordedSince) && history.recordedSince <= history.to && history.recordedSince >= history.from
+  const signalDetail = repeated
+    ? `${disruptions} presence-signal interruptions were recorded in the last 24 hours. Recording gaps may follow; this does not prove time awake or out of bed.`
+    : knownHistory
+      ? `${disruptions} presence-signal interruptions in the available monitoring history. Unmonitored time remains unknown.`
+      : 'Not enough monitoring history to assess repeated interruptions.'
+  const breaks = input.presenceBreaks
+  const breaksCurrent = breaks != null && Number.isSafeInteger(breaks.observedAt)
+    && breaks.observedAt <= now && breaks.observedAt >= now - RECORDING_CHECK_MAX_AGE_MS && breaks.status !== 'unavailable'
+  const assessed = breaksCurrent ? breaks.sides.filter(side => side.records > 0) : []
+  const clustered = assessed.some(side => side.mostInOneHour >= PRESENCE_BREAK_REVIEW_COUNT)
+  const breaksKnown = breaksCurrent && breaks.status === 'read' && assessed.length > 0
+  const breakDetail = !breaksCurrent
+    ? 'Completed-record presence review is unavailable.'
+    : assessed.length === 0
+      ? 'No usable completed presence intervals in the last 24 hours.'
+      : assessed.map(side => `${side.side === 'left' ? 'Left' : 'Right'} recording stream, usable completed intervals: ${side.shortBreaks} short reported breaks (30–120 seconds), up to ${side.mostInOneHour} in one hour.`).join(' ')
+  const clocks = [knownHistory || repeated ? history?.to : null, breaksCurrent ? breaks.observedAt : null]
+    .filter((clock): clock is number => clock != null)
   checks.push({ id: 'presence-history', title: 'Recent presence interruptions',
-    state: repeated ? 'attention' : knownHistory ? 'ok' : 'unknown',
-    detail: repeated
-      ? `${disruptions} presence-signal interruptions were recorded in the last 24 hours. Recording gaps may follow; this does not prove time awake or out of bed.`
-      : knownHistory
-        ? `${disruptions} presence-signal interruptions in the available monitoring history. Unmonitored time remains unknown.`
-        : 'Not enough monitoring history to assess repeated interruptions.',
-    nextStep: repeated ? 'Review System → Health history and compare its gaps with your actual time in bed.' : null,
-    observedAt: knownHistory || repeated ? history?.to ?? null : null })
+    state: repeated || clustered ? 'attention' : knownHistory && breaksKnown ? 'ok' : 'unknown',
+    detail: `${signalDetail} ${breakDetail}${breaksCurrent && breaks.status === 'partial' ? ' Some interval evidence was excluded or exceeded the review limit.' : ''}${clustered ? ' Repeated short breaks warrant review; genuine exits and inconsistent sensing can look alike.' : ''} Only completed records are reviewed; an unfinished night is not included. In solo-anywhere mode one recording stream can combine both zones. Reported presence is not measured sleep or uninterrupted sensor coverage.`,
+    nextStep: repeated || clustered
+      ? 'Compare the recording gaps with your actual time in bed in Sleep and System → Health history. If they disagree, inspect the cover connection and presence calibration; this check changes neither.'
+      : knownHistory && breaksKnown ? null : 'Check again after a completed night; use recording diagnostics if a source remains unavailable.',
+    observedAt: clocks.length ? Math.min(...clocks) : null })
 
   const state = checks.some(check => check.state === 'attention')
     ? 'attention'
