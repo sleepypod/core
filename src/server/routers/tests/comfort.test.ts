@@ -6,8 +6,11 @@ import { PreviewReportError } from '@/src/comfort/report-summary'
 const runtime = vi.hoisted(() => ({ status: vi.fn(), configure: vi.fn(), setMode: vi.fn(), feedback: vi.fn() }))
 const owner = vi.hoisted(() => ({ status: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), retest: vi.fn() }))
 const targetResponse = vi.hoisted(() => vi.fn())
+const responseModels = vi.hoisted(() => ({ status: vi.fn(), train: vi.fn() }))
+const responsePreview = vi.hoisted(() => vi.fn())
 const reports = vi.hoisted(() => ({ list: vi.fn(), detail: vi.fn(), review: vi.fn() }))
-vi.mock('@/src/comfort/instance', () => ({ getComfortRuntime: () => runtime, getPreviewReports: () => reports, getComfortOwner: () => owner, getTargetResponseAudit: targetResponse }))
+vi.mock('@/src/comfort/instance', () => ({ getComfortRuntime: () => runtime, getPreviewReports: () => reports, getComfortOwner: () => owner,
+  getTargetResponseAudit: targetResponse, getTargetResponseModels: () => responseModels, previewTargetResponse: responsePreview }))
 const { comfortRouter } = await import('../comfort')
 const caller = comfortRouter.createCaller({})
 
@@ -26,6 +29,32 @@ beforeEach(() => {
 })
 
 describe('personal comfort API contract', () => {
+  it('exposes inert response-model status and preserves explicit fit conflicts', async () => {
+    const status = { apiVersion: 1, side: 'left', generatedAt: 1, completeNights: 0, requiredNights: 20,
+      datasetHash: 'a'.repeat(64), canTrain: false, activationAvailable: false, reason: 'Collecting', model: null,
+      evidence: { apiVersion: 1, policy: 'acknowledged-small-step-v1', generatedAt: 1, side: 'left', attribution: 'physical_zone_only',
+        status: 'read', reviewedNights: 0, responseNights: 0, coolingWindows: 0, warmingWindows: 0, requiredNights: 20,
+        datasetHash: 'a'.repeat(64), modelAvailable: false, activationAvailable: false, exclusions: [], exclusionsTruncated: false, reason: 'Collecting' } }
+    responseModels.status.mockReturnValue(status)
+    expect(await caller.targetResponseModel({ side: 'left' })).toEqual(status)
+    responseModels.train.mockRejectedValue(new PreviewReportError('Recordings changed', 'CONFLICT'))
+    await expect(caller.trainTargetResponseModel({ side: 'left', expectedDatasetHash: status.datasetHash })).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(responseModels.train).toHaveBeenCalledWith('left', status.datasetHash)
+    await expect(caller.trainTargetResponseModel({ side: 'left', expectedDatasetHash: status.datasetHash, activate: true } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(caller.trainTargetResponseModel({ side: 'left', expectedDatasetHash: 'old' })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(responseModels.train).toHaveBeenCalledTimes(1)
+    expect(runtime.configure).not.toHaveBeenCalled()
+  })
+  it('reads response candidates only from the server and rejects caller-supplied measurements', async () => {
+    const result = { apiVersion: 1, side: 'right', generatedAt: 1, activationAvailable: false, candidates: [], reason: 'No fresh observations' }
+    responsePreview.mockReturnValue(result)
+    expect(await caller.targetResponsePreview({ side: 'right' })).toEqual(result)
+    await expect(caller.targetResponsePreview({ side: 'left', input: { waterF: 70 }, targetF: 69 } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(responsePreview).toHaveBeenCalledTimes(1)
+    expect(responsePreview).toHaveBeenCalledWith('right')
+    expect(runtime.status).not.toHaveBeenCalled()
+    expect(runtime.configure).not.toHaveBeenCalled()
+  })
   it('reads target response evidence without evaluating the controller and rejects extra input', async () => {
     const result = { apiVersion: 1, policy: 'acknowledged-small-step-v1', generatedAt: 1, side: 'right', attribution: 'physical_zone_only',
       status: 'read', reviewedNights: 0, responseNights: 0, coolingWindows: 0, warmingWindows: 0, requiredNights: 20,

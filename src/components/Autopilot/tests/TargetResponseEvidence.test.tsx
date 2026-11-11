@@ -4,10 +4,11 @@ import { TargetResponseEvidence } from '../TargetResponseEvidence'
 
 const mock = vi.hoisted(() => ({ now: 1_800_000_000_000, options: undefined as unknown,
   query: { data: undefined as unknown, error: null as unknown, dataUpdatedAt: 1_800_000_000_000, isFetching: false, refetch: vi.fn() } }))
-vi.mock('@/src/utils/trpc', () => ({ trpc: { comfort: { targetResponse: { useQuery: (_input: unknown, options: unknown) => {
+vi.mock('@/src/utils/trpc', () => ({ trpc: { comfort: { targetResponseModel: { useQuery: (_input: unknown, options: unknown) => {
   mock.options = options
   return mock.query
 } } } } }))
+vi.mock('../TargetResponseEvaluation', () => ({ TargetResponseEvaluation: () => null }))
 vi.mock('@/src/components/Schedule/CurveChart', () => ({ useNowMinute: () => mock.now / 60_000 }))
 afterEach(cleanup)
 beforeEach(() => {
@@ -16,6 +17,9 @@ beforeEach(() => {
     status: 'read', reviewedNights: 12, responseNights: 9, coolingWindows: 8, warmingWindows: 4, requiredNights: 20,
     datasetHash: 'a'.repeat(64), modelAvailable: false, activationAvailable: false,
     exclusions: [{ date: '2026-11-09', count: 2, reason: 'Water readings have a gap.' }], exclusionsTruncated: false, reason: 'Collecting' }
+  const evidence = mock.query.data
+  mock.query.data = { apiVersion: 1, side: 'left', generatedAt: mock.now, completeNights: 9, requiredNights: 20,
+    datasetHash: 'a'.repeat(64), canTrain: false, activationAvailable: false, reason: 'Collecting', model: null, evidence }
   mock.query.error = null
   mock.query.dataUpdatedAt = mock.now
   mock.query.isFetching = false
@@ -45,8 +49,8 @@ it.each(['error', 'fetching', 'expired', 'future', 'wrong-side', 'malformed', 'u
     if (failure === 'expired') mock.now += 300_001
     if (failure === 'future') data.generatedAt = mock.now + 60_001
     if (failure === 'wrong-side') data.side = 'right'
-    if (failure === 'malformed') data.modelAvailable = true
-    if (failure === 'unavailable') data.status = 'unavailable'
+    if (failure === 'malformed') data.activationAvailable = true
+    if (failure === 'unavailable') (data.evidence as Record<string, unknown>).status = 'unavailable'
     view.rerender(<TargetResponseEvidence side="left" />)
     expect(screen.queryByText('9 of 12')).toBeNull()
     if (failure === 'error') expect(screen.getByRole('alert').textContent).toContain('Reconnect')
@@ -54,10 +58,11 @@ it.each(['error', 'fetching', 'expired', 'future', 'wrong-side', 'malformed', 'u
   })
 
 it('labels limited reads and milestones without implying a passing predictive model', () => {
-  Object.assign(mock.query.data as object, { status: 'partial', responseNights: 20, reviewedNights: 25, exclusionsTruncated: true })
+  Object.assign((mock.query.data as { evidence: object }).evidence, { status: 'partial', responseNights: 20, reviewedNights: 25, exclusionsTruncated: true })
+  Object.assign(mock.query.data as object, { completeNights: 20 })
   render(<TargetResponseEvidence side="left" />)
   fireEvent.click(screen.getByRole('button', { name: 'Check recorded changes' }))
   expect(screen.getByText(/Some records could not be inspected/)).toBeTruthy()
-  expect(screen.getByText(/Model fitting, comparison and permission/)).toBeTruthy()
+  expect(screen.getByText(/A separate model evaluation/)).toBeTruthy()
   expect(screen.getByText(/first 300 exclusion summaries/)).toBeTruthy()
 })

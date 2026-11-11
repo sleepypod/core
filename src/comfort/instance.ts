@@ -34,10 +34,16 @@ import { thermalConfiguration } from './thermal-dataset'
 import { createThermalForecasts } from './thermal-forecast-store'
 import { readResponseAudit } from './response-audit'
 import { previousForecastInput } from './thermal-forecast-input'
+import { createResponseModels } from './response-model-store'
+import type { ForecastInput } from './thermal-forecast'
 
 /** Inspect retained evidence without starting the comfort runtime or sending hardware commands. */
 export function getTargetResponseAudit(side: Side) {
   return readResponseAudit(sqlite, biometricsDb.$client, side, Date.now())
+}
+
+export function getTargetResponseModels() {
+  return createResponseModels(sqlite, biometricsDb.$client)
 }
 
 export function getThermalModels() {
@@ -48,14 +54,18 @@ export function getThermalForecasts() {
   return createThermalForecasts(sqlite)
 }
 
-/** Read a guarded current observation and its actual five-minute predecessor; never send a command. */
-export function previewWaterForecast(side: Side) {
+/** Share the same guarded observation across unchanged-target and small-step research. */
+function readForecastObservation(side: Side): {
+  now: number
+  reason: string
+  observation: { input: ForecastInput, configuration: string, observedAt: number } | null
+} {
   const state = createComfortStore(sqlite).read(side), now = Date.now()
   const { context, timezone } = readComfortContext(side, state, now, false)
   const evidence = capturePreviewEvidence(state, context, context.window?.baselineF ?? null, timezone,
     '00000000-0000-4000-8000-000000000001', previewOrigin())
   const receipt = thermalObservation(state, context, evidence)
-  if (!evidence || !receipt || !context.thermalContext) return { predictions: [], reason: 'Waiting for fresh, occupied, quiet pre-alarm bed and room readings.' }
+  if (!evidence || !receipt || !context.thermalContext || context.device.observedAt === null) return { now, observation: null, reason: 'Waiting for fresh, occupied, quiet pre-alarm bed and room readings.' }
   const configuration = thermalConfiguration(evidence, receipt.bedroomConfiguration)
   const row = sqlite.prepare(`SELECT observed_at AS at, event FROM comfort_events WHERE side = ? AND observed_at >= ?
     AND observed_at <= ? AND json_extract(event, '$.thermalContext') IS NOT NULL ORDER BY observed_at DESC LIMIT 1`)
@@ -66,8 +76,28 @@ export function previewWaterForecast(side: Side) {
   }
   catch { /* A malformed source cannot provide a preceding measurement. */ }
   const input = previousForecastInput(previous, { at: now, session: evidence.session, configuration, context: context.thermalContext }, row?.at ?? null)
-  if (!input) return { predictions: [], reason: 'Waiting for an actual five-minute predecessor from this same quiet session and target.' }
-  return getThermalForecasts().preview(side, input, configuration)
+  if (!input) return { now, observation: null, reason: 'Waiting for an actual five-minute predecessor from this same quiet session and target.' }
+  return { now, observation: { input, configuration, observedAt: context.device.observedAt }, reason: 'Fresh guarded observation available.' }
+}
+
+/** Read a guarded current observation and its actual five-minute predecessor; never send a command. */
+export function previewWaterForecast(side: Side) {
+  const { observation, reason } = readForecastObservation(side)
+  return observation ? getThermalForecasts().preview(side, observation.input, observation.configuration) : { predictions: [], reason }
+}
+
+/** Compare nearby targets as conditional water research, without selecting or dispatching either one. */
+export function previewTargetResponse(side: Side) {
+  const { now, observation, reason } = readForecastObservation(side)
+  const base = { apiVersion: 1 as const, side, generatedAt: now, activationAvailable: false as const }
+  if (!observation) return { ...base, candidates: [], reason }
+  const candidates = [-1, 1].map(step => observation.input.targetF + step).filter(target => target >= 55 && target <= 110)
+  const inputs = candidates.map(requestedTargetF => ({ observedAt: observation.observedAt,
+    previousTargetF: observation.input.targetF, requestedTargetF, waterBeforeF: observation.input.waterF,
+    waterChange5mF: observation.input.change5mF, roomF: observation.input.roomF, humidity: observation.input.humidity }))
+  const results = getTargetResponseModels().compare(side, inputs, observation.configuration)
+  return { ...base, candidates: candidates.map((targetF, index) => ({ targetF, ...results[index] })),
+    reason: 'Comparisons describe observed water responses under similar conditions. They do not establish the effect of intervening or improved comfort. No target was selected or changed.' }
 }
 
 /** A model preview uses the same fresh, quiet, occupied thermal observations as collection. */

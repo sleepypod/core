@@ -5,21 +5,23 @@ import { trpc } from '@/src/utils/trpc'
 import type { Side } from '@/src/hardware/types'
 import { Button } from '@/src/components/ds'
 import { useNowMinute } from '@/src/components/Schedule/CurveChart'
-import { responseAuditSchema } from '@/src/comfort/response-contract'
+import { responseModelStatusSchema } from '@/src/comfort/response-model-contract'
 import { currentLearningRead } from './learningJourneyModel'
+import { TargetResponseEvaluation } from './TargetResponseEvaluation'
 
 /** An explicit read keeps evidence inspection separate from training and bed control. */
 export function TargetResponseEvidence({ side }: { side: Side }) {
   const [requested, setRequested] = useState(false)
   const minute = useNowMinute(), now = minute === null ? null : minute * 60_000
-  const query = trpc.comfort.targetResponse.useQuery({ side }, {
+  const query = trpc.comfort.targetResponseModel.useQuery({ side }, {
     enabled: false, retry: false, refetchOnWindowFocus: false,
   })
-  const parsed = responseAuditSchema.safeParse(query.data)
+  const parsed = responseModelStatusSchema.safeParse(query.data)
   const candidate = parsed.success ? parsed.data : null
   const current = requested && currentLearningRead(now, query.dataUpdatedAt, Boolean(query.error), query.isFetching)
     && candidate?.side === side && now !== null && candidate.generatedAt <= now + 60_000 && now - candidate.generatedAt <= 300_000
-  const data = current ? candidate : null
+  const status = current ? candidate : null
+  const data = status?.evidence
   const readable = data && data.status !== 'unavailable'
   return (
     <section aria-label="Learning from small temperature changes" className="max-w-3xl space-y-3 border-t border-line pt-5">
@@ -41,7 +43,7 @@ export function TargetResponseEvidence({ side }: { side: Side }) {
           </dl>
           <p className="text-sm">
             {data.responseNights >= data.requiredNights
-              ? 'Collection milestone reached. Model fitting, comparison and permission to adjust the bed are still separate steps.'
+              ? 'Collection milestone reached. A separate model evaluation checks whether later nights can be predicted.'
               : `The first milestone is ${data.requiredNights} usable nights. Keep your comfortable routine and review each night.`}
           </p>
           {data.status === 'partial' && <p role="status" className="text-sm text-fg-2">Some records could not be inspected. Counts cover usable evidence only.</p>}
@@ -86,7 +88,8 @@ export function TargetResponseEvidence({ side }: { side: Side }) {
         </Button>
         {query.isFetching && <p role="status" className="text-sm text-fg-2">Reading complete nights and reported water temperatures…</p>}
       </div>
-      <p className="text-sm text-fg-2">Evidence collection only. No model is fitted and no bed adjustment is enabled here.</p>
+      {status && <TargetResponseEvaluation key={`${side}:${status.generatedAt}`} status={status} onSaved={() => { void query.refetch() }} />}
+      <p className="text-sm text-fg-2">Reading evidence and evaluating predictions leave your bed settings unchanged.</p>
       <details className="max-w-prose text-sm">
         <summary className="min-h-11 cursor-pointer py-3 font-medium">About these observations</summary>
         <p className="text-fg-2">These readings belong to this physical half of the bed. They do not establish a person’s body temperature or improved comfort. Historical Health sleep totals cannot replace missing temperature readings. Do not change temperatures just to fill the count.</p>
