@@ -80,6 +80,23 @@ def test_actual_parameters_reset_before_samples_and_ack_after(rig):
     assert all(r[1:] == (1, 1000, "applied") for r in receipts)
 
 
+def test_arrangement_profiles_need_both_actual_installed_selections(rig):
+    connection, _, _, _, runtime = rig
+    configuration = project(connection, side="left", generation=2)
+    project(connection, side="right", generation=3)
+    expected = {"left": {"generation": 2, "hash": configuration["hash"]},
+                "right": {"generation": 3, "hash": configuration["hash"]}}
+    assert not runtime.matches_profiles(expected)
+    runtime.before_frame("left", lambda _: False, 1000)
+    assert not runtime.matches_profiles(expected)  # solo routing cannot prove both assigned channels
+    runtime.before_frame(None, lambda _: False, 2000)
+    assert runtime.matches_profiles(expected)
+    assert not runtime.matches_profiles({"left": expected["left"]})
+    assert not runtime.matches_profiles({**expected, "right": {"generation": 4, "hash": configuration["hash"]}})
+    runtime.problem = "Failed actual runtime write"
+    assert not runtime.matches_profiles(expected)
+
+
 def test_pending_next_session_and_restart_restore(rig):
     conn, holder, processors, clock, runtime = rig
     project(conn, boundary="next_session")

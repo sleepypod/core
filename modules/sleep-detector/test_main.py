@@ -37,6 +37,7 @@ for _name in ("calibration", "calibration_identity", "side_mode"):
     _stubs[f"common.{_name}"] = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_stubs[f"common.{_name}"])
 _stubs["common.health"].report_health = lambda *a, **kw: None
+_stubs["common"].__path__ = [str(Path(__file__).resolve().parent.parent / "common")]
 sys.modules.update(_stubs)
 
 import main  # noqa: E402
@@ -689,6 +690,39 @@ class TestStateFile:
 
     def test_unwritable_path_reports_failure(self, tmp_path):
         assert main.save_state(tmp_path / "missing-dir" / "state.json", (_tracker(),)) is False
+
+
+class TestArrangementBoundary:
+    def test_closes_old_session_and_resets_windows_but_keeps_physical_baseline(self, tmp_path):
+        tracker = _tracker()
+        start = 1_800_000_000.0
+        _feed(tracker, [(start, True), (start + 31, True), (start + 400, True)])
+        tracker._last_ts = start + 400
+        baseline = main.AdaptiveBaseline('capSense', {'out': 1025, 'cen': 575, 'in': 950}, 300)
+        tracker.baseline = baseline
+        tracker._movement_buf = [99]
+        path = tmp_path / 'state.json'
+        intent = {'operationId': 'fixture'}
+        fresh = main.adopt_arrangement_trackers((tracker,), intent, path, None)
+        assert fresh is not None
+        assert _rows(tracker) == [(400, 0)]
+        assert fresh[0]._session_start is None and fresh[0]._movement_buf == []
+        assert fresh[0].baseline is baseline
+        assert fresh[0]._replay_until_ts == start + 400
+        saved = main.load_state(path)
+        assert saved['arrangement'] == main.config_hash(intent)
+        assert saved['left']['session_start'] is None
+        assert main.adopt_arrangement_trackers(fresh, intent, path, saved['arrangement']) == fresh
+
+    def test_failed_old_write_or_checkpoint_cannot_acknowledge_boundary(self, tmp_path, monkeypatch):
+        tracker = _tracker()
+        start = 1_800_000_000.0
+        _feed(tracker, [(start, True), (start + 31, True), (start + 400, True)])
+        monkeypatch.setattr(main, 'write_sleep_record', lambda *args: False)
+        assert main.adopt_arrangement_trackers((tracker,), {}, tmp_path / 'state.json', None) is None
+        assert tracker._session_start is not None
+        tracker._reset_session()
+        assert main.adopt_arrangement_trackers((tracker,), {}, tmp_path / 'missing' / 'state.json', None) is None
 
 
 # ---------------------------------------------------------------------------

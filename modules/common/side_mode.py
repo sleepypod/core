@@ -44,8 +44,16 @@ class SingleSleeperMode:
         self._last_read: Optional[float] = None
         self._home: Optional[str] = None
         self._active = SIDES
+        self._assigned = False
+
+    def adopt_assigned(self):
+        """The arrangement consumer verifies this mode before every accepted frame."""
+        self._assigned = True
+        self._home, self._active = None, SIDES
 
     def home_side(self) -> Optional[str]:
+        if self._assigned:
+            return None
         now = self._clock()
         if self._last_read is None or now - self._last_read >= self._reload_s:
             self._last_read = now

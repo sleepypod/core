@@ -45,6 +45,7 @@ import cbor2
 from common.nats_follower import create_follower
 from common.dialect import KNOWN_RECORD_TYPES, warn_unknown_type_once
 from common.side_mode import SingleSleeperMode
+from common.arrangement_processing import ArrangementProcessing
 from common.bed_presence import BedPresence
 import numpy as np
 from runtime_adapter import RuntimeCoordinator, RunContext
@@ -345,6 +346,23 @@ def main() -> None:
     left.home_side = right.home_side = bed_mode.home_side
     runtime = RuntimeCoordinator(db_holder, {"left": left, "right": right},
                                  timestamp_basis=FIRMWARE_TIMESTAMP_BASIS, mechanical_context=MECHANICAL_VERSION)
+
+    def reset_arrangement(intent):
+        nonlocal runtime
+        # Completed candidates retain their original provenance; unfinished windows must start again.
+        if not vitals_router.flush():
+            return False
+        bed_mode.adopt_assigned()
+        reset_live_buffers((left, right))
+        for processor in (left, right):
+            if hasattr(processor, "runtime_key"):
+                del processor.runtime_key
+        runtime = RuntimeCoordinator(db_holder, {"left": left, "right": right},
+                                     timestamp_basis=FIRMWARE_TIMESTAMP_BASIS, mechanical_context=MECHANICAL_VERSION)
+        return True
+
+    arrangement = ArrangementProcessing(SLEEPYPOD_DB, lambda: db_holder.conn, "piezo-processor", reset_arrangement,
+                                        clock=lambda: time.monotonic(), wall=lambda: time.time())
     runtime_problem = None
     input_problem = None
     # Source selected once at startup: NatsFollower on new-firmware pods (NATS
@@ -402,10 +420,26 @@ def main() -> None:
             l_samples, r_samples = frame.samples
 
             frame_time_ms = int(frame_clock() * 1000)
+            if not arrangement.before_frame(frame_time_ms):
+                reset_live_buffers((left, right))
+                problem = arrangement.problem or 'Waiting for a fresh arrangement sample'
+                if problem != input_problem:
+                    input_problem = problem
+                    report_health("degraded", "Household processing is waiting for verified configuration and fresh sensor data")
+                continue
             runtime.before_frame(bed_mode.home_side(), bed.occupied, frame_time_ms)
+            if arrangement.intent is not None and not runtime.matches_profiles(arrangement.intent["profiles"]):
+                reset_live_buffers((left, right))
+                problem = 'Household processing is waiting for both reviewed profiles'
+                if input_problem != problem:
+                    input_problem = problem
+                    report_health("degraded", problem)
+                continue
             left.ingest(l_samples)
             right.ingest(r_samples)
             runtime.after_frame(frame_time_ms)
+            if runtime.problem is None:
+                arrangement.after_frame(frame_time_ms)
             if runtime.problem != runtime_problem or input_problem is not None:
                 runtime_problem = runtime.problem
                 input_problem = None

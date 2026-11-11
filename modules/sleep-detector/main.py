@@ -77,6 +77,8 @@ sys.path.append(str(Path(__file__).resolve().parent))
 import cbor2
 from common.nats_follower import create_follower
 from common.side_mode import SingleSleeperMode
+from common.arrangement_processing import ArrangementProcessing
+from common.biometrics.config import config_hash
 from common.dialect import (
     KNOWN_RECORD_TYPES,
     log_capsense_status_once,
@@ -384,12 +386,14 @@ def load_state(path: Path) -> dict:
     return state
 
 
-def save_state(path: Path, trackers) -> bool:
+def save_state(path: Path, trackers, arrangement=None) -> bool:
     """Atomically write every tracker's state. Returns True on success.
 
     tmp + fsync + rename so a power cut leaves either the previous or the new
     file, never a truncated one."""
     state = {"version": STATE_VERSION}
+    if arrangement is not None:
+        state["arrangement"] = arrangement
     for t in trackers:
         state[t.side] = t.snapshot()
     tmp = path.with_name(path.name + ".tmp")
@@ -1711,6 +1715,30 @@ def process_single_sleeper(home: SessionTracker, away: SessionTracker,
     away._vitals_evidence_ts = None
 
 
+def adopt_arrangement_trackers(trackers, intent, state_path, current_identity):
+    """Persist a routing boundary before new samples; retain physical baselines and completed old records."""
+    identity = config_hash(intent)
+    if current_identity == identity:
+        return tuple(trackers)
+    for tracker in trackers:
+        if tracker._session_start is not None:
+            last_seen = tracker._last_present_ts or tracker._last_ts
+            if last_seen is None or last_seen < tracker._session_start.timestamp():
+                return None
+            tracker._close_session(last_seen)
+        if tracker._session_start is not None:
+            return None  # preserve a failed old-session write for retry
+    fresh = []
+    for tracker in trackers:
+        replacement = SessionTracker(side=tracker.side, db=tracker.db, calibration=tracker.calibration, pump_gate=tracker.pump_gate)
+        replacement.baseline = tracker.baseline
+        replacement._replay_until_ts = tracker._last_ts
+        fresh.append(replacement)
+    if not save_state(state_path, fresh, identity):
+        return None
+    return tuple(fresh)
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -1739,6 +1767,22 @@ def main() -> None:
     for t in trackers:
         t.restore(saved.get(t.side), time.time())
     last_save = time.monotonic()
+    routing_identity = saved.get("arrangement")
+
+    def reset_arrangement(intent):
+        nonlocal left, right, trackers, routing_identity
+        identity = config_hash(intent)
+        adopted = adopt_arrangement_trackers(trackers, intent, STATE_PATH, routing_identity)
+        if adopted is None:
+            return False
+        left, right = adopted
+        trackers, routing_identity = adopted, identity
+        bed_mode.adopt_assigned()
+        return True
+
+    arrangement = ArrangementProcessing(SLEEPYPOD_DB, lambda: db_holder.conn, "sleep-detector", reset_arrangement,
+                                        clock=lambda: time.monotonic(), wall=lambda: time.time())
+    arrangement_problem = None
     # Source selected once at startup: NatsFollower on new-firmware pods (NATS
     # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
     follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
@@ -1775,12 +1819,25 @@ def main() -> None:
             # Record (do not gate on) new-firmware capSense per-side status.
             log_capsense_status_once(record, "sleep-detector")
 
-            ts = sanitize_ts(record.get("ts"))
+            raw_ts = record.get("ts")
+            source_ms = raw_ts * 1000 if type(raw_ts) in (int, float) else float('nan')
+            if not arrangement.before_frame(source_ms):
+                problem = arrangement.problem or 'Waiting for a fresh arrangement sample'
+                if problem != arrangement_problem:
+                    arrangement_problem = problem
+                    report_health("degraded", "Household processing is waiting for verified configuration and fresh sensor data")
+                continue
+            ts = sanitize_ts(raw_ts)
             process_sleeper_frame(left, right, ts, record, bed_mode)
+            if arrangement.intent is not None and all(tracker._vitals_evidence_ts == ts for tracker in trackers):
+                arrangement.after_frame(int(source_ms))
+                if arrangement_problem is not None and arrangement.problem is None:
+                    arrangement_problem = None
+                    report_health("healthy", "Household presence routing verified on fresh sensor data")
 
             if (left.state_dirty or right.state_dirty
                     or time.monotonic() - last_save >= STATE_SAVE_INTERVAL_S):
-                if save_state(STATE_PATH, trackers):
+                if save_state(STATE_PATH, trackers, routing_identity):
                     left.state_dirty = right.state_dirty = False
                 last_save = time.monotonic()
 
@@ -1789,7 +1846,7 @@ def main() -> None:
         report_health("down", str(e))
         sys.exit(1)
     finally:
-        save_state(STATE_PATH, trackers)
+        save_state(STATE_PATH, trackers, routing_identity)
         cal_store.close()
         db_holder.conn.close()
         log.info("Shutdown complete")

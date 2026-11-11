@@ -195,3 +195,13 @@ class RuntimeCoordinator:
             self._receipted.update(completed)
         except sqlite3.Error as error:
             self._problem(error)
+
+    def matches_profiles(self, expected):
+        """Check actual installed selections, not requested or restored database receipts."""
+        if not self.enabled or self.problem is not None or self._frame_sides != {"left", "right"}:
+            return False
+        for side, profile in expected.items():
+            snapshot = self.selections[side].applied
+            if snapshot is None or (snapshot.generation, snapshot.resolved_hash) != (profile["generation"], profile["hash"]):
+                return False
+        return set(expected) == {"left", "right"}

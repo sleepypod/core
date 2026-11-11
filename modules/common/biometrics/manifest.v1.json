@@ -625,9 +625,9 @@
   },
   "sourceHashes": {
     "modules/common/biometrics/signal.py": "fff73469815673c8daebba9e2c9e7bcf97708939ad7a5639a52f0a53c9d75c18",
-    "modules/piezo-processor/main.py": "0447dfaf0956f5dfd72aeb95f10e5b02654c81ec4a91a826f75935a04d154635",
+    "modules/piezo-processor/main.py": "c0e34395276675fef8e4017e2ab8129b56dc47db142bca0a2ba7275f987e8193",
     "src/lib/sleep-stages.ts": "421a85f6c039407bf300f9b92080c8958cb7f1733e7b781c1a1318b6f5352398",
-    "modules/piezo-processor/runtime_adapter.py": "f280dabdc76959208af9ffb3caf34167a4a784fba08d00e41b59e3c535c05b6f",
+    "modules/piezo-processor/runtime_adapter.py": "b3c232b330e377185e6ef40111be9b2d0171181033fe22854adb59069f762cf3",
     "modules/common/biometrics/runtime.py": "dbe327ce6e6ae315cad83439903e4c5d6a5c594468086739504caa8ed028a944",
     "modules/common/biometrics/gates.py": "c46285ff1cdf95bd4184823fabd6ceb66b005f7c410ee87880de4e563edd6e7c",
     "modules/common/biometrics/routing.py": "04872bab0f797e0bedd6e7114e686bbf7a5b4110ed2052c9b160e5aa1f7d0839",
@@ -636,7 +636,10 @@
     "modules/common/biometrics/replay.py": "29ec711d935e76e7118da7e0b417c1d8d5273b12832a11acc13ae37e4d52e95c",
     "modules/common/biometrics/live_input.py": "bc0a08648e56bad782dc0d280e4a70e757b5edd665d0745482bb79a5ecabbcbf",
     "modules/common/biometrics/mechanical.py": "9b893fdae76f7ca57b82fbdc3ca13d75e58b71606e35c7c3368300e73ed8b62c",
-    "src/lib/stage-coverage.ts": "14c9cb92801f9fd10f9f094f9919ee5aece570b56a2b3fd1e3b52ce299c8e0c4"
+    "src/lib/stage-coverage.ts": "14c9cb92801f9fd10f9f094f9919ee5aece570b56a2b3fd1e3b52ce299c8e0c4",
+    "modules/common/arrangement_processing.py": "8b4226769ac366ceaa175b856d03d6d85d92efa02a52b1bdc71fd7e34595ae73",
+    "modules/common/side_mode.py": "9ab1b69035d0897932c1e8eb0aea494350f181ba0a2c120daef23f0323e632b9",
+    "modules/sleep-detector/main.py": "ffcc93bdb6ff321d08b5ab8470394230c1d7e69ea4d291c61897f5e2d269cb7c"
   },
   "dependencyHashes": {
     "modules/piezo-processor/uv.lock": "ceb7356c660093dc79c3116884caa1c57f1ebaf3e544bd490476a9862e601c35",

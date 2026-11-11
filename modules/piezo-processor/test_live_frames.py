@@ -1,5 +1,6 @@
 """Arrival time must not turn replayed or discontinuous input into fresh vitals."""
 from types import SimpleNamespace
+import sqlite3
 
 import numpy as np
 import pytest
@@ -115,6 +116,10 @@ def test_main_rejects_backlog_and_resets_before_accepting_recovery(monkeypatch, 
     monkeypatch.setattr(main.time, "time", lambda: clock.wall)
     monkeypatch.setattr(main.time, "monotonic", lambda: clock.monotonic)
     monkeypatch.setattr(main, "BIOMETRICS_DB", tmp_path / "biometrics.db")
+    config_path = tmp_path / 'config.db'
+    with sqlite3.connect(config_path) as connection:
+        connection.execute('CREATE TABLE side_settings(side TEXT)')
+    monkeypatch.setattr(main, 'SLEEPYPOD_DB', config_path)
     monkeypatch.setattr(main, "open_biometrics_db", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(main, "report_health", lambda *args: None)
     monkeypatch.setattr(main, "read_snapshot", lambda _, now: quiet_snapshot(now))
