@@ -16,11 +16,23 @@ import { getTemperatureController } from '@/src/temperature/instance'
 import { shouldBlock as pumpStallShouldBlock } from '@/src/hardware/pumpStallGuard'
 import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { assertHardwareWriteCurrent, captureHardwareIntent, HardwareAdmissionError } from '@/src/hardware/admission'
 import type { Side } from '@/src/hardware/types'
 
 const KEEPALIVE_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6 hours in milliseconds
 
-const timers = new Map<Side, ReturnType<typeof setInterval>>()
+interface Keepalive {
+  timer?: ReturnType<typeof setInterval>
+  pending?: Promise<void>
+}
+const shared = globalThis as typeof globalThis & {
+  __sp_keepalives?: {
+    entries: Map<Side, Keepalive>
+    pending: Set<Promise<void>>
+    shutdown: Promise<void> | null
+  }
+}
+const runtime = shared.__sp_keepalives ??= { entries: new Map(), pending: new Set(), shutdown: null }
 
 /**
  * Start the keepalive timer for a side. If the side is powered on and has
@@ -30,14 +42,22 @@ const timers = new Map<Side, ReturnType<typeof setInterval>>()
  * Idempotent — stops any existing timer for the side before starting a new one.
  */
 export function startKeepalive(side: Side): void {
+  const admission = captureHardwareIntent()
+  assertHardwareWriteCurrent(admission)
+  if (runtime.shutdown) throw new Error('Temperature keepalives are stopping')
   stopKeepalive(side)
+  const entry: Keepalive = {}
+  runtime.entries.set(side, entry)
 
-  const tick = async () => {
+  const renew = async () => {
     try {
       // The whole tick runs under the side lock so the isPowered and
       // stall-guard checks stay valid at the write — a power-off job or
       // guard trip serialized ahead of this reissue is observed, not raced.
       await withSideLock(side, async () => {
+        // Stopping or replacing a timer also cancels work still waiting for the lock.
+        if (runtime.entries.get(side) !== entry) return
+        assertHardwareWriteCurrent(admission)
         // Read current device state to get target temperature
         const [state] = db
           .select()
@@ -79,6 +99,10 @@ export function startKeepalive(side: Side): void {
       })
     }
     catch (error) {
+      if (error instanceof HardwareAdmissionError) {
+        if (runtime.entries.get(side) === entry) stopKeepalive(side)
+        return
+      }
       console.error(
         `[keepalive] Failed to re-send temperature for ${side}:`,
         error instanceof Error ? error.message : error,
@@ -86,15 +110,24 @@ export function startKeepalive(side: Side): void {
     }
   }
 
+  const tick = () => {
+    if (runtime.entries.get(side) !== entry || entry.pending) return
+    const pending = renew().finally(() => {
+      runtime.pending.delete(pending)
+      entry.pending = undefined
+    })
+    entry.pending = pending
+    runtime.pending.add(pending)
+  }
+
   // Fire immediately to reset firmware duration timer right away
   tick()
 
-  const interval = setInterval(tick, KEEPALIVE_INTERVAL_MS)
+  entry.timer = setInterval(tick, KEEPALIVE_INTERVAL_MS)
 
   // Allow Node process to exit even if timer is running
-  interval.unref()
+  entry.timer.unref()
 
-  timers.set(side, interval)
   console.log(`[keepalive] Started for ${side} (interval: 6h)`)
 }
 
@@ -103,10 +136,10 @@ export function startKeepalive(side: Side): void {
  * No-op if no timer is active.
  */
 export function stopKeepalive(side: Side): void {
-  const timer = timers.get(side)
-  if (timer) {
-    clearInterval(timer)
-    timers.delete(side)
+  const entry = runtime.entries.get(side)
+  if (entry) {
+    clearInterval(entry.timer)
+    runtime.entries.delete(side)
     console.log(`[keepalive] Stopped for ${side}`)
   }
 }
@@ -143,8 +176,14 @@ export function initializeKeepalives(): void {
 /**
  * Stop all keepalive timers. Called during graceful shutdown.
  */
-export function shutdownKeepalives(): void {
-  for (const side of timers.keys()) {
+export function shutdownKeepalives(): Promise<void> {
+  if (runtime.shutdown) return runtime.shutdown
+  for (const side of runtime.entries.keys()) {
     stopKeepalive(side)
   }
+  // Retired entries can still be completing a command; drain them before cutover.
+  runtime.shutdown = Promise.all([...runtime.pending]).then(() => {}).finally(() => {
+    runtime.shutdown = null
+  })
+  return runtime.shutdown
 }

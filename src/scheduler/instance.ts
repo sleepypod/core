@@ -10,6 +10,7 @@ import { JobManager } from './jobManager'
 import { db } from '@/src/db'
 import { deviceSettings } from '@/src/db/schema'
 import { outsideControlRequest } from '@/src/controls/context'
+import { assertHardwareWriteCurrent, captureHardwareIntent } from '@/src/hardware/admission'
 
 const DEFAULT_TIMEZONE = 'America/Los_Angeles'
 
@@ -57,6 +58,8 @@ async function loadTimezone(): Promise<string> {
  * Uses single-flight pattern to prevent race conditions
  */
 export async function getJobManager(): Promise<JobManager> {
+  const admission = captureHardwareIntent()
+  assertHardwareWriteCurrent(admission)
   const s = state()
   if (s.shutdown) throw new Error('JobManager is shutting down')
   // If already initialized, return immediately
@@ -78,10 +81,12 @@ export async function getJobManager(): Promise<JobManager> {
       const timezone = await loadTimezone()
 
       controller.signal.throwIfAborted()
+      assertHardwareWriteCurrent(admission)
       const manager = new JobManager(timezone)
       try {
         await manager.loadSchedules()
         controller.signal.throwIfAborted()
+        assertHardwareWriteCurrent(admission)
       }
       catch (error) {
         // loadSchedules can throw after registering some jobs; the discarded

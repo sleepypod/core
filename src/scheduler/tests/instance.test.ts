@@ -12,6 +12,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { beforeControlWrite, withinControlRequest } from '@/src/controls/context'
 import { testScope } from '@/src/controls/tests/fixtures'
+import { admissionFixture } from '@/src/hardware/tests/admissionFixture'
+
+let admission: ReturnType<typeof admissionFixture>
 
 // Reset both the mocks and cross-bundle singleton between tests.
 const loadSchedulesMock = vi.fn(async () => {})
@@ -77,6 +80,7 @@ async function freshModule(): Promise<InstanceModule> {
 
 describe('scheduler/instance', () => {
   beforeEach(() => {
+    admission = admissionFixture()
     delete (globalThis as Record<string, unknown>).__sp_job_manager__
     loadSchedulesMock.mockClear()
     shutdownMock.mockClear()
@@ -93,6 +97,7 @@ describe('scheduler/instance', () => {
       await mod.shutdownJobManager().catch(() => {})
     }
     finally {
+      admission.uninstall()
       vi.useRealTimers()
       vi.restoreAllMocks()
     }
@@ -111,6 +116,29 @@ describe('scheduler/instance', () => {
     expect((m as any).timezone).toBe('America/Los_Angeles')
     expect(loadSchedulesMock).toHaveBeenCalledTimes(1)
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('does not construct a scheduler during a persisted transition hold', async () => {
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    const mod = await freshModule()
+    await expect(mod.getJobManager()).rejects.toThrow('Hardware changes are paused')
+    expect(ctorMock).not.toHaveBeenCalled()
+  })
+
+  it('drains schedules loaded across a hold and requires a fresh initialization after release', async () => {
+    const gate = Promise.withResolvers<undefined>()
+    loadSchedulesMock.mockImplementationOnce(() => gate.promise)
+    const mod = await freshModule()
+    const pending = mod.getJobManager()
+    const rejected = expect(pending).rejects.toThrow('Hardware changes are paused')
+    await vi.waitFor(() => expect(loadSchedulesMock).toHaveBeenCalledOnce())
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    gate.resolve(undefined)
+    await rejected
+    expect(shutdownMock).toHaveBeenCalledOnce()
+    admission.set({ revision: 3, holdId: null })
+    await mod.getJobManager()
+    expect(ctorMock).toHaveBeenCalledTimes(2)
   })
 
   it('does not attach scheduled jobs to the control request that initializes the manager', async () => {

@@ -11,7 +11,11 @@
  * import boundary so only the wrapper's wiring is exercised; engine behaviour
  * is covered in engine.test.ts.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { admissionFixture } from '@/src/hardware/tests/admissionFixture'
+
+let admission: ReturnType<typeof admissionFixture>
+afterEach(() => admission.uninstall())
 
 const ctorMock = vi.fn()
 const tickMock = vi.fn(async () => {})
@@ -106,6 +110,7 @@ async function freshModule(): Promise<InstanceModule> {
 }
 
 beforeEach(() => {
+  admission = admissionFixture()
   delete (globalThis as Record<string, unknown>).__sp_automationState
   tickMock.mockClear()
   ctorMock.mockClear()
@@ -120,6 +125,48 @@ beforeEach(() => {
 })
 
 describe('automation/instance — init & caching', () => {
+  it('does not load or start rules while admission is held', async () => {
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    const mod = await freshModule()
+    await expect(mod.getAutomationEngine()).rejects.toThrow('Hardware changes are paused')
+    expect(ctorMock).not.toHaveBeenCalled()
+    expect(startMock).not.toHaveBeenCalled()
+  })
+
+  it('stops a partially started engine if admission changes while rules load', async () => {
+    const gate = Promise.withResolvers<undefined>()
+    startMock.mockImplementationOnce(() => gate.promise)
+    const mod = await freshModule()
+    const pending = mod.getAutomationEngine()
+    const rejected = expect(pending).rejects.toThrow('Hardware changes are paused')
+    await vi.waitFor(() => expect(startMock).toHaveBeenCalledOnce())
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    gate.resolve(undefined)
+    await rejected
+    expect(stopMock).toHaveBeenCalledOnce()
+    expect(tickMock).not.toHaveBeenCalled()
+    expect(mod.getAutomationEngineIfRunning()).toBeNull()
+  })
+
+  it('waits for an in-flight start before finishing shutdown and rejecting new starts', async () => {
+    const gate = Promise.withResolvers<undefined>()
+    startMock.mockImplementationOnce(() => gate.promise)
+    const mod = await freshModule()
+    const pending = mod.getAutomationEngine()
+    const rejected = expect(pending).rejects.toThrow('startup was cancelled')
+    await vi.waitFor(() => expect(startMock).toHaveBeenCalledOnce())
+    let stopped = false
+    const shutdown = mod.shutdownAutomationEngine().then(() => {
+      stopped = true
+    })
+    await expect(mod.getAutomationEngine()).rejects.toThrow('shutting down')
+    expect(stopped).toBe(false)
+    gate.resolve(undefined)
+    await Promise.all([rejected, shutdown])
+    expect(stopMock).toHaveBeenCalledOnce()
+    expect(tickMock).not.toHaveBeenCalled()
+  })
+
   it('constructs the engine, starts it, and caches the instance', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     selectImpl = async () => [{ timezone: 'UTC', on: true }]

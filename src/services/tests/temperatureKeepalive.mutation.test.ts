@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { admissionFixture } from '@/src/hardware/tests/admissionFixture'
 
 vi.mock('@/src/db', () => {
   const query = {
@@ -35,6 +36,7 @@ describe('temperature keepalive mutation contract', () => {
     // hide behind the module instance collected before mutation activation.
     vi.resetModules()
     const { startKeepalive, shutdownKeepalives } = await import('../temperatureKeepalive')
+    const admission = admissionFixture()
 
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const interval = vi.spyOn(globalThis, 'setInterval')
@@ -43,6 +45,7 @@ describe('temperature keepalive mutation contract', () => {
     startKeepalive('left')
 
     expect(interval).toHaveBeenCalledWith(expect.any(Function), 21_600_000)
-    shutdownKeepalives()
+    await shutdownKeepalives()
+    admission.uninstall()
   })
 })

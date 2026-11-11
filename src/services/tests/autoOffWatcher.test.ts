@@ -671,6 +671,18 @@ describe('autoOffWatcher — power-off queued behind the side lock', () => {
 })
 
 describe('autoOffWatcher — lifecycle', () => {
+  it('shares its timer across module instances and stops the original producer', async () => {
+    const interval = vi.spyOn(globalThis, 'setInterval')
+    startAutoOffWatcher()
+    vi.resetModules()
+    const duplicate = await import('../autoOffWatcher')
+    duplicate.startAutoOffWatcher()
+    expect(interval).toHaveBeenCalledOnce()
+    await duplicate.stopAutoOffWatcher()
+    await vi.advanceTimersByTimeAsync(31 * 60_000)
+    expect(setPower).not.toHaveBeenCalled()
+  })
+
   it('startAutoOffWatcher is idempotent', async () => {
     const interval = vi.spyOn(globalThis, 'setInterval')
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -714,7 +726,10 @@ describe('autoOffWatcher — lifecycle', () => {
     await vi.advanceTimersByTimeAsync(60_000)
 
     let stopped = false
-    const stop = stopAutoOffWatcher().then(() => {
+    const stopping = stopAutoOffWatcher()
+    expect(stopAutoOffWatcher()).toBe(stopping)
+    expect(() => startAutoOffWatcher()).toThrow('stopping')
+    const stop = stopping.then(() => {
       stopped = true
     })
     await Promise.resolve()

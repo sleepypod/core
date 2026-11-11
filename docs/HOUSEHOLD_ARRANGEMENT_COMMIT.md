@@ -14,8 +14,10 @@ stateDiagram-v2
     Reviewed --> Held: Persist hold and private receipt together
     Held --> Held: Stop, timeout, stale evidence or failed write
     Held --> CommittedHeld: Both weeks + identities + archive + close solo epoch
+    Held --> Cancelled: Fresh attended cancellation after verified restart
+    Cancelled --> SoloReady: Receipt and release commit together
     CommittedHeld --> Recovery: Separate runtime and processing verification
-    Recovery --> Ready: Future reviewed release coordinator
+    Recovery --> Ready: Atomic verified recovery (internal)
 ```
 
 `begin` requires an enabled internal coordinator, an authenticated owner device,
@@ -69,9 +71,10 @@ unassigned. Importing a row that crosses the boundary cannot move an old persona
 record or silently attribute merged output to the joining sleeper.
 
 Existing private copies retain their sleeper IDs. The bounded importer continues
-to withhold intervals without exactly one eligible reviewed epoch. A later
-recovery coordinator must explicitly append the assigned epoch after verifying
-both the live pipeline configuration and physical arrangement.
+to withhold intervals without exactly one eligible reviewed epoch. The internal
+recovery store explicitly appends the assigned epoch only after verifying the
+live pipeline configuration and fresh independent physical observations. Runtime
+wiring and the attended app flow remain separate work.
 
 ### Processing acknowledgments
 
@@ -105,7 +108,7 @@ The biometric source manifest and generated browser-worker identity change with
 this code. Prior profile artifacts stay retained; existing compatibility checks
 must still pass before an artifact can be used with the changed engine.
 
-## Recovery integration still required
+## Verified recovery storage
 
 A read-only Linux service-generation reader verifies the current process against
 systemd's active MainPID and invocation, the kernel boot identity and `/proc`
@@ -117,23 +120,111 @@ an application UUID, changed environment value or reused PID alone is insufficie
 `HardwareAdmissionStore.releaseWithReceipt` can save the coordinator's synchronous
 reconciliation and release in one FULL-durability transaction. Wrong revisions,
 failed receipt writes, failed admission writes and callback changes to the hold
-roll back together. It is internal, and no recovery coordinator calls it yet.
+roll back together. `ArrangementRecoveryStore` now uses this internal primitive;
+neither store is registered on an HTTP route or called automatically at startup.
+
+The initial hold stores the verified service generation, and commit rejects a
+changed process even if an application run ID was reused. After the committed
+arrangement survives a real restart, recovery requires a new attended request
+from the same current owner device, current session/assignment revisions, the
+exact committed settings, still-valid approving devices, an unchanged reviewed
+recording source, both fresh processing receipts and fresh empty/off/stationary
+observations. A Stop awaiting its acknowledgment prevents release.
+
+Recovery reserves the biometric source against concurrent writes while the FULL
+configuration transaction opens the assigned attribution epoch, saves the
+private recovery evidence and advances admission to its open revision. It
+rechecks runtime evidence and drain again before release. Failed epoch, receipt
+or release writes roll back all three changes. The new epoch starts at the
+verified recovery time; earlier processing samples do not retroactively claim
+the reload gap.
+
+The exact saved request can replay its historical receipt after a lost response,
+expiry or later hold without performing any write. Changed request contents,
+revoked credentials and malformed saved evidence cannot replay. Client receipts
+contain no other person's preferences, algorithm data or process identifiers.
+They acknowledge admission release and explicitly state that physical movement
+was not requested; they do not claim a bed-movement test.
+
+## Cancellation before commit
+
+`ArrangementCancellationStore` is an internal exit from an uncommitted hold. It
+does not undo a committed two-person arrangement. The current original owner
+device must request a fresh preview and confirm keeping the solo arrangement,
+the empty attended bed, and that saved routines may resume. A verified new Linux
+controller generation, independently fresh empty/off/stationary observations,
+unchanged solo attribution and drained writes are required before release.
+
+The preview binds the current operating controls, including routines, temporary
+actions, automation rules and relevant device settings. If those change, a fresh
+preview is required; cancellation never restores an outdated copy. Unpublished
+personal drafts and preferences, credentials and live telemetry are excluded
+from that digest and remain untouched. A partner may cancel their arrangement
+review without trapping the owner in the hold.
+
+With a reserved biometric source and a FULL-durability configuration transaction,
+cancellation marks the review and transition cancelled, saves its exact request
+and receipt, and releases admission together. It preserves all routine, profile,
+calibration, personal-history and attribution data. Receipt/write failures,
+expiry, source changes or a pending Stop roll back the release. Replaying the
+same saved request can return its historical result after expiry or a later hold;
+it cannot release that later hold or restart the cancelled arrangement.
+
+Migration 0066 adds only a nullable cancellation receipt. Its upgrade test checks
+existing held and committed records, private account data and the active hold
+remain unchanged, including a repeated migration and foreign-key integrity.
+Focused tests cover cancellation/recovery/transition compatibility, partial
+writes, changed controls, independent freshness, Stop, source reservations and
+durable reopening. No live cancellation, service restart or bed action was run.
+
+## Automatic-service suspension and recovery
+
+`suspendAutomaticServices()` is an internal lifecycle operation to call after
+persisting the hardware hold. It pauses initialization, cancels the scheduler's
+clock wait, and drains scheduled work, automation evaluation, temperature
+reconciliation, keepalives and occupancy-triggered power changes. Diagnostic
+connections, MQTT and HomeKit remain available for reads and explicit Stop.
+
+The lifecycle and its keepalive/occupancy producers share process-global state
+across Next.js module instances. Replacing or stopping a keepalive cancels a
+refresh still waiting for its side lock, while shutdown waits for a refresh
+already dispatched. New timers cannot start during shutdown. Old temperature
+loops and keepalives retain their original admission revision and cannot resume
+merely because a later household hold is released.
+
+Suspension cancels snooze timers before draining both side-operation queues,
+including state updates after a hardware reply. Only then does it clear active
+alarm timers and wait for already-running alarm publications. This prevents an
+old snooze callback from installing another timer after suspension completes.
+Persisted alarm state remains available for verified restoration.
+
+`resumeAutomaticServices()` requires released admission, successful suspension
+and a fresh startup. It waits for background initialization and reports failures;
+a partial resume is suspended again. Startup under an existing durable hold
+starts observability without restoring alarms or automatic command producers.
+
+These functions are not a public activation API. The coordinator must still
+verify current processing and service-generation evidence before releasing a
+hold and requesting a resume. No live Pod, routine or household assignment was
+changed by this implementation.
+
+## Runtime integration still required
 
 A committed storage transaction is **not completed physical activation**. Before
 exposing activation in either app, implement and test:
 
 1. Shared native/web review of maintenance effects, private plans and limits.
-2. Cancellation/recovery receipts and a separately attended recheck, including
-   restart before commit and failure after commit.
-3. Producer shutdown/reload: scheduler, keepalives, auto-on/off, temperature
-   requests, comfort leases, reactive rules, base queues and alarm restoration.
+2. Wire the implemented cancellation/recovery receipts to a separately attended
+   recheck, including restart before commit and failure after commit.
+3. Connect the implemented automatic-service suspension/resume to the coordinator
+   and verify it together with base queues and actual processing acknowledgments.
    Old callbacks must not capture fresh admission using stale in-memory policy.
 4. Reconcile the actual processing receipts with the committed fingerprint and
    review any later personal-profile migration. The implemented default reset and
    sample-boundary acknowledgments are prerequisites, not completed activation.
-5. Exact committed-state reconciliation, fresh independent observations, a new
-   reviewed assigned recording epoch, and a durable release receipt coupled to
-   admission reopening. Neither time passing nor drain completion releases it.
+5. Connect the implemented reconciliation/epoch/release transaction to the
+   coordinator and the separate attended recovery flow. Neither time passing,
+   an accepted restart request nor drain completion may trigger automatic release.
 
 There is no public API that can invoke these incomplete recovery steps today.
 
@@ -182,3 +273,43 @@ Discovery verified the same 671 files exactly once; all 57 shell cases and the
 complete final suite passed. An overlapping build/typecheck removed generated
 Next type files during that check; the retained failure was followed by a clean
 typecheck after the production build completed.
+
+The verified recovery storage follow-up passes **9,426 Core tests, 19 existing
+skips**. Focused transition/recovery checks cover generation changes, original
+and recovery request expiry, revoked credentials, missing/stale processing,
+changed settings/source, database reopen, whole-interval attribution, exact
+replay and receipt corruption. SQL fault injection proves epoch/receipt/release
+rollback; a second connection proves the biometric source stays reserved until
+the configuration commit finishes. A Stop injected at the final receipt write
+also rolls back the operation. TypeScript, full ESLint, both migration checks,
+the generated schema contract and the production build pass. The generated snapshot changes only
+the nullable recovery column and migration identity.
+
+The first recovery fixture omitted the independently saved personal preferences
+required by the existing review contract; correcting the fixture preserved that
+requirement. A full run passed before two final commit-boundary guards were
+added. The next full run had one connection reset in the unchanged WebSocket
+replay test (9,425 passed); all 137 streaming tests passed in isolation and the
+complete final suite then passed. The failed run remains in the evidence record;
+neither the streaming code nor its assertions/timeouts were changed.
+
+Automatic-service lifecycle validation passes **9,501 tests, 19 existing skips**,
+including 344 focused startup, suspension, cross-module timer, queued-operation,
+alarm-publication and explicit-resume checks. TypeScript, full ESLint and the
+production build pass. An earlier full run had one HTTP 501 WebSocket handshake
+failure; the isolated 137-case streaming suite and final complete run both passed.
+That failure is retained as a transient observation, not claimed as a fixed
+streaming defect. No live household transition was attempted.
+
+The first hosted run passed the browser, build, type and lint checks but exceeded
+the unchanged 30-second thermal-forecast audit guard (9,500 tests passed). A CPU
+profile found repeated ICU timezone formatter construction in source-day conversion
+and timezone validation. A bounded shared cache now reuses those immutable
+formatters, including invalid-zone results; recording audits and time-dependent
+evidence are still rechecked. The fixture, assertions, coverage and timeout are
+unchanged. Comparable local coverage runs measured 9.0 seconds before and 3.2
+seconds after; the final full suite measured 2.7 seconds for that test.
+
+The corrected full suite passes **9,512 tests, 19 existing skips**, including 11
+new timezone/DST/eviction checks. TypeScript, focused ESLint and the production
+build pass. These local results do not replace final hosted or live acceptance.

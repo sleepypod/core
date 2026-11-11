@@ -863,13 +863,15 @@ export const householdArrangementTransitions = sqliteTable('household_arrangemen
   request: text('request').notNull(),
   runId: text('run_id').notNull(),
   admissionRevision: integer('admission_revision').notNull(),
-  state: text('state', { enum: ['held', 'committed'] }).notNull(),
+  state: text('state', { enum: ['held', 'committed', 'cancelled'] }).notNull(),
   createdAt: integer('created_at').notNull(),
   committedAt: integer('committed_at'),
   context: text('context').notNull(),
   archive: text('archive'),
   committedHash: text('committed_hash'),
   processing: text('processing'),
+  recovery: text('recovery'),
+  cancellation: text('cancellation'),
 }, table => [index('idx_household_arrangement_transitions').on(table.householdId, table.createdAt)])
 
 // Persist the latest browser identity independently of response arrival order.

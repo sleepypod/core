@@ -1,15 +1,10 @@
 import { z } from 'zod'
 import { bedroomGuidanceSchema } from '@/src/bedroom/contract'
+import { isValidTimeZone } from '@/src/lib/timeZoneDate'
 
 export const reportIdSchema = z.string().regex(/^[a-f0-9]{64}$/)
 const timestamp = z.number().int().nonnegative().max(8_640_000_000_000_000)
-const timezone = z.string().max(100).refine((value) => {
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: value })
-    return true
-  }
-  catch { return false }
-}, 'Unknown timezone')
+const timezone = z.string().max(100).refine(isValidTimeZone, 'Unknown timezone')
 
 /** Captured by the runtime, never accepted as a client-supplied observation. */
 export const previewEvidenceSchema = z.object({

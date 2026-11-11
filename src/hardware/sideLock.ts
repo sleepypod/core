@@ -36,6 +36,12 @@ function getSideLocks(): Record<Side, Promise<void>> {
   return locks
 }
 
+/** After pausing producers, wait for queued writes and their state updates. Never call inside a side lock. */
+export async function waitForSideOperations(): Promise<void> {
+  const { left, right } = getSideLocks()
+  await Promise.all([left, right])
+}
+
 export async function withSideLock<T>(side: Side, fn: () => Promise<T>): Promise<T> {
   return withinHardwareIntent(async () => {
     const sideLocks = getSideLocks()

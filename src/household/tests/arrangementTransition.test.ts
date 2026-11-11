@@ -38,8 +38,10 @@ const state = () => ['hardware_admission', 'households', 'household_accounts', '
   'household_arrangement_reviews', 'household_arrangement_transitions', 'household_attribution_epochs', 'household_history_state',
   'biometric_profile_bindings', 'biometric_profile_revisions', 'biometric_activation_events', 'biometric_config_outbox']
   .map(table => fixture.database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
-const makeStore = (runtimeId = runId) => new ArrangementTransitionStore({ database: fixture.database, identities: fixture.identities,
-  reviews, history, historySource: source.source, enabled: () => enabled, observe: () => proof, runId: runtimeId, now: () => fixture.clock.now })
+const generation = () => ({ version: 1, invocationId: 'a'.repeat(32), bootId: runId, pid: 1234, startTicks: '1000', observedAt: fixture.clock.now })
+const makeStore = (runtimeId = runId, controllerGeneration: () => unknown = generation) => new ArrangementTransitionStore({ database: fixture.database, identities: fixture.identities,
+  reviews, history, historySource: source.source, enabled: () => enabled, observe: () => proof, runId: runtimeId, now: () => fixture.clock.now,
+  controllerGeneration })
 const ownWeek = (side: 'left' | 'right') => readBedtimeRoutineState(drizzle(fixture.database, { schema }), side).records.map(row => row.snapshot)
 
 beforeEach(() => {
@@ -88,6 +90,29 @@ afterEach(() => {
 })
 
 describe('atomic reviewed arrangement storage', () => {
+  it.each(['missing', 'stale', 'future'])('requires %s controller proof to be corrected before holding', (problem) => {
+    const controller = generation()
+    if (problem === 'stale') controller.observedAt -= 5001
+    if (problem === 'future') controller.observedAt++
+    const store = makeStore(runId, () => problem === 'missing' ? null : controller)
+    expect(() => store.begin(fixture.ownerKey, request)).toThrow()
+    expect(admission.read().holdId).toBeNull()
+  })
+
+  it.each(['invocationId', 'pid', 'startTicks', 'bootId'] as const)('keeps held after actual %s changes even with an unchanged app run ID', (field) => {
+    const controller = generation()
+    const store = makeStore(runId, () => controller)
+    store.begin(fixture.ownerKey, request)
+    if (field === 'invocationId') controller.invocationId = 'b'.repeat(32)
+    if (field === 'pid') controller.pid++
+    if (field === 'startTicks') controller.startTicks = '2000'
+    if (field === 'bootId') controller.bootId = randomUUID()
+    const before = state()
+    expect(() => store.commit(fixture.ownerKey, request)).toThrow()
+    expect(state()).toEqual(before)
+    expect(admission.read().holdId).toBe(request.requestId)
+  })
+
   it('holds and records together, changes both weeks and identities together, and stays closed for recovery', async () => {
     const operating = ownWeek('left')[0]?.draft
     const draft = fixture.identities.routines(fixture.ownerKey)
@@ -151,6 +176,20 @@ describe('atomic reviewed arrangement storage', () => {
     expect(() => failure === 'receipt' ? transition.begin(fixture.ownerKey, request) : transition.commit(fixture.ownerKey, request)).toThrow('injected_disk_failure')
     expect(state()).toEqual(before)
     expect(admission.read().holdId).toBe(failure === 'receipt' ? null : request.requestId)
+  })
+
+  it.each(['expired', 'stop'])('rechecks %s after the final receipt write and rolls back the whole configuration', (problem) => {
+    transition.begin(fixture.ownerKey, request)
+    fixture.database.function('interrupt_commit', () => {
+      if (problem === 'expired') fixture.clock.now = request.expiresAt
+      else finishes.push(beginHardwareWrite(captureHardwareIntent(), true))
+      return 1
+    })
+    fixture.database.exec('CREATE TRIGGER interrupt_transition AFTER UPDATE OF state ON household_arrangement_transitions BEGIN SELECT interrupt_commit(); END')
+    const before = state()
+    expect(() => transition.commit(fixture.ownerKey, request)).toThrow()
+    expect(state()).toEqual(before)
+    expect(admission.read()).toEqual({ revision: 2, holdId: request.requestId })
   })
 
   it.each(['presence', 'thermal', 'alarm', 'base'] as const)('rejects independently stale or future %s evidence before hold and before commit', (sourceName) => {

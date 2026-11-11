@@ -6,7 +6,7 @@
  * between components (scheduler vs automation engine).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { withSideLock } from '../sideLock'
+import { waitForSideOperations, withSideLock } from '../sideLock'
 
 const G = globalThis as { __sp_side_locks__?: unknown }
 
@@ -15,6 +15,37 @@ afterEach(() => {
 })
 
 describe('withSideLock', () => {
+  it('drains both sides including queued state updates through another module instance', async () => {
+    let releaseLeft!: () => void
+    let releaseRight!: () => void
+    const leftGate = new Promise<void>((resolve) => {
+      releaseLeft = resolve
+    })
+    const rightGate = new Promise<void>((resolve) => {
+      releaseRight = resolve
+    })
+    const left = withSideLock('left', () => leftGate)
+    const right = withSideLock('right', () => rightGate)
+    let stateUpdated = false
+    const queued = withSideLock('left', async () => {
+      stateUpdated = true
+    })
+    vi.resetModules()
+    const duplicate = await import('../sideLock')
+    let drained = false
+    const drain = duplicate.waitForSideOperations().then(() => {
+      drained = true
+    })
+    releaseLeft()
+    await Promise.all([left, queued])
+    expect(stateUpdated).toBe(true)
+    expect(drained).toBe(false)
+    releaseRight()
+    await Promise.all([right, drain])
+    expect(drained).toBe(true)
+    await expect(waitForSideOperations()).resolves.toBeUndefined()
+  })
+
   it('serializes writers for the same side', async () => {
     const order: string[] = []
     let release!: () => void

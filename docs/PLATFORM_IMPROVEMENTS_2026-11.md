@@ -42,7 +42,7 @@ priority and acceptance; it does not introduce an additional approval gate.
 | 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 merged after hosted checks; native explanation timeline consolidated in PR 69; live acceptance remains |
 | 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Core and native PR 69 provide the clear plan and app-owned backup workflow; physical alarm and selected accessory acceptance remain |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Core PR 98 merged after hosted checks; native PR 69 includes reviewed Pod and app-owned phone coordination with fresh phone-state reconciliation. Qualified house devices and live acceptance remain |
-| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99–103 merged source identity, bounded continuous history import, the durable command boundary, atomic arrangement storage and fresh processing acknowledgments after hosted checks. Service-generation and atomic-release prerequisites pass local validation. Runtime recovery, private learning migration and native/web activation remain pending; live solo behavior is unchanged |
+| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99–103 merged source identity, bounded continuous history import, the durable command boundary, atomic arrangement storage and fresh processing acknowledgments after hosted checks. Service-generation, verified recovery and cancellation storage pass local validation, including the 9,478-test Core suite, production build, types, lint and both migration checks. Runtime recovery, private learning migration and native/web activation remain pending; live solo behavior is unchanged |
 | 17 | Quiet and temporary arrangements | Explicit partner-resting/guest/side-swap state; shared-action arbitration and ambiguous-night training exclusion | Pending |
 | 18 | In-app practice | Illustrated guide reused, interactive temperature/alarm/Stop practice; secure invitation without owner key | Pending |
 | 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | Pending |
@@ -177,3 +177,27 @@ skips**. TypeScript, full ESLint, both migration checks and production build pas
 The initial full-run failure was two omitted schema-contract expectations for the
 new receipt table; both were updated and the complete suite passed afterward.
 Hosted checks and the complete runtime recovery path remain separate gates.
+
+### Arrangement automatic-service lifecycle — local implementation
+
+Core PR 104 is merged as `32e08120650142bf011bb4ea1f7e1b7538e6d3f0`;
+its tree `8d87a7568ee55506c6ed944fd3ebd8aac9e7ba1b` matches the tested head.
+The follow-up adds shared, drainable suspension and explicit fresh resume for
+automatic services, including old keepalive refreshes, occupancy producers,
+rule evaluations and post-command alarm state updates. Held startup retains
+diagnostics and Stop but cannot restore automatic producers.
+
+The focused lifecycle suite passes 344 tests; the full suite passes 9,501 tests
+with 19 existing skips. TypeScript, full ESLint and production build pass. An
+earlier full run had one WebSocket handshake failure (HTTP 501); all 137 streaming
+cases passed in isolation, and the final full suite passed without changing the
+streaming implementation, assertions or timeouts. The failed log remains retained.
+The public arrangement API still reports
+activation unavailable; coordinator wiring, private learning migration and
+attended hardware acceptance remain outstanding. Live solo behavior is unchanged.
+
+The hosted thermal-forecast audit timeout was profiled and traced to repeated ICU
+timezone formatter construction. Shared bounded formatter reuse preserves every
+recording/source audit, fixture, assertion and timeout. The corrected local full
+coverage suite passes **9,512 tests, 19 existing skips**; production build,
+TypeScript and focused lint pass. Final hosted checks remain a separate gate.

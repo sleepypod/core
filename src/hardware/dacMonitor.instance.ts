@@ -188,7 +188,7 @@ export const shutdownDacMonitor = async (): Promise<void> => {
 
   // Keep pending snoozes and vibrating alarms on disk for the next process.
   suspendSnoozes()
-  suspendActiveAlarms()
+  await suspendActiveAlarms()
   resetPrimingState()
 
   const unsubFlow = g[KEYS.unsubFlow] as (() => void) | undefined

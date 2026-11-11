@@ -626,6 +626,34 @@ describe('AutomationEngine — action error', () => {
 })
 
 describe('AutomationEngine — branch coverage corners', () => {
+  it('waits for an in-flight rule evaluation before reporting stopped', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const harness = makeHarness([rule({ actions: [{ kind: 'setTemperature', temp: lit(70) }] })])
+    const publish = vi.spyOn(harness.control, 'replaceAutopilot')
+    publish.mockImplementationOnce(async () => {
+      await gate
+      return { source: null, requestId: null, targetTemperature: null, holdUntil: null, blocked: null }
+    })
+    await harness.engine.reload()
+    const tick = harness.engine.tick()
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce())
+    let stopped = false
+    const stopping = harness.engine.stop().then(() => {
+      stopped = true
+    })
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(3))
+    expect(stopped).toBe(false)
+    expect(harness.engine.isGloballyEnabled()).toBe(false)
+    release()
+    await Promise.all([tick, stopping])
+    expect(stopped).toBe(true)
+    expect(harness.runs).toHaveLength(0)
+    expect(harness.hwCalls).toHaveLength(0)
+  })
+
   it('start() is idempotent — a second call does not install a second timer', async () => {
     const h = makeHarness([rule({ actions: [{ kind: 'notify', message: 'x' }] })])
     await h.engine.start()

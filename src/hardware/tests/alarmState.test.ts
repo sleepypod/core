@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   writes: [] as Array<{ isAlarmVibrating: boolean }>,
   fail: false,
   failure: new Error('db dead') as unknown,
+  publicationGate: null as Promise<void> | null,
   broadcast: vi.fn(),
 }))
 
@@ -15,6 +16,7 @@ vi.mock('@/src/db', () => ({
     update: () => ({
       set: (values: { isAlarmVibrating: boolean }) => ({
         where: async () => {
+          await mocks.publicationGate
           if (mocks.fail) throw mocks.failure
           mocks.writes.push(values)
         },
@@ -40,11 +42,12 @@ describe('alarmState', () => {
     mocks.writes.length = 0
     mocks.fail = false
     mocks.failure = new Error('db dead')
+    mocks.publicationGate = null
     mocks.broadcast.mockClear()
   })
 
-  afterEach(() => {
-    suspendActiveAlarms()
+  afterEach(async () => {
+    await suspendActiveAlarms()
     vi.useRealTimers()
     rmSync(dir, { recursive: true, force: true })
   })
@@ -140,11 +143,34 @@ describe('alarmState', () => {
 
   it('suspending stops timers but keeps the alarm on disk for the next process', async () => {
     await markAlarmStarted('left', ALARM, Date.now())
-    suspendActiveAlarms()
+    await suspendActiveAlarms()
     expect(getActiveAlarmConfig('left')).toBeNull()
     mocks.broadcast.mockClear()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(mocks.broadcast).not.toHaveBeenCalled()
     expect(loadAlarmState().alarms.left).toBeDefined()
+  })
+
+  it('drains a fired timer publication even through another module instance', async () => {
+    await markAlarmStarted('left', { ...ALARM, duration: 1 })
+    let release!: () => void
+    mocks.publicationGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getActiveAlarmConfig('left')).toBeNull()
+    vi.resetModules()
+    const duplicate = await import('../alarmState')
+    let suspended = false
+    const suspension = duplicate.suspendActiveAlarms().then(() => {
+      suspended = true
+    })
+    await Promise.resolve()
+    expect(suspended).toBe(false)
+    release()
+    await suspension
+    expect(suspended).toBe(true)
+    expect(mocks.writes.at(-1)).toMatchObject({ isAlarmVibrating: false })
+    expect(mocks.broadcast).toHaveBeenLastCalledWith('left', { isAlarmVibrating: false })
   })
 })

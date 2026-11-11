@@ -84,13 +84,22 @@ const freshState = (): SideState => ({
   ownMutationAt: 0,
 })
 
-const state: Record<Side, SideState> = { left: freshState(), right: freshState() }
-
-let pollHandle: ReturnType<typeof setInterval> | null = null
-const pendingPowerOns = new Set<Promise<void>>()
-const powerOnInFlight = new Set<Side>()
-/** Bumped on stop and on settings changes; a queued power-on from an older generation stands down. */
-let generation = 0
+// API and instrumentation chunks must stop and restart the same watcher.
+const shared = globalThis as typeof globalThis & {
+  __sp_autoOnWatcher?: {
+    state: Record<Side, SideState>
+    pollHandle: ReturnType<typeof setInterval> | null
+    pendingPowerOns: Set<Promise<void>>
+    powerOnInFlight: Set<Side>
+    generation: number
+    shutdown: Promise<void> | null
+  }
+}
+const runtime = shared.__sp_autoOnWatcher ??= {
+  state: { left: freshState(), right: freshState() }, pollHandle: null,
+  pendingPowerOns: new Set(), powerOnInFlight: new Set(), generation: 0, shutdown: null,
+}
+const { state, pendingPowerOns, powerOnInFlight } = runtime
 
 // ---------------------------------------------------------------------------
 // Config / DB reads
@@ -214,7 +223,7 @@ export function inWindow(nowMinutes: number, start: string, end: string): boolea
 // ---------------------------------------------------------------------------
 
 function isStillEligible(side: Side, gen: number): boolean {
-  if (gen !== generation) return false
+  if (gen !== runtime.generation) return false
   const cfg = getConfig()[side]
   if (!cfg.enabled || cfg.awayMode) return false
   if (readPower(side).powered || hasActiveRunOnce(side)) return false
@@ -261,8 +270,8 @@ async function powerOnSide(side: Side, gen: number): Promise<void> {
         console.warn(`[auto-on] ${side}: could not release a held power-off:`, e instanceof Error ? e.message : e)
       }
       const fallback = state[side].lastTarget ?? DEFAULT_FALLBACK_TEMP_F
-      const status = await getTemperatureController().powerOnLocked(side, fallback, () => gen === generation)
-      if (gen !== generation) {
+      const status = await getTemperatureController().powerOnLocked(side, fallback, () => gen === runtime.generation)
+      if (gen !== runtime.generation) {
         skip()
         return
       }
@@ -282,7 +291,7 @@ async function powerOnSide(side: Side, gen: number): Promise<void> {
 
 function firePowerOn(side: Side): void {
   powerOnInFlight.add(side)
-  const p = powerOnSide(side, generation).finally(() => {
+  const p = powerOnSide(side, runtime.generation).finally(() => {
     state[side].personSince = null
     powerOnInFlight.delete(side)
     pendingPowerOns.delete(p)
@@ -395,24 +404,28 @@ function poll(): void {
 // ---------------------------------------------------------------------------
 
 export function startAutoOnWatcher(): void {
-  if (pollHandle) return
+  if (runtime.shutdown) throw new Error('Auto-on watcher is stopping')
+  if (runtime.pollHandle) return
   console.log('[auto-on] Watcher started (poll every 30s)')
   poll()
-  pollHandle = setInterval(poll, POLL_INTERVAL_MS)
+  runtime.pollHandle = setInterval(poll, POLL_INTERVAL_MS)
 }
 
-export async function stopAutoOnWatcher(): Promise<void> {
-  if (pollHandle) {
-    clearInterval(pollHandle)
-    pollHandle = null
+export function stopAutoOnWatcher(): Promise<void> {
+  if (runtime.shutdown) return runtime.shutdown
+  if (runtime.pollHandle) {
+    clearInterval(runtime.pollHandle)
+    runtime.pollHandle = null
   }
-  generation++
+  runtime.generation++
   for (const side of SIDES) state[side] = freshState()
   if (pendingPowerOns.size > 0) {
     console.log(`[auto-on] Waiting for ${pendingPowerOns.size} in-flight power-on(s)...`)
-    await Promise.allSettled([...pendingPowerOns])
   }
-  console.log('[auto-on] Watcher stopped')
+  runtime.shutdown = Promise.allSettled([...pendingPowerOns]).then(() => {
+    console.log('[auto-on] Watcher stopped')
+  }).finally(() => { runtime.shutdown = null })
+  return runtime.shutdown
 }
 
 /**
@@ -421,8 +434,8 @@ export async function stopAutoOnWatcher(): Promise<void> {
  * suppression and the last target.
  */
 export function restartAutoOnWatcher(): void {
-  if (!pollHandle) return
-  generation++
+  if (!runtime.pollHandle) return
+  runtime.generation++
   for (const side of SIDES) {
     state[side].personSince = null
     state[side].emptySince = null

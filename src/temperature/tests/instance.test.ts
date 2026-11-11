@@ -1,6 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { resetControlDatabase } from './databaseFixture'
+import { admissionFixture } from '@/src/hardware/tests/admissionFixture'
+
+let admission: ReturnType<typeof admissionFixture>
 
 const hardware = vi.hoisted(() => ({
   connect: vi.fn(async () => {}),
@@ -50,6 +53,7 @@ const fileDatabase = databaseModule as typeof databaseModule & { reopenForTest: 
 afterAll(() => fileDatabase.cleanupForTest())
 
 beforeEach(() => {
+  admission = admissionFixture()
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-09-28T22:00:00Z'))
   safety.blocked = false
@@ -72,10 +76,29 @@ beforeEach(() => {
 
 afterEach(async () => {
   await stopTemperatureController()
+  admission.uninstall()
   vi.useRealTimers()
 })
 
 describe('production controller with migrated SQLite', () => {
+  it('does not start reconciliation while the arrangement is held', async () => {
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    await expect(startTemperatureController()).rejects.toThrow('Hardware changes are paused')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+  })
+
+  it('retires its periodic loop when an arrangement changes and never resumes an old loop', async () => {
+    await startTemperatureController()
+    hardware.setTemperature.mockClear()
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    await vi.advanceTimersByTimeAsync(1000)
+    admission.set({ revision: 3, holdId: null })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(hardware.setTemperature).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('journals the actual arbitration winner, never an unselected policy proposal', async () => {
     const controller = getTemperatureController()
     const now = Date.now()

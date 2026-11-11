@@ -42,19 +42,20 @@ type Side = (typeof SIDES)[number]
  * side is occupied, off, exempt, or presence can't be sensed. The countdown to
  * power-off is `now - emptySince >= autoOffMinutes`.
  */
-const emptySince: Record<Side, number | null> = { left: null, right: null }
-
-let pollHandle: ReturnType<typeof setInterval> | null = null
-
-/** Track in-flight powerOffSide() calls so shutdown can await them. */
-const pendingPowerOffs = new Set<Promise<void>>()
-
-/**
- * Sides with a power-off queued or running. The off waits on the side lock and
- * device_state stays powered until it runs, so without this every 30s poll
- * would queue another power-off behind a long-held lock.
- */
-const powerOffInFlight = new Set<Side>()
+const shared = globalThis as typeof globalThis & {
+  __sp_autoOffWatcher?: {
+    emptySince: Record<Side, number | null>
+    pollHandle: ReturnType<typeof setInterval> | null
+    pendingPowerOffs: Set<Promise<void>>
+    powerOffInFlight: Set<Side>
+    shutdown: Promise<void> | null
+  }
+}
+const runtime = shared.__sp_autoOffWatcher ??= {
+  emptySince: { left: null, right: null }, pollHandle: null,
+  pendingPowerOffs: new Set(), powerOffInFlight: new Set(), shutdown: null,
+}
+const { emptySince, pendingPowerOffs, powerOffInFlight } = runtime
 
 /** 'timeout' = per-side presence countdown; 'cap' = global wall-clock cap. */
 type PowerOffReason = 'timeout' | 'cap'
@@ -366,17 +367,19 @@ function poll(): void {
 
 /** Start the auto-off watcher polling loop. */
 export function startAutoOffWatcher(): void {
-  if (pollHandle) return // already running
+  if (runtime.shutdown) throw new Error('Auto-off watcher is stopping')
+  if (runtime.pollHandle) return // already running
   console.log('[auto-off] Watcher started (poll every 30s)')
   poll() // initial evaluation
-  pollHandle = setInterval(poll, POLL_INTERVAL_MS)
+  runtime.pollHandle = setInterval(poll, POLL_INTERVAL_MS)
 }
 
 /** Stop the watcher, clear all pending timers, and await in-flight power-offs. */
-export async function stopAutoOffWatcher(): Promise<void> {
-  if (pollHandle) {
-    clearInterval(pollHandle)
-    pollHandle = null
+export function stopAutoOffWatcher(): Promise<void> {
+  if (runtime.shutdown) return runtime.shutdown
+  if (runtime.pollHandle) {
+    clearInterval(runtime.pollHandle)
+    runtime.pollHandle = null
   }
   clearEmptySince('left')
   clearEmptySince('right')
@@ -384,10 +387,11 @@ export async function stopAutoOffWatcher(): Promise<void> {
   // Await any in-flight powerOffSide() calls
   if (pendingPowerOffs.size > 0) {
     console.log(`[auto-off] Waiting for ${pendingPowerOffs.size} in-flight power-off(s)...`)
-    await Promise.allSettled([...pendingPowerOffs])
   }
-
-  console.log('[auto-off] Watcher stopped')
+  runtime.shutdown = Promise.allSettled([...pendingPowerOffs]).then(() => {
+    console.log('[auto-off] Watcher stopped')
+  }).finally(() => { runtime.shutdown = null })
+  return runtime.shutdown
 }
 
 /**
@@ -397,7 +401,7 @@ export async function stopAutoOffWatcher(): Promise<void> {
  */
 export function restartAutoOffTimers(): void {
   // Don't poll if watcher is not running (e.g. in CI)
-  if (!pollHandle) return
+  if (!runtime.pollHandle) return
 
   clearEmptySince('left')
   clearEmptySince('right')

@@ -8,6 +8,7 @@
  */
 
 import { eq } from 'drizzle-orm'
+import { assertHardwareWriteCurrent, captureHardwareIntent } from '@/src/hardware/admission'
 import { db } from '@/src/db'
 import { automationRuns, automations, deviceSettings } from '@/src/db/schema'
 import { getTemperatureController } from '@/src/temperature/instance'
@@ -32,10 +33,11 @@ const globals = globalThis as typeof globalThis & {
     engineInitPromise: Promise<AutomationEngine> | null
     cachedTimezone: string | null
     activeTimezone: string
+    shutdown: Promise<void> | null
   }
 }
 const state = globals.__sp_automationState ??= {
-  engineInstance: null, engineInitPromise: null, cachedTimezone: null, activeTimezone: DEFAULT_TIMEZONE,
+  engineInstance: null, engineInitPromise: null, cachedTimezone: null, activeTimezone: DEFAULT_TIMEZONE, shutdown: null,
 }
 
 async function loadTimezone(): Promise<string> {
@@ -88,12 +90,21 @@ async function disableRule(automationId: number): Promise<void> {
 }
 
 export async function getAutomationEngine(): Promise<AutomationEngine> {
+  const admission = captureHardwareIntent()
+  assertHardwareWriteCurrent(admission)
+  if (state.shutdown) throw new Error('AutomationEngine is shutting down')
   if (state.engineInstance) return state.engineInstance
   if (state.engineInitPromise) return state.engineInitPromise
 
   state.engineInitPromise = (async () => {
+    let engine: AutomationEngine | null = null
+    const assertStarting = () => {
+      assertHardwareWriteCurrent(admission)
+      if (state.shutdown) throw new Error('AutomationEngine startup was cancelled')
+    }
     try {
       const timezone = await loadTimezone()
+      assertStarting()
       state.activeTimezone = timezone
       // DAC status first, biometrics merged on top; the DAC reader stays
       // authoritative for any overlapping key (e.g. water.low).
@@ -102,7 +113,7 @@ export async function getAutomationEngine(): Promise<AutomationEngine> {
         new RoomSignalReader(),
         new DeviceSignalReader(),
       ])
-      const engine = new AutomationEngine({
+      engine = new AutomationEngine({
         signals: reader,
         now: () => Date.now(),
         clock: () => clockInTimezone(state.activeTimezone, new Date()),
@@ -123,12 +134,21 @@ export async function getAutomationEngine(): Promise<AutomationEngine> {
       catch {
         console.warn('[automation] settings unreadable; automatic control remains disabled')
       }
+      assertStarting()
       await engine.setGlobalEnabled(enabled)
+      assertStarting()
       await engine.start()
+      assertStarting()
       await engine.tick()
+      assertStarting()
       state.engineInstance = engine
       console.log('AutomationEngine initialized with timezone:', timezone)
       return engine
+    }
+    catch (error) {
+      // An interrupted start may already own a timer; drain it before permitting a retry.
+      await engine?.stop()
+      throw error
     }
     finally {
       state.engineInitPromise = null
@@ -154,12 +174,17 @@ export function updateAutomationTimezone(timezone: string): void {
   console.log('[automation] timezone updated to', timezone)
 }
 
-export async function shutdownAutomationEngine(): Promise<void> {
-  if (state.engineInstance) {
-    await state.engineInstance.stop()
+export function shutdownAutomationEngine(): Promise<void> {
+  if (state.shutdown) return state.shutdown
+  const pending = state.engineInitPromise
+  state.shutdown = (async () => {
+    await pending?.catch(() => {})
+    await state.engineInstance?.stop()
+  })().finally(() => {
     state.engineInstance = null
     state.engineInitPromise = null
     state.cachedTimezone = null
-    console.log('AutomationEngine shut down')
-  }
+    state.shutdown = null
+  })
+  return state.shutdown
 }

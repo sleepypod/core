@@ -26,6 +26,11 @@ interface ActiveAlarm {
 
 const G = globalThis as Record<string, unknown>
 const KEY = '__sp_active_alarms__'
+const PENDING_KEY = '__sp_alarm_publications__'
+
+function pendingPublications(): Set<Promise<void>> {
+  return (G[PENDING_KEY] ??= new Set<Promise<void>>()) as Set<Promise<void>>
+}
 
 function active(): Map<Side, ActiveAlarm> {
   let m = G[KEY] as Map<Side, ActiveAlarm> | undefined
@@ -36,7 +41,13 @@ function active(): Map<Side, ActiveAlarm> {
   return m
 }
 
-async function publish(side: Side, vibrating: boolean): Promise<void> {
+function publish(side: Side, vibrating: boolean): Promise<void> {
+  const pending = publishState(side, vibrating).finally(() => pendingPublications().delete(pending))
+  pendingPublications().add(pending)
+  return pending
+}
+
+async function publishState(side: Side, vibrating: boolean): Promise<void> {
   try {
     await db
       .update(deviceState)
@@ -109,7 +120,9 @@ export async function restoreActiveAlarms(now = Date.now()): Promise<void> {
  * Shutdown: stop this process's end-of-alarm timers but keep active alarms
  * persisted, so the next process restores them (restoreActiveAlarms).
  */
-export function suspendActiveAlarms(): void {
+export async function suspendActiveAlarms(): Promise<void> {
   for (const a of active().values()) clearTimeout(a.timer)
   active().clear()
+  // A fired timer can still be publishing after it leaves the active map.
+  await Promise.all([...pendingPublications()])
 }

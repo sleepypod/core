@@ -9,6 +9,7 @@ import { markSideMutated } from '@/src/hardware/deviceStateSync'
 import { hasFirmwareSynced, hasHeatingSessionEvidence } from '@/src/hardware/sideMutations'
 import { shouldBlock } from '@/src/hardware/pumpStallGuard'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { assertHardwareWriteCurrent, captureHardwareIntent } from '@/src/hardware/admission'
 import { fahrenheitToLevel, MAX_TEMP, MIN_TEMP, type Side } from '@/src/hardware/types'
 import { activeSleeperSides, scheduleSourceSide, type BedConfiguration } from '@/src/lib/singleSleeper'
 import { broadcastMutationStatus } from '@/src/streaming/broadcastMutationStatus'
@@ -209,6 +210,8 @@ export function getTemperatureControllerIfRunning(): TemperatureController | und
 
 /** Start after migrations/state restoration. The non-overlapping loop also retries failed writes. */
 export async function startTemperatureController(): Promise<void> {
+  const admission = captureHardwareIntent()
+  assertHardwareWriteCurrent(admission)
   if (globalState.__sp_temperatureService?.running) return
   if (globalState.__sp_temperatureService) {
     await stopTemperatureController()
@@ -219,6 +222,15 @@ export async function startTemperatureController(): Promise<void> {
   const ticking = new Set<Side>()
   let waitingLogged = false
   const tick = () => {
+    try {
+      assertHardwareWriteCurrent(admission)
+    }
+    catch {
+      // A held or replaced arrangement never revives this generation's periodic reconciliation.
+      service.running = false
+      clearInterval(service.timer)
+      return Promise.all([...service.pending])
+    }
     // device_state is only trustworthy once the firmware has reported in
     // since this process started; before that a stale is_powered row would
     // make reconcile energize a side nobody asked for. Explicit commands

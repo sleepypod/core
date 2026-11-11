@@ -2,6 +2,9 @@
 import { resetControlDatabase } from '@/src/temperature/tests/databaseFixture'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type BetterSqlite3 from 'better-sqlite3'
+import { admissionFixture } from '@/src/hardware/tests/admissionFixture'
+
+let admission: ReturnType<typeof admissionFixture>
 
 // ── Shared mocks ──────────────────────────────────────────────────────────
 const setTemperature = vi.fn(async () => {})
@@ -100,6 +103,7 @@ async function flushAsync(): Promise<void> {
 }
 
 beforeEach(() => {
+  admission = admissionFixture()
   vi.restoreAllMocks()
   setTemperature.mockClear()
   connect.mockClear()
@@ -107,8 +111,9 @@ beforeEach(() => {
   resetSchema()
 })
 
-afterEach(() => {
-  shutdownKeepalives()
+afterEach(async () => {
+  await shutdownKeepalives()
+  admission.uninstall()
   vi.useRealTimers()
 })
 
@@ -280,8 +285,8 @@ describe('startKeepalive', () => {
     startKeepalive('left')
     await flushAsync()
 
-    // Two immediate ticks (one per start call), but only one interval armed.
-    expect(setTemperature).toHaveBeenCalledTimes(2)
+    // Replacing the first timer cancels its still-queued refresh as well.
+    expect(setTemperature).toHaveBeenCalledTimes(1)
 
     setTemperature.mockClear()
     await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS)
@@ -480,6 +485,83 @@ describe('initializeKeepalives', () => {
 })
 
 describe('shutdownKeepalives', () => {
+  it('cancels a refresh that is still waiting behind another side operation', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 70 })
+    setSideSettings('left', { alwaysOn: 1 })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const occupied = withSideLock('left', () => gate)
+    startKeepalive('left')
+    const stopping = shutdownKeepalives()
+    let stopped = false
+    void stopping.then(() => {
+      stopped = true
+    })
+    await flushAsync()
+    expect(stopped).toBe(false)
+    release()
+    await Promise.all([occupied, stopping])
+    expect(setTemperature).not.toHaveBeenCalled()
+  })
+
+  it('drains an already dispatched refresh and refuses a new timer while stopping', async () => {
+    setSideState('left', { isPowered: 1, targetTemperature: 70 })
+    setSideSettings('left', { alwaysOn: 1 })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    setTemperature.mockImplementationOnce(() => gate)
+    startKeepalive('left')
+    await flushAsync()
+    expect(setTemperature).toHaveBeenCalledOnce()
+    const stopping = shutdownKeepalives()
+    expect(shutdownKeepalives()).toBe(stopping)
+    let stopped = false
+    void stopping.then(() => {
+      stopped = true
+    })
+    await flushAsync()
+    expect(stopped).toBe(false)
+    expect(() => startKeepalive('right')).toThrow('stopping')
+    release()
+    await stopping
+    expect(stopped).toBe(true)
+    expect(() => startKeepalive('right')).not.toThrow()
+  })
+
+  it('shares cancellation across separately bundled module instances', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    setSideState('left', { isPowered: 1, targetTemperature: 70 })
+    setSideSettings('left', { alwaysOn: 1 })
+    startKeepalive('left')
+    await flushAsync()
+    expect(setTemperature).toHaveBeenCalledOnce()
+    vi.resetModules()
+    const duplicate = await import('../temperatureKeepalive')
+    expect(duplicate.shutdownKeepalives).not.toBe(shutdownKeepalives)
+    await duplicate.shutdownKeepalives()
+    await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS * 2)
+    expect(setTemperature).toHaveBeenCalledOnce()
+  })
+
+  it('does not carry an old timer into a released household revision', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    setSideState('left', { isPowered: 1, targetTemperature: 70 })
+    setSideSettings('left', { alwaysOn: 1 })
+    startKeepalive('left')
+    await flushAsync()
+    expect(setTemperature).toHaveBeenCalledOnce()
+    admission.set({ revision: 2, holdId: 'transition' })
+    expect(() => startKeepalive('right')).toThrow('paused')
+    admission.set({ revision: 3, holdId: null })
+    await vi.advanceTimersByTimeAsync(KEEPALIVE_INTERVAL_MS)
+    expect(setTemperature).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('stops every active timer', async () => {
     setSideState('left', { isPowered: 1, targetTemperature: 90 })
     setSideState('right', { isPowered: 1, targetTemperature: 95 })

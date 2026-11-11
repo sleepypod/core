@@ -86,6 +86,7 @@ export class AutomationEngine {
   private windowSignals = new Set<string>()
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
+  private pendingTick: Promise<void> | null = null
 
   // Global kill-switch. When false, ticks short-circuit and no rule is
   // evaluated or commanded — per-rule enabled/dryRun state is left untouched, so
@@ -158,6 +159,7 @@ export class AutomationEngine {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     await this.setGlobalEnabled(false)
+    await this.pendingTick
   }
 
   /** Flip the persisted kill-switch and immediately revoke every outstanding lease. */
@@ -209,6 +211,10 @@ export class AutomationEngine {
     if (!this.globalEnabled) return // kill-switch engaged — evaluate nothing
     if (this.ticking) return // never overlap ticks
     this.ticking = true
+    let finish!: () => void
+    this.pendingTick = new Promise<void>((resolve) => {
+      finish = resolve
+    })
     try {
       const generation = this.generation
       this.pendingRuns = []
@@ -300,6 +306,8 @@ export class AutomationEngine {
     }
     finally {
       this.ticking = false
+      this.pendingTick = null
+      finish()
     }
   }
 

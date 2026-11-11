@@ -10,6 +10,13 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { admissionFixture } from '@/src/hardware/tests/admissionFixture'
+
+let admission: ReturnType<typeof admissionFixture>
+function resetProcessModules() {
+  delete (globalThis as Record<string, unknown>).__sp_nodeLifecycle
+  vi.resetModules()
+}
 
 const mocks = vi.hoisted(() => ({
   startHardwareAdmission: vi.fn(),
@@ -40,6 +47,13 @@ const mocks = vi.hoisted(() => ({
   shutdownKeepalives: vi.fn(),
   startAutoOffWatcher: vi.fn(),
   stopAutoOffWatcher: vi.fn(async () => undefined),
+  startAutoOnWatcher: vi.fn(),
+  stopAutoOnWatcher: vi.fn(async () => undefined),
+  restoreActiveAlarms: vi.fn(async () => undefined),
+  restoreSnoozes: vi.fn(),
+  suspendActiveAlarms: vi.fn(),
+  suspendSnoozes: vi.fn(),
+  waitForSideOperations: vi.fn<() => Promise<void>>(async () => undefined),
   shutdownHomeKit: vi.fn(async () => undefined),
   startHomeKitIfEnabled: vi.fn(async () => undefined),
   runMigrations: vi.fn(async () => undefined),
@@ -68,8 +82,9 @@ const mocks = vi.hoisted(() => ({
   stopHealthSampler: vi.fn(),
 }))
 vi.mock('@/src/lib/healthSampler', () => ({ startHealthSampler: mocks.startHealthSampler, stopHealthSampler: mocks.stopHealthSampler }))
-vi.mock('@/src/hardware/alarmState', () => ({ restoreActiveAlarms: vi.fn(async () => undefined) }))
-vi.mock('@/src/hardware/snoozeManager', () => ({ restoreSnoozes: vi.fn() }))
+vi.mock('@/src/hardware/alarmState', () => ({ restoreActiveAlarms: mocks.restoreActiveAlarms, suspendActiveAlarms: mocks.suspendActiveAlarms }))
+vi.mock('@/src/hardware/snoozeManager', () => ({ restoreSnoozes: mocks.restoreSnoozes, suspendSnoozes: mocks.suspendSnoozes }))
+vi.mock('@/src/hardware/sideLock', () => ({ waitForSideOperations: mocks.waitForSideOperations }))
 
 vi.mock('@/src/biometrics/shadow/startup', () => ({
   startConfiguredShadowService: mocks.startConfiguredShadowService,
@@ -156,6 +171,10 @@ vi.mock('@/src/services/autoOffWatcher', () => ({
   startAutoOffWatcher: mocks.startAutoOffWatcher,
   stopAutoOffWatcher: mocks.stopAutoOffWatcher,
 }))
+vi.mock('@/src/services/autoOnWatcher', () => ({
+  startAutoOnWatcher: mocks.startAutoOnWatcher,
+  stopAutoOnWatcher: mocks.stopAutoOnWatcher,
+}))
 vi.mock('@/src/homekit', () => ({
   shutdownHomeKit: mocks.shutdownHomeKit,
   startHomeKitIfEnabled: mocks.startHomeKitIfEnabled,
@@ -179,7 +198,8 @@ const jobManager = { getScheduler: () => scheduler }
 const signalHandlers = new Map<string, () => Promise<void>>()
 
 beforeEach(() => {
-  vi.resetModules()
+  admission = admissionFixture()
+  resetProcessModules()
   for (const key of Object.keys(mocks) as Array<keyof typeof mocks>) {
     const m = mocks[key] as ReturnType<typeof vi.fn>
     if (typeof m.mockReset === 'function') m.mockReset()
@@ -211,6 +231,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  admission.uninstall()
   delete process.env.CI
   delete process.env.NEXT_RUNTIME
   vi.useRealTimers()
@@ -455,6 +476,7 @@ describe('register()', () => {
     expect(mocks.startDatabaseIntegrityChecks).toHaveBeenCalledOnce()
     expect(mocks.initializeKeepalives).not.toHaveBeenCalled()
     expect(mocks.recordStartupPhase).toHaveBeenCalledWith('http-initialization-ready')
+    await vi.waitFor(() => expect(mocks.getJobManager).toHaveBeenCalledOnce())
     release(jobManager)
     await initializeScheduler()
     expect(mocks.initializeKeepalives).toHaveBeenCalledOnce()
@@ -471,12 +493,14 @@ describe('register()', () => {
     const { register, initializeScheduler } = await fresh()
     await register()
     const pending = initializeScheduler()
+    await vi.waitFor(() => expect(mocks.getJobManager).toHaveBeenCalledOnce())
     await signalHandlers.get('SIGTERM')?.()
     release(jobManager)
     await pending
 
     expect(mocks.initializeKeepalives).not.toHaveBeenCalled()
-    expect(mocks.startMqttBridge).not.toHaveBeenCalled()
+    expect(mocks.startMqttBridge).toHaveBeenCalledOnce()
+    expect(mocks.shutdownMqttBridge).toHaveBeenCalledOnce()
     expect(mocks.startAutoOffWatcher).not.toHaveBeenCalled()
     expect(mocks.stopDatabaseIntegrityChecks).toHaveBeenCalledOnce()
     expect(mocks.shutdownJobManager).toHaveBeenCalledOnce()
@@ -522,8 +546,9 @@ describe('register()', () => {
   })
 
   it('runs migrations and full init when not in CI', async () => {
-    const { register } = await fresh()
+    const { register, initializeScheduler } = await fresh()
     await register()
+    await initializeScheduler()
     expect(mocks.runMigrations).toHaveBeenCalled()
     expect(mocks.checkAndRepairIptables).toHaveBeenCalled()
     expect(mocks.getJobManager).toHaveBeenCalled()
@@ -696,7 +721,7 @@ describe('graceful shutdown and process handlers', () => {
     await vi.waitFor(() => expect(mocks.stopTemperatureController).toHaveBeenCalledTimes(2))
     expect(mocks.initializeKeepalives).not.toHaveBeenCalled()
 
-    vi.resetModules()
+    resetProcessModules()
     mocks.startTemperatureController.mockRejectedValueOnce(new Error('controller offline'))
     const next = await fresh()
     await next.initializeScheduler()
@@ -720,13 +745,13 @@ describe('graceful shutdown and process handlers', () => {
     expect(mocks.startHealthSampler).not.toHaveBeenCalled()
     expect(mocks.startDatabaseIntegrityChecks).not.toHaveBeenCalled()
 
-    vi.resetModules()
+    resetProcessModules()
     mocks.rehydratePumpStallGuard.mockImplementationOnce(() => void signal('SIGTERM'))
     entry = await fresh()
     await entry.register()
     expect(mocks.startDacServer).toHaveBeenCalledOnce()
 
-    vi.resetModules()
+    resetProcessModules()
     mocks.shutdownDacMonitor.mockClear()
     mocks.getDacMonitor.mockImplementationOnce(async () => {
       void signal('SIGTERM')
@@ -737,7 +762,7 @@ describe('graceful shutdown and process handlers', () => {
     expect(mocks.startPiezoStreamServer).not.toHaveBeenCalled()
     await vi.waitFor(() => expect(mocks.shutdownDacMonitor).toHaveBeenCalledTimes(2))
 
-    vi.resetModules()
+    resetProcessModules()
     mocks.getJobManager.mockImplementation(async () => {
       void signal('SIGTERM')
       return jobManager
@@ -747,10 +772,11 @@ describe('graceful shutdown and process handlers', () => {
     await vi.waitFor(() => expect(mocks.getJobManager).toHaveBeenCalledOnce())
     await entry.initializeScheduler()
     expect(mocks.recordStartupPhase).not.toHaveBeenCalledWith('scheduler-ready', expect.anything())
-    expect(mocks.startMqttBridge).not.toHaveBeenCalled()
+    expect(mocks.startMqttBridge).toHaveBeenCalled()
+    expect(mocks.shutdownMqttBridge).toHaveBeenCalled()
     mocks.getJobManager.mockResolvedValue(jobManager)
 
-    vi.resetModules()
+    resetProcessModules()
     mocks.startConfiguredBacktestHost.mockClear()
     mocks.startConfiguredShadowService.mockClear()
     const shutdowns: Promise<void>[] = []
@@ -759,7 +785,7 @@ describe('graceful shutdown and process handlers', () => {
     await entry.register()
     expect(mocks.startConfiguredBacktestHost).not.toHaveBeenCalled()
 
-    vi.resetModules()
+    resetProcessModules()
     mocks.startConfiguredBacktestHost.mockImplementationOnce(() => void shutdowns.push(signal('SIGTERM')))
     entry = await fresh()
     await entry.register()
@@ -791,7 +817,7 @@ describe('graceful shutdown and process handlers', () => {
         expect(warnSpy).toHaveBeenCalledWith(expect.any(String), text)
       }
     })
-    vi.resetModules()
+    resetProcessModules()
     const logSpy = vi.mocked(console.log)
     logSpy.mockClear()
     warnSpy.mockClear()
@@ -800,5 +826,148 @@ describe('graceful shutdown and process handlers', () => {
     await next.register()
     expect(logSpy).not.toHaveBeenCalledWith('[startup] iptables rules verified')
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringMatching(/Repaired/), expect.anything())
+  })
+})
+
+describe('household transition service lifecycle', () => {
+  it('drains already-running side callbacks before clearing alarms and completing the pause', async () => {
+    const sideWork = Promise.withResolvers<undefined>()
+    const publication = Promise.withResolvers<undefined>()
+    mocks.waitForSideOperations.mockImplementationOnce(() => sideWork.promise)
+    mocks.suspendActiveAlarms.mockImplementationOnce(() => publication.promise)
+    const node = await import('@/src/server/instrumentation-node')
+    let stopped = false
+    const stopping = node.suspendAutomaticServices().then(() => {
+      stopped = true
+    })
+    await vi.waitFor(() => expect(mocks.waitForSideOperations).toHaveBeenCalledOnce())
+    expect(mocks.suspendSnoozes).toHaveBeenCalledOnce()
+    expect(mocks.suspendActiveAlarms).not.toHaveBeenCalled()
+    expect(stopped).toBe(false)
+    sideWork.resolve(undefined)
+    await vi.waitFor(() => expect(mocks.suspendActiveAlarms).toHaveBeenCalledOnce())
+    expect(stopped).toBe(false)
+    publication.resolve(undefined)
+    await stopping
+    expect(stopped).toBe(true)
+  })
+
+  it('keeps diagnostics online while a persisted hold blocks automatic restoration and lazy startup', async () => {
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    const node = await import('@/src/server/instrumentation-node')
+    await node.initializeScheduler()
+    expect(mocks.startDacServer).toHaveBeenCalledOnce()
+    expect(mocks.getDacMonitor).toHaveBeenCalledOnce()
+    expect(mocks.startHealthSampler).toHaveBeenCalledOnce()
+    expect(mocks.startMqttBridge).toHaveBeenCalledOnce()
+    expect(mocks.startHomeKitIfEnabled).toHaveBeenCalledOnce()
+    for (const producer of [mocks.restoreActiveAlarms, mocks.restoreSnoozes, mocks.getJobManager,
+      mocks.getAutomationEngine, mocks.startTemperatureController, mocks.startComfortPreview,
+      mocks.initializeKeepalives, mocks.startAutoOnWatcher, mocks.startAutoOffWatcher]) {
+      expect(producer).not.toHaveBeenCalled()
+    }
+    await expect(node.resumeAutomaticServices()).rejects.toThrow('Hardware changes are paused')
+    admission.set({ revision: 3, holdId: null })
+    await node.resumeAutomaticServices()
+    await vi.waitFor(() => expect(mocks.startComfortPreview).toHaveBeenCalledOnce())
+    expect(mocks.restoreActiveAlarms).toHaveBeenCalledOnce()
+    expect(mocks.restoreSnoozes).toHaveBeenCalledOnce()
+    expect(mocks.startMqttBridge).toHaveBeenCalledOnce()
+    expect(mocks.startHomeKitIfEnabled).toHaveBeenCalledOnce()
+  })
+
+  it('does not duplicate startup when Next loads another copy of the lifecycle module', async () => {
+    const first = await import('@/src/server/instrumentation-node')
+    await first.initializeScheduler()
+    await vi.waitFor(() => expect(mocks.startComfortPreview).toHaveBeenCalledOnce())
+    vi.resetModules()
+    const second = await import('@/src/server/instrumentation-node')
+    await second.initializeScheduler()
+    expect(mocks.getJobManager).toHaveBeenCalledOnce()
+    expect(mocks.startDacServer).toHaveBeenCalledOnce()
+    expect(mocks.startHomeKitIfEnabled).toHaveBeenCalledOnce()
+  })
+
+  it('quiesces pending startup and every producer while preserving read/Stop connections', async () => {
+    const gate = Promise.withResolvers<typeof jobManager>()
+    mocks.getJobManager.mockImplementationOnce(() => gate.promise)
+    const node = await import('@/src/server/instrumentation-node')
+    const starting = node.initializeScheduler()
+    await vi.waitFor(() => expect(mocks.getJobManager).toHaveBeenCalledOnce())
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    const stopping = node.suspendAutomaticServices()
+    gate.resolve(jobManager)
+    await Promise.all([starting, stopping])
+    expect(mocks.getAutomationEngine).not.toHaveBeenCalled()
+    expect(mocks.startAutoOnWatcher).not.toHaveBeenCalled()
+    expect(mocks.shutdownJobManager).toHaveBeenCalledOnce()
+    expect(mocks.shutdownAutomationEngine).toHaveBeenCalledOnce()
+    expect(mocks.shutdownKeepalives).toHaveBeenCalledOnce()
+    expect(mocks.stopAutoOnWatcher).toHaveBeenCalledOnce()
+    expect(mocks.stopAutoOffWatcher).toHaveBeenCalledOnce()
+    expect(mocks.suspendActiveAlarms).toHaveBeenCalledOnce()
+    expect(mocks.suspendSnoozes).toHaveBeenCalledOnce()
+    expect(mocks.shutdownDacMonitor).not.toHaveBeenCalled()
+    expect(mocks.shutdownMqttBridge).not.toHaveBeenCalled()
+    expect(mocks.shutdownHomeKit).not.toHaveBeenCalled()
+    await node.initializeScheduler()
+    expect(mocks.getJobManager).toHaveBeenCalledOnce()
+    admission.set({ revision: 3, holdId: null })
+    await node.resumeAutomaticServices()
+    expect(mocks.getJobManager).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps startup suspended after a stop fails and still attempts every other stop', async () => {
+    const node = await import('@/src/server/instrumentation-node')
+    await node.initializeScheduler()
+    await vi.waitFor(() => expect(mocks.startComfortPreview).toHaveBeenCalledOnce())
+    admission.set({ revision: 2, holdId: 'held-transition' })
+    mocks.shutdownKeepalives.mockImplementationOnce(() => {
+      throw new Error('cannot drain keepalive')
+    })
+    await expect(node.suspendAutomaticServices()).rejects.toThrow('did not finish stopping')
+    expect(mocks.stopComfortPreview).toHaveBeenCalledOnce()
+    expect(mocks.stopTemperatureController).toHaveBeenCalledOnce()
+    expect(mocks.stopAutoOnWatcher).toHaveBeenCalledOnce()
+    expect(mocks.stopAutoOffWatcher).toHaveBeenCalledOnce()
+    await node.initializeScheduler()
+    expect(mocks.getJobManager).toHaveBeenCalledOnce()
+    admission.set({ revision: 3, holdId: null })
+    await expect(node.resumeAutomaticServices()).rejects.toThrow('must finish stopping')
+    await node.suspendAutomaticServices()
+    await node.resumeAutomaticServices()
+    expect(mocks.getJobManager).toHaveBeenCalledTimes(2)
+  })
+
+  it('waits for late automatic startup before confirming a resume', async () => {
+    const node = await import('@/src/server/instrumentation-node')
+    await node.suspendAutomaticServices()
+    const gate = Promise.withResolvers<undefined>()
+    mocks.startTemperatureController.mockImplementationOnce(() => gate.promise)
+    let resumed = false
+    const resuming = node.resumeAutomaticServices().then(() => {
+      resumed = true
+    })
+    await vi.waitFor(() => expect(mocks.startTemperatureController).toHaveBeenCalledOnce())
+    expect(resumed).toBe(false)
+    expect(mocks.startComfortPreview).not.toHaveBeenCalled()
+    gate.resolve(undefined)
+    await resuming
+    expect(resumed).toBe(true)
+    expect(mocks.startComfortPreview).toHaveBeenCalledOnce()
+  })
+
+  it('reports an engine startup failure and drains the partial resume', async () => {
+    const node = await import('@/src/server/instrumentation-node')
+    await node.suspendAutomaticServices()
+    mocks.getAutomationEngine.mockRejectedValueOnce(new Error('rules unavailable'))
+    await expect(node.resumeAutomaticServices()).rejects.toThrow('could not resume')
+    expect(mocks.shutdownJobManager).toHaveBeenCalledTimes(2)
+    expect(mocks.stopTemperatureController).toHaveBeenCalledTimes(2)
+    expect(mocks.suspendSnoozes).toHaveBeenCalledTimes(2)
+    await node.initializeScheduler()
+    expect(mocks.getJobManager).toHaveBeenCalledOnce()
+    await node.resumeAutomaticServices()
+    expect(mocks.getJobManager).toHaveBeenCalledTimes(2)
   })
 })

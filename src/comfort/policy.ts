@@ -3,6 +3,7 @@ import type { ComfortSignals } from './signals'
 import type { ComfortApplication } from './application-contract'
 import type { BedroomComfortGuidance } from '@/src/bedroom/contract'
 import { currentBedroomGuidance } from '@/src/bedroom/fusion'
+import { dateInTimeZone } from '@/src/lib/timeZoneDate'
 import type { ThermalContext } from './thermal-learning'
 
 /** Personal comfort policy ported from the owner's Free Sleep thermal/policy.ts.
@@ -201,9 +202,7 @@ function validDate(value: string): boolean {
 }
 
 export function comfortLocalDate(now: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now)
-  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
-  return `${values.year}-${values.month}-${values.day}`
+  return dateInTimeZone(now, timezone)
 }
 
 /** Consume each local-date check-in once, with at most one degree of learning per routine. */

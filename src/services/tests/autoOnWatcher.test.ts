@@ -529,6 +529,19 @@ describe('autoOnWatcher — gates', () => {
 })
 
 describe('autoOnWatcher — lifecycle', () => {
+  it('shares its timer across module instances and stops the original producer', async () => {
+    mockOccupancy.left = occ('person')
+    const interval = vi.spyOn(globalThis, 'setInterval')
+    startAutoOnWatcher()
+    vi.resetModules()
+    const duplicate = await import('../autoOnWatcher')
+    duplicate.startAutoOnWatcher()
+    expect(interval).toHaveBeenCalledOnce()
+    await duplicate.stopAutoOnWatcher()
+    await vi.advanceTimersByTimeAsync(10 * MIN)
+    expect(powerOnLocked).not.toHaveBeenCalled()
+  })
+
   it('start is idempotent and stop awaits in-flight power-ons', async () => {
     let release: () => void = () => {}
     powerOnLocked.mockImplementationOnce(() => new Promise((resolve) => {
@@ -540,6 +553,8 @@ describe('autoOnWatcher — lifecycle', () => {
     await vi.advanceTimersByTimeAsync(5 * MIN)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const stopping = stopAutoOnWatcher()
+    expect(stopAutoOnWatcher()).toBe(stopping)
+    expect(() => startAutoOnWatcher()).toThrow('stopping')
     release()
     await stopping
     expect(log).toHaveBeenCalledWith('[auto-on] Waiting for 1 in-flight power-on(s)...')

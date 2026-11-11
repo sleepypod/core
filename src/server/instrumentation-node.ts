@@ -39,21 +39,37 @@ import { startDatabaseIntegrityChecks, stopDatabaseIntegrityChecks } from '@/src
 import { startPerformanceMonitoring, stopPerformanceMonitoring, recordStartupPhase } from '@/src/lib/serverPerformance'
 import { shutdownHomeKit, startHomeKitIfEnabled } from '@/src/homekit'
 import { stopPersonalHistoryIngestion } from '@/src/household/historyIngestionRuntime'
+import { assertHardwareWriteCurrent, captureHardwareIntent, HardwareAdmissionError } from '@/src/hardware/admission'
 
-let isInitialized = false
-let isShuttingDown = false
-let handlersRegistered = false
-let initializationPromise: Promise<void> | null = null
-let hardwareReady = false
-let hardwarePromise: Promise<void> | null = null
+interface NodeLifecycle {
+  isInitialized: boolean
+  isShuttingDown: boolean
+  handlersRegistered: boolean
+  initializationPromise: Promise<void> | null
+  hardwareReady: boolean
+  hardwarePromise: Promise<void> | null
+  observabilityReady: boolean
+  automaticSuspended: boolean
+  suspension: Promise<void> | null
+  automaticPromise: Promise<void> | null
+  automaticStartupFailure: unknown | null
+  automaticStopFailed: boolean
+}
+const shared = globalThis as typeof globalThis & { __sp_nodeLifecycle?: NodeLifecycle }
+const lifecycle = shared.__sp_nodeLifecycle ??= {
+  isInitialized: false, isShuttingDown: false, handlersRegistered: false,
+  initializationPromise: null, hardwareReady: false, hardwarePromise: null,
+  observabilityReady: false, automaticSuspended: false, suspension: null, automaticPromise: null,
+  automaticStartupFailure: null, automaticStopFailed: false,
+}
 
 /**
  * Centralized graceful shutdown coordinator.
  * Sequences: wait for in-flight jobs → shutdown scheduler → close database → exit
  */
 async function gracefulShutdown(signal: string): Promise<void> {
-  if (isShuttingDown) return
-  isShuttingDown = true
+  if (lifecycle.isShuttingDown) return
+  lifecycle.isShuttingDown = true
 
   console.log(`Received ${signal}, starting graceful shutdown...`)
 
@@ -73,7 +89,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     await stopComfortPreview()
     await stopTemperatureController()
     shutdownBaseController()
-    shutdownKeepalives()
+    await shutdownKeepalives()
   }
   catch (error) {
     console.error('Error shutting down keepalives:', error)
@@ -201,8 +217,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
  * Safe to call multiple times - only registers once.
  */
 function registerGlobalHandlers(): void {
-  if (handlersRegistered) return
-  handlersRegistered = true
+  if (lifecycle.handlersRegistered) return
+  lifecycle.handlersRegistered = true
 
   // Centralized signal handlers
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
@@ -238,11 +254,12 @@ async function withRetry<T>(
 ): Promise<T> {
   let lastError: unknown
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (isShuttingDown) throw new Error('Startup cancelled during shutdown')
+    if (lifecycle.isShuttingDown) throw new Error('Startup cancelled during shutdown')
     try {
       return await fn()
     }
     catch (error) {
+      if (error instanceof HardwareAdmissionError) throw error
       lastError = error
       if (attempt < maxAttempts) {
         const delay = baseDelayMs * Math.pow(2, attempt - 1)
@@ -271,15 +288,10 @@ async function withRetry<T>(
 const initializeDacMonitor = async (): Promise<void> => {
   try {
     await getDacMonitor()
-    if (isShuttingDown) {
+    if (lifecycle.isShuttingDown) {
       await shutdownDacMonitor()
       return
     }
-    // A restart mid-alarm or mid-snooze (deploy, crash) resumes it.
-    const { restoreActiveAlarms } = await import('@/src/hardware/alarmState')
-    const { restoreSnoozes } = await import('@/src/hardware/snoozeManager')
-    await restoreActiveAlarms()
-    restoreSnoozes()
   }
   catch (error) {
     console.warn(
@@ -290,12 +302,12 @@ const initializeDacMonitor = async (): Promise<void> => {
 }
 
 async function initializeHardware(): Promise<void> {
-  if (hardwareReady || isShuttingDown) return
-  if (hardwarePromise) return hardwarePromise
-  hardwarePromise = prepareHardware().finally(() => {
-    hardwarePromise = null
+  if (lifecycle.hardwareReady || lifecycle.isShuttingDown) return
+  if (lifecycle.hardwarePromise) return lifecycle.hardwarePromise
+  lifecycle.hardwarePromise = prepareHardware().finally(() => {
+    lifecycle.hardwarePromise = null
   })
-  return hardwarePromise
+  return lifecycle.hardwarePromise
 }
 
 async function prepareHardware(): Promise<void> {
@@ -313,7 +325,7 @@ async function prepareHardware(): Promise<void> {
     )
   }
 
-  if (isShuttingDown) return
+  if (lifecycle.isShuttingDown) return
 
   // Start DAC socket server FIRST — this is the single listener on dac.sock.
   // frankenfirmware will connect to it. Everything else (DacMonitor, device
@@ -326,16 +338,16 @@ async function prepareHardware(): Promise<void> {
     console.warn('[DAC] Socket server failed to start:', error instanceof Error ? error.message : error)
   }
 
-  if (isShuttingDown) return
+  if (lifecycle.isShuttingDown) return
 
   // Start DAC monitor (non-blocking — waits for frankenfirmware to connect)
   initializeDacMonitor()
-  if (isShuttingDown) return
+  if (lifecycle.isShuttingDown) return
   // Subscribe to configured base telemetry for interference detection; no movement.
   getBaseController()
 
-  if (isShuttingDown) return
-  hardwareReady = true
+  if (lifecycle.isShuttingDown) return
+  lifecycle.hardwareReady = true
   try {
     startPiezoStreamServer()
   }
@@ -350,31 +362,51 @@ async function prepareHardware(): Promise<void> {
  * Safe to call multiple times - will only initialize once
  */
 export async function initializeScheduler(): Promise<void> {
-  if (isInitialized || isShuttingDown) return
-  if (initializationPromise) return initializationPromise
-  initializationPromise = initializeBackgroundServices().finally(() => {
-    initializationPromise = null
+  if (lifecycle.isInitialized || lifecycle.isShuttingDown || lifecycle.automaticSuspended) return
+  if (lifecycle.initializationPromise) return lifecycle.initializationPromise
+  lifecycle.initializationPromise = initializeBackgroundServices().finally(() => {
+    lifecycle.initializationPromise = null
   })
-  return initializationPromise
+  return lifecycle.initializationPromise
 }
 
 async function initializeBackgroundServices(): Promise<void> {
+  lifecycle.automaticStartupFailure = null
   try {
     await initializeHardware()
-    if (isShuttingDown) return
+    if (lifecycle.isShuttingDown) return
 
     // Record System → Health's data-path history once a minute (non-blocking).
     // Started before the scheduler so a scheduler that fails to load still
     // leaves a history of the failure.
     startHealthSampler()
 
+    // Read/Stop integrations remain available while a persisted arrangement hold
+    // prevents restoring alarms or constructing any automatic command producer.
+    startObservability()
+    const admission = captureHardwareIntent()
+    const assertStarting = () => {
+      assertHardwareWriteCurrent(admission)
+      if (lifecycle.isShuttingDown || lifecycle.automaticSuspended) throw new HardwareAdmissionError()
+    }
+    assertStarting()
+    const { restoreActiveAlarms } = await import('@/src/hardware/alarmState')
+    const { restoreSnoozes } = await import('@/src/hardware/snoozeManager')
+    assertStarting()
+    await restoreActiveAlarms()
+    assertStarting()
+    restoreSnoozes()
+
     const schedulerStartedAt = performance.now()
     console.log('Initializing job scheduler...')
     const jobManager = await withRetry(
-      () => getJobManager(),
+      () => {
+        assertStarting()
+        return getJobManager()
+      },
       'Job manager initialization'
     )
-    if (isShuttingDown) return
+    assertStarting()
     recordStartupPhase('scheduler-ready', schedulerStartedAt)
     const scheduler = jobManager.getScheduler()
     const jobs = scheduler.getJobs()
@@ -405,15 +437,7 @@ async function initializeBackgroundServices(): Promise<void> {
       }
     }
 
-    isInitialized = true
-
-    // Optional integrations do not hold up HTTP or the remaining services.
-    void startMqttBridge().then(() => {
-      if (isShuttingDown) return shutdownMqttBridge()
-      recordStartupPhase('mqtt-started')
-    }).catch((error) => {
-      console.warn('WARNING: MQTT bridge failed to start:', error instanceof Error ? error.message : error)
-    })
+    lifecycle.isInitialized = true
 
     // Start auto-off watcher (polls biometrics DB for bed-exit events)
     startAutoOffWatcher()
@@ -421,47 +445,105 @@ async function initializeBackgroundServices(): Promise<void> {
     // Start auto-on watcher (experimental: powers a side on when a person settles in)
     startAutoOnWatcher()
 
-    // Start Bonjour/mDNS announcement (non-blocking)
-    startBonjourAnnouncement()
-
-    // Start HomeKit bridge if user has opted in (non-blocking)
-    startHomeKitIfEnabled().then(() => {
-      if (isShuttingDown) return shutdownHomeKit()
-    }).catch((error) => {
-      console.warn(
-        '[homekit] startup failed:',
-        error instanceof Error ? error.message : error,
-      )
-    })
-
-    // Start biometrics time-series retention loop (non-blocking)
-    startBiometricsRetention()
-    startAutomationRunsRetention()
-
     // Boot the Autopilot rules engine beside the scheduler (non-blocking).
     // Shares the same hardware path; no-op until automations are created.
-    getAutomationEngine().catch((error) => {
+    lifecycle.automaticPromise = getAutomationEngine().catch((error) => {
+      if (error instanceof HardwareAdmissionError) throw error
+      lifecycle.automaticStartupFailure = error
       console.warn('[automation] engine failed to start:', error instanceof Error ? error.message : error)
     }).then(async () => {
-      if (isShuttingDown) return shutdownAutomationEngine()
+      if (lifecycle.isShuttingDown || lifecycle.automaticSuspended) return shutdownAutomationEngine()
+      assertStarting()
       await startTemperatureController()
-      if (isShuttingDown) {
-        await stopTemperatureController()
-        return
-      }
+      if (lifecycle.isShuttingDown || lifecycle.automaticSuspended) return stopTemperatureController()
+      assertStarting()
       initializeKeepalives()
       await startComfortPreview()
-      if (isShuttingDown) await stopComfortPreview()
-    }).catch((error) => {
+      if (lifecycle.isShuttingDown || lifecycle.automaticSuspended) return stopComfortPreview()
+      assertStarting()
+    }).catch(async (error) => {
+      lifecycle.automaticStartupFailure = error
+      if (error instanceof HardwareAdmissionError) {
+        await Promise.allSettled([shutdownKeepalives(), shutdownAutomationEngine(), stopTemperatureController(), stopComfortPreview()])
+        return
+      }
       console.warn(
         '[temperature] controller failed to start:',
         error instanceof Error ? error.message : error,
       )
-    })
+    }).finally(() => { lifecycle.automaticPromise = null })
   }
   catch (error) {
+    lifecycle.isInitialized = false
+    lifecycle.automaticStartupFailure = error
+    if (error instanceof HardwareAdmissionError) return
     console.error('Failed to initialize job scheduler:', error)
     // Don't crash the app if scheduler fails to initialize
+  }
+}
+
+/** Diagnostics, discovery and explicit Stop are still usable during attended recovery. */
+function startObservability(): void {
+  if (lifecycle.observabilityReady || lifecycle.isShuttingDown) return
+  lifecycle.observabilityReady = true
+  void startMqttBridge().then(() => {
+    if (lifecycle.isShuttingDown) return shutdownMqttBridge()
+    recordStartupPhase('mqtt-started')
+  }).catch(error => console.warn('WARNING: MQTT bridge failed to start:', error instanceof Error ? error.message : error))
+  startBonjourAnnouncement()
+  void startHomeKitIfEnabled().then(() => {
+    if (lifecycle.isShuttingDown) return shutdownHomeKit()
+  }).catch(error => console.warn('[homekit] startup failed:', error instanceof Error ? error.message : error))
+  startBiometricsRetention()
+  startAutomationRunsRetention()
+}
+
+/** Call after persisting the hardware hold. Drain producers without closing diagnostic connections. */
+export function suspendAutomaticServices(): Promise<void> {
+  if (lifecycle.suspension) return lifecycle.suspension
+  lifecycle.automaticSuspended = true
+  lifecycle.isInitialized = false
+  lifecycle.suspension = (async () => {
+    // Cancel the scheduler's clock wait before waiting for initialization to settle.
+    const results = await Promise.allSettled([shutdownJobManager, shutdownAutomationEngine].map(stop => Promise.resolve().then(stop)))
+    await lifecycle.initializationPromise
+    const stopped = await Promise.allSettled([
+      shutdownKeepalives, stopComfortPreview, stopTemperatureController, stopAutoOnWatcher, stopAutoOffWatcher,
+      async () => { (await import('@/src/hardware/snoozeManager')).suspendSnoozes() },
+    ].map(stop => Promise.resolve().then(stop)))
+    await lifecycle.automaticPromise
+    // An alarm callback already inside a side lock can arm its timer after the
+    // hardware reply. Drain that callback before clearing the last alarm timers.
+    const drained = await Promise.allSettled([Promise.resolve().then(async () => {
+      await (await import('@/src/hardware/sideLock')).waitForSideOperations()
+      await (await import('@/src/hardware/alarmState')).suspendActiveAlarms()
+    })])
+    const failures = [...results, ...stopped, ...drained].filter(result => result.status === 'rejected')
+    lifecycle.automaticStopFailed = failures.length > 0
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Automatic services did not finish stopping')
+  })().finally(() => { lifecycle.suspension = null })
+  return lifecycle.suspension
+}
+
+/** A verified recovery/cancellation releases durable admission before requesting a fresh start. */
+export async function resumeAutomaticServices(): Promise<void> {
+  await lifecycle.suspension
+  assertHardwareWriteCurrent(captureHardwareIntent())
+  if (lifecycle.isShuttingDown) throw new Error('Controller is shutting down')
+  if (lifecycle.automaticStopFailed) throw new Error('Automatic services must finish stopping before resuming')
+  lifecycle.automaticSuspended = false
+  try {
+    await initializeScheduler()
+    await lifecycle.automaticPromise
+    assertHardwareWriteCurrent(captureHardwareIntent())
+    if (!lifecycle.isInitialized || lifecycle.automaticSuspended || lifecycle.isShuttingDown || lifecycle.automaticStartupFailure) {
+      throw new Error('Automatic services could not resume', { cause: lifecycle.automaticStartupFailure })
+    }
+  }
+  catch (error) {
+    // A partial resume must not leave unattended producers running behind a failed result.
+    await suspendAutomaticServices()
+    throw error
   }
 }
 
@@ -493,7 +575,7 @@ export async function registerNodeInstrumentation(): Promise<void> {
   }
 
   const { startPersonalHistoryIngestion } = await import('@/src/household/historyIngestionRuntime')
-  if (isShuttingDown) return
+  if (lifecycle.isShuttingDown) return
   startPersonalHistoryIngestion(sqlite, biometricsDb.$client)
 
   startMechanicalContext()
@@ -514,13 +596,13 @@ export async function registerNodeInstrumentation(): Promise<void> {
   }
 
   await initializeHardware()
-  if (isShuttingDown) return
+  if (lifecycle.isShuttingDown) return
   startDatabaseIntegrityChecks()
   const { startConfiguredBacktestHost } = await import('@/src/biometrics/backtest/host-startup')
-  if (isShuttingDown) return
+  if (lifecycle.isShuttingDown) return
   startConfiguredBacktestHost(biometricsDb)
   const { startConfiguredShadowService } = await import('@/src/biometrics/shadow/startup')
-  if (isShuttingDown) return
+  if (lifecycle.isShuttingDown) return
   startConfiguredShadowService(db, biometricsDb)
   // The clock gate and scheduler loading still finish before scheduled writers
   // start, but no longer prevent clients from loading settings or diagnostics.
