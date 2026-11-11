@@ -137,7 +137,7 @@ describe('VitalsLegend', () => {
 })
 
 describe('movement alignment', () => {
-  it('plots position changes in their own row, restricted to visible sessions', () => {
+  it('plots minutes moving in their own row, restricted to visible sessions', () => {
     withWidth()
     render(
       <VitalsChart
@@ -151,8 +151,8 @@ describe('movement alignment', () => {
       />
     )
     expect(screen.getAllByTestId('movement-bar')).toHaveLength(1)
-    expect(screen.getByTestId('movement-bar').textContent).toContain('3 position changes')
-    expect(screen.getByText('changes / 5 min')).toBeTruthy()
+    expect(screen.getByTestId('movement-bar').textContent).toContain('3 minutes moving')
+    expect(screen.getByText('min moving / 15 min')).toBeTruthy()
   })
 })
 
@@ -398,15 +398,15 @@ describe('VitalsChart Apple Watch movement overlay', () => {
     expect(screen.queryAllByTestId('watch-movement-line')).toHaveLength(0)
   })
 
-  it('sums into the pod\'s 5-minute buckets, breaks the line at missing buckets, dots isolated ones and ignores minutes outside sessions', () => {
+  it('sums into the pod\'s 15-minute buckets, breaks the line at missing buckets, dots isolated ones and ignores minutes outside sessions', () => {
     withWidth()
     const watchMovement = [
       // Before the first session: outside the night, never drawn or counted.
       { t: START - 30 * MIN, moving: 500 },
-      { t: START, moving: 2 }, { t: START + MIN, moving: 4 }, { t: START + 6 * MIN, moving: 1 }, { t: START + 11 * MIN, moving: 20 },
+      { t: START, moving: 2 }, { t: START + 3 * MIN, moving: 4 }, { t: START + 18 * MIN, moving: 1 }, { t: START + 33 * MIN, moving: 20 },
       // A bucket without bins: a new run, and this one stands alone.
-      { t: START + 20 * MIN, moving: 5 },
-      { t: START + 30 * MIN, moving: 3 }, { t: START + 35 * MIN, moving: 2 },
+      { t: START + 60 * MIN, moving: 5 },
+      { t: START + 90 * MIN, moving: 3 }, { t: START + 105 * MIN, moving: 2 },
       // Between sessions.
       { t: START + 4 * 60 * MIN, moving: 50 },
     ]

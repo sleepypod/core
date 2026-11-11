@@ -23,7 +23,7 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from 'recharts'
-import { pickMovementBucketSeconds } from '@/src/lib/movement'
+import { MOVEMENT_CHART_SCORE_MIN, pickMovementBucketSeconds } from '@/src/lib/movement'
 import { WATCH_MAX_SCALE, WATCH_MOTION_MAX_SERIES_MS, watchBuckets, type WatchMinute } from '@/src/lib/watchMovement'
 
 interface BucketRecord {
@@ -99,7 +99,7 @@ function deriveStats(
  */
 function toChartData(buckets: BucketRecord[], bucketSeconds: number): ChartDataPoint[] {
   // Movement events / hour, normalised by bucket width so the y-axis
-  // unit is constant across day (5-min) and week (30-min) views. Mirrors
+  // unit is constant across day (15-min) and week (30-min) views. Mirrors
   // Whoop "Disturbances/hr" and Garmin "Restless Moments" conventions.
   const eventsPerHour = (count: number) => Math.round(count / (bucketSeconds / 3600))
   return buckets
@@ -251,7 +251,7 @@ export function MovementChart() {
   )
 
   const bucketsQuery = trpc.biometrics.getMovementBuckets.useQuery(
-    { side, startDate: weekStart, endDate: weekEnd, bucketSeconds },
+    { side, startDate: weekStart, endDate: weekEnd, bucketSeconds, eventScoreMin: MOVEMENT_CHART_SCORE_MIN },
     { refetchOnWindowFocus: false },
   )
   const summaryQuery = trpc.biometrics.getMovementSummary.useQuery(
