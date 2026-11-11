@@ -40,15 +40,16 @@ flowchart LR
 The production history store receives the real biometrics connection. Account
 creation and history reads perform no source preparation or binding. This is an
 internal prerequisite for the still-unavailable arrangement activation coordinator;
-it does not enable shared-bed activation, claim historic data during signup or
-start an automatic importer. Existing capability flags remain unchanged.
+it does not enable shared-bed activation or claim historic data during signup.
+The background importer described below only uses existing reviewed bindings and
+attribution intervals. Existing capability flags remain unchanged.
 
 ## Completed presence import
 
 `PresenceHistoryImporter` reads completed `sleep_records` through the verified
-biometrics connection. It is an internal adapter, with no public write endpoint
-and no scheduled or startup invocation. A coordinator must explicitly prepare
-the source binding and reviewed attribution intervals before using it.
+biometrics connection. It is an internal adapter, with no public write endpoint.
+A coordinator must explicitly prepare the source binding and reviewed attribution
+intervals before the background worker can use it.
 
 - Each source snapshot is bounded to 100 rows, 256 KiB per interval JSON column
   and 8 MiB of interval JSON per page. A byte limit returns a cursor before the
@@ -57,6 +58,10 @@ the source binding and reviewed attribution intervals before using it.
 - Timestamps are converted explicitly from source UTC seconds to history UTC
   milliseconds. Only completed, nonfuture intervals up to 24 hours qualify.
   Unsupported, empty or malformed interval data remains unavailable.
+- A future-dated row is deferred, not admitted. Existing unchanged copies survive
+  a clock rollback; revalidation can still withdraw an actually changed copy
+  without admitting a replacement. A clock change alone cannot permanently erase
+  a valid night's private copy.
 - Reported presence is the union of the source's known present intervals, not
   the entire elapsed night or the misleadingly named `sleep_duration_seconds`
   column. Missing gaps are not filled, and presence is not described as sleep.
@@ -73,8 +78,55 @@ the source binding and reviewed attribution intervals before using it.
 
 This adapter does not import movement or vital rows: their legacy timestamps do
 not define complete measurement windows. It also does not infer processing
-provenance that `sleep_records` never recorded. Continuous ingestion and reviewed
-household activation remain separate integration steps.
+provenance that `sleep_records` never recorded. Reviewed household activation
+remains a separate integration step.
+
+## Continuous ingestion and revalidation
+
+After migrations, the Node runtime starts one `globalThis`-owned worker. It is
+skipped in CI and stops before database shutdown. Both household preparation and
+personal history must be enabled, with exactly one existing reviewed source that
+has at least one nonrevoked attribution interval. Otherwise it remains idle.
+The worker never initializes source metadata, creates a binding, appends an epoch,
+changes an account or issues a hardware command.
+
+```mermaid
+flowchart LR
+  Review[Existing source and dated assignment] --> Verify{Verify identity each page}
+  Verify --> Tail[New arrivals: 25 rows]
+  Verify --> Audit[Older-record audit: 25 rows]
+  Tail --> Copy[Immutable private copies]
+  Audit --> Withdraw[Withdraw edited or malformed copies]
+  Audit --> Copy
+  Failure[Interrupted page] --> Retry[Back off and replay same cursor]
+  Retry --> Verify
+```
+
+- The first pass begins five seconds after startup. A successful tick is followed
+  by a 30-second delay. At most two 25-row pages run per tick: one for new arrivals
+  and one for an audit, each retaining the adapter's interval-byte limits.
+- A catch-up pass uses a fixed maximum source ID. Once complete, a fresh tail pass
+  starts after that maximum. New arrivals cannot extend an audit indefinitely.
+- After the initial catch-up, a complete audit starts 15 minutes after the last
+  complete audit. Large audits proceed page by page while new arrivals continue
+  on the independent lane. A source edit is withdrawn when its audit page runs,
+  not instantaneously; long histories or failures extend that delay.
+- A new reviewed older interval is discovered by the next audit. Withheld rows
+  are never automatically assigned to the current side or household owner.
+- A failed page does not advance its cursor. Backoff grows from one minute to a
+  maximum of 15 minutes. Already committed private copies make retries idempotent.
+  Source replacement or missing identity blocks imports without repairing or
+  rebinding anything. Existing attributed copies remain private and readable.
+- Cursors are deliberately in memory: restart replays the source with bounded
+  pages. There is no durable checkpoint that can silently skip a partially
+  completed import. A target change, disabled runtime or missing review resets
+  both lanes. Raw retention does not remove private copies.
+- Internal status reports state, last attempt, last successful page, last complete
+  audit and bounded failure count. It contains no names, rows, SQL, error messages
+  or paths. It is not a claim of physical sensor quality or confirmed sleep.
+
+These are software lifecycle checks. Deployment and a real two-person transition
+still need their own acceptance; no live flag or household state was changed.
 
 Before activating a shared arrangement, the coordinator still needs to bind the
 exact approved arrangement, quiesce all command writers durably, publish both
@@ -98,3 +150,14 @@ The importer has 19 migrated-database regressions, including interruption after
 commit, consistent paging, same-total interval edits, malformed replacements,
 cross-person ownership, unknown gaps and raw-source retention.
 This is source validation, not a live deployment or two-person activation receipt.
+
+The continuous worker's final source passed **9,293 tests with 19 existing
+skips**, TypeScript, full ESLint and the production build. The household/startup
+subset passed 289 tests. New cases exercise real migrated stores, cross-person
+access, independent audit/tail progress, retry after partial commit, restart,
+source replacement and missing identity, revoked review, raw retention, newly
+reviewed older intervals, clock rollback and changed future-dated rows. An early
+timer test incorrectly counted an audit page as another timer tick; it now
+asserts the actual tick boundary without weakening the two-page budget. The
+original failed receipt is retained. Hosted promotion and deployment remain
+separate from these local checks.

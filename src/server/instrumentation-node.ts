@@ -38,6 +38,7 @@ import { startAutoOnWatcher, stopAutoOnWatcher } from '@/src/services/autoOnWatc
 import { startDatabaseIntegrityChecks, stopDatabaseIntegrityChecks } from '@/src/db/integrity'
 import { startPerformanceMonitoring, stopPerformanceMonitoring, recordStartupPhase } from '@/src/lib/serverPerformance'
 import { shutdownHomeKit, startHomeKitIfEnabled } from '@/src/homekit'
+import { stopPersonalHistoryIngestion } from '@/src/household/historyIngestionRuntime'
 
 let isInitialized = false
 let isShuttingDown = false
@@ -64,6 +65,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   forceExitTimer.unref()
 
   stopPerformanceMonitoring()
+  stopPersonalHistoryIngestion()
   await stopDatabaseIntegrityChecks()
 
   // Step 0: Stop keepalive timers
@@ -489,6 +491,10 @@ export async function registerNodeInstrumentation(): Promise<void> {
     console.log('CI environment detected — skipping hardware initialization')
     return
   }
+
+  const { startPersonalHistoryIngestion } = await import('@/src/household/historyIngestionRuntime')
+  if (isShuttingDown) return
+  startPersonalHistoryIngestion(sqlite, biometricsDb.$client)
 
   startMechanicalContext()
 

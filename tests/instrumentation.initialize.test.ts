@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   startHardwareAdmission: vi.fn(),
+  startPersonalHistoryIngestion: vi.fn(),
+  stopPersonalHistoryIngestion: vi.fn(),
   getBaseController: vi.fn(),
   startMechanicalContext: vi.fn(),
   stopMechanicalContext: vi.fn(),
@@ -115,12 +117,16 @@ vi.mock('@/src/biometrics/profiles/runtime-host', () => ({
 }))
 vi.mock('@/src/db', () => ({
   sqlite: { admissionDatabase: true },
-  db: {}, biometricsDb: {},
+  db: {}, biometricsDb: { $client: { historyDatabase: true } },
   closeDatabase: mocks.closeDatabase,
   closeBiometricsDatabase: mocks.closeBiometricsDatabase,
 }))
 
 vi.mock('@/src/hardware/admissionRuntime', () => ({ startHardwareAdmission: mocks.startHardwareAdmission }))
+vi.mock('@/src/household/historyIngestionRuntime', () => ({
+  startPersonalHistoryIngestion: mocks.startPersonalHistoryIngestion,
+  stopPersonalHistoryIngestion: mocks.stopPersonalHistoryIngestion,
+}))
 vi.mock('@/src/db/retention', () => ({
   startBiometricsRetention: mocks.startBiometricsRetention,
   stopBiometricsRetention: mocks.stopBiometricsRetention,
@@ -409,6 +415,7 @@ describe('register()', () => {
     await vi.waitFor(() => expect(mocks.runMigrations).toHaveBeenCalledOnce())
     expect(mocks.startBiometricRuntime).not.toHaveBeenCalled()
     expect(mocks.startHardwareAdmission).not.toHaveBeenCalled()
+    expect(mocks.startPersonalHistoryIngestion).not.toHaveBeenCalled()
 
     expect(mocks.seedDefaultData).not.toHaveBeenCalled()
     expect(mocks.startDacServer).not.toHaveBeenCalled()
@@ -417,6 +424,7 @@ describe('register()', () => {
     await pending
     expect(mocks.startBiometricRuntime).toHaveBeenCalledOnce()
     expect(mocks.startHardwareAdmission).toHaveBeenCalledExactlyOnceWith({ admissionDatabase: true })
+    expect(mocks.startPersonalHistoryIngestion).toHaveBeenCalledExactlyOnceWith({ admissionDatabase: true }, { historyDatabase: true })
     expect(mocks.startHardwareAdmission.mock.invocationCallOrder[0]).toBeLessThan(mocks.startDacServer.mock.invocationCallOrder[0])
     await initializeScheduler()
     expect(mocks.startPiezoStreamServer).toHaveBeenCalledOnce()
@@ -510,6 +518,7 @@ describe('register()', () => {
     expect(mocks.startConfiguredShadowService).not.toHaveBeenCalled()
     expect(mocks.startMechanicalContext).not.toHaveBeenCalled()
     expect(mocks.getBaseController).not.toHaveBeenCalled()
+    expect(mocks.startPersonalHistoryIngestion).not.toHaveBeenCalled()
   })
 
   it('runs migrations and full init when not in CI', async () => {
@@ -625,6 +634,7 @@ describe('graceful shutdown and process handlers', () => {
     const { register } = await fresh()
     await register()
     const pending = signal('SIGTERM')
+    expect(mocks.stopPersonalHistoryIngestion).toHaveBeenCalledOnce()
     await vi.advanceTimersByTimeAsync(10_000)
     expect(exitSpy).toHaveBeenCalledWith(1)
     expect(errorSpy).toHaveBeenCalledWith('Graceful shutdown timed out after 10s, forcing exit')

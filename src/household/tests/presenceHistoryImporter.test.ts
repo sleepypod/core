@@ -93,6 +93,7 @@ describe('recorded presence importer', () => {
     let completed = 0
     const interrupted = new PresenceHistoryImporter(source.biometrics, source.source, {
       rejectSourceObservation: input => history.rejectSourceObservation(input),
+      revalidateObservation: input => history.revalidateObservation(input),
       admitObservation: (input) => {
         const result = history.admitObservation(input)
         if (++completed === 2) throw new Error('Simulated interruption after commit')
@@ -103,6 +104,19 @@ describe('recorded presence importer', () => {
     expect(history.records(fixture.ownerKey, query()).records).toHaveLength(2)
     expect(importer.scan(request()).counts).toEqual({ scanned: 3, admitted: 1, unchanged: 2, withheld: 0 })
     expect(history.records(fixture.ownerKey, query()).records).toHaveLength(3)
+  })
+
+  it('starts a fresh bounded tail after a completed checkpoint and reports the snapshot watermark', () => {
+    assign()
+    insert(recording(0))
+    const first = importer.scan(request())
+    expect(first.watermark).toBe(1)
+    insert(recording(1))
+    expect(importer.scan({ ...request(), afterId: first.watermark })).toMatchObject({
+      counts: { scanned: 1, admitted: 1, unchanged: 0, withheld: 0 }, watermark: 2, nextCursor: null,
+    })
+    expect(() => importer.scan({ ...request(), afterId: 1, cursor: { afterId: 1, watermark: 2 } })).toThrow('not both')
+    expect(() => importer.scan({ ...request(), afterId: -1 })).toThrow()
   })
 
   it('withholds the entire recording across a reviewed side transition', () => {
@@ -183,8 +197,34 @@ describe('recorded presence importer', () => {
     if (kind === 'long') row.left = row.entered + 86_401
     if (kind === 'negative_exits') row.exits = -1
     insert(row)
-    expect(importer.scan(request())).toMatchObject({ counts: { admitted: 0, withheld: 1 }, withheldReasons: { invalid_recording: 1 } })
+    expect(importer.scan(request())).toMatchObject({ counts: { admitted: 0, withheld: 1 },
+      withheldReasons: { [kind === 'future' ? 'incomplete_or_future' : 'invalid_recording']: 1 } })
     expect(history.records(fixture.ownerKey, query()).records).toEqual([])
+  })
+
+  it('preserves an unchanged copy through clock rollback while withdrawing a genuinely edited future row', () => {
+    assign()
+    const identifier = insert(recording(20))
+    importer.scan(request())
+    const copied = history.records(fixture.ownerKey, query()).records[0]
+    fixture.clock.now = start + 15 * day
+    expect(importer.scan(request()).counts).toEqual({ scanned: 1, admitted: 0, unchanged: 1, withheld: 0 })
+    expect(history.record(fixture.ownerKey, copied.id)).toEqual(copied)
+    source.biometrics.prepare('UPDATE sleep_records SET side = \'right\' WHERE id = ?').run(identifier)
+    expect(importer.scan(request()).withheldReasons).toEqual({ source_changed: 1 })
+    expect(history.record(fixture.ownerKey, copied.id)).toBeNull()
+    expect(history.record(fixture.memberKey, copied.id)).toBeNull()
+  })
+
+  it('defers a new future row until it is complete without creating an invalidated private copy', () => {
+    assign()
+    insert(recording(20))
+    fixture.clock.now = start + 20 * day + 4 * 3600_000
+    expect(importer.scan(request()).withheldReasons).toEqual({ incomplete_or_future: 1 })
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM household_person_records').get()).toEqual({ count: 0 })
+    fixture.clock.now = start + 21 * day
+    expect(importer.scan(request()).counts.admitted).toBe(1)
+    expect(history.records(fixture.ownerKey, query()).records).toHaveLength(1)
   })
 
   it('bounds combined JSON bytes and resumes at the unconsumed row', () => {

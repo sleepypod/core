@@ -12,8 +12,10 @@ const cursorSchema = z.object({ afterId: safeRowId, watermark: safeRowId }).stri
   .refine(value => value.afterId <= value.watermark, 'The source cursor is outside its snapshot.')
 const scanSchema = z.object({
   householdId: householdIdSchema, datasetId: householdIdSchema,
-  cursor: cursorSchema.optional(), limit: z.number().int().min(1).max(100).default(50),
-}).strict()
+  cursor: cursorSchema.optional(), afterId: safeRowId.optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+}).strict().refine(value => value.cursor === undefined || value.afterId === undefined,
+  'Continue a snapshot or begin after a checkpoint, not both.')
 const sourceSeconds = z.number().int().nonnegative().max(8_640_000_000_000)
 const rowSchema = z.object({
   id: safeRowId.min(1), side: householdSideSchema,
@@ -24,7 +26,7 @@ const rowSchema = z.object({
 }).strict().refine(row => row.left > row.entered && row.left - row.entered <= 86_400
   && row.duration <= row.left - row.entered, 'The recording interval is incomplete or unsupported.')
 interface SourceMetadata { id: number, presentBytes: number, absentBytes: number }
-type WithheldReason = 'invalid_recording' | 'source_changed' | 'source_conflict' | 'unassigned' | 'overlapping_presence'
+type WithheldReason = 'invalid_recording' | 'incomplete_or_future' | 'source_changed' | 'source_conflict' | 'unassigned' | 'overlapping_presence'
 const MAX_PAGE_BYTES = 8 * 1024 * 1024
 
 /** Read completed Pod presence, never estimated sleep or invented vital windows.
@@ -33,7 +35,7 @@ const MAX_PAGE_BYTES = 8 * 1024 * 1024
 export class PresenceHistoryImporter {
   constructor(private readonly biometrics: Database.Database,
     private readonly source: Pick<PersonHistorySource, 'verify'>,
-    private readonly history: Pick<PersonHistoryStore, 'admitObservation' | 'rejectSourceObservation'>,
+    private readonly history: Pick<PersonHistoryStore, 'admitObservation' | 'rejectSourceObservation' | 'revalidateObservation'>,
     private readonly now = () => Date.now()) {}
 
   scan(input: unknown) {
@@ -41,7 +43,10 @@ export class PresenceHistoryImporter {
     return this.biometrics.transaction(() => {
       this.source.verify(request.householdId, request.datasetId)
       const maximum = this.biometrics.prepare('SELECT COALESCE(MAX(id), 0) AS watermark FROM sleep_records').get() as { watermark: number }
-      const cursor = request.cursor ?? { afterId: 0, watermark: safeRowId.parse(maximum.watermark) }
+      const watermark = safeRowId.parse(maximum.watermark)
+      // Retention can lower an empty source's maximum. Periodic complete scans
+      // still inspect reused IDs; the private store never reassigns their copies.
+      const cursor = request.cursor ?? { afterId: Math.min(request.afterId ?? 0, watermark), watermark }
       const candidates = this.biometrics.prepare(`SELECT id,
         COALESCE(length(CAST(present_intervals AS BLOB)), 0) AS presentBytes,
         COALESCE(length(CAST(not_present_intervals AS BLOB)), 0) AS absentBytes
@@ -73,24 +78,28 @@ export class PresenceHistoryImporter {
           : null
         const parsed = rowSchema.safeParse(raw)
         const row = parsed.success ? parsed.data : null
-        const intervals = row && row.left * 1000 <= this.now() && (row.created === null || row.created * 1000 <= this.now())
-          ? historyIntervals(row.present, metadata.presentBytes, row.entered, row.left)
-          : null
+        const intervals = row ? historyIntervals(row.present, metadata.presentBytes, row.entered, row.left) : null
         if (!row || !intervals?.intervals || intervals.coveredSeconds === null) {
           this.history.rejectSourceObservation({ ...identity, kind: 'presence' })
           withhold('invalid_recording')
           continue
         }
-        const result = this.history.admitObservation({ ...identity,
+        const observation = { ...identity,
           sourceFingerprint: createHash('sha256').update(JSON.stringify({ adapter: 'pod-presence-v1', row })).digest('hex'),
           recordedSide: row.side, startsAt: row.entered * 1000, endsAt: row.left * 1000,
           payload: { kind: 'presence', reportedPresenceSeconds: intervals.coveredSeconds,
-            exits: row.exits, interpretation: 'bed_presence_not_sleep' } })
+            exits: row.exits, interpretation: 'bed_presence_not_sleep' } }
+        const completed = row.left * 1000 <= this.now() && (row.created === null || row.created * 1000 <= this.now())
+        const result = completed ? this.history.admitObservation(observation) : this.history.revalidateObservation(observation)
+        if (!result) {
+          withhold('incomplete_or_future')
+          continue
+        }
         if (result.status === 'admitted') counts.admitted++
         else if (result.status === 'unchanged') counts.unchanged++
         else withhold(result.reason)
       }
-      return { counts, withheldReasons,
+      return { counts, withheldReasons, watermark: cursor.watermark,
         nextCursor: candidates.length > counts.scanned ? { afterId, watermark: cursor.watermark } : null }
     })()
   }

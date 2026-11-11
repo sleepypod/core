@@ -41,8 +41,8 @@ const cursorSchema = z.object({
   beforeStartsAt: historyTimeSchema,
 }).strict()
 
-/** Internal ownership boundary. No HTTP mutation, hardware change or automatic
- * source importer calls this yet. Only a reviewed coordinator may append epochs. */
+/** Internal ownership boundary. The bounded importer may copy observations,
+ * but only a reviewed coordinator may append attribution epochs. */
 export class PersonHistoryStore {
   // Cursors expire when this singleton restarts. They carry no reusable account
   // credential; signatures prevent clients from changing snapshot watermarks.
@@ -145,20 +145,8 @@ export class PersonHistoryStore {
     return this.database.transaction(() => {
       this.source.verify(parsed.householdId, parsed.datasetId)
       const contentHash = digest(parsed)
-      const existing = this.database.prepare('SELECT * FROM household_person_records WHERE dataset_id = ? AND source_kind = ? AND source_record_key = ?')
-        .get(parsed.datasetId, parsed.payload.kind, parsed.sourceRecordKey) as RecordRow | undefined
-      if (existing) {
-        if (existing.household_id !== parsed.householdId) return { status: 'withheld' as const, reason: 'source_conflict' as const }
-        if (existing.invalidated_at !== null) return { status: 'withheld' as const, reason: 'source_changed' as const }
-        if (existing.content_hash !== contentHash) {
-          this.database.prepare('UPDATE household_person_records SET invalidated_at = ? WHERE id = ?').run(this.now(), existing.id)
-          this.bumpRevision(parsed.householdId)
-          return { status: 'withheld' as const, reason: 'source_changed' as const }
-        }
-        const epoch = this.database.prepare('SELECT revoked_at FROM household_attribution_epochs WHERE id = ?').get(existing.epoch_id) as { revoked_at: number | null } | undefined
-        if (!epoch || epoch.revoked_at !== null) return { status: 'withheld' as const, reason: 'unassigned' as const }
-        return { status: 'unchanged' as const, personRecordId: existing.id }
-      }
+      const existing = this.existingObservation(parsed)
+      if (existing) return existing
       const epochs = this.database.prepare(`SELECT * FROM household_attribution_epochs WHERE household_id = ? AND dataset_id = ?
         AND starts_at < ? AND (ends_at IS NULL OR ends_at > ?)`).all(parsed.householdId, parsed.datasetId, parsed.endsAt, parsed.startsAt) as EpochRow[]
       const epoch = epochs[0]
@@ -179,6 +167,32 @@ export class PersonHistoryStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(personRecordId, parsed.householdId, assignment.sleeperId, epoch.id, parsed.datasetId, parsed.payload.kind, parsed.sourceRecordKey, contentHash, parsed.recordedSide, parsed.startsAt, parsed.endsAt, JSON.stringify(parsed.payload), this.now())
       return { status: 'admitted' as const, personRecordId }
+    }).immediate()
+  }
+
+  private existingObservation(parsed: SourceObservation) {
+    const existing = this.database.prepare('SELECT * FROM household_person_records WHERE dataset_id = ? AND source_kind = ? AND source_record_key = ?')
+      .get(parsed.datasetId, parsed.payload.kind, parsed.sourceRecordKey) as RecordRow | undefined
+    if (!existing) return null
+    if (existing.household_id !== parsed.householdId) return { status: 'withheld' as const, reason: 'source_conflict' as const }
+    if (existing.invalidated_at !== null) return { status: 'withheld' as const, reason: 'source_changed' as const }
+    if (existing.content_hash !== digest(parsed)) {
+      this.database.prepare('UPDATE household_person_records SET invalidated_at = ? WHERE id = ?').run(this.now(), existing.id)
+      this.bumpRevision(parsed.householdId)
+      return { status: 'withheld' as const, reason: 'source_changed' as const }
+    }
+    const epoch = this.database.prepare('SELECT revoked_at FROM household_attribution_epochs WHERE id = ?').get(existing.epoch_id) as { revoked_at: number | null } | undefined
+    if (!epoch || epoch.revoked_at !== null) return { status: 'withheld' as const, reason: 'unassigned' as const }
+    return { status: 'unchanged' as const, personRecordId: existing.id }
+  }
+
+  /** Revalidate copies without admitting new future observations. Clock rollback
+   * alone preserves an unchanged copy; actual source edits still withdraw it. */
+  revalidateObservation(input: unknown) {
+    const parsed = sourceObservationSchema.parse(input)
+    return this.database.transaction(() => {
+      this.source.verify(parsed.householdId, parsed.datasetId)
+      return this.existingObservation(parsed)
     }).immediate()
   }
 
