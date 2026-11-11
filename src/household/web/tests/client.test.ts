@@ -4,6 +4,19 @@ import { householdSessionSchema } from '../../contract'
 import { PersonalBrowserClient } from '../client'
 const session = householdSessionSchema.parse(preparation.ownerSession)
 describe('personal-only transport', () => {
+  it('allows only validated library reads and keeps their original payload bytes', async () => {
+    const payload = JSON.stringify({ payload: 'a'.repeat(600000) })
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(payload))
+    const client = new PersonalBrowserClient(session, fetcher)
+    const record = 'me/learning/records/30000000-0000-4000-8000-000000000001'
+    expect(await client.read(record)).toEqual(JSON.parse(payload))
+    await expect(client.read('me/learning/archives')).rejects.toThrow('too large')
+    for (const path of ['me/learning/archives?side=left', 'me/learning/records', `${record}?side=left`, `${record}#fragment`,
+      'me/learning/archives?limit=01', 'me/learning/archives?limit=1&limit=2']) await expect(client.read(path)).rejects.toThrow()
+    await expect(client.read(record, 'POST', {})).rejects.toThrow()
+    await expect(client.read(record, 'GET', {})).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
   it('uses only same-origin personal endpoints, a pinned sleeper, and no redirect or owner fallback', async () => {
     const fetcher = vi.fn(async () => new Response('{}'))
     const client = new PersonalBrowserClient(session, fetcher)

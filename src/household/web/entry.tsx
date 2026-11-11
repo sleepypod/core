@@ -5,6 +5,7 @@ import { BrowserRecoveryJournal } from './recovery'
 import { PersonalWebWorkspace } from './workspace'
 import { PersonalWorkspace } from './PersonalWorkspace'
 import { PersonalHistoryWorkspace } from './history'
+import { PersonalLearningWorkspace } from './learning'
 import { HouseholdMaintenanceWorkspace } from './maintenance'
 import { ArrangementMaintenancePanel } from './ArrangementMaintenancePanel'
 export { BrowserRecoveryJournal } from './recovery'
@@ -24,16 +25,19 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     if (disposed) return
     workspace.dispose()
     history.dispose()
+    learning.dispose()
     maintenance.dispose()
     invalidated()
   }
   const workspace = new PersonalWebWorkspace({ session, client: new PersonalBrowserClient(session), journal: new BrowserRecoveryJournal(), invalidated: invalidate })
   const history = new PersonalHistoryWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
+  const learning = new PersonalLearningWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const maintenance = new HouseholdMaintenanceWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate,
     entered: () => {
       mode = 'maintenance'
       workspace.dispose()
       history.dispose()
+      learning.dispose()
       lifecycle?.maintenanceModeChanged(mode)
       render(currentPreferences)
     },
@@ -43,7 +47,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     if (disposed) return
     currentPreferences = value
     root.render(mode === 'ordinary'
-      ? <PersonalWorkspace workspace={workspace} history={history} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
+      ? <PersonalWorkspace workspace={workspace} history={history} learning={learning} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
       : <div className="personal-runtime"><ArrangementMaintenancePanel workspace={maintenance} standalone /></div>)
   }
   const unsubscribe = maintenance.subscribe(() => {
@@ -71,12 +75,16 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
   const hideHistory = () => {
     if (document.visibilityState !== 'visible') {
       history.clear()
+      learning.clear()
       maintenance.clear()
     }
   }
   document.addEventListener('visibilitychange', hideHistory)
   const historyAccess = setInterval(() => {
-    if (mode === 'ordinary' && document.visibilityState === 'visible') void history.checkAccess()
+    if (mode === 'ordinary' && document.visibilityState === 'visible') {
+      void history.checkAccess()
+      void learning.checkAccess()
+    }
   }, 15000)
   return { updatePreferences: render, dispose() {
     if (disposed) return
@@ -87,6 +95,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     document.removeEventListener('visibilitychange', hideHistory)
     workspace.dispose()
     history.dispose()
+    learning.dispose()
     unsubscribe()
     maintenance.dispose()
     root.unmount()

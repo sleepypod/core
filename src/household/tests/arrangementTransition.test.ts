@@ -161,6 +161,8 @@ describe('atomic reviewed arrangement storage', () => {
     expect(JSON.stringify(first)).not.toContain('Only the original owner')
     const second = await (await learningRequest(`records?archiveId=${request.requestId}&after=${first.nextOrdinal}&limit=1`)).json()
     expect(second.records[0].recordId).not.toBe(first.records[0].recordId)
+    expect(second.records[0]).toMatchObject({ sourceTable: 'journal_entries', recordedDate: '2026-10-30' })
+    expect(JSON.stringify(second)).not.toContain('Only the original owner')
     const record = fixture.database.prepare('SELECT id FROM household_learning_records WHERE source_table = \'journal_entries\'').get() as { id: string }
     const detail = await (await learningRequest(`records/${record.id}`)).json()
     expect(detail.payload).toContain('Only the original owner')

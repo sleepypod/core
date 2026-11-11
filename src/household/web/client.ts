@@ -3,6 +3,8 @@ import type { HouseholdSession } from '../contract'
 import { householdIdSchema } from '../contract'
 import { parsePersonalHistorySearch } from '../historyApiContract'
 import { maintenancePathAllowed } from './maintenanceProtocol'
+import { learningReadPath } from './learningPaths'
+import { learningArchiveLimits } from '../learningArchiveContract'
 export interface PersonalWebTransport {
   read(path: string, method?: 'GET' | 'PUT' | 'POST', body?: unknown): Promise<unknown>
   dispose(): void
@@ -15,6 +17,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
   }
 
   async read(path: string, method: 'GET' | 'PUT' | 'POST' = 'GET', body?: unknown): Promise<unknown> {
+    const learningRead = learningReadPath(path, method, body)
     let historyRead = false
     if (method === 'GET' && body === undefined && !path.includes('#')) {
       const [pathname, search, extra] = path.split('?')
@@ -34,7 +37,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
     const allowedMethod = method === 'GET'
       ? !['me/controls', 'me/routines/publish', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
       : method === 'PUT' ? path === 'me/routines' : ['me/controls', 'me/routines/publish', 'household/arrangement', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
-    if (this.disposed || (!historyRead && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
+    if (this.disposed || (!learningRead && !historyRead && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
       throw new PersonalWebError('account_changed', 'Reconnect the personal workspace before continuing.')
     const controller = new AbortController()
     this.requests.add(controller)
@@ -54,7 +57,8 @@ export class PersonalBrowserClient implements PersonalWebTransport {
         if (next.done)
           break
         length += next.value.length
-        if (length > 524288) {
+        const maximumBytes = learningRead === 'detail' ? 2 * learningArchiveLimits.recordBytes + 64 * 1024 : 524288
+        if (length > maximumBytes) {
           await reader.cancel()
           throw new PersonalWebError('invalid', 'The controller response was too large.')
         }

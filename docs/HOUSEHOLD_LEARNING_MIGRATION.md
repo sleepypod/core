@@ -1,8 +1,8 @@
 # Personal learning across a side change
 
 This records the preservation/read implementation and the remaining private-learning
-work in improvement 16. Atomic archive capture and account-scoped reads are implemented
-locally; public arrangement activation stays unavailable. The attended web workflow
+work in improvement 16. Atomic archive capture and account-scoped reads merged in
+Core PR 109; public arrangement activation stays unavailable. The attended web workflow
 is merged in PR 108; the native workflow is tested locally and under review in iOS
 PR 70. Source validation does not establish a live household migration.
 
@@ -131,7 +131,8 @@ sharing consent remains separate.
 - New feedback, journal and training paths must use verified person attribution
   and compatible physical-zone provenance. The archive is never a ready-made
   training dataset.
-- Web/native library screens and explicit local Health-owner enrollment remain.
+- The web library is implemented below. Native library screens and explicit local
+  Health-owner enrollment remain.
 - Public activation, installed-device verification and the attended migration
   remain separate from this source change.
 
@@ -148,7 +149,52 @@ exposed a SQLite iterator/write conflict; the keyset implementation and subseque
 passing runs retain that failure as diagnostic evidence. The final full suite passes
 9,685 tests with 19 existing skips. The production build, full lint, focused final
 lint and both database-migration checks pass. Browser and hosted release status are
-recorded below when complete.
+recorded below.
+
+### Preservation release
+
+Core PR 109 merged as `e76d920db808a221198db0e2131ef3d086602e4d` after all seven
+hosted checks succeeded. Its tree matches tested head
+`24e3ee5b2aa7077155837998d1af69039b38d8a4`. The full browser suite passed 99 cases;
+the normal pre-push suite passed 8,029 cases with 17 existing skips. This is source
+integration, not a live arrangement transition or deployment.
+
+## Personal browser library
+
+The personal workspace now offers **Your saved learning**. Opening it fetches one
+bounded archive page; selecting an archive fetches one metadata page. Known journal
+and comfort records show their original calendar date and readable fields. Unknown
+model formats remain exact downloadable JSON; the browser never rewrites large
+integer source identifiers. Reading a historical model cannot train or activate it.
+
+Each response is checked against the personal session before and after reading,
+the selected archive hash, page selectors and immutable record identity. Hidden
+tabs, identity/revision changes, feature withdrawal and failed reads discard the
+visible private records. Only one page and selected detail stay in memory. The
+library has its own client, so a pending download cannot block temperature Stop.
+An empty library explains that current sleep recordings are a separate collection.
+
+Metadata optionally includes the validated original calendar date for journal
+and comfort entries; old responses without that field remain compatible. The
+browser admits only validated learning GET paths. Only single-record reads receive
+the larger bounded response allowance, matching the server's maximum encoding size.
+
+The focused browser-state, transport and real migrated-store tests pass 128 cases.
+The full local suite passes 9,702 cases with 19 existing skips. TypeScript, focused
+lint and the production build pass. Three focused browser scenarios verify readable
+notes, exact original-file downloads, keyboard focus, 390-pixel large-text dark
+layout, tablet light layout, empty/error states, visibility withdrawal and an
+independent Stop request. These fixtures do not establish physical Stop behavior.
+The final full browser suite passes all 102 scenarios on the rebuilt package.
+The initial browser timing/capture failures and a stale standalone-asset failure
+are retained separately from the passing rebuilt-package results.
+
+The independent Impeccable finish review returned **ship** for this incumbent
+extension, with no material fixes. It inspected the light tablet, dark large-text
+phone, expanded source/download, empty and error views, plus surrounding page
+context. Two detector warnings refer to unchanged surrounding accent borders;
+the new library styles do not introduce that treatment. This review does not
+cover native delivery or actual two-person hardware operation.
 
 ## Required evidence before enabling the complete household transition
 

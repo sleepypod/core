@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { householdIdSchema } from './contract'
 import { personalHistoryScopeSchema } from './historyApiContract'
+import { journalDateSchema } from '@/src/journal/contract'
 import { learningArchiveBindingSchema, learningArchiveLimits, learningArchiveRecordSchema, learningArchiveSources } from './learningArchiveContract'
 
 export const learningPageLimitSchema = z.number().int().min(1).max(50)
@@ -29,8 +30,10 @@ export const learningArchivePageSchema = z.object({
 export const learningRecordSummarySchema = z.object({
   recordId: householdIdSchema, ordinal: recordFields.ordinal, sourceTable: recordFields.source_table,
   sourceSide: recordFields.source_side, kind: recordFields.kind, payloadBytes: recordFields.payload_bytes, redacted: z.boolean(),
+  recordedDate: journalDateSchema.nullable().optional(),
 }).strict().refine(value => learningArchiveSources.find(source => source.table === value.sourceTable)?.kind === value.kind,
   'Learning source and provenance kind do not match.')
+  .refine(value => !value.recordedDate || ['journal_entries', 'comfort_feedback'].includes(value.sourceTable), 'This source does not supply a check-in date.')
 export const learningRecordPageSchema = z.object({
   ...envelope, query: z.object({ archiveId: householdIdSchema, after: learningAfterSchema, limit: learningPageLimitSchema }).strict(),
   archiveId: householdIdSchema, contentHash: recordFields.payload_hash,

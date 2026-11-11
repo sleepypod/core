@@ -5,6 +5,7 @@ import { HouseholdError, type HouseholdCredential, type HouseholdStore } from '.
 import { readLearningArchive, verifiedLearningRecord } from './learningArchive'
 import { learningArchiveRecordSchema } from './learningArchiveContract'
 import { learningAfterSchema, learningPageLimitSchema } from './learningApiContract'
+import { journalDateSchema } from '@/src/journal/contract'
 
 const unavailable = () => new HouseholdError('not_ready', 404, 'This private learning record is unavailable.')
 
@@ -46,14 +47,17 @@ export class PersonalLearningLibrary {
     learningPageLimitSchema.parse(limit)
     const { manifest } = this.ownedArchive(credential, archiveId)
     const rows = this.database.prepare(`SELECT id, ordinal, source_table, source_side, kind, payload_bytes,
-      payload IS NULL AS redacted FROM household_learning_records WHERE operation_id = ?
+      payload IS NULL AS redacted, CASE WHEN source_table = 'journal_entries' THEN json_extract(source_key, '$[1]')
+      WHEN source_table = 'comfort_feedback' THEN json_extract(payload, '$.local_date') ELSE NULL END AS recorded_date
+      FROM household_learning_records WHERE operation_id = ?
       AND ordinal > ? ORDER BY ordinal LIMIT ?`).all(archiveId, after, limit + 1)
     const records = rows.slice(0, limit).map((raw) => {
-      const { redacted, ...metadata } = raw as Record<string, unknown>
+      const { redacted, recorded_date, ...metadata } = raw as Record<string, unknown>
       const row = learningArchiveRecordSchema.pick({ id: true, ordinal: true, source_table: true,
         source_side: true, kind: true, payload_bytes: true }).parse(metadata)
       return { recordId: row.id, ordinal: row.ordinal, sourceTable: row.source_table, sourceSide: row.source_side,
-        kind: row.kind, payloadBytes: row.payload_bytes, redacted: z.union([z.literal(0), z.literal(1)]).parse(redacted) === 1 }
+        kind: row.kind, payloadBytes: row.payload_bytes, redacted: z.union([z.literal(0), z.literal(1)]).parse(redacted) === 1,
+        recordedDate: journalDateSchema.safeParse(recorded_date).data ?? null }
     })
     return { archiveId, contentHash: manifest.content_hash, records,
       nextOrdinal: rows.length > limit ? records.at(-1)?.ordinal ?? null : null }
