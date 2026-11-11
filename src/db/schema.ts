@@ -2,6 +2,11 @@ import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
 
+// Logical installation identity survives restarts and restore; never use hardware serials for route matching.
+export const controllerConnectionIdentity = sqliteTable('controller_connection_identity', {
+  id: integer('id').primaryKey(), installationId: text('installation_id').notNull().unique(), createdAt: integer('created_at').notNull(),
+})
+
 // Source snapshots are server-created. Owner confirmation is distinct from sensor/command evidence.
 export const comfortOwnerReviews = sqliteTable('comfort_owner_reviews', {
   id: text('id').primaryKey(), side: text('side').notNull(), createdAt: integer('created_at').notNull(),

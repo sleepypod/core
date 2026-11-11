@@ -32,6 +32,7 @@ export const capabilitiesSchema = z.object({
     openapi: z.literal('/api/openapi.json'),
     nativeCompatibility: z.string().startsWith('/api/').nullable(),
     controls: z.literal('/api/v1/controls'),
+    connectionIdentity: z.literal('/api/v1/connection').optional(),
     importedHistory: z.literal('/api/v1/history'),
     journal: z.literal('/api/v1/journal'),
     nextAlarm: z.literal('/api/v1/alarm/next'),
@@ -117,7 +118,7 @@ export function buildCapabilities(snapshot: CapabilitySnapshot): ControllerCapab
     apiVersion: 1,
     generatedAt: new Date(now).toISOString(),
     controller: { id: 'sleepypod-core', upstreamBaseline: '3.4.0', revision: snapshot.revision },
-    endpoints: { rest: '/api', trpc: '/api/trpc', openapi: '/api/openapi.json', nativeCompatibility: null, controls: '/api/v1/controls', importedHistory: '/api/v1/history', journal: '/api/v1/journal', nextAlarm: '/api/v1/alarm/next', alarmOverride: '/api/v1/alarm/override', temperatureApplications: '/api/v1/device/temperature/applications' },
+    endpoints: { rest: '/api', trpc: '/api/trpc', openapi: '/api/openapi.json', nativeCompatibility: null, controls: '/api/v1/controls', connectionIdentity: '/api/v1/connection', importedHistory: '/api/v1/history', journal: '/api/v1/journal', nextAlarm: '/api/v1/alarm/next', alarmOverride: '/api/v1/alarm/override', temperatureApplications: '/api/v1/device/temperature/applications' },
     authentication: { required: true, bearer: true, browserSession: true },
     observations: { device: deviceObservation, base: baseObservation },
     features: {

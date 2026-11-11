@@ -1298,6 +1298,20 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
   {
     "checks": 0,
     "columns": [
+      "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | not-autoincrement | enum:none",
+      "installation_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | unique:controller_connection_identity_installation_id_unique | not-autoincrement | enum:none",
+      "created_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "controllerConnectionIdentity",
+    "foreignKeys": [],
+    "indexes": [],
+    "name": "controller_connection_identity",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "request_id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
       "fingerprint | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "request | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
