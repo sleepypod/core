@@ -6,6 +6,49 @@ on HTTP/tRPC or startup**. Public `activateArrangement` and `canActivate` remain
 false. This source change does not alter an installation, its feature flags,
 people, schedules, hardware, or reviewed history.
 
+## Internal runtime coordinator
+
+`ArrangementCoordinator` connects the transaction, recovery and cancellation
+stores to a serialized runtime operation. It remains internal: no route,
+startup activation or public capability is enabled by this implementation.
+Duplicate module instances share the operation exclusion for the same database.
+
+The coordinator reads evidence before placing a hold, suspends and drains
+automatic producers, waits for base writes and DAC replies, then reads every
+source again before committing. Expiry or failure leaves the durable hold in
+place. It never restarts the process itself. Separate attended recovery still
+requires a verified new controller generation and both processing receipts.
+Recovery and cancellation resume automatic services only after the release
+transaction succeeds. An exact historical replay does not read sensors, stop
+services, restart producers or repeat saved actions.
+
+The production evidence reader inspects existing occupancy, DAC, persisted
+device-state, alarm and base readers. It does not initialize Bluetooth or send
+commands. Original measurement clocks must be within five seconds and cannot
+be renewed by polling. Both zones must be calibrated and empty, both thermal
+channels off, water adequate, priming stopped and the connected base freshly
+stationary. Unconfigured or missing base telemetry is unknown, not evidence of
+an unsupported base. Supporting an independently verified base-free installation
+is separate capability work.
+
+The firmware does not expose physical vibration status. Alarm evidence therefore
+means quiet saved and in-memory controller records plus inactive managed alarms
+and snoozes; it is never proof that vibration physically stopped. Missing,
+oversized or corrupt alarm persistence cannot become an empty record. The
+attended confirmation remains required.
+
+A failed automatic restart is returned separately from the successful durable
+release receipt. The coordinator drains the partial runtime. If that drain also
+fails, admission rejects both old and new non-Stop commands until runtime
+replacement; Stop remains available. Replaying the release cannot retry startup.
+
+Behavioral tests use real migrated configuration and biometric stores with
+simulated external observations. They cover drain ordering, failure and expiry,
+duplicate coordinators, replay, original-owner authorization, processing
+acknowledgments, cancellation and failed startup. These are source checks, not
+physical household qualification. Runtime registration, maintenance routes and
+the attended web/native workflow remain pending.
+
 ## Transaction and interruption behavior
 
 ```mermaid

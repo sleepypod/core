@@ -41,6 +41,32 @@ async function ready() {
 }
 
 describe('whole-bed controller', () => {
+  it('does not report drained writes before an explicit Stop is acknowledged', async () => {
+    await ready()
+    const reply = Promise.withResolvers<undefined>()
+    vi.mocked(transport.write).mockReturnValueOnce(reply.promise)
+    const stopping = controller.stop()
+    await flush()
+    let drained = false
+    const waiting = controller.waitForWrites().then(() => {
+      drained = true
+    })
+    await flush()
+    expect(drained).toBe(false)
+    reply.resolve(undefined)
+    await stopping
+    await waiting
+    expect(drained).toBe(true)
+  })
+  it('does not call the gap between head and feet commands fully drained', async () => {
+    await ready()
+    const moving = controller.setPosition(target)
+    await flush()
+    await expect(controller.waitForWrites()).rejects.toMatchObject({ code: 'busy' })
+    await vi.advanceTimersByTimeAsync(500)
+    await moving
+    await expect(controller.waitForWrites()).resolves.toBeUndefined()
+  })
   it('withdraws the delayed leg movement across arrangement revisions without closing Bluetooth or losing Stop', async () => {
     const admission = admissionFixture()
     const accepted: Uint8Array[] = []

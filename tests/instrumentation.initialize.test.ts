@@ -11,6 +11,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { admissionFixture } from '@/src/hardware/tests/admissionFixture'
+import { beginHardwareWrite, captureHardwareIntent, HardwareAdmissionError } from '@/src/hardware/admission'
 
 let admission: ReturnType<typeof admissionFixture>
 function resetProcessModules() {
@@ -969,5 +970,16 @@ describe('household transition service lifecycle', () => {
     expect(mocks.getJobManager).toHaveBeenCalledOnce()
     await node.resumeAutomaticServices()
     expect(mocks.getJobManager).toHaveBeenCalledTimes(2)
+  })
+
+  it('blocks actuator writes when startup and subsequent suspension both fail', async () => {
+    const node = await import('@/src/server/instrumentation-node')
+    await node.suspendAutomaticServices()
+    mocks.getAutomationEngine.mockRejectedValueOnce(new Error('rules unavailable'))
+    mocks.shutdownJobManager.mockRejectedValueOnce(new Error('scheduler stuck'))
+    await expect(node.resumeAutomaticServices()).rejects.toThrow('restart is required')
+    expect(() => beginHardwareWrite(captureHardwareIntent())).toThrow(HardwareAdmissionError)
+    expect(() => beginHardwareWrite(captureHardwareIntent(), true)()).not.toThrow()
+    await expect(node.resumeAutomaticServices()).rejects.toThrow()
   })
 })

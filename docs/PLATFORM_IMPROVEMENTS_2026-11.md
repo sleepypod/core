@@ -201,3 +201,25 @@ timezone formatter construction. Shared bounded formatter reuse preserves every
 recording/source audit, fixture, assertion and timeout. The corrected local full
 coverage suite passes **9,512 tests, 19 existing skips**; production build,
 TypeScript and focused lint pass. Final hosted checks remain a separate gate.
+
+
+### Household runtime coordination — local implementation
+
+Core PR 105 passed all hosted checks and merged as
+`01535709a5a535d5efc3b4c23696d694e3294430`. Its tree matches tested
+`3c39c4f725f34e3a49c584dc4ee896c40dac7486`.
+
+The internal coordinator now serializes activation, recovery and cancellation,
+drains automatic services and base/DAC writes, and rechecks original source
+clocks before committing. A failed automatic restart reports unavailable
+separately from the durable release; a failed subsequent drain rejects further
+non-Stop writes until runtime replacement. Producers start outside the attended
+request's old command context. Historical replay cannot restart them.
+
+Source verification includes 269 focused tests and a full coverage run with
+9,556 passing tests and 19 existing skips. The subsequent request-context
+regression and final base/lifecycle cases pass a further 73-test focused run.
+These are simulated-observation checks over real migrated stores; public
+activation remains unavailable. Production runtime registration, the attended
+web/native workflow, personal learning migration and physical acceptance remain.
+See [the coordinator contract](HOUSEHOLD_ARRANGEMENT_COMMIT.md).

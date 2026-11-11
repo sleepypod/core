@@ -39,7 +39,7 @@ import { startDatabaseIntegrityChecks, stopDatabaseIntegrityChecks } from '@/src
 import { startPerformanceMonitoring, stopPerformanceMonitoring, recordStartupPhase } from '@/src/lib/serverPerformance'
 import { shutdownHomeKit, startHomeKitIfEnabled } from '@/src/homekit'
 import { stopPersonalHistoryIngestion } from '@/src/household/historyIngestionRuntime'
-import { assertHardwareWriteCurrent, captureHardwareIntent, HardwareAdmissionError } from '@/src/hardware/admission'
+import { assertHardwareWriteCurrent, blockHardwareUntilRestart, captureHardwareIntent, HardwareAdmissionError } from '@/src/hardware/admission'
 
 interface NodeLifecycle {
   isInitialized: boolean
@@ -542,7 +542,13 @@ export async function resumeAutomaticServices(): Promise<void> {
   }
   catch (error) {
     // A partial resume must not leave unattended producers running behind a failed result.
-    await suspendAutomaticServices()
+    try {
+      await suspendAutomaticServices()
+    }
+    catch (stopError) {
+      blockHardwareUntilRestart()
+      throw new AggregateError([error, stopError], 'Automatic startup and suspension failed; restart is required')
+    }
     throw error
   }
 }

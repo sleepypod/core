@@ -50,6 +50,14 @@ export class ArrangementTransitionStore {
     return readArrangementTransition(this.dependencies.database, operationId)
   }
 
+  /** Lost-response inspection never creates a new hold or repeats a completed transition. */
+  readReceipt(credential: HouseholdCredential, input: unknown) {
+    const request = arrangementTransitionRequestSchema.parse(input)
+    const row = this.row(request.requestId)
+    this.authorize(credential, request, row)
+    return row ? { receipt: this.receipt(row), recovered: row.recovery !== null } : null
+  }
+
   private authorize(credential: HouseholdCredential, input: ArrangementTransitionRequest, row?: TransitionRow) {
     const session = this.dependencies.identities.session(credential)
     const deviceId = typeof credential === 'string' ? this.dependencies.identities.deviceIdentity(credential) : credential.deviceId

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { beginHardwareWrite, captureHardwareIntent, classifyDacAdmission, HardwareAdmissionError,
+import { beginHardwareWrite, blockHardwareUntilRestart, captureHardwareIntent, classifyDacAdmission, HardwareAdmissionError,
   installHardwareAdmission, outsideHardwareIntent, waitForHardwareDrain, withinHardwareIntent } from '../admission'
 import { withSideLock } from '../sideLock'
 import { outsideControlRequest } from '@/src/controls/context'
@@ -18,6 +18,21 @@ function source() {
 }
 
 describe('durable hardware admission', () => {
+  it('keeps a failed runtime blocked across durable revisions until replacement, preserving Stop', () => {
+    const state = source()
+    const prior = captureHardwareIntent()
+    blockHardwareUntilRestart()
+    expect(() => beginHardwareWrite(prior)).toThrow(HardwareAdmissionError)
+    expect(() => beginHardwareWrite(captureHardwareIntent())).toThrow(HardwareAdmissionError)
+    state.revision += 2
+    expect(() => beginHardwareWrite(captureHardwareIntent())).toThrow(HardwareAdmissionError)
+    beginHardwareWrite(prior, true)()
+    uninstall?.()
+    uninstall = undefined
+    source()
+    beginHardwareWrite(captureHardwareIntent())()
+    expect(() => beginHardwareWrite(prior)).toThrow(HardwareAdmissionError)
+  })
   it('fails closed before initialization and preserves explicit Stop', () => {
     expect(() => beginHardwareWrite(captureHardwareIntent())).toThrow(HardwareAdmissionError)
     expect(() => beginHardwareWrite(captureHardwareIntent(), true)()).not.toThrow()

@@ -188,6 +188,12 @@ export class BaseController {
     }
   }
 
+  /** After producers and side operations drain, retain queued Stop replies before recovery. */
+  async waitForWrites(): Promise<void> {
+    await this.writes
+    if (this.busy || this.stopping) throw new BaseError('busy', 'A base operation is still completing')
+  }
+
   shutdown(): void {
     this.closed = true
     ++this.generation

@@ -11,6 +11,7 @@ interface Runtime {
   active: number
   waiters: Set<() => void>
   observed?: HardwareAdmissionSnapshot
+  blockedUntilRestart?: boolean
 }
 const shared = globalThis as typeof globalThis & {
   __sp_hardwareAdmission?: Runtime
@@ -56,6 +57,7 @@ export function captureHardwareIntent(): Intent {
   if (inherited) return inherited
   const runtime = shared.__sp_hardwareAdmission
   if (!runtime) return { runtime: null, revision: null }
+  if (runtime.blockedUntilRestart) return { runtime, revision: null }
   try {
     const snapshot = read(runtime)
     return { runtime, revision: snapshot.holdId === null ? snapshot.revision : null }
@@ -76,10 +78,16 @@ export function outsideHardwareIntent<Result>(operation: () => Result): Result {
 export function assertHardwareWriteCurrent(intent: Intent, stopping = false): void {
   const runtime = shared.__sp_hardwareAdmission
   if (!stopping) {
-    if (!runtime || intent.runtime !== runtime || intent.revision === null) throw new HardwareAdmissionError()
+    if (!runtime || runtime.blockedUntilRestart || intent.runtime !== runtime || intent.revision === null) throw new HardwareAdmissionError()
     const snapshot = read(runtime)
     if (snapshot.holdId !== null || snapshot.revision !== intent.revision) throw new HardwareAdmissionError()
   }
+}
+
+/** If a partial runtime cannot be drained, reject its old and new writes until a clean process starts. Stop remains available. */
+export function blockHardwareUntilRestart(): void {
+  const runtime = shared.__sp_hardwareAdmission
+  if (runtime) runtime.blockedUntilRestart = true
 }
 
 /** Recheck durable admission at actual dispatch and retain in-flight writes through their reply. */
