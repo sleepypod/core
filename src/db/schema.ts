@@ -444,6 +444,14 @@ export const thermalForecasts = sqliteTable('thermal_forecasts', {
   record: text('record', { mode: 'json' }).notNull(),
 }, table => [index('idx_thermal_forecasts_side_created').on(table.side, table.createdAt)])
 
+/** Inert target-change research artifacts remain separate from unchanged-target forecasts. */
+export const targetResponseModels = sqliteTable('target_response_models', {
+  id: text('id').primaryKey(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  createdAt: integer('created_at').notNull(),
+  record: text('record', { mode: 'json' }).notNull(),
+}, table => [index('idx_target_response_models_side_created').on(table.side, table.createdAt)])
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

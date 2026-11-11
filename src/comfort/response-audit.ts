@@ -5,13 +5,29 @@ import type { Side } from '@/src/hardware/types'
 import { temperatureApplicationSchema } from '@/src/temperature/applications'
 import { thermalDatasetAudit, type ThermalDatasetAudit } from './thermal-dataset'
 import { RESPONSE_POLICY, responseAuditSchema, type ResponseAudit } from './response-contract'
-import { assessResponseWindow, RESPONSE_BEFORE_MS, RESPONSE_AFTER_MS, responseSampleSchema, type ResponseWindow } from './response-window'
+import { assessResponseWindow, RESPONSE_BEFORE_MS, RESPONSE_AFTER_MS, responseSampleSchema, responseWindowSchema, type ResponseWindow } from './response-window'
 
 interface ApplicationRow { id: number, attemptId: string, attemptedAt: number, finishedAt: number | null, outcome: string, requestBytes: number }
+export interface ResponseEvidence {
+  audit: ResponseAudit
+  configuration: string | null
+  windows: Array<{ window: ResponseWindow, sourceHash: string }>
+}
 
-/** Join reviewed nights to command receipts and actual water samples; no device or model is started. */
+export function responseEvidenceHash(side: Side, configuration: string | null, windows: ResponseEvidence['windows']): string {
+  const ordered = windows.map(item => ({ window: responseWindowSchema.parse(item.window), sourceHash: item.sourceHash }))
+    .sort((first, second) => first.window.at - second.window.at || first.window.attemptId.localeCompare(second.window.attemptId))
+  return createHash('sha256').update(JSON.stringify([RESPONSE_POLICY, side, configuration, ordered])).digest('hex')
+}
+
 export function readResponseAudit(database: Database.Database, biometrics: Database.Database, side: Side, now: number,
   audit: (database: Database.Database, side: Side, now: number) => ThermalDatasetAudit = thermalDatasetAudit): ResponseAudit {
+  return readResponseEvidence(database, biometrics, side, now, audit).audit
+}
+
+/** Join reviewed nights to command receipts and actual water samples; no device or model is started. */
+export function readResponseEvidence(database: Database.Database, biometrics: Database.Database, side: Side, now: number,
+  audit: (database: Database.Database, side: Side, now: number) => ThermalDatasetAudit = thermalDatasetAudit): ResponseEvidence {
   z.enum(['left', 'right']).parse(side)
   z.number().int().positive().max(8_640_000_000_000_000).parse(now)
   const result: ResponseAudit = { apiVersion: 1, policy: RESPONSE_POLICY, generatedAt: now, side, attribution: 'physical_zone_only',
@@ -110,16 +126,16 @@ export function readResponseAudit(database: Database.Database, biometrics: Datab
       result.responseNights = new Set(windows.map(item => item.window.date)).size
       result.coolingWindows = windows.filter(item => item.window.requestedTargetF < item.window.previousTargetF).length
       result.warmingWindows = windows.length - result.coolingWindows
-      result.datasetHash = createHash('sha256').update(JSON.stringify([RESPONSE_POLICY, side, current ?? null, windows])).digest('hex')
+      result.datasetHash = responseEvidenceHash(side, current ?? null, windows)
       result.exclusions = [...excluded.values()].slice(0, 300)
       result.exclusionsTruncated = excluded.size > 300
       result.reason = `${result.responseNights} reviewed nights contain qualifying 1°F target changes. A minimum of 20 distinct nights is a collection milestone, not proof of model quality. Observed responses are not randomized causal effects, body temperature or comfort outcomes. No model is fitted or activated by this audit.`
-      return responseAuditSchema.parse(result)
+      return { audit: responseAuditSchema.parse(result), configuration: current ?? null, windows }
     })())()
   }
   catch {
-    return responseAuditSchema.parse({ ...result, status: 'unavailable', reviewedNights: 0, responseNights: 0,
+    return { audit: responseAuditSchema.parse({ ...result, status: 'unavailable', reviewedNights: 0, responseNights: 0,
       coolingWindows: 0, warmingWindows: 0, datasetHash: '0'.repeat(64), exclusions: [], exclusionsTruncated: false,
-      reason: 'Reviewed-night, command or water evidence could not be read. No response readiness can be established.' })
+      reason: 'Reviewed-night, command or water evidence could not be read. No response readiness can be established.' }), configuration: null, windows: [] }
   }
 }

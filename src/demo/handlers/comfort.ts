@@ -10,6 +10,16 @@ function rejectDemoWrite(): never {
 }
 
 export const comfort: DemoHandlers<'comfort'> = {
+  targetResponseModel: ({ side }) => {
+    const generatedAt = Date.now()
+    return { apiVersion: 1, generatedAt, side, requiredNights: 20, completeNights: 0, datasetHash: '0'.repeat(64),
+      canTrain: false, activationAvailable: false, model: null, reason: unavailable,
+      evidence: { apiVersion: 1, policy: RESPONSE_POLICY, generatedAt, side, attribution: 'physical_zone_only',
+        status: 'unavailable', reviewedNights: 0, responseNights: 0, coolingWindows: 0, warmingWindows: 0, requiredNights: 20,
+        datasetHash: '0'.repeat(64), modelAvailable: false, activationAvailable: false, exclusions: [], exclusionsTruncated: false, reason: unavailable } }
+  },
+  trainTargetResponseModel: rejectDemoWrite,
+  targetResponsePreview: ({ side }) => ({ apiVersion: 1, generatedAt: Date.now(), side, activationAvailable: false, candidates: [], reason: unavailable }),
   targetResponse: ({ side }) => ({ apiVersion: 1, policy: RESPONSE_POLICY, generatedAt: Date.now(), side, attribution: 'physical_zone_only',
     status: 'unavailable', reviewedNights: 0, responseNights: 0, coolingWindows: 0, warmingWindows: 0, requiredNights: 20,
     datasetHash: '0'.repeat(64), modelAvailable: false, activationAvailable: false, exclusions: [], exclusionsTruncated: false, reason: unavailable }),

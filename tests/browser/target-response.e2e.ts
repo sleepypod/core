@@ -39,18 +39,21 @@ for (const width of [390, 1440]) {
     const read = protocol.procedure.input(z.object({ side: z.enum(['left', 'right']) })).query(async ({ input }) => {
       if (pending) await pending
       if (failed) throw new Error('Illustrative controller unavailable')
-      return { apiVersion: 1, policy: 'acknowledged-small-step-v1', generatedAt: Date.now(), side: input.side, attribution: 'physical_zone_only',
+      const generatedAt = Date.now()
+      const evidence = { apiVersion: 1, policy: 'acknowledged-small-step-v1', generatedAt, side: input.side, attribution: 'physical_zone_only',
         status: 'partial', reviewedNights: 12, responseNights: 9, coolingWindows: 8, warmingWindows: 4, requiredNights: 20,
         datasetHash: 'a'.repeat(64), modelAvailable: false, activationAvailable: false,
         exclusions: [{ date: '2026-11-09', count: 2, reason: 'Actual preceding water readings and timely firmware confirmation are missing.' },
           { date: '2026-11-08', count: 1, reason: 'Another change or unresolved command overlaps this response window.' }],
         exclusionsTruncated: false, reason: 'Illustrative response-readiness fixture; no personal measurements.' }
+      return { apiVersion: 1, generatedAt, side: input.side, completeNights: 9, requiredNights: 20,
+        datasetHash: evidence.datasetHash, canTrain: false, activationAvailable: false, reason: evidence.reason, model: null, evidence }
     })
     await page.route('**/api/trpc/**', async (route) => {
       const incoming = route.request()
       const paths = decodeURIComponent(new URL(incoming.url()).pathname.split('/api/trpc/')[1]).split(',')
-      if (!paths.includes('comfort.targetResponse')) return route.continue()
-      const procedures = Object.fromEntries(paths.map(path => [path, path === 'comfort.targetResponse'
+      if (!paths.includes('comfort.targetResponseModel')) return route.continue()
+      const procedures = Object.fromEntries(paths.map(path => [path, path === 'comfort.targetResponseModel'
         ? read
         : protocol.procedure.input(z.unknown()).query(async ({ input }) => {
             const forwarded = await request.get(`/api/trpc/${path}?input=${encodeURIComponent(JSON.stringify(superjson.serialize(input)))}`,
