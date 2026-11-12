@@ -2,13 +2,15 @@ import { householdSessionSchema, type HouseholdSession } from '../contract'
 import type { PersonalWebTransport } from './client'
 import { ComfortExperimentBrowserWorkspace } from '@/src/comfort/experiments/browserWorkspace'
 import { experimentBrowserRequest } from '@/src/comfort/experiments/browserContract'
+import { experimentExecutionBrowserRequest } from '@/src/comfort/experiments/browserExecution'
 
 export function personalExperimentPath(path: string, method: string, body: unknown) {
   const prefix = 'me/comfort-experiments'
   if (!path.startsWith(prefix)) return false
   const suffix = path.slice(prefix.length)
   if (suffix && !suffix.startsWith('/') && !suffix.startsWith('?')) return false
-  return experimentBrowserRequest(suffix.startsWith('/') ? suffix.slice(1) : suffix, method, body)
+  const relative = suffix.startsWith('/') ? suffix.slice(1) : suffix
+  return experimentBrowserRequest(relative, method, body) || experimentExecutionBrowserRequest(relative, method, body)
 }
 
 export function personalExperimentWorkspace(session: HouseholdSession, client: PersonalWebTransport) {
@@ -22,7 +24,7 @@ export function personalExperimentWorkspace(session: HouseholdSession, client: P
       const current = householdSessionSchema.parse(await client.read('household/session'))
       if (signal.aborted || !current.capabilities.comfortExperiments || JSON.stringify(scope(current)) !== expected)
         throw new Error('Personal experiment account changed.')
-      return { scope: scope(current), revision: expected }
+      return { scope: scope(current), revision: expected, execution: current.capabilities.comfortExperimentExecution === true }
     },
     async request(path, method, body, signal) {
       const destination = `me/comfort-experiments${path.startsWith('?') || !path ? path : `/${path}`}`

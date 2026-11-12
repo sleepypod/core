@@ -6,6 +6,7 @@ import { dateInTimeZone } from '@/src/lib/timeZoneDate'
 import { formatSetpointF } from '@/src/lib/tempUtils'
 import { ExperimentNightPlan, ExperimentPlanSummary } from './ExperimentNightPlan'
 import { ExperimentFeedbackForm } from './ExperimentFeedbackForm'
+import { ExperimentExecution } from './ExperimentExecution'
 /** One renderer for the owner and personal account; each receives a separate scoped transport. */
 export function ComfortExperiments({ workspace, unit = 'F' }: {
   workspace: ComfortExperimentBrowserWorkspace
@@ -14,6 +15,7 @@ export function ComfortExperiments({ workspace, unit = 'F' }: {
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot, workspace.getSnapshot)
   const title = useId(), reviewRef = useRef<HTMLElement>(null), detailRef = useRef<HTMLElement>(null)
   const proposalRef = useRef<HTMLHeadingElement>(null), wasReviewing = useRef(false)
+  const selectedPlanId = state.detail?.record.plan.id
   useEffect(() => {
     const hide = () => {
       if (document.visibilityState !== 'visible')
@@ -53,9 +55,9 @@ export function ComfortExperiments({ workspace, unit = 'F' }: {
     wasReviewing.current = Boolean(state.review)
   }, [state.review])
   useEffect(() => {
-    if (state.detail)
+    if (selectedPlanId)
       detailRef.current?.focus()
-  }, [state.detail])
+  }, [selectedPlanId])
   const format = (value: number) => formatSetpointF(value, unit)
   const context = state.library?.availability.context
   const openPlan = state.library?.experiments.find(record => record.status === 'planned')
@@ -70,11 +72,7 @@ export function ComfortExperiments({ workspace, unit = 'F' }: {
           {state.busy ? 'Checking comparison…' : state.library || state.detail ? 'Refresh comparisons' : 'Open my comparisons'}
         </button>
       </div>
-      <p className="experiment-notice">
-        <strong>Planning only.</strong>
-        {' '}
-        You can review and save a comparison. Overnight experiment control is not available yet; your current routine and wake alarm continue unchanged.
-      </p>
+      {!state.detail && <p className="experiment-notice">Saving a plan does not change the bed. Overnight control needs a separate review; your wake plan stays the same.</p>}
       {state.error && <p className="experiment-notice" role="alert">{state.error}</p>}
       {state.message && <p className="experiment-notice" role="status">{state.message}</p>}
       {state.busy && <p role="status">Checking your account and the saved result…</p>}
@@ -140,7 +138,7 @@ export function ComfortExperiments({ workspace, unit = 'F' }: {
         <section ref={detailRef} tabIndex={-1} aria-label="Saved comparison" className="experiment-reading">
           <div className="experiment-heading">
             <div>
-              <h3>{state.detail.record.status === 'stopped' ? 'Comparison stopped' : 'Your saved comparison'}</h3>
+              <h3>{state.detail.record.status === 'stopped' ? state.execution?.state === 'admitted' ? 'Finish stopping this comparison' : 'Comparison stopped' : 'Your saved comparison'}</h3>
               <p>
                 {format(state.detail.record.plan.context.baselineF)}
                 {' '}
@@ -149,9 +147,10 @@ export function ComfortExperiments({ workspace, unit = 'F' }: {
                 {format(state.detail.record.plan.variantF)}
               </p>
             </div>
-            {state.detail.record.status !== 'stopped' && <button type="button" disabled={state.busy} onClick={() => void workspace.stop()}>Stop comparison</button>}
+            {(state.detail.record.status !== 'stopped' || state.execution?.state === 'admitted') && <button type="button" disabled={state.busy} onClick={() => void workspace.stop()}>{state.detail.record.status === 'stopped' ? 'Finish stopping control' : 'Stop comparison'}</button>}
           </div>
           {!state.detail.contextCurrent && <p className="experiment-notice">Your routine or assignment has changed. This saved plan cannot authorize further adjustments. You can still read its record or stop it.</p>}
+          <ExperimentExecution state={state} workspace={workspace} format={format} />
           <ExperimentResult detail={state.detail} />
           <details>
             <summary>See planned nights and wake boundaries</summary>

@@ -2,10 +2,11 @@ import { experimentBrowserProblem } from './browserError'
 import { z } from 'zod'
 import { ComfortExperimentBrowserWorkspace } from './browserWorkspace'
 import { experimentBrowserRequest } from './browserContract'
+import { experimentExecutionBrowserRequest } from './browserExecution'
 const owner = z.object({ configured: z.literal(true), authenticated: z.literal(true), privacyAvailable: z.literal(true),
   personalSessionActive: z.literal(false), personalConnectionRequired: z.literal(false), browserScopeRevision: z.string().min(1).max(256) })
 const connection = z.object({ schemaVersion: z.literal(1), controller: z.literal('sleepypod-core'), installationId: z.string().uuid(), challenge: z.string() }).strict()
-/** Same-origin owner cookies only; no owner key, cross-origin destinations or control endpoints. */
+/** Same-origin owner cookies; fixed comparison actions, never arbitrary actuator endpoints. */
 export function ownerExperimentWorkspace(fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init)) {
   const request = async (path: string, method: 'GET' | 'POST', body: unknown, signal: AbortSignal): Promise<unknown> => {
     const response = await fetcher(path, { method, signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
@@ -51,10 +52,10 @@ export function ownerExperimentWorkspace(fetcher: typeof fetch = (input, init) =
       const identity = connection.parse(await request(`/api/v1/connection?challenge=${challenge}`, 'GET', undefined, signal))
       if (identity.challenge !== challenge)
         throw new Error('Controller identity changed.')
-      return { scope: { kind: 'legacy', installationId: identity.installationId }, revision: session.browserScopeRevision }
+      return { scope: { kind: 'legacy', installationId: identity.installationId }, revision: session.browserScopeRevision, execution: true }
     },
     request(path, method, body, signal) {
-      if (!experimentBrowserRequest(path, method, body))
+      if (!experimentBrowserRequest(path, method, body) && !experimentExecutionBrowserRequest(path, method, body))
         throw new Error('Invalid comparison request.')
       return request(`/api/v1/comfort/experiments${path.startsWith('?') || !path ? path : `/${path}`}`, method, body, signal)
     },

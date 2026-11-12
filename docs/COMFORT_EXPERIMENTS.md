@@ -1,20 +1,20 @@
 # Personal comfort experiments
 
-This is the implemented protocol, evidence collector, durable repository,
-authenticated planning API and owner/personal browser interface for approved
-improvement 10. It is **planning-only, not an enabled temperature controller**.
-Native screens, authenticated activation and runtime observation collection remain integration work. The
-guarded execution adapter, durable admission/attempt journals and production lifecycle host are connected;
-the public API still exposes planning only and cannot create an execution grant. No
-experiment was started on Luca's Pod and no schedule, alarm or live setting was
-changed by this implementation.
+This is the implemented protocol, evidence collector, durable repository and
+authenticated owner/personal browser flow for approved improvement 10. Saving a
+plan never enables control. A separate one-minute review binds actual server
+qualification and reviewed-night evidence before the user may authorize execution
+through the shared temperature controller. The browser controls pass local
+validation; native screens, release, deployment and prospective acceptance remain.
+No experiment was started on Luca's Pod and no live setting was changed here.
 
 ```mermaid
 flowchart LR
     Settings[Current person and approved range] --> Plan[Immutable balanced plan]
     Plan --> Review[Review exact dates and settings]
-    Review -. remaining integration .-> Authority[Single temperature authority]
-    Authority -. observed intervals .-> Collector[Freshness and assignment checks]
+    Review --> Admission[Separate qualified control review]
+    Admission --> Authority[Single temperature authority]
+    Authority --> Collector[Freshness and assignment checks]
     Collector --> Record[Private revisioned evidence]
     Feedback[Morning comfort and problems] --> Record
     Record --> Comparison[Complete paired observations]
@@ -185,26 +185,25 @@ reactivate a stopped record. Authority and writes share a database transaction w
 and private response delivery rechecks authority and selected content. Input is
 strict UTF-8 JSON limited to 8 KiB. Cache headers prohibit shared caching.
 
-All responses explicitly identify execution as `planning_only`. The preview now
+Planning responses retain the compatibility field `execution: planning_only`;
+actual authorization comes from the separate execution API below. The preview
 returns the exact scheduled windows, wake snapshots and skipped dates. The saved
 version 2 plan binds them into its hash. Sixteen scheduled windows do not establish
 sixteen observed or physically qualified nights.
 
 ## Remaining controller and app integration
 
-The next implementation must connect these parts to the single controller:
+Remaining delivery and acceptance work:
 
 1. Add matching native review and results screens, including all skipped dates,
    exact night/wake boundaries and evidence exclusions. The browser screens and
-   their authenticated planning/recovery flow are implemented below.
+   their separate reviewed execution/recovery flow are implemented below.
 2. Complete release and installed-app acceptance of the browser/native flow.
-3. Admit only explicitly reviewed, qualified treatment leases. Pause normal
-   adaptation during a comparison; preserve manual priority and the alarm window.
-4. Persist live observation references and reconcile source withdrawal. On stop,
-   expiry, reassignment, manual intervention or restart uncertainty, revoke the
-   experiment lease. Resume only the current valid plan; never restore a stale
-   saved target over a newer manual control.
-5. Run prospective Preview and attended qualification before actual treatment.
+3. Verify the implemented controller/collector on the installed Pod, including
+   manual interruption, source loss, cancellation and restart behavior. Software
+   fixtures do not replace actual qualification or reviewed Preview nights.
+4. Run prospective observations and review complete comparisons before suggesting
+   a preference change. Never restore an old target over a newer manual control.
 
 The currently saved `planned`/`stopped` record states deliberately express what
 this stage implements. They must not be presented as active or completed trials.
@@ -298,7 +297,8 @@ comparison renderer. They inject separate authenticated transports and scope
 validators. The owner uses the existing browser session and verified installation;
 the personal route derives its sleeper from the current credential and assignment.
 Neither transport accepts an arbitrary URL, a client-selected sleeper, exposure
-uploads or activation. Replies are size-bounded and checked for freshness,
+uploads or arbitrary actuator commands. The execution extension below permits
+only explicit reviewed actions. Replies are size-bounded and checked for freshness,
 identity, exact plan order and scheduled windows.
 
 The compact review presents both settings, the actual date span and preserved
@@ -608,7 +608,8 @@ uncertain attempt, not just its initial reservation, and must still be fresh.
 The personal session advertises `comfortExperimentExecution` when its handler is
 installed. The existing planning response retains its compatibility field
 `execution: planning_only`; clients must use the separate execution receipt for
-admission state. Browser/native execution controls are the next integration step.
+admission state. The browser extension is described below; matching native
+controls remain implementation work.
 
 Local verification currently passes **294 focused tests**, including real migrated
 storage, actual owner credentials and two personal identities with fake firmware.
@@ -621,3 +622,43 @@ Core recorder PR 132 passed all seven hosted checks and merged as
 `248b834c2fb95c52e868dc0210691885b592b39b` equals tested head
 `d9d501b9a9a085a102d74b289d2b7b523905bf8c`. The execution API branch was rebased
 onto that merge with an unchanged tree before this documentation receipt.
+
+## Browser execution and interrupted-action recovery
+
+Owner and personal-account screens now show saved-plan state separately from
+current execution permission. The shared transport only permits fixed preview,
+confirm, cancel and recover actions. Account, plan, scheduled target, affected
+zones, observation clocks and attempt outcomes are validated before rendering.
+Personal clients require the session's explicit execution capability.
+
+The inline review shows the two settings, affected halves, preserved wake plan and
+one-minute expiry. Back and expiry return keyboard focus without discarding the
+saved comparison. A missing qualification explains the problem while retaining
+the plan and Stop access. Only a separate “Allow scheduled comparison” submits
+authorization; opening, saving and refreshing never do.
+
+Stop first durably closes the plan, preventing a concurrent device from admitting
+it again, then cancels its retained grant under the original side locks. Either
+lost response interrupts that sequence. A read-only check shows which step
+completed; a closed plan with an uncancelled grant keeps “Finish stopping control”
+available. There is no automatic resubmission. The shared controller still checks
+the stopped plan before any new experimental write.
+
+Periodic visible-page reads update control status without moving keyboard focus
+or renewing a review. An account change or hidden page withdraws private content.
+Unknown firmware attempts offer an explicit fresh-target check that ends the old
+authorization. The UI never labels a readback or acknowledged request as physical
+delivery, and never resends a temperature command during recovery.
+
+Local validation currently passes 316 focused tests across the experiment and
+personal API suites. New state tests use the real service, execution host and
+migrated stores with fake firmware. Browser scenarios exercise rendered owner and
+personal flows using synthetic execution receipts; they are not hardware evidence.
+All 12 rendered browser scenarios pass, including light tablet, dark phone and
+enlarged text. A separate viewport check confirms the phone confirmation button
+is visible and unobstructed by navigation. The first browser failures exposed
+missing spaces in interpolated text and two test actions that advanced before
+the preceding response finished; both the failed evidence and corrections are
+retained. The production build, TypeScript and focused ESLint pass; the one-time
+Impeccable detector returned no findings. Hosted checks, deployment and physical
+acceptance remain. Logs are retained under `/tmp/sleepypod-experiment-controls-*`.

@@ -48,6 +48,9 @@
 .experiment-feedback { padding-top: 20px; border-top: 1px solid var(--experiment-line); }
 .experiment-feedback form { display: grid; gap: 18px; }
 .experiment-feedback form > button { justify-self: start; }
+.experiment-execution { display: grid; gap: 14px; padding-block: 20px; border-block: 1px solid var(--experiment-line); }
+.experiment-execution > button { justify-self: start; }
+.experiment-control-review { display: grid; gap: 16px; padding-block: 18px; border-top: 1px solid var(--experiment-line); }
 .experiment-observations > li { padding: 14px 0; border-bottom: 1px solid var(--experiment-line); }
 @media(max-width:600px) {
   .comfort-experiments { padding: 20px 16px; }
