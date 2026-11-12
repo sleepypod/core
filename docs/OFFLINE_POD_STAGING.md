@@ -31,6 +31,14 @@ objects must be Linux ARM64 ELF files. Escaping links, unsafe archive paths,
 dirty sources, wrong build identity and demo builds are rejected. Existing
 output is never overwritten. Failed preparation removes only its new directory.
 
+The outer runtime archive records root ownership (UID/GID 0 and name `root`) for
+files, directories and symbolic links. It preserves their bytes, executable
+modes and link destinations without changing ownership on the build computer.
+This prevents a root extraction on the Pod from importing the developer's Mac
+account IDs, which the maintenance verifier correctly rejects. Existing staged
+archives are not repaired by rebuilding the packager: verify their contents and
+inactive status separately before correcting ownership within that release only.
+
 Pinned runtime sources:
 
 - [Node 24.22.1 security release](https://nodejs.org/en/blog/release/v24.22.1)
@@ -114,7 +122,7 @@ and seven actual Preview nights remain separate from this packaging check.
 python3 -m unittest discover -s scripts/deployment -p 'test_*.py' -v
 ```
 
-The suite checks archive traversal/link attacks, native architecture, secret/data
+The suite checks archive traversal/link attacks, root-owned packaging, native architecture, secret/data
 exclusion, corrupted cached artifacts and existing-directory preservation. It
 runs in the Unit Tests CI job and the pre-push gate. Live staging receipts belong
 in private local recovery records; no owner credentials belong in this document.
