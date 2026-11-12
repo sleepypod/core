@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { migratedComfortDatabase } from '../../tests/databaseFixture'
 import { ComfortExperimentStore } from '../store'
-import { experimentPlanSchema } from '../contract'
+import { EXPERIMENT_REVIEW_MS, experimentPlanSchema } from '../contract'
 import { experimentPlanHash } from '../plan'
 import { completeExperiment, context, createdAt, fixturePlan } from './fixture'
 
@@ -146,7 +146,7 @@ describe('durable personal comfort experiment records', () => {
 
   it('refuses expired and future previews without leaving partial records', () => {
     const plan = fixturePlan()
-    now = createdAt + 30_001
+    now = createdAt + EXPERIMENT_REVIEW_MS
     expect(() => store.create(plan)).toThrow('expired')
     now = createdAt - 1
     expect(() => store.create(plan)).toThrow('expired')

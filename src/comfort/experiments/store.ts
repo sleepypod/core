@@ -2,13 +2,15 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { z } from 'zod'
 import { dateInTimeZone } from '@/src/lib/timeZoneDate'
-import { experimentExposureSchema, experimentFeedbackSchema, experimentHashSchema, experimentInstantSchema,
+import { EXPERIMENT_REVIEW_MS, experimentExposureSchema, experimentFeedbackSchema, experimentHashSchema, experimentInstantSchema,
   experimentPlanSchema, type ExperimentPlan, type ExperimentRecord } from './contract'
 import { checkedExperimentRecord, experimentNights, experimentPlanHash } from './plan'
 
 const identifier = z.string().uuid()
 const feedbackInput = experimentFeedbackSchema.omit({ recordedAt: true })
-const conflict = () => new Error('The experiment changed. Read its current revision before saving.')
+export class ExperimentStoreConflict extends Error {}
+export class ExperimentFeedbackError extends Error {}
+const conflict = () => new ExperimentStoreConflict('The experiment changed. Read its current revision before saving.')
 interface ExperimentRow {
   id: string
   subject_key: string
@@ -19,7 +21,7 @@ interface ExperimentRow {
   record: string
 }
 
-/** Internal repository, bound to an authenticated subject by its future API adapter; never a hardware owner. */
+/** Internal repository, bound to an authenticated subject by its API adapter; never a hardware owner. */
 export class ComfortExperimentStore {
   private readonly subjectKey: string
 
@@ -51,6 +53,26 @@ export class ComfortExperimentStore {
       .all(this.subjectKey) as ExperimentRow[]).map(row => this.decode(row))
   }
 
+  open(): ExperimentRecord | null {
+    const row = this.database.prepare('SELECT * FROM comfort_experiments WHERE subject_key = ? AND status = \'planned\'')
+      .get(this.subjectKey) as ExperimentRow | undefined
+    return row ? this.decode(row) : null
+  }
+
+  /** Stable keyset pagination is scoped before resolving the cursor, including tied creation clocks. */
+  page(afterId?: string): { records: ExperimentRecord[], nextId: string | null } {
+    const after = afterId === undefined ? null : this.read(identifier.parse(afterId))
+    if (afterId !== undefined && !after) throw new Error('The experiment page is unavailable')
+    const rows = (after
+      ? this.database.prepare(`SELECT * FROM comfort_experiments WHERE subject_key = ? AND
+        (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT 21`)
+          .all(this.subjectKey, after.plan.createdAt, after.plan.createdAt, after.plan.id)
+      : this.database.prepare('SELECT * FROM comfort_experiments WHERE subject_key = ? ORDER BY created_at DESC, id DESC LIMIT 21')
+          .all(this.subjectKey)) as ExperimentRow[]
+    const records = rows.slice(0, 20).map(row => this.decode(row))
+    return { records, nextId: rows.length > 20 ? records[records.length - 1].plan.id : null }
+  }
+
   /** Save the exact reviewed assignment. Retrying an existing ID never creates a second plan. */
   create(input: ExperimentPlan): ExperimentRecord {
     const plan = experimentPlanSchema.parse(input)
@@ -62,9 +84,9 @@ export class ComfortExperimentStore {
         return existing
       }
       const now = this.clock()
-      if (plan.createdAt > now || now - plan.createdAt > 30_000) throw new Error('The experiment preview expired')
+      if (plan.createdAt > now || now - plan.createdAt >= EXPERIMENT_REVIEW_MS) throw new ExperimentStoreConflict('The experiment preview expired')
       const open = this.database.prepare('SELECT id FROM comfort_experiments WHERE subject_key = ? AND status = \'planned\'').get(this.subjectKey)
-      if (open) throw new Error('Stop the existing experiment before starting another')
+      if (open) throw new ExperimentStoreConflict('Stop the existing experiment before starting another')
       const record = checkedExperimentRecord({ plan, revision: randomUUID(), updatedAt: now, status: 'planned',
         stoppedAt: null, exposures: [], feedback: [] })
       this.database.prepare('INSERT INTO comfort_experiments (id, subject_key, revision, status, created_at, updated_at, record) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -98,7 +120,9 @@ export class ComfortExperimentStore {
     return this.update(id, expectedRevision, (record, now) => {
       if (feedback.nightDate >= dateInTimeZone(now, record.plan.context.timezone)
         || Date.parse(dateInTimeZone(now, record.plan.context.timezone)) - Date.parse(feedback.nightDate) > 15 * 86_400_000)
-        throw new Error('Feedback must describe a completed night within the last fourteen mornings')
+        throw new ExperimentFeedbackError('Feedback must describe a completed night within the last fourteen mornings')
+      if (!experimentNights(record.plan).some(night => night.date === feedback.nightDate))
+        throw new ExperimentFeedbackError('Feedback cannot describe an unassigned experiment night')
       const saved = experimentFeedbackSchema.parse({ ...feedback, recordedAt: now })
       return { ...record, feedback: [...record.feedback.filter(value => value.nightDate !== saved.nightDate), saved]
         .sort((first, second) => first.nightDate.localeCompare(second.nightDate)) }

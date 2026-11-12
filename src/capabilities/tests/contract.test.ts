@@ -34,6 +34,9 @@ describe('capability evidence contract', () => {
     expect(result.features.importedHistory).toMatchObject({ implemented: true, runtime: 'ready', reason: 'read_only_history_api_check_snapshot_availability' })
     expect(result.endpoints.importedHistory).toBe('/api/v1/history')
     expect(result.endpoints.temperatureApplications).toBe('/api/v1/device/temperature/applications')
+    expect(result.endpoints.comfortExperiments).toBe('/api/v1/comfort/experiments')
+    expect(result.features.comfortExperimentPlanning).toMatchObject({ implemented: true, physicalVerification: 'not_applicable',
+      reason: 'authenticated_planning_and_feedback_only_no_treatment_activation' })
     expect(result.features.temperatureApplicationHistory).toMatchObject({ implemented: true, runtime: 'ready', physicalVerification: 'not_applicable' })
     expect(result.controlSemantics).toEqual({ acknowledgment: 'accepted_not_physically_verified', durableCommandReceipts: true, commandExpiry: true, receiptScope: 'versioned_controls_only', maxLifetimeMs: 60000 })
   })

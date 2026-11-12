@@ -1,9 +1,9 @@
 # Personal comfort experiments
 
-This is the implemented protocol, evidence collector and durable repository for
-approved improvement 10. It is **not yet an available app feature or an enabled
-temperature controller**. Authenticated API adapters, review screens, guarded
-runtime admission and lease cancellation are the next integration work. No
+This is the implemented protocol, evidence collector, durable repository and
+authenticated planning API for approved improvement 10. It is **not yet an available
+app feature or an enabled temperature controller**. Review screens, guarded runtime
+admission and lease cancellation remain integration work. No
 experiment was started on Luca's Pod and no schedule, alarm or live setting was
 changed by this implementation.
 
@@ -95,10 +95,11 @@ No comparison automatically changes a routine or enables Autopilot.
 
 Migration `0072_nosy_umar.sql` adds only `comfort_experiments` with a per-subject
 history index and a partial unique index permitting one open plan per subject.
-An internal repository is constructed with a trusted subject key; it is not an
-authentication mechanism. Future owner and personal APIs must derive that key
-from current server credentials, retain existing privacy boundaries and recheck
-assignment/revocation before mutations.
+The API derives the repository's subject key from authenticated installation or
+personal-account identity. Legacy owner records and personal records remain
+separate, including after the owner creates a personal account. The existing
+durable legacy privacy boundary applies to the owner routes. Personal routes
+recheck the device credential, browser selection and current assignment.
 
 Plans are immutable, updates compare revisions in an immediate transaction, and
 unknown create outcomes can be recovered by reading the original plan ID. A stop
@@ -108,12 +109,55 @@ Collector evidence can be replaced or withdrawn with a newer observation; source
 revalidation remains the collector adapter's obligation. Feedback is timestamped
 on the server and can be corrected with a current revision.
 
+## Authenticated planning API
+
+The owner prefix is `/api/v1/comfort/experiments`; the personal prefix is
+`/api/v1/me/comfort-experiments`. Both expose:
+
+| Method and suffix | Behavior |
+| --- | --- |
+| `GET /` | Current planning availability and twenty records, with an `afterId` continuation when another page exists |
+| `POST /preview` | Accept only `firstNightDate` and `variantF`; return the server-generated plan, exact order, hash and five-minute review expiry |
+| `POST /confirm` | Accept only `reviewId` and `planHash`; recheck identity, policy, routine and wake overrides before saving the exact plan |
+| `GET /{id}` | Read the saved record, evidence gaps and comparison; identify changed current context |
+| `POST /{id}/stop` | Accept the current `expectedRevision`; durably stop without restoring an old target |
+| `POST /{id}/feedback` | Accept `expectedRevision` and subjective `feedback`; timestamp it on the server |
+
+`HEAD` is available for reads. Feedback contains only `nightDate`,
+`confirmedFullNight`, `comfort`, `unwantedAdjustments` and `problem`. There is no
+HTTP exposure-upload route, client-selected subject/side, activation action or
+client-supplied measurement timestamp.
+
+The server derives the source side from the solo-anywhere or assigned account
+configuration. Planning requires an enabled overnight limit and one consistent
+scheduled baseline, intersected with the adaptive policy bounds. Alarm rows and
+one-time wake overrides have a separate hash; the 105°F wake target does not
+expand the overnight range. Missing or corrupt policy cannot authorize a plan,
+but historical reading and cancellation remain available.
+
+Migration `0073_aspiring_brother_voodoo.sql` stores short-lived private reviews
+separately from confirmed plans. There can be at most eight unexpired reviews
+per person. Workers and restarts share the same exact preview until its five-minute
+expiry; changed account scope or context still rejects confirmation. Confirmed
+plans remain durable and can be recovered by their original ID after a lost response
+or restart. Retrying confirmation cannot rerandomize or
+reactivate a stopped record. Authority and writes share a database transaction with FULL synchronization for mutations,
+and private response delivery rechecks authority and selected content. Input is
+strict UTF-8 JSON limited to 8 KiB. Cache headers prohibit shared caching.
+
+All responses explicitly identify execution as `planning_only`. Sixteen calendar
+dates do not establish sixteen scheduled or observed nights. The runtime adapter
+must review actual eligible routine windows and surface unscheduled dates before
+offering an executable comparison; it must not add weekend routines implicitly.
+
+## Remaining controller and app integration
+
 The next implementation must connect these parts to the single controller:
 
-1. Derive and revalidate real owner/personal context, including solo-anywhere
-   assignment, overnight limits, routine revisions and effective wake overrides.
-2. Expose authenticated plan preparation/read/stop/check-in and recovery APIs.
-3. Add matching web/native review and results screens, including all exclusions.
+1. Resolve the real scheduled windows for the reviewed comparison, including
+   unscheduled nights, overlaps and DST; preserve the existing wake plan.
+2. Add matching web/native review and results screens, including all exclusions.
+3. Connect authenticated planning and recovery to those screens.
 4. Admit only explicitly reviewed, qualified treatment leases. Pause normal
    adaptation during a comparison; preserve manual priority and the alarm window.
 5. Persist live observation references and reconcile source withdrawal. On stop,
@@ -148,3 +192,33 @@ The final local logs are `/tmp/sleepypod-experiments-full-final.log`,
 `/tmp/sleepypod-experiments-lint-full.log`,
 `/tmp/sleepypod-experiments-migration.log` and
 `/tmp/sleepypod-experiments-build.log`. Hosted checks remain separate.
+
+
+## API integration validation
+
+Owner and personal HTTP tests exercise real migrated databases, credentials,
+browser account revisions, invitation/assignment state and revoked devices.
+Coverage includes exact review recovery across independent database connections,
+stop/confirmation retry behavior, input limits, forged telemetry, wake/policy
+changes, interrupted uploads, private response withdrawal, per-person pagination,
+FULL synchronization and rollback when authorization changes.
+
+The first API test run found a missing test-only browser signing key; the next
+found a missing browser-revision header in the simulated sign-out. Both fixtures
+now use the existing production authentication contract. No access checks were
+relaxed. A subsequent source review identified process-local preview loss; reviews
+now use migration 0073 and have independent-connection/reopen tests.
+
+This is still software evidence. Screens, treatment execution, prospective nights
+and physical qualification remain outstanding; no controller has been deployed
+or actuated for these API checks.
+
+Final local API integration validation passes **10,128 tests** with nineteen
+existing skips and no failures. Full ESLint, TypeScript/production build and
+Drizzle migration checks pass. The full run includes 122 experiment/API tests
+and 22 schema tests. Evidence is retained in
+`/tmp/sleepypod-experiment-api-full-final.log`,
+`/tmp/sleepypod-experiment-api-build-final.log`,
+`/tmp/sleepypod-experiment-api-lint-all.log` and
+`/tmp/sleepypod-experiment-api-migration-check.log`. Hosted checks and deployment
+are separate acceptance steps.

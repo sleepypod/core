@@ -484,6 +484,16 @@ export const comfortExperiments = sqliteTable('comfort_experiments', {
 }, table => [index('idx_comfort_experiments_subject_created').on(table.subjectKey, table.createdAt),
   uniqueIndex('uq_comfort_experiments_open_subject').on(table.subjectKey).where(sql`${table.status} = 'planned'`)])
 
+/** Short-lived private reviews must be shared by independent HTTP workers. */
+export const comfortExperimentReviews = sqliteTable('comfort_experiment_reviews', {
+  id: text('id').primaryKey(),
+  subjectKey: text('subject_key').notNull(),
+  scopeHash: text('scope_hash').notNull(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  plan: text('plan').notNull(),
+}, table => [index('idx_comfort_experiment_reviews_subject_expiry').on(table.subjectKey, table.expiresAt)])
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

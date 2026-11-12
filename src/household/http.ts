@@ -16,6 +16,9 @@ import type { PersonalJournalApi } from './personalJournalApi'
 import type { ArrangementCoordinator } from './arrangementCoordinator'
 import type { PersonalReportsApi } from './personalReportsApi'
 import type { HouseholdQuietApi } from './quietApi'
+import type { PersonalExperimentApi } from './experimentApi'
+import { experimentErrorResponse, readExperimentBody } from '@/src/comfort/experiments/http'
+import { ExperimentError } from '@/src/comfort/experiments/service'
 import { readReportBody, reportErrorResponse } from '@/src/reports/http'
 import { ReportError } from '@/src/reports/store'
 const MAX_BODY_BYTES = 128 * 1024
@@ -58,6 +61,7 @@ export interface HouseholdHttpDependencies {
   personalJournal?: PersonalJournalApi
   personalReports?: PersonalReportsApi
   householdQuiet?: HouseholdQuietApi
+  personalExperiments?: PersonalExperimentApi
   arrangementCoordinator?: ArrangementCoordinator
 }
 /** This namespace authorizes every route itself; personal credentials never enter legacy APIs. */
@@ -74,7 +78,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     // A native client may enroll its own Health library against this authenticated identity.
     // This grants no Health upload route, legacy history access or cloud-analysis permission.
     const quiet = dependencies.householdQuiet?.present(reports) ?? reports
-    const maintenance = dependencies.arrangementCoordinator?.present(quiet) ?? quiet
+    const experiments = dependencies.personalExperiments?.present(quiet) ?? quiet
+    const maintenance = dependencies.arrangementCoordinator?.present(experiments) ?? experiments
     return { ...maintenance, capabilities: { ...maintenance.capabilities, healthImport: true } }
   }
   const url = new URL(request.url)
@@ -139,8 +144,9 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     // Read potentially streamed input before resolving the current browser and
     // device identity, so revocation while uploading cannot leave stale authority.
     const reportPath = /^\/api\/v1\/me\/reports(?:\/[^/]+)?$/.test(path)
+    const experimentPath = path === '/api/v1/me/comfort-experiments' || path.startsWith('/api/v1/me/comfort-experiments/')
     const mutationBody = ['POST', 'PUT', 'DELETE'].includes(method)
-      ? await (reportPath ? readReportBody(request) : jsonBody(request))
+      ? await (reportPath ? readReportBody(request) : experimentPath ? readExperimentBody(request) : jsonBody(request))
       : undefined
     const credential = personalCredential(request)
     // Cookies are shared between tabs. A stale editor must never write its
@@ -159,6 +165,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
       return reply(present(store.session(credential)))
     if (dependencies.personalReports && reportPath)
       return dependencies.personalReports.response(request, credential, mutationBody, assertRequestCurrent)
+    if (dependencies.personalExperiments && experimentPath)
+      return dependencies.personalExperiments.response(request, credential, mutationBody, assertRequestCurrent)
     if (dependencies.householdQuiet && ['GET', 'HEAD', 'POST'].includes(method)
       && (path === '/api/v1/me/quiet' || (method !== 'POST' && /^\/api\/v1\/me\/quiet\/requests\/[^/]+$/.test(path))))
       return dependencies.householdQuiet.response(request, credential, mutationBody, assertRequestCurrent)
@@ -258,6 +266,7 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
   }
   catch (error) {
     if (error instanceof ReportError) return reportErrorResponse(error)
+    if (error instanceof ExperimentError) return experimentErrorResponse(error)
     if (error instanceof BrowserScopeConflict)
       return reply({ error: { code: 'conflict', message: error.message } }, 409)
     if (error instanceof ControlConflictError)

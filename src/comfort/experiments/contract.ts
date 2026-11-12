@@ -17,6 +17,7 @@ export const EXPERIMENT_MINIMUM_PAIRS = 3
 export const EXPERIMENT_MINIMUM_EXPOSURE_MS = 4 * 3_600_000
 export const EXPERIMENT_MINIMUM_TARGET_FRACTION = 0.9
 export const EXPERIMENT_MEANINGFUL_COMFORT_DIFFERENCE = 1
+export const EXPERIMENT_REVIEW_MS = 5 * 60_000
 
 /** Captured by the server from the current person's assignment and approved policy. */
 export const experimentContextSchema = z.object({
