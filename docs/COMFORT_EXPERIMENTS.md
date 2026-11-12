@@ -3,8 +3,9 @@
 This is the implemented protocol, evidence collector, durable repository,
 authenticated planning API and owner/personal browser interface for approved
 improvement 10. It is **planning-only, not an enabled temperature controller**.
-Native screens, reviewed activation and runtime observation collection remain integration work. The
-guarded execution adapter and durable attempt journal are implemented but not registered in production. No
+Native screens, authenticated activation and runtime observation collection remain integration work. The
+guarded execution adapter, durable admission/attempt journals and production lifecycle host are connected;
+the public API still exposes planning only and cannot create an execution grant. No
 experiment was started on Luca's Pod and no schedule, alarm or live setting was
 changed by this implementation.
 
@@ -368,7 +369,7 @@ Explicit recovery requires a fresh observation after the attempt and rechecked
 authority. It records a resolution but does not resurrect the old admission.
 Unknown intents cannot be overwritten by a new plan. Per-side failure latches do
 not silently block another independently admitted zone. Solo-anywhere coordination
-and atomic multi-zone admission remain obligations of the activation host.
+and atomic multi-zone admission are implemented by the lifecycle host described below.
 
 The exposure collector now uses the actual prefixed authority request identifier.
 A matching temperature with an unsubmitted proposal ID cannot qualify exposure.
@@ -427,6 +428,59 @@ replacement; an uncertain application needs the existing recovery process first.
 The tests use real migrated stores and qualification/report machinery with
 explicitly synthetic observations. They cover account isolation, expiry,
 revocation, source withdrawal, atomic two-zone rollback and independent claims.
-This is an internal integration stage: the production host, authenticated
-activation/recovery API, retained observation collector and matching app screens
-remain to be connected. No live admission, mode or hardware changed.
+This is an internal integration stage: the authenticated activation/recovery API,
+retained observation collector and matching app screens remain to be connected.
+No live admission, mode or hardware changed.
+
+Core PR 130 passed all seven hosted checks and merged as
+`69f999e1d4827248325fd71d51b3b189a5bfec7b`. Its tree matches tested head
+`d22d0f1adfb0443c5889fd4d5bd7b48aa37aaef8` exactly. This is source integration,
+not an admission on the Pod.
+
+## Production execution lifecycle
+
+`ExperimentExecutionHost` now starts and drains with the existing personal comfort
+service. It shares the running temperature authority and existing per-side locks;
+creating a plan or reading a status never opens another hardware connection.
+Without a separately confirmed admission it publishes no treatment request.
+
+An admission binds a server-derived account/device reference, never its bearer
+key. Every dispatch rechecks the actual persisted account, device, assignment,
+routine, policy and qualification. The full retained night sources are checked
+when starting or restarting and at least once per minute while running. A source
+withdrawal, ordinary adaptation resuming, new manual pause, changed target or
+uncertain application durably revokes the affected grant. For a solo grant covering
+both zones, an uncertain first-zone attempt withdraws both before the second can
+dispatch. The hardware observations used here retain each physical zone's own
+freshness and presence; another half's occupancy is not invented as exposure.
+
+Cancellation locks the originally admitted zones and rechecks current account
+authority after waiting. A valid device may cancel its own retained admission even
+when its physical assignment is no longer ready. Revoking a device during the wait
+prevents it from cancelling another current session's work. Cancellation never
+reactivates an earlier adaptive grant or restores a saved temperature over the
+current schedule/manual plan. Service shutdown invalidates queued requests first,
+then drains existing work before the ordinary comfort service stops.
+
+Execution samples deliberately do not call temperature selection recursively.
+The separate runtime observation collector must read actual selected-request
+provenance, retain it durably and summarize complete windows before results may be
+presented as observed treatments. That collector, the authenticated execution and
+recovery endpoints, native screens and physical/prospective acceptance remain.
+
+The host tests use real migrated stores, real qualification/report logic and the
+shared temperature controller with synthetic observations and fake hardware.
+They exercise scheduled wake handoff, source withdrawal after restart and during
+operation, manual interruption, changed accounts, two-zone uncertainty, current
+plan restoration, cancellation during assignment/revocation changes and shutdown
+with a queued write. No synthetic qualification is installed on a real Pod.
+
+The broad local coverage run passed 10,265 tests with nineteen existing skips.
+While it was running, review found that the existing planning Stop action withheld
+dispatch but retained its zone claim. A new regression reproduced that failure;
+the corrected host now releases the admission as well. All 256 focused experiment,
+live-input and personal HTTP checks passed after that correction. The broad run
+predates this final regression and is not represented as an exact final-head check.
+The production package also builds successfully. Final hosted regression and
+deployment remain distinct requirements. Logs are retained under
+`/tmp/sleepypod-experiment-host-*`, including the failing Stop regression.

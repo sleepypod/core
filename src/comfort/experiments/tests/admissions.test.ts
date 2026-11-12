@@ -13,6 +13,8 @@ import { context, fixtureSchedule } from './fixture'
 
 const fixtures: ReturnType<typeof ownerFixture>[] = []
 const scopeHash = '1'.repeat(64)
+const principal = { kind: 'personal' as const, deviceId: randomUUID() }
+const interruptionHash = '0'.repeat(64)
 async function fixture() {
   const test = ownerFixture()
   fixtures.push(test)
@@ -33,7 +35,7 @@ async function fixture() {
     revokeLease: test.deps.revokeLease,
   }
   const admissions = new ExperimentAdmissions(deps)
-  const prepare = () => admissions.prepare(context.subjectKey, scopeHash, plan.id, [{ side: 'left', evidence: proof }], () => {})
+  const prepare = () => admissions.prepare(context.subjectKey, scopeHash, plan.id, [{ side: 'left', evidence: proof, interruptionHash }], () => {}, principal)
   const confirm = (id: string, check = () => {}) => admissions.confirm(context.subjectKey, scopeHash, id, experimentPlanHash(plan), check)
   return { ...test, plans, plan, proof, deps, admissions, prepare, confirm }
 }
@@ -175,7 +177,7 @@ describe('reviewed experiment admission with real qualification and migrated sto
   it('bounds pending reviews and rejects malformed physical-zone proofs before persistence', async () => {
     const test = await fixture()
     expect(() => test.admissions.prepare(context.subjectKey, scopeHash, test.plan.id,
-      [{ side: 'left', evidence: test.proof }, { side: 'left', evidence: test.proof }], () => {})).toThrow()
+      [{ side: 'left', evidence: test.proof, interruptionHash }, { side: 'left', evidence: test.proof, interruptionHash }], () => {}, principal)).toThrow()
     for (let index = 0; index < 8; index++) test.prepare()
     expect(() => test.prepare()).toThrow('Several activation reviews')
     test.refresh(test.now() + EXECUTION_REVIEW_MS)
@@ -187,7 +189,7 @@ describe('reviewed experiment admission with real qualification and migrated sto
     const active = await test.owner.prepare({ side: 'left', purpose: 'activation', kind: null })
     await test.owner.confirm({ side: 'left', id: active.id, confirmed: true, note: 'Synthetic test only.' })
     const review = test.admissions.prepare(context.subjectKey, scopeHash, test.plan.id,
-      [{ side: 'left', evidence: test.proof }, { side: 'right', evidence: right }], () => {})
+      [{ side: 'left', evidence: test.proof, interruptionHash }, { side: 'right', evidence: right, interruptionHash }], () => {}, principal)
     const beforeLeft = test.store.read('left'), beforeRight = test.store.read('right'), suspend = test.deps.suspend
     test.deps.suspend = (zone) => {
       suspend(zone)
@@ -214,7 +216,7 @@ describe('reviewed experiment admission with real qualification and migrated sto
     test.confirm(left.id)
     const other = { ...test.plan, id: randomUUID(), context: { ...test.plan.context, subjectKey: 'e'.repeat(64) } }
     new ComfortExperimentStore(test.database, other.context.subjectKey, test.now).create(other)
-    const review = test.admissions.prepare(other.context.subjectKey, scopeHash, other.id, [{ side: 'right', evidence: right }], () => {})
+    const review = test.admissions.prepare(other.context.subjectKey, scopeHash, other.id, [{ side: 'right', evidence: right, interruptionHash }], () => {}, principal)
     test.admissions.confirm(other.context.subjectKey, scopeHash, review.id, review.planHash, () => {})
     test.admissions.revoke(other.context.subjectKey, review.id, 'Stopped right comparison', () => {})
     expect(test.admissions.current('left')?.admission.revision).toBe(left.id)

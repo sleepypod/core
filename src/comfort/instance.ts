@@ -240,8 +240,12 @@ export function getComfortRuntimeIfRunning(): ComfortRuntime | undefined {
 }
 export async function startComfortPreview(): Promise<void> {
   await getComfortRuntime().start()
+  const { getExperimentExecution } = await import('./experiments/execution-instance')
+  await getExperimentExecution().start()
 }
 export async function stopComfortPreview(): Promise<void> {
+  const { getExperimentExecutionIfRunning } = await import('./experiments/execution-instance')
+  await getExperimentExecutionIfRunning()?.stop()
   await globals.__sp_comfortRuntime?.stop()
 }
 

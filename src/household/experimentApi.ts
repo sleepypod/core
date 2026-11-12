@@ -1,7 +1,7 @@
 import type { HouseholdSession } from './contract'
 import { HouseholdError, type HouseholdCredential, type HouseholdStore } from './store'
 import type { PersonalRuntimeAuthority } from './runtimeAuthority'
-import { experimentDigest } from '@/src/comfort/experiments/access'
+import { personalExperimentAccess } from '@/src/comfort/experiments/execution-access'
 import type { ComfortExperimentService } from '@/src/comfort/experiments/service'
 import { experimentErrorResponse, experimentResponse } from '@/src/comfort/experiments/http'
 
@@ -20,13 +20,7 @@ export class PersonalExperimentApi {
       if (!request.headers.has('authorization') && request.headers.get('x-sleepypod-sleeper-id') !== session.selfSleeperId)
         throw new HouseholdError('conflict', 409, 'Reload your personal account before opening experiments.')
       const bed = this.authority.resolveSession(session)
-      const identity = { kind: 'personal', podId: session.podId, householdId: session.householdId,
-        accountId: session.accountId, sleeperId: session.selfSleeperId }
-      return { subjectKey: experimentDigest(identity),
-        scope: { ...identity, sessionRevision: session.sessionRevision, assignmentRevision: session.assignmentRevision,
-          householdRevision: session.householdRevision },
-        binding: { ...identity, configurationRevision: bed.scope.configurationRevision, assignmentRevision: session.assignmentRevision },
-        routineSide: bed.routineSide, ready: bed.availability === 'ready' }
+      return personalExperimentAccess(session, bed)
     }
     try {
       return experimentResponse(request, body, this.experiments, authorize, this.now)

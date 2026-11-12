@@ -1,14 +1,17 @@
 import { z } from 'zod'
 import { ownerSnapshotSchema } from '../owner-contract'
 import { experimentHashSchema, experimentInstantSchema } from './contract'
+import { experimentPrincipalSchema } from './execution-principal'
 
 export const EXECUTION_REVIEW_MS = 60_000
-export const experimentZoneProofSchema = z.object({ side: z.enum(['left', 'right']), evidence: ownerSnapshotSchema }).strict()
+export const experimentZoneProofSchema = z.object({ side: z.enum(['left', 'right']), evidence: ownerSnapshotSchema,
+  interruptionHash: experimentHashSchema }).strict()
 export type ExperimentZoneProof = z.infer<typeof experimentZoneProofSchema>
 export const experimentExecutionReviewSchema = z.object({
   id: z.string().uuid(), subjectKey: experimentHashSchema, scopeHash: experimentHashSchema,
   planId: z.string().uuid(), planHash: experimentHashSchema, expectedRevision: z.string().uuid(),
   createdAt: experimentInstantSchema, expiresAt: experimentInstantSchema,
+  principal: experimentPrincipalSchema,
   zones: z.array(experimentZoneProofSchema).min(1).max(2),
 }).strict().refine(value => value.expiresAt === value.createdAt + EXECUTION_REVIEW_MS
   && new Set(value.zones.map(zone => zone.side)).size === value.zones.length)

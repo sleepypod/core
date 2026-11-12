@@ -52,7 +52,7 @@ const fresh = (source: number | null, now: number, maximumAge: number) => source
 
 /**
  * Apply a qualified treatment through the existing authority, never directly to hardware.
- * This adapter is not started by production until durable admission/journaling are integrated.
+ * The lifecycle host supplies durable admission and journaling; a saved plan alone cannot dispatch.
  */
 export class ExperimentApplicationAdapter {
   private generations: Record<Side, number> = { left: 0, right: 0 }
@@ -62,6 +62,9 @@ export class ExperimentApplicationAdapter {
 
   /** Immediately invalidates queued proposals; reconciliation reveals the current independent plan. */
   revoke(side: Side) { this.generations[side]++ }
+
+  /** Let the lifecycle host durably withdraw an admission rejected by dispatch/readback. */
+  failedRevision(side: Side): string | null { return this.failedAdmission[side] ?? null }
 
   async reconcile(side: Side): Promise<void> {
     const generation = ++this.generations[side]

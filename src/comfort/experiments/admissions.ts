@@ -10,6 +10,7 @@ import type { ExperimentAdmission } from './application-contract'
 import { experimentHashSchema, experimentInstantSchema } from './contract'
 import { experimentPlanHash } from './plan'
 import { ComfortExperimentStore } from './store'
+import type { ExperimentPrincipal } from './execution-principal'
 
 export interface ExperimentAdmissionDeps {
   database: Database.Database
@@ -89,14 +90,15 @@ export class ExperimentAdmissions {
     return value
   }
 
-  prepare(subjectKey: string, scopeHash: string, planId: string, zones: ExperimentZoneProof[], assertCurrent: () => void): ExperimentExecutionReview {
+  prepare(subjectKey: string, scopeHash: string, planId: string, zones: ExperimentZoneProof[], assertCurrent: () => void,
+    principal: ExperimentPrincipal): ExperimentExecutionReview {
     experimentHashSchema.parse(subjectKey)
     experimentHashSchema.parse(scopeHash)
     return durableTransaction(this.database, () => {
       assertCurrent()
       const record = this.plan(subjectKey, planId), now = this.now()
       const review = experimentExecutionReviewSchema.parse({ id: randomUUID(), subjectKey, scopeHash, planId,
-        planHash: experimentPlanHash(record.plan), expectedRevision: record.revision, createdAt: now, expiresAt: now + EXECUTION_REVIEW_MS, zones })
+        planHash: experimentPlanHash(record.plan), expectedRevision: record.revision, createdAt: now, expiresAt: now + EXECUTION_REVIEW_MS, zones, principal })
       this.currentPlan(review, true)
       this.deps.validate(review, true)
       // Consumed reviews are retained because they anchor a durable grant and lost-response reconciliation.
@@ -170,6 +172,29 @@ export class ExperimentAdmissions {
         issuedAt: grant.admittedAt, expiresAt: grant.endsAt, sides: grant.review.zones.map(zone => zone.side) } }
     }
     catch { return null }
+  }
+
+  /** Trusted host inspection; never return another subject's grant through a client endpoint. */
+  claim(side: Side): ExperimentGrant | null { return this.claimed(side) }
+
+  /** Current authenticated subjects may inspect their own retained grant after assignment changes. */
+  read(subjectKey: string, id: string): ExperimentGrant {
+    experimentHashSchema.parse(subjectKey)
+    const row = this.database.prepare('SELECT id FROM comfort_experiment_admissions WHERE id = ? AND subject_key = ?')
+      .get(z.string().uuid().parse(id), subjectKey)
+    if (!row) throw new Error('This experiment admission is unavailable to the current account')
+    return this.grant(id)
+  }
+
+  review(subjectKey: string, scopeHash: string, id: string): ExperimentExecutionReview {
+    const row = this.database.prepare('SELECT * FROM comfort_experiment_execution_reviews WHERE id = ? AND subject_key = ? AND scope_hash = ?')
+      .get(z.string().uuid().parse(id), experimentHashSchema.parse(subjectKey), experimentHashSchema.parse(scopeHash)) as ReviewRow | undefined
+    if (!row) throw new Error('This execution review is unavailable to the current account')
+    const review = experimentExecutionReviewSchema.parse(JSON.parse(row.record))
+    if (review.id !== row.id || review.subjectKey !== row.subject_key || review.scopeHash !== row.scope_hash
+      || review.planId !== row.plan_id || review.createdAt !== row.created_at || review.expiresAt !== row.expires_at)
+      throw new Error('The saved execution review identity changed')
+    return review
   }
 
   revoke(subjectKey: string, id: string, reason: string, assertCurrent: () => void): void {
