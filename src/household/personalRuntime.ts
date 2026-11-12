@@ -8,6 +8,7 @@ import type { HouseholdSession } from './contract'
 import { personalBedSchema, type PersonalBed } from './bedContract'
 import { PersonalControlService } from './personalControls'
 import { PersonalRuntimeAuthority } from './runtimeAuthority'
+import { readPersonalNextWake } from './personalWake'
 
 type Side = 'left' | 'right'
 export interface PersonalObservation { observedAt: number, status: DeviceStatus }
@@ -37,6 +38,10 @@ export class PersonalRuntime {
   }
 
   session(session: HouseholdSession) { return this.authority.present(session) }
+
+  nextWake(credential: HouseholdCredential, assertRequestCurrent: () => void) {
+    return readPersonalNextWake(this.dependencies.database, this.authority, credential, assertRequestCurrent, this.now())
+  }
 
   async bed(credential: HouseholdCredential, assertRequestCurrent: () => void): Promise<PersonalBed> {
     assertRequestCurrent()
