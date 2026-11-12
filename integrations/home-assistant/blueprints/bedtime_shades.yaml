@@ -1,0 +1,160 @@
+# Installing this blueprint never enables a house automation.
+blueprint:
+  name: SleepyPod — Prepare selected shades at bedtime
+  description: >-
+    After a known bed entry lasts one minute during the night window, lower
+    selected individual blinds, shades or curtains toward a reviewed position.
+    Position reporting, position commands and Stop must be supported and tested.
+    Moving, grouped, unavailable and already-lower shades are skipped. Starts
+    disabled. No automatic reopening, delayed restoration or catch-up is queued.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Allow bedtime shade positioning
+      description: Enable only after testing each selected shade's position and Stop while nearby.
+      default: false
+      selector:
+        boolean: {}
+    occupancy_entities:
+      name: Qualified bed occupancy
+      description: >-
+        Choose one or both calibrated, expiring Core occupancy sensors. A known
+        empty-to-occupied transition is required. Recovery from unavailable or
+        unknown does not trigger movement. Occupancy does not identify a person.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            domain: binary_sensor
+            device_class: occupancy
+    shades:
+      name: Individual shades allowed to move
+      description: >-
+        Select tested individual blinds, shades or curtains, not groups. Each
+        must report position and support both setting position and Stop. Doors,
+        windows, gates, garage doors, shutters and awnings are not accepted.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+          - domain: cover
+            device_class: blind
+          - domain: cover
+            device_class: shade
+          - domain: cover
+            device_class: curtain
+    pause_entities:
+      name: Pause while any of these helpers is on
+      description: >-
+        Optional existing helpers such as Partner resting or Pause shade
+        routines. Every selected helper must be known off before each request.
+        Turning a helper on prevents further requests; use the shade's own Stop
+        control to stop movement that has already begun.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+          - domain: input_boolean
+          - domain: binary_sensor
+    position:
+      name: Bedtime position
+      description: >-
+        Percent open: 0 is fully closed. A shade already at or below this
+        position is left alone. Confirm the integration's direction in person.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 1
+          unit_of_measurement: '% open'
+          mode: box
+    window_start:
+      name: Window starts (Home Assistant timezone)
+      default: '22:00:00'
+      selector:
+        time: {}
+    window_end:
+      name: Window ends (Home Assistant timezone)
+      default: '05:00:00'
+      selector:
+        time: {}
+initial_state: false
+mode: single
+max_exceeded: silent
+variables:
+  allow_actions: !input allow_actions
+  occupancy_entities: !input occupancy_entities
+  shades: !input shades
+  pause_entities: !input pause_entities
+  position: !input position
+triggers:
+- trigger: state
+  entity_id: !input occupancy_entities
+  from: 'off'
+  to: 'on'
+  for:
+    seconds: 60
+conditions: []
+actions:
+# Guards belong inside actions because HA's Run actions skips normal conditions.
+- condition: template
+  value_template: >-
+    {{ allow_actions is sameas true
+       and occupancy_entities is list and 1 <= occupancy_entities | count <= 2
+       and occupancy_entities | unique | list | count == occupancy_entities | count
+       and shades is list and 0 <= shades | count <= 20
+       and pause_entities is list and pause_entities | count <= 20
+       and position is number and position is not boolean
+       and 0 <= position <= 50 and position == position | int
+       and trigger is defined and trigger.platform == 'state'
+       and trigger.entity_id in occupancy_entities
+       and trigger.from_state is not none and trigger.from_state.state == 'off'
+       and trigger.to_state is not none and trigger.to_state.state == 'on'
+       and trigger.from_state.entity_id == trigger.entity_id
+       and trigger.to_state.entity_id == trigger.entity_id }}
+- condition: time
+  after: !input window_start
+  before: !input window_end
+- variables:
+    entered_at: '{{ as_timestamp(trigger.to_state.last_changed, none) }}'
+    selected_shades: '{{ shades | unique | list }}'
+- repeat:
+    for_each: '{{ selected_shades }}'
+    sequence:
+    # Re-read the source and pause state for each shade. Never retain a backlog.
+    - condition: template
+      value_template: >-
+        {{ allow_actions is sameas true and entered_at is number
+           and 60 <= now().timestamp() - entered_at <= 90
+           and is_state(trigger.entity_id, 'on')
+           and as_timestamp(states[trigger.entity_id].last_changed, none) == entered_at
+           and pause_entities | select('is_state', 'off') | list | count == pause_entities | count }}
+    - condition: time
+      after: !input window_start
+      before: !input window_end
+    - if:
+      - condition: template
+        value_template: >-
+          {% set features = state_attr(repeat.item, 'supported_features') %}
+          {% set reported_position = state_attr(repeat.item, 'current_position') %}
+          {{ repeat.item is string and repeat.item.startswith('cover.')
+             and is_state(repeat.item, 'open')
+             and state_attr(repeat.item, 'device_class') in ['blind', 'shade', 'curtain']
+             and state_attr(repeat.item, 'entity_id') is none
+             and state_attr(repeat.item, 'assumed_state') is not sameas true
+             and features is integer and features >= 0
+             and features | bitwise_and(12) == 12
+             and reported_position is number and reported_position is not boolean
+             and position < reported_position <= 100 }}
+      then:
+      # HA CoverEntityFeature: SET_POSITION=4 and STOP=8. Qualification is separate.
+      - action: cover.set_cover_position
+        target:
+          entity_id: '{{ repeat.item }}'
+        data:
+          position: '{{ position | int }}'

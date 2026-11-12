@@ -49,7 +49,8 @@ class BlueprintHarness(unittest.IsolatedAsyncioTestCase):
         async def capture(call):
             self.calls.append((call.domain, call.service, dict(call.data)))
         for domain, service in [('scene', 'turn_on'), ('persistent_notification', 'create'),
-                                ('persistent_notification', 'dismiss'), ('light', 'turn_on')]:
+                                ('persistent_notification', 'dismiss'), ('light', 'turn_on'),
+                                ('cover', 'set_cover_position')]:
             self.hass.services.async_register(domain, service, capture)
         self.hass.states.async_set('scene.test_bedroom', 'unknown')
         self.hass.states.async_set('binary_sensor.test_left', 'off')

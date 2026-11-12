@@ -6,7 +6,7 @@ app links for routines and controls and keeps house automations opt-in. The
 [Free Sleep HA compatibility review](../../docs/research/free-sleep-ha-assessment.md)
 explains why Core uses its native integration rather than the legacy component.
 
-These seven Home Assistant blueprints are an opt-in starting point for qualified
+These eight Home Assistant blueprints are an opt-in starting point for qualified
 house integrations. Installing a blueprint does not create an automation or
 select a device. Every created automation starts **disabled**, and its separate
 **Allow** input defaults to **off**. That input is checked inside the action
@@ -16,6 +16,7 @@ sequence as well as the normal conditions, so **Run actions** cannot skip it.
 | --- | --- |
 | [Wind-down](blueprints/wind_down.yaml) | Activate a selected scene at a chosen Home Assistant local time. This is a separate house schedule, not the Pod's bedtime routine. |
 | [Bedtime lights already on](blueprints/bedtime_lights.yaml) | After a known bed entry lasts one minute after 22:00, dim selected individual lamps that remain on and above 10%. Optional resting/pause helpers inhibit the routine. See [setup and limitations](BEDTIME_LIGHTS.md). |
+| [Bedtime shades](blueprints/bedtime_shades.yaml) | After the same qualified entry, lower selected stationary individual shades toward a reviewed position. Requires reported position, position control and Stop; pauses and missing data inhibit further requests. See [setup and qualification](BEDTIME_SHADES.md). |
 | [Nighttime path](blueprints/night_path.yaml) | Activate a dim-light scene after a known occupied-to-empty transition lasts five seconds within the night window. |
 | [Morning scene](blueprints/morning_scene.yaml) | Activate a scene after a known occupied-to-empty transition lasts thirty seconds within the morning window. This follows bed exit; it is **not** alarm synchronization. |
 | [Empty bed](blueprints/empty_bed.yaml) | Activate a scene after both distinct sides have been continuously known empty for five minutes. |
@@ -41,6 +42,12 @@ unsupported brightness, unavailable values and lamps already at or below the
 target. It rechecks occupancy, pauses and each lamp before dispatch, and never
 restores or queues a later action. [Its acceptance guide](BEDTIME_LIGHTS.md)
 describes the remaining integration and physical checks.
+
+The separate shade template sends only `cover.set_cover_position` to selected
+individual blinds, shades or curtains with supported position and Stop controls.
+It does not reopen shades later. A pause stops further requests; the accessory's
+own Stop control is needed for movement already in progress. See its
+[qualification guide](BEDTIME_SHADES.md) before enabling it.
 
 ```mermaid
 flowchart LR
@@ -120,7 +127,7 @@ uv run --project scripts/home-assistant --frozen python -m unittest discover \
 
 The locked test environment uses Home Assistant 2026.10.4 on Python 3.14. It
 loads the real blueprint/automation/trigger schemas and executes Home Assistant's
-script engine against synthetic states and stub scene/notification services.
+script engine against synthetic states and stub scene/notification/light/cover services.
 The suite covers disabled/manual-run guards, time windows, known transitions,
 two-side empty holds, source clocks, stale recovery and notification withdrawal.
 No household data, real MQTT broker or physical devices are used in those tests.
