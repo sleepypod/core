@@ -83,6 +83,25 @@ original request's expiry; a new change then needs another explicit action.
 
 ## Verification and remaining delivery
 
+### Shared audio handoff reads
+
+Installation clients can read `GET /api/v1/household/shared-quiet` with their
+existing owner connection. Personal accounts continue to use `GET /api/v1/me/quiet`.
+The installation response contains only version, generated/expiry timestamps and
+the union of requests (`shared.paused`, `shared.until`). It contains no account
+names, identifiers, individual quiet requests or biometric data. It cannot change
+quiet time and does not accept query selectors.
+
+The response expires after 15 seconds. Authorization, shared state and clocks are
+rechecked when the body is delivered, so a delayed response cannot clear a newer
+request. Unavailable storage withholds the reading. Native audio handoffs must
+also bind it to their current account and foreground operation; this endpoint
+does not itself launch, stop or claim to observe Endel or HomePod audio.
+
+The addition passes 41 focused HTTP/store tests over real migrated SQLite,
+including missing/personal credentials, owner-key rotation, changes before
+delivery, expiry, reversed clocks, damaged storage and rejected writes.
+
 Regression tests use migrated isolated SQLite databases, simulated base transport,
 MQTT publication fixtures, and Home Assistant's real script engine with stubbed
 accessory services. They exercise independent requests, revision conflicts,

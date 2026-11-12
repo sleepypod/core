@@ -102,6 +102,18 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
   try {
     if (request.headers.has('origin') && !sameOrigin(request.headers))
       throw new HouseholdError('forbidden', 403, 'Use the same private Pod origin.')
+    if (path === '/api/v1/household/shared-quiet') {
+      const assertOwner = () => {
+        if (!authorized(request.headers, method))
+          throw new HouseholdError('forbidden', 403, 'The installation connection is required for shared quiet status.')
+      }
+      assertOwner()
+      if (!['GET', 'HEAD'].includes(method) || url.search)
+        throw new HouseholdError('invalid_request', 400, 'Shared quiet status is read-only and accepts no query fields.')
+      if (!dependencies.householdQuiet)
+        throw new HouseholdError('not_ready', 503, 'Shared quiet status is unavailable on this controller.')
+      return dependencies.householdQuiet.sharedResponse(request, assertOwner)
+    }
     if (path === '/api/v1/household/setup' && method === 'POST') {
       const input = householdSetupSchema.parse(await jsonBody(request))
       if (!authorized(request.headers, method))

@@ -23,6 +23,12 @@ export const quietSelectionSchema = z.object({
 export const sharedQuietSchema = z.object({
   paused: z.boolean(), until: quietInstantSchema.nullable(),
 }).strict().refine(value => value.paused === (value.until !== null), 'Shared quiet state is inconsistent.')
+
+/** Installation clients need only the union of quiet requests, never personal identities. */
+export const sharedQuietReadSchema = z.object({
+  version: z.literal(1), generatedAt: quietInstantSchema, expiresAt: quietInstantSchema, shared: sharedQuietSchema,
+}).strict().refine(value => value.expiresAt === value.generatedAt + QUIET_OBSERVATION_LIFETIME_MS
+  && (value.shared.until === null || value.shared.until > value.generatedAt), 'Shared quiet reading is inconsistent.')
 export const quietReceiptSchema = z.object({
   requestId: householdIdSchema, revision: householdIdSchema,
   savedAt: quietInstantSchema, until: quietInstantSchema.nullable(),

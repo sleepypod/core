@@ -10,7 +10,7 @@ import { issuePersonalSession, PERSONAL_COOKIE } from '../browserSession'
 import { HouseholdStore } from '../store'
 import { HouseholdQuietStore } from '../quiet'
 import { HouseholdQuietApi } from '../quietApi'
-import { quietReadResponseSchema, quietWriteResponseSchema } from '../quietContract'
+import { quietReadResponseSchema, quietWriteResponseSchema, sharedQuietReadSchema } from '../quietContract'
 import { householdHttp, type HouseholdHttpDependencies } from '../http'
 
 let database: Database.Database, identities: HouseholdStore, quiet: HouseholdQuietStore, dependencies: HouseholdHttpDependencies
@@ -113,4 +113,54 @@ it('withholds a status that expires before delivery and reports damaged storage 
   await expect(response.json()).rejects.toThrow('changed before delivery')
   database.prepare('UPDATE household_quiet_requests SET revision = ?').run('invalid')
   expect((await householdHttp(request(), dependencies)).status).toBe(503)
+})
+
+it('lets the installation read only the union of shared quiet requests without household identities', async () => {
+  quiet.write(member, input())
+  const response = await householdHttp(request('household/shared-quiet', 'GET', undefined, legacy), dependencies)
+  expect(response.status).toBe(200)
+  const body = sharedQuietReadSchema.parse(await response.json())
+  expect(body).toEqual({ version: 1, generatedAt: now, expiresAt: now + 15_000, shared: { paused: true, until: now + 3_600_000 } })
+  expect(response.headers.get('cache-control')).toBe('private, no-store')
+  expect(JSON.stringify(body)).not.toContain(identities.session(member).accountId)
+  expect(JSON.stringify(body)).not.toContain('Example member')
+})
+
+it('rejects missing, personal and unknown owner credentials and cross-origin shared reads', async () => {
+  for (const key of [null, owner, member, secret()]) {
+    const response = await householdHttp(request('household/shared-quiet', 'GET', undefined, key), dependencies)
+    expect(response.status).toBe(403)
+  }
+  expect((await householdHttp(request('household/shared-quiet', 'GET', undefined, legacy, { origin: 'https://other.test' }), dependencies)).status).toBe(403)
+})
+
+it('does not let owner audio reads become writes or arbitrary personal selectors', async () => {
+  for (const method of ['POST', 'PUT', 'DELETE']) {
+    expect((await householdHttp(request('household/shared-quiet', method, input(), legacy), dependencies)).status).toBe(400)
+  }
+  expect((await householdHttp(request('household/shared-quiet?account=other', 'GET', undefined, legacy), dependencies)).status).toBe(400)
+  expect(quiet.sharedState()).toEqual({ paused: false, until: null })
+})
+
+it('withdraws an owner reading if a quiet request or its credentials change before delivery', async () => {
+  const changedQuiet = await householdHttp(request('household/shared-quiet', 'GET', undefined, legacy), dependencies)
+  quiet.write(member, input())
+  await expect(changedQuiet.json()).rejects.toThrow('changed before delivery')
+  const changedOwner = await householdHttp(request('household/shared-quiet', 'GET', undefined, legacy), dependencies)
+  vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', secret())
+  await expect(changedOwner.json()).rejects.toThrow('changed before delivery')
+})
+
+it.each([15_000, -1])('withdraws a shared reading on expiry or reversed controller clock (%i)', async (advance) => {
+  const response = await householdHttp(request('household/shared-quiet', 'GET', undefined, legacy), dependencies)
+  now += advance
+  await expect(response.json()).rejects.toThrow('changed before delivery')
+})
+
+it('does not clear quiet time when storage is damaged or the shared service is missing', async () => {
+  quiet.write(member, input())
+  database.prepare('UPDATE household_quiet_requests SET revision = ?').run('damaged')
+  expect((await householdHttp(request('household/shared-quiet', 'GET', undefined, legacy), dependencies)).status).toBe(503)
+  const withoutQuiet = { ...dependencies, householdQuiet: undefined }
+  expect((await householdHttp(request('household/shared-quiet', 'GET', undefined, legacy), withoutQuiet)).status).toBe(503)
 })
