@@ -8,6 +8,7 @@ import type { Side } from '@/src/hardware/types'
 import { trpc } from '@/src/utils/trpc'
 import { useNow } from './TonightCard'
 import { LastNightCard } from './LastNightCard'
+import { OwnerReportLibrary } from '@/src/components/Reports/OwnerReportLibrary'
 import { currentTonightRead, morningInPodZone, personalComfortMode } from './tonightSummary'
 
 /** The everyday plan stays visible in both layouts; detailed editors keep their existing authority. */
@@ -37,11 +38,12 @@ export function TonightOverview({ side, name, sleepSide = side, sleepName = name
   const morning = showMorning ?? morningInPodZone(now, timeZone)
   return (
     <section aria-label="Tonight overview" className="mb-5 min-w-0 space-y-4 [overflow-wrap:anywhere]">
+      {morning && <OwnerReportLibrary compact />}
       {morning && (
         <div className="grid items-start gap-3 min-[700px]:grid-cols-2" aria-label="Morning review">
           <div className="space-y-2 py-2">
             <h2 className="text-xl font-semibold">Your morning review</h2>
-            <p className="max-w-prose text-sm text-fg-2">Open the latest night to review recorded time and gaps. Personal Health reports stay in the iPhone app.</p>
+            <p className="max-w-prose text-sm text-fg-2">Open the latest night to review recorded time and gaps. Only explicitly shared personal reports appear in the brief above.</p>
             <Link className="inline-flex min-h-11 items-center text-sm underline underline-offset-4" href={`/${lang}/autopilot?view=automations&side=${side}#personal-comfort`}>Review overnight comfort</Link>
           </div>
           <LastNightCard side={sleepSide} name={sleepName} />

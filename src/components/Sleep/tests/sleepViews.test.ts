@@ -11,6 +11,6 @@ describe('resolveSleepSection', () => {
   })
 
   it('lists Nights first', () => {
-    expect(SLEEP_SECTIONS.map(s => s.label)).toEqual(['Nights', 'Biometrics', 'History', 'Journal'])
+    expect(SLEEP_SECTIONS.map(s => s.label)).toEqual(['Nights', 'Biometrics', 'History', 'Journal', 'Reports'])
   })
 })

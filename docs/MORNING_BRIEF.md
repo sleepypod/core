@@ -2,8 +2,9 @@
 
 This work implements approved item 12. The native brief already has a saved,
 encrypted report and grounded follow-up flow. Web integration is in progress.
-The authenticated storage service and native wire encoder are implemented locally;
-the sharing interface, browser brief and live installation remain outstanding.
+The authenticated storage service is merged. The explicit native sharing interface
+and browser reader are implemented and undergoing release validation. Live
+installation and browser question generation remain outstanding.
 
 ## Frozen evidence
 
@@ -30,14 +31,10 @@ remain available. A report without three supporting facts gets fewer cards.
 
 ## Remaining integration
 
-- Connect the native encoder to an explicit sharing action for the authenticated
-  Pod/account. Device-local reports and API keys are not automatically uploaded.
-  Preserve current connection/identity across request and reply, and reconcile
-  uncertain replies through reads before another explicit action.
-- Render the brief on the web morning view: evidence-backed takeaways, source and
-  freshness badges, gaps in the chart, one actual proposed experiment, and the
-  expandable formatted report and evidence. Distinguish absent chart metadata
-  from metadata that failed validation.
+- Release and verify the explicit native owner sharing action. Finish personal
+  Health/report enrollment and sharing; the personal wire protocol and reading
+  surface do not make this enrollment complete. Device-local reports and API keys
+  are not automatically uploaded.
 - Add grounded questions using only the original calculated facts and fresh
   sharing consent. Preserve current provider/model selection and discard late
   answers after cancellation, account changes, revocation or report deletion.
@@ -109,4 +106,50 @@ without another incoming body chunk and reads the exact native fixture.
 The native encoder passes 11 test functions (17 parameterized executions),
 including existing report/answer regressions. It does not read a connected phone,
 start a network request or change the encrypted archive's existing date encoding.
-Browser UI, explicit sharing, hosted validation and deployment remain pending.
+The browser reader adds focused contract, transport, account-lifetime and prose
+tests. Real authenticated browser fixtures cover rendering at 390, 834 and 1440
+pixels, chart gaps, source disclosure, withdrawal and unavailable reads, literal
+HTML/link handling, and separate personal-account access. Test fixtures are
+synthetic and are not evidence of live Pod delivery or sleep improvement.
+
+The browser reader's focused suite passes 85 tests. Its final production build,
+focused lint and all 13 browser scenarios pass, including rendered chart-label
+size and containment at 390, 834 and 1440 pixels. The independent reviewer returned
+`ship` after scoring the one mobile chart typography finding resolved. All 14
+final captures were inspected. The extension preserves the incumbent AppShell,
+personal workspace palette and design tokens; no design-system file was replaced.
+
+Native explicit sharing is in PR 74. Its complete model/application regression
+passes 1,521 tests with nine existing skips; the final five UI tests pass on each
+iPhone and iPad simulator. The native reviewer scored its large-text button finding
+resolved. Hosted checks, distribution and physical acceptance remain open.
+
+## Browser reader
+
+Sleep → Reports opens the owner library. Tonight includes the compact brief during
+the morning. The personal workspace has its own report reader and never falls back
+to the owner's library. Both render the same saved highlights, comparison, source
+badges, formatted interpretation, actual proposed experiment and dated answers.
+A separate experiment appears only when the original report contains exactly one
+recognized experiment section; it is never invented or silently truncated.
+
+Report HTML is escaped, links and images remain non-navigable text, and only
+supplied recognized facts become expandable source badges. The browser reader
+does not load report-specified resources or call an AI provider. New questions
+currently run in the iPhone app; updated answers need explicit sharing.
+
+The owner reader verifies the signed-in browser scope and a fresh installation
+challenge before and after loading. Personal reads pin Pod, household, account,
+sleeper and all three revisions. Both validate bounded replies and saved clocks,
+check access periodically, and clear reports when hidden, signed out, revoked,
+withdrawn or switched to another account. Failed refreshes do not leave a stale
+private report on screen. Browser reports stay in memory, not local storage or a
+service-worker cache. This is connected reading; the native encrypted offline
+library is a separate feature.
+
+```mermaid
+flowchart LR
+  Native[Private native report] -->|Explicit sharing| Pod[Authenticated report library]
+  Pod -->|Owner or personal scoped read| Reader[Browser morning brief]
+  Reader --> Sources[Saved facts and dated answers]
+```

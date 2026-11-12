@@ -11,11 +11,14 @@ import { LearningPanel } from './LearningPanel'
 import { JournalPanel } from './JournalPanel'
 import type { PersonalJournalWorkspace } from './journal'
 import { ControlPractice } from '@/src/components/Practice/ControlPractice'
-export function PersonalWorkspace({ workspace, history, learning, journal, maintenance, preferredTemperatureF, displayUnit }: {
+import { ReportLibrary } from '@/src/components/Reports/ReportLibrary'
+import type { MorningReportBrowserWorkspace } from '@/src/reports/browserWorkspace'
+export function PersonalWorkspace({ workspace, history, learning, journal, reports, maintenance, preferredTemperatureF, displayUnit }: {
   workspace: PersonalWebWorkspace
   history: PersonalHistoryWorkspace
   learning?: PersonalLearningWorkspace
   journal?: PersonalJournalWorkspace
+  reports?: MorningReportBrowserWorkspace
   maintenance?: HouseholdMaintenanceWorkspace
   preferredTemperatureF: number
   displayUnit: 'F' | 'C'
@@ -157,6 +160,7 @@ export function PersonalWorkspace({ workspace, history, learning, journal, maint
           ))}
         </article>
       )}
+      {reports && <ReportLibrary workspace={reports} personal />}
       <HistoryPanel history={history} />
       {journal && <JournalPanel journal={journal} />}
       {learning && <LearningPanel learning={learning} />}

@@ -3,7 +3,7 @@
 import { useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { SegmentedControl, Skeleton } from '@/src/components/ds'
+import { PageHeader, SegmentedControl, Skeleton } from '@/src/components/ds'
 import { SleepScreen } from './SleepScreen'
 import { useDocumentTitle } from '@/src/hooks/useDocumentTitle'
 import { resolveSleepSection, SLEEP_SECTIONS, type SleepSection } from './sleepViews'
@@ -20,6 +20,8 @@ const MorningJournal = dynamic(
   () => import('./MorningJournal').then(module => module.MorningJournal),
   { loading: () => <Skeleton className="h-64" /> },
 )
+const OwnerReportLibrary = dynamic(() => import('@/src/components/Reports/OwnerReportLibrary').then(module => module.OwnerReportLibrary),
+  { loading: () => <Skeleton className="h-64" /> })
 
 /**
  * Sleep: Nights, Biometrics and separately labelled imported History. The section
@@ -55,6 +57,13 @@ export function SleepSections() {
   if (section === 'nights') return <SleepScreen sectionSwitch={sectionSwitch} />
   if (section === 'history') return <ImportedHistory sectionSwitch={sectionSwitch} />
   if (section === 'journal') return <MorningJournal sectionSwitch={sectionSwitch} />
+  if (section === 'reports') return (
+    <div className="space-y-5">
+      <PageHeader title="Sleep" />
+      {sectionSwitch}
+      <OwnerReportLibrary />
+    </div>
+  )
 
   return <BiometricsPage sectionSwitch={sectionSwitch} />
 }

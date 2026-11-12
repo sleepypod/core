@@ -19,6 +19,8 @@ export class PersonalBrowserClient implements PersonalWebTransport {
 
   async read(path: string, method: 'GET' | 'PUT' | 'POST' = 'GET', body?: unknown): Promise<unknown> {
     const learningRead = learningReadPath(path, method, body)
+    const reportRead = method === 'GET' && body === undefined && (path === 'me/reports'
+      || (path.startsWith('me/reports/') && householdIdSchema.safeParse(path.slice('me/reports/'.length)).success))
     let historyRead = false
     if (method === 'GET' && body === undefined && !path.includes('#')) {
       const [pathname, search, extra] = path.split('?')
@@ -38,7 +40,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
     const allowedMethod = method === 'GET'
       ? !['me/controls', 'me/routines/publish', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
       : method === 'PUT' ? path === 'me/routines' : ['me/controls', 'me/routines/publish', 'household/arrangement', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
-    if (this.disposed || (!learningRead && !historyRead && !personalJournalPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
+    if (this.disposed || (!reportRead && !learningRead && !historyRead && !personalJournalPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
       throw new PersonalWebError('account_changed', 'Reconnect the personal workspace before continuing.')
     const controller = new AbortController()
     this.requests.add(controller)
