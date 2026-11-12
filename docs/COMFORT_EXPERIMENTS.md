@@ -1,9 +1,9 @@
 # Personal comfort experiments
 
-This is the implemented protocol, evidence collector, durable repository and
-authenticated planning API for approved improvement 10. It is **not yet an available
-app feature or an enabled temperature controller**. Review screens, guarded runtime
-admission and lease cancellation remain integration work. No
+This is the implemented protocol, evidence collector, durable repository,
+authenticated planning API and owner/personal browser interface for approved
+improvement 10. It is **planning-only, not an enabled temperature controller**.
+Native screens, guarded runtime admission and lease cancellation remain integration work. No
 experiment was started on Luca's Pod and no schedule, alarm or live setting was
 changed by this implementation.
 
@@ -192,9 +192,10 @@ sixteen observed or physically qualified nights.
 
 The next implementation must connect these parts to the single controller:
 
-1. Add matching web/native review and results screens, including all skipped
-   dates, exact night/wake boundaries and evidence exclusions.
-2. Connect authenticated planning and recovery to those screens.
+1. Add matching native review and results screens, including all skipped dates,
+   exact night/wake boundaries and evidence exclusions. The browser screens and
+   their authenticated planning/recovery flow are implemented below.
+2. Complete release and installed-app acceptance of the browser/native flow.
 3. Admit only explicitly reviewed, qualified treatment leases. Pause normal
    adaptation during a comparison; preserve manual priority and the alarm window.
 4. Persist live observation references and reconcile source withdrawal. On stop,
@@ -287,3 +288,47 @@ Evidence: `/tmp/sleepypod-experiment-windows-full.log`,
 `/tmp/sleepypod-experiment-windows-build.log` and
 `/tmp/sleepypod-experiment-windows-lint-all.log`. Hosted checks and physical
 qualification remain separate.
+
+## Browser planning, review and feedback
+
+Owner Autopilot → Learning and the personal account workspace share the same
+comparison renderer. They inject separate authenticated transports and scope
+validators. The owner uses the existing browser session and verified installation;
+the personal route derives its sleeper from the current credential and assignment.
+Neither transport accepts an arbitrary URL, a client-selected sleeper, exposure
+uploads or activation. Replies are size-bounded and checked for freshness,
+identity, exact plan order and scheduled windows.
+
+The compact review presents both settings, the actual date span and preserved
+wake plan. The adjacent disclosure lists every settling/scored night and skipped
+date. Back retains the chosen date and setting; Back and timer expiry return
+keyboard focus to the proposal. Saving clearly states that overnight control has
+not been activated. The detail view exposes Stop, morning feedback and the actual
+comparison conclusion with readable exclusion reasons. A comfort rating alone
+cannot establish treatment exposure or improved sleep.
+
+The workspace holds private content only in memory and clears on backgrounding,
+page exit, account changes, maintenance and unmount. Every request rechecks scope
+before and after delivery, with periodic access checks while visible. Lost write
+replies offer only a read of the original record; they never replay a mutation.
+
+Local browser/API validation uses synthetic scoped accounts and real experiment
+services over isolated migrated databases. All five browser scenarios pass at
+phone/tablet sizes, including enlarged phone text, expired review, focus return,
+back-navigation draft retention, saved Stop, uncertain-write recovery and personal
+feedback. The focused suite passed 327 tests. The full regression run passed
+10,160 tests with 19 existing skips after correcting the LearningJourney fixture's
+missing temperature-unit setting. An intervening run retained an intermittent
+HTTP 501 WebSocket handshake failure. The next full run passed; failure diagnostics
+now include response status/headers as well as socket/port context, without any
+retry or assertion changes. The intermittent cause remains unresolved.
+
+Production build and focused lint pass. Logs are retained under
+`/tmp/sleepypod-experiment-browser-*`; rendered review artifacts are in the local
+`.impeccable/review/comfort-experiments/` folder. Hosted checks, deployment,
+native delivery and real-night observations remain separate acceptance states.
+The independent design reviewer scored both final findings resolved: focus
+restoration after Back/expiry and spacing around interpolated copy. All five
+browser scenarios passed again with explicit focus and readable-text assertions.
+This verdict covers those fixes and the supplied planning-interface evidence,
+not controller execution or physical qualification.

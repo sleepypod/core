@@ -1,3 +1,4 @@
+import { personalExperimentWorkspace } from './experiments'
 import { createRoot } from 'react-dom/client'
 import { householdSessionSchema, type HouseholdSession } from '../contract'
 import { PersonalBrowserClient } from './client'
@@ -30,6 +31,8 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     history.dispose()
     learning.dispose()
     journal.dispose()
+    experiments.dispose()
+    experimentClient.dispose()
     reports.dispose()
     quiet.dispose()
     reportClient.dispose()
@@ -41,6 +44,8 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
   const learning = new PersonalLearningWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const journal = new PersonalJournalWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const quiet = new PersonalQuietWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
+  const experimentClient = new PersonalBrowserClient(session)
+  const experiments = personalExperimentWorkspace(session, experimentClient)
   const reportClient = new PersonalBrowserClient(session)
   const reports = personalReportWorkspace(session, reportClient)
   const maintenance = new HouseholdMaintenanceWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate,
@@ -51,6 +56,8 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       learning.dispose()
       journal.dispose()
       quiet.dispose()
+      experiments.dispose()
+      experimentClient.dispose()
       reports.dispose()
       reportClient.dispose()
       lifecycle?.maintenanceModeChanged(mode)
@@ -62,7 +69,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     if (disposed) return
     currentPreferences = value
     root.render(mode === 'ordinary'
-      ? <PersonalWorkspace workspace={workspace} history={history} learning={learning} journal={journal} reports={reports} quiet={quiet} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
+      ? <PersonalWorkspace workspace={workspace} history={history} learning={learning} journal={journal} reports={reports} experiments={session.capabilities.comfortExperiments ? experiments : undefined} quiet={quiet} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
       : <div className="personal-runtime"><ArrangementMaintenancePanel workspace={maintenance} standalone /></div>)
   }
   const unsubscribe = maintenance.subscribe(() => {
@@ -102,6 +109,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       learning.clear()
       journal.clear()
       quiet.clear()
+      experiments.clear()
       reports.clear()
       maintenance.clear()
     }
@@ -126,6 +134,8 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     learning.dispose()
     journal.dispose()
     quiet.dispose()
+    experiments.dispose()
+    experimentClient.dispose()
     reports.dispose()
     reportClient.dispose()
     unsubscribe()

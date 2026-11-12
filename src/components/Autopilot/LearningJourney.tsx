@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { Brain, MoonStar, Thermometer, Smartphone } from 'lucide-react'
+import { OwnerComfortExperiments } from './OwnerComfortExperiments'
 import { trpc } from '@/src/utils/trpc'
 import type { Side } from '@/src/hardware/types'
 import { Button, SegmentedControl } from '@/src/components/ds'
@@ -91,6 +92,7 @@ export function LearningJourney({ side, onSideChange, lang, onTemperature }: {
             : stages.isFetching || thermal.isFetching ? 'Reading model inventory…' : 'Some model checks are unavailable or expired. Refresh to check again.'}
         </p>
       </div>
+      <OwnerComfortExperiments />
       <details className="rounded-card border border-line p-5 text-sm">
         <summary className="cursor-pointer font-medium">What these models cannot establish</summary>
         <p className="mt-3 text-fg-2">A stage model estimates labels. A baseline measures differences from earlier nights. A temperature model predicts comfort feedback in familiar conditions. None establishes a medical diagnosis or improved sleep. Historical Health nights cannot supply missing Pod temperatures, and heart rate alone cannot tell whether you feel hot or cold.</p>

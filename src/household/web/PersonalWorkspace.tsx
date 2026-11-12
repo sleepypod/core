@@ -1,3 +1,5 @@
+import { ComfortExperiments } from '@/src/components/Autopilot/ComfortExperiments'
+import type { ComfortExperimentBrowserWorkspace } from '@/src/comfort/experiments/browserWorkspace'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { PersonalWebWorkspace } from './workspace'
 import { RoutineEditor } from './RoutineEditor'
@@ -15,11 +17,12 @@ import { ReportLibrary } from '@/src/components/Reports/ReportLibrary'
 import type { MorningReportBrowserWorkspace } from '@/src/reports/browserWorkspace'
 import { QuietPanel } from './QuietPanel'
 import type { PersonalQuietWorkspace } from './quiet'
-export function PersonalWorkspace({ workspace, history, learning, journal, reports, quiet, maintenance, preferredTemperatureF, displayUnit }: {
+export function PersonalWorkspace({ workspace, history, learning, journal, reports, experiments, quiet, maintenance, preferredTemperatureF, displayUnit }: {
   workspace: PersonalWebWorkspace
   history: PersonalHistoryWorkspace
   learning?: PersonalLearningWorkspace
   journal?: PersonalJournalWorkspace
+  experiments?: ComfortExperimentBrowserWorkspace
   reports?: MorningReportBrowserWorkspace
   quiet?: PersonalQuietWorkspace
   maintenance?: HouseholdMaintenanceWorkspace
@@ -164,6 +167,7 @@ export function PersonalWorkspace({ workspace, history, learning, journal, repor
           ))}
         </article>
       )}
+      {experiments && <ComfortExperiments workspace={experiments} unit={displayUnit} />}
       {reports && <ReportLibrary workspace={reports} personal />}
       <HistoryPanel history={history} />
       {journal && <JournalPanel journal={journal} />}

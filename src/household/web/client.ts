@@ -1,3 +1,4 @@
+import { ExperimentBrowserProblem, experimentBrowserProblem } from '@/src/comfort/experiments/browserError'
 import { PersonalWebError } from './protocol'
 import type { HouseholdSession } from '../contract'
 import { householdIdSchema } from '../contract'
@@ -7,6 +8,7 @@ import { learningReadPath, learningRemovalPath } from './learningPaths'
 import { learningArchiveLimits } from '../learningArchiveContract'
 import { personalJournalPath } from './journalPaths'
 import { personalQuietPath } from './quietPaths'
+import { personalExperimentPath } from './experiments'
 export interface PersonalWebTransport {
   read(path: string, method?: 'GET' | 'PUT' | 'POST', body?: unknown): Promise<unknown>
   dispose(): void
@@ -41,7 +43,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
     const allowedMethod = method === 'GET'
       ? !['me/controls', 'me/routines/publish', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
       : method === 'PUT' ? path === 'me/routines' : ['me/controls', 'me/routines/publish', 'household/arrangement', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
-    if (this.disposed || (!reportRead && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !personalQuietPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
+    if (this.disposed || (!personalExperimentPath(path, method, body) && !reportRead && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !personalQuietPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
       throw new PersonalWebError('account_changed', 'Reconnect the personal workspace before continuing.')
     const controller = new AbortController()
     this.requests.add(controller)
@@ -70,6 +72,15 @@ export class PersonalBrowserClient implements PersonalWebTransport {
       }
       if (this.disposed)
         throw new PersonalWebError('account_changed', 'The personal account changed.')
+      if (!response.ok && personalExperimentPath(path, method, body)) {
+        const joined = new Uint8Array(length)
+        let position = 0
+        for (const chunk of chunks) {
+          joined.set(chunk, position)
+          position += chunk.length
+        }
+        throw experimentBrowserProblem(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(joined)))
+      }
       if (!response.ok) {
         const code = [401, 403].includes(response.status) ? 'authentication' : response.status === 409 ? 'conflict' : response.status === 404 ? 'missing' : 'unavailable'
         throw new PersonalWebError(code, code === 'authentication'
@@ -87,7 +98,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
       return JSON.parse(new TextDecoder().decode(buffer))
     }
     catch (error) {
-      if (error instanceof PersonalWebError)
+      if (error instanceof PersonalWebError || error instanceof ExperimentBrowserProblem)
         throw error
       throw new PersonalWebError('uncertain', 'The response could not be confirmed. Check its saved result; the request will not be resent.')
     }

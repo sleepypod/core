@@ -638,6 +638,8 @@ async function connectClient(port: number): Promise<ConnectedClient> {
     ws.once('open', () => resolve())
     ws.once('error', error => reject(new Error(`${error.message}; handshake=${JSON.stringify({
       port, reusedSocket: request?.reusedSocket, socketAddress,
+      responseStatus: request?.res?.statusCode,
+      responseHeaders: request?.res?.headers,
     })}`, { cause: error })))
   })
   return {

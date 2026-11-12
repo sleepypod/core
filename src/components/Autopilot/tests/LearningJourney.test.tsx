@@ -8,6 +8,7 @@ const mock = vi.hoisted(() => ({
   thermal: { data: undefined as unknown, error: null as unknown, dataUpdatedAt: 1_800_000_000_000, isFetching: false, refetch: vi.fn() },
 }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
+  settings: { getAll: { useQuery: () => ({ data: { device: { temperatureUnit: 'F' } } }) } },
   sleepStages: { getModel: { useQuery: () => mock.stage } },
   comfort: { thermalModel: { useQuery: () => mock.thermal } },
 } }))

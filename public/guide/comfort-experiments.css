@@ -1,0 +1,56 @@
+.comfort-experiments {
+  --experiment-ink: var(--text-1, var(--ink));
+  --experiment-muted: var(--text-2, var(--muted));
+  --experiment-accent: var(--accent-link, var(--blue));
+  --experiment-line: var(--border-1, var(--line));
+  --experiment-paper: var(--surface-card, var(--card));
+  --experiment-soft: var(--surface-active, var(--soft));
+  color: var(--experiment-ink); background: var(--experiment-paper);
+  padding: 24px; border: 1px solid var(--experiment-line); border-radius: 16px;
+  font-size: 1rem; line-height: 1.6; min-width: 0; overflow-wrap: anywhere;
+}
+.comfort-experiments :is(h2,h3,h4,p,ol,ul) { margin: 0; }
+.comfort-experiments :is(h2,h3,h4) { line-height: 1.35; text-wrap: balance; font-weight: 600; }
+.comfort-experiments h2 { font-size: 1.5rem; }
+.comfort-experiments h3 { font-size: 1.2rem; }
+.comfort-experiments h4 { font-size: 1rem; }
+.comfort-experiments p { max-width: 72ch; }
+.comfort-experiments > * + * { margin-top: 20px; }
+.comfort-experiments .experiment-muted { color: var(--experiment-muted); font-size: .875rem; }
+.comfort-experiments :is(button,input,select) {
+  font: inherit; color: var(--experiment-ink); background: var(--experiment-paper);
+  border: 1px solid var(--experiment-line); border-radius: 10px; padding: 10px 14px;
+  min-height: 44px; max-width: 100%; min-width: 0; margin: 0;
+}
+.comfort-experiments button { cursor: pointer; }
+.comfort-experiments button:hover { background: var(--experiment-soft); }
+.comfort-experiments button:disabled { opacity: .55; cursor: default; }
+.comfort-experiments :focus-visible { outline: 3px solid var(--experiment-accent); outline-offset: 3px; }
+.comfort-experiments ::selection { background: var(--experiment-soft); color: var(--experiment-ink); }
+.comfort-experiments :is(input,select) { caret-color: var(--experiment-accent); font-variant-numeric: tabular-nums; }
+.comfort-experiments .experiment-primary { color: var(--experiment-accent); border-color: var(--experiment-accent); font-weight: 600; }
+.experiment-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.experiment-heading > div { display: grid; gap: 6px; }
+.experiment-notice { padding: 14px 0; border-block: 1px solid var(--experiment-line); }
+.experiment-summary,.experiment-proposal,.experiment-reading,.experiment-calendar,.experiment-result,.experiment-feedback { display: grid; gap: 16px; }
+.experiment-reading { padding-top: 24px; border-top: 1px solid var(--experiment-line); }
+.experiment-proposal > button { justify-self: start; }
+.experiment-fields { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); }
+.comfort-experiments label { display: grid; gap: 6px; margin: 0; }
+.experiment-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.comfort-experiments :is(.experiment-library,.experiment-nights,.experiment-observations) { list-style: none; padding: 0; }
+.experiment-library > li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--experiment-line); }
+.experiment-nights > li { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(0,1.5fr); gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--experiment-line); }
+.experiment-nights strong { font-variant-numeric: tabular-nums; }
+.comfort-experiments details { margin: 0; border: 0; padding: 0; }
+.comfort-experiments summary { cursor: pointer; padding: 12px 0; min-height: 44px; font-weight: 500; }
+.comfort-experiments .experiment-skipped { padding-inline-start: 24px; color: var(--experiment-muted); }
+.experiment-feedback { padding-top: 20px; border-top: 1px solid var(--experiment-line); }
+.experiment-feedback form { display: grid; gap: 18px; }
+.experiment-feedback form > button { justify-self: start; }
+.experiment-observations > li { padding: 14px 0; border-bottom: 1px solid var(--experiment-line); }
+@media(max-width:600px) {
+  .comfort-experiments { padding: 20px 16px; }
+  .experiment-nights > li { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+  .experiment-window { grid-column: 1 / -1; }
+}

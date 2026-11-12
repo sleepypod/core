@@ -1,7 +1,9 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto'
+import { experimentNights } from './nights'
+export { experimentNights } from './nights'
 import { dateInTimeZone } from '@/src/lib/timeZoneDate'
-import { experimentContextSchema, experimentDateSchema, experimentPlanSchema, experimentProposalSchema, experimentRecordSchema,
-  type ExperimentArm, type ExperimentContext, type ExperimentNight, type ExperimentPlan, type ExperimentSchedule } from './contract'
+import { experimentContextSchema, experimentPlanSchema, experimentProposalSchema, experimentRecordSchema,
+  type ExperimentContext, type ExperimentNight, type ExperimentPlan, type ExperimentSchedule } from './contract'
 
 /** Canonical parsed objects keep the reviewed plan identity independent of input key order. */
 export function experimentPlanHash(plan: ExperimentPlan): string {
@@ -28,25 +30,6 @@ export function createExperimentPlan(context: ExperimentContext, proposal: unkno
 export function createScheduledExperimentPlan(context: ExperimentContext, variantF: number, schedule: ExperimentSchedule, now: number): ExperimentPlan {
   const plan = createExperimentPlan(context, { firstNightDate: schedule.windows[0].date, variantF }, now)
   return experimentPlanSchema.parse({ ...plan, version: 2, schedule })
-}
-
-/** Legacy calendar plans remain readable; new plans use their immutable scheduled dates. */
-export function experimentNights(plan: ExperimentPlan): ExperimentNight[] {
-  const validated = experimentPlanSchema.parse(plan)
-  const nights: ExperimentNight[] = []
-  for (const [pair, order] of validated.orders.entries()) {
-    const arms: ExperimentArm[] = order === 'baseline_first' ? ['baseline', 'variant'] : ['variant', 'baseline']
-    for (const [period, arm] of arms.entries()) {
-      for (const role of ['settling', 'scored'] as const) {
-        const date = validated.version === 2
-          ? validated.schedule.windows[nights.length].date
-          : experimentDateSchema.parse(new Date(Date.parse(validated.firstNightDate) + nights.length * 86_400_000).toISOString().slice(0, 10))
-        nights.push({ date, pair, period, role, arm,
-          targetF: arm === 'baseline' ? validated.context.baselineF : validated.variantF })
-      }
-    }
-  }
-  return nights
 }
 
 export function checkedExperimentRecord(input: unknown) {
