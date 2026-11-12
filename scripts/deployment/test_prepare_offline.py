@@ -115,6 +115,34 @@ class OfflineBundleTests(unittest.TestCase):
             command.assert_not_called()
         self.assertEqual((existing / 'owner-data').read_text(), 'preserved')
 
+    def test_packaging_uses_pod_ownership_and_preserves_files_modes_and_links(self):
+        for name in ('app', 'runtime'):
+            (self.root / name).mkdir()
+        executable = self.root / 'runtime/node'
+        executable.write_bytes(b'executable fixture')
+        executable.chmod(0o755)
+        (self.root / 'runtime/current').symlink_to('node')
+        source = self.root / 'app/server.js'
+        source.write_bytes(b'application fixture')
+        source.chmod(0o644)
+        for name in ('source.tar.gz', 'LICENSE', 'bundle-manifest.json'):
+            (self.root / name).write_bytes(name.encode())
+        original_owner = source.stat().st_uid
+        with tarfile.open(release.package_runtime(self.root)) as archive:
+            members = {member.name: member for member in archive}
+            self.assertEqual(set(members), {'app', 'app/server.js', 'runtime',
+                'runtime/node', 'runtime/current', 'source.tar.gz', 'LICENSE', 'bundle-manifest.json'})
+            for member in members.values():
+                self.assertEqual((member.uid, member.gid, member.uname, member.gname),
+                                 (0, 0, 'root', 'root'))
+            self.assertEqual(archive.extractfile('app/server.js').read(), source.read_bytes())
+            self.assertEqual(archive.extractfile('runtime/node').read(), executable.read_bytes())
+            self.assertEqual(members['app/server.js'].mode, 0o644)
+            self.assertEqual(members['runtime/node'].mode, 0o755)
+            self.assertTrue(members['runtime/current'].issym())
+            self.assertEqual(members['runtime/current'].linkname, 'node')
+        self.assertEqual(source.stat().st_uid, original_owner)
+
 
 if __name__ == '__main__':
     unittest.main()

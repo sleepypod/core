@@ -128,6 +128,22 @@ def inventory(directory):
     return sorted(records, key=lambda record: record['path'])
 
 
+def pod_archive_member(member):
+    """Use the Pod's release owner rather than the build machine's account IDs."""
+    member.uid = member.gid = 0
+    member.uname = member.gname = 'root'
+    return member
+
+
+def package_runtime(output):
+    """Preserve reviewed bytes, modes and links with portable root ownership."""
+    archive = output / 'sleepypod-runtime.tar.gz'
+    with tarfile.open(archive, 'w:gz', dereference=False) as bundle:
+        for name in ['app', 'runtime', 'source.tar.gz', 'LICENSE', 'bundle-manifest.json']:
+            bundle.add(output / name, arcname=name, filter=pod_archive_member)
+    return archive
+
+
 def prepare(repo, output):
     """Use a clean committed build; install target dependencies without running install scripts."""
     if output.exists() or output.is_symlink():
@@ -198,10 +214,7 @@ def prepare(repo, output):
                     'application': inventory(application), 'runtime': inventory(runtime),
                     'sourceSha256': checksum(output / 'source.tar.gz')}
         (output / 'bundle-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        archive = output / 'sleepypod-runtime.tar.gz'
-        with tarfile.open(archive, 'w:gz', dereference=False) as bundle:
-            for name in ['app', 'runtime', 'source.tar.gz', 'LICENSE', 'bundle-manifest.json']:
-                bundle.add(output / name, arcname=name)
+        archive = package_runtime(output)
         (output / 'sleepypod-runtime.sha256').write_text(f'{checksum(archive)}  {archive.name}\n')
         print(json.dumps({'archive': str(archive), 'sourceCommit': commit, 'controllerStarted': False}))
     except BaseException:
