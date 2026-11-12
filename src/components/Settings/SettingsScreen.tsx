@@ -116,6 +116,7 @@ function SectionBody({ section, side, onSideChange }: {
   side: Side
   onSideChange: (side: Side) => void
 }) {
+  const lang = langFromPath(usePathname())
   switch (section) {
     case 'connection':
       return (
@@ -126,6 +127,7 @@ function SectionBody({ section, side, onSideChange }: {
               <h2 className="text-lg font-medium">Personal household preparation</h2>
               <p className="mt-2 text-sm text-fg-2">Prepare separate profiles and private routine drafts. Joining does not activate a second sleeper or move your existing routine.</p>
               <Link href="/household/index.html" prefetch={false} className="mt-3 block text-sm text-link">Open personal preparation</Link>
+              <Link href={`/${lang}/practice`} className="mt-3 block text-sm text-link">Practice temperature, alarms and Stop</Link>
               <a href="/guide/marissa.html" className="mt-2 block text-sm text-link">Marissa’s interactive practice guide</a>
             </Card>
             <Card>

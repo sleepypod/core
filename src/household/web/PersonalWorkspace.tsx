@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { PersonalWebWorkspace } from './workspace'
 import { RoutineEditor } from './RoutineEditor'
 import { ArrangementReviewPanel } from './ArrangementReviewPanel'
@@ -10,6 +10,7 @@ import type { PersonalLearningWorkspace } from './learning'
 import { LearningPanel } from './LearningPanel'
 import { JournalPanel } from './JournalPanel'
 import type { PersonalJournalWorkspace } from './journal'
+import { ControlPractice } from '@/src/components/Practice/ControlPractice'
 export function PersonalWorkspace({ workspace, history, learning, journal, maintenance, preferredTemperatureF, displayUnit }: {
   workspace: PersonalWebWorkspace
   history: PersonalHistoryWorkspace
@@ -22,15 +23,27 @@ export function PersonalWorkspace({ workspace, history, learning, journal, maint
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot)
   const [target, setTarget] = useState<number | null>(null)
   const [hold, setHold] = useState(30)
+  const [practicing, setPracticing] = useState(false)
+  const practiceButton = useRef<HTMLButtonElement>(null)
+  const hasPracticed = useRef(false)
+  useEffect(() => {
+    if (!practicing && hasPracticed.current) practiceButton.current?.focus()
+    if (practicing) hasPracticed.current = true
+  }, [practicing])
   const bed = state.bed
   const format = (value: number | null | undefined) => value === null || value === undefined ? '—' : `${displayUnit === 'C' ? ((value - 32) * 5 / 9).toFixed(1) : value}°${displayUnit}`
   const reportedTargets = bed?.zones.map(zone => zone.reportedTargetF) ?? []
   const common = state.fresh && reportedTargets.length && reportedTargets.every(value => value !== null && value === reportedTargets[0]) ? reportedTargets[0] : null
   const starting = target !== null && Number.isFinite(target) ? target : Math.round(common ?? preferredTemperatureF)
+  if (practicing) return <ControlPractice onClose={() => setPracticing(false)} />
   return (
     <div className="personal-runtime">
       {state.error && <p role="alert" className="notice">{state.error}</p>}
       {state.message && <p className="notice" data-testid="personal-result" aria-live="polite">{state.message}</p>}
+      <div className="row">
+        <p>New to the controls? Try temperature, tomorrow’s alarm and Stop with example settings.</p>
+        <button ref={practiceButton} type="button" onClick={() => setPracticing(true)}>Start practice</button>
+      </div>
       <article>
         <div className="row">
           <div>
