@@ -62,3 +62,4 @@ sleepypod.local.db-wal
 *.db
 .reviews/
 __pycache__/
+.claude/settings.local.json
