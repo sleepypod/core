@@ -42,6 +42,7 @@ export const householdSessionSchema = z.object({
     personalLearningArchive: z.boolean().optional(),
     personalJournal: z.boolean().optional(),
     personalJournalPatterns: z.boolean().optional(),
+    personalReports: z.boolean().optional(),
     personalHistory: z.boolean(), healthImport: z.boolean(), cloudAnalysis: z.literal(false),
   }).strict(),
 }).strict()

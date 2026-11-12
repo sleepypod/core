@@ -2,6 +2,15 @@ import { sql } from 'drizzle-orm'
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { DayOfWeek } from '@/src/lib/scheduleTime'
 
+// Immutable reports and append-only answers; deletion leaves a small anti-replay tombstone.
+// Scope is derived by the authenticated server, never from a submitted report.
+export const morningReports = sqliteTable('morning_reports', {
+  scopeKey: text('scope_key').notNull(), reportId: text('report_id').notNull(),
+  createdAt: integer('created_at'), receivedAt: integer('received_at').notNull(), updatedAt: integer('updated_at').notNull(),
+  revision: text('revision').notNull(), originalHash: text('original_hash'), documentHash: text('document_hash'),
+  payload: text('payload'), deletedAt: integer('deleted_at'),
+}, table => [primaryKey({ columns: [table.scopeKey, table.reportId] }), index('morning_reports_recent').on(table.scopeKey, table.createdAt)])
+
 // Migration seeds one open row; startup must never recreate a missing hold.
 export const hardwareAdmission = sqliteTable('hardware_admission', {
   id: integer('id').primaryKey(), revision: integer('revision').notNull(),

@@ -506,7 +506,7 @@ describe('db schema definitions', () => {
       'biometricActivationEvents', 'biometricConfigOutbox',
       'comfortEvents', 'comfortFeedback', 'comfortStates', 'comfortReviews', 'comfortModels', 'thermalForecasts', 'targetResponseModels',
       'comfortActivations', 'comfortOwnerReviews', 'comfortQualifications', 'comfortResolutions',
-      'notificationInbox', 'temperatureApplications', 'temperatureLimits',
+      'notificationInbox', 'temperatureApplications', 'temperatureLimits', 'morningReports',
       'roomContextSettings', 'roomContextLatest', 'roomContextHistory',
       'bedroomSettings', 'bedroomLatest', 'bedroomHistory',
       'households', 'householdAccounts', 'householdBrowserScopes', 'householdDevices', 'householdInvitations', 'householdPersonalSettings', 'householdMutationReceipts', 'householdArrangementReviews', 'householdArrangementApprovals',

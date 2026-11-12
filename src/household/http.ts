@@ -14,6 +14,9 @@ import type { PersonalHistoryApi } from './historyApi'
 import type { PersonalLearningApi } from './learningApi'
 import type { PersonalJournalApi } from './personalJournalApi'
 import type { ArrangementCoordinator } from './arrangementCoordinator'
+import type { PersonalReportsApi } from './personalReportsApi'
+import { readReportBody, reportErrorResponse } from '@/src/reports/http'
+import { ReportError } from '@/src/reports/store'
 const MAX_BODY_BYTES = 128 * 1024
 const privacyHeaders = { 'Cache-Control': 'private, no-store', 'Vary': 'Authorization, Cookie', 'X-Content-Type-Options': 'nosniff' }
 async function jsonBody(request: Request): Promise<unknown> {
@@ -52,6 +55,7 @@ export interface HouseholdHttpDependencies {
   personalHistory?: PersonalHistoryApi
   personalLearning?: PersonalLearningApi
   personalJournal?: PersonalJournalApi
+  personalReports?: PersonalReportsApi
   arrangementCoordinator?: ArrangementCoordinator
 }
 /** This namespace authorizes every route itself; personal credentials never enter legacy APIs. */
@@ -63,7 +67,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const arrangement = dependencies.arrangementReviews?.present(routines) ?? routines
     const history = dependencies.personalHistory?.present(arrangement) ?? arrangement
     const learning = dependencies.personalLearning?.present(history) ?? history
-    return dependencies.personalJournal?.present(learning) ?? learning
+    const journal = dependencies.personalJournal?.present(learning) ?? learning
+    return dependencies.personalReports?.present(journal) ?? journal
   }
   const url = new URL(request.url)
   const path = url.pathname.replace(/\/$/, '')
@@ -126,7 +131,10 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     }
     // Read potentially streamed input before resolving the current browser and
     // device identity, so revocation while uploading cannot leave stale authority.
-    const mutationBody = ['POST', 'PUT', 'DELETE'].includes(method) ? await jsonBody(request) : undefined
+    const reportPath = /^\/api\/v1\/me\/reports(?:\/[^/]+)?$/.test(path)
+    const mutationBody = ['POST', 'PUT', 'DELETE'].includes(method)
+      ? await (reportPath ? readReportBody(request) : jsonBody(request))
+      : undefined
     const credential = personalCredential(request)
     // Cookies are shared between tabs. A stale editor must never write its
     // previous person's preferences into the newly selected person's account.
@@ -142,6 +150,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     }
     if (path === '/api/v1/household/session' && method === 'GET')
       return reply(present(store.session(credential)))
+    if (dependencies.personalReports && reportPath)
+      return dependencies.personalReports.response(request, credential, mutationBody, assertRequestCurrent)
     if (dependencies.personalHistory && ['GET', 'HEAD'].includes(method)
       && (path === '/api/v1/me/sleep' || /^\/api\/v1\/me\/sleep\/[^/]+$/.test(path)))
       return dependencies.personalHistory.response(request, credential, assertRequestCurrent)
@@ -230,6 +240,7 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     return reply({ error: { code: 'not_ready', message: 'This personal operation is not available. Existing routines remain unchanged.' } }, 404)
   }
   catch (error) {
+    if (error instanceof ReportError) return reportErrorResponse(error)
     if (error instanceof BrowserScopeConflict)
       return reply({ error: { code: 'conflict', message: error.message } }, 409)
     if (error instanceof ControlConflictError)

@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "report": {
+    "id": "120C83DB-50F9-4FEF-879D-5DC603978BEA",
+    "createdAt": 1793635500000,
+    "provider": "apple",
+    "model": "fixture-local-model",
+    "source": "Synthetic Watch",
+    "facts": [
+      {
+        "id": "health.sleep",
+        "text": "Synthetic source-specific sleep estimates; completeness is unknown."
+      }
+    ],
+    "text": "### Recorded coverage\nThese fixture observations do not prove a sleep improvement. [health.sleep]",
+    "comparison": {
+      "metric": "recorded_sleep_minutes",
+      "sourceID": "synthetic-watch",
+      "sourceName": "Synthetic Watch",
+      "timeZone": "America/Los_Angeles",
+      "importedAt": 1793635200000,
+      "asOf": 1793635260000,
+      "omittedRecords": 0,
+      "days": [
+        {
+          "start": 1792436400000,
+          "end": 1792522800000,
+          "minutes": null
+        },
+        {
+          "start": 1792522800000,
+          "end": 1792609200000,
+          "minutes": 420
+        },
+        {
+          "start": 1792609200000,
+          "end": 1792695600000,
+          "minutes": 420
+        },
+        {
+          "start": 1792695600000,
+          "end": 1792782000000,
+          "minutes": 420
+        },
+        {
+          "start": 1792782000000,
+          "end": 1792868400000,
+          "minutes": 420
+        },
+        {
+          "start": 1792868400000,
+          "end": 1792954800000,
+          "minutes": 420
+        },
+        {
+          "start": 1792954800000,
+          "end": 1793041200000,
+          "minutes": 420
+        },
+        {
+          "start": 1793041200000,
+          "end": 1793127600000,
+          "minutes": 480
+        },
+        {
+          "start": 1793127600000,
+          "end": 1793214000000,
+          "minutes": 480
+        },
+        {
+          "start": 1793214000000,
+          "end": 1793300400000,
+          "minutes": 480
+        },
+        {
+          "start": 1793300400000,
+          "end": 1793386800000,
+          "minutes": 480
+        },
+        {
+          "start": 1793386800000,
+          "end": 1793473200000,
+          "minutes": 480
+        },
+        {
+          "start": 1793473200000,
+          "end": 1793563200000,
+          "minutes": 480
+        },
+        {
+          "start": 1793563200000,
+          "end": 1793649600000,
+          "minutes": 480
+        }
+      ]
+    },
+    "followUps": [
+      {
+        "id": "8893F3E4-0EEF-4EB5-A53F-F273574C55DE",
+        "createdAt": 1793635560000,
+        "question": "How complete are these observations?",
+        "text": "Unknown days remain gaps.",
+        "provider": "apple",
+        "model": "fixture-local-model"
+      }
+    ]
+  }
+}
