@@ -197,6 +197,10 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
         return reply(presentReview(dependencies.arrangementReviews.get(credential, reviewPath[1])))
     }
     if (dependencies.personalRuntime) {
+      if (path === '/api/v1/me/alarm/next' && method === 'GET') {
+        z.object({}).strict().parse(Object.fromEntries(url.searchParams))
+        return reply(dependencies.personalRuntime.nextWake(credential, assertRequestCurrent))
+      }
       if (path === '/api/v1/me/bed' && method === 'GET')
         return reply(await dependencies.personalRuntime.bed(credential, assertRequestCurrent))
       if (path === '/api/v1/me/controls' && method === 'POST')

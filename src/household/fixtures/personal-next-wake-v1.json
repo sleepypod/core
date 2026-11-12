@@ -1,0 +1,102 @@
+{
+  "synthetic": true,
+  "bed": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "arrangement": "solo-anywhere",
+    "availability": "ready",
+    "routing": {
+      "temperature": [
+        "left",
+        "right"
+      ],
+      "power": [
+        "left",
+        "right"
+      ],
+      "vibrationCancellation": [
+        "left",
+        "right"
+      ],
+      "scheduledVibration": [
+        "left"
+      ],
+      "routines": "left"
+    },
+    "observation": {
+      "state": "fresh",
+      "observedAt": 1793278800000,
+      "water": "ok",
+      "priming": false
+    },
+    "zones": [
+      {
+        "side": "left",
+        "measuredTemperatureF": 69,
+        "reportedTargetF": 70,
+        "reportedPowered": true,
+        "requestedTargetF": 68
+      },
+      {
+        "side": "right",
+        "measuredTemperatureF": 81,
+        "reportedTargetF": 82,
+        "reportedPowered": true,
+        "requestedTargetF": 80
+      }
+    ],
+    "physicalVerification": "unverified"
+  },
+  "wake": {
+    "version": 1,
+    "scope": {
+      "podId": "00000000-0000-4000-8000-000000000001",
+      "householdId": "00000000-0000-4000-8000-000000000002",
+      "sleeperId": "00000000-0000-4000-8000-000000000003",
+      "sessionRevision": 1,
+      "assignmentRevision": 1,
+      "configurationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "sourceSide": "left",
+    "observedAt": 1793278800000,
+    "plan": {
+      "apiVersion": 1,
+      "side": "left",
+      "timeZone": "America/Los_Angeles",
+      "revision": "ce4ecad7606f33fd583bb2591617332eb9119970503024f9bc7f78b255a10d33",
+      "state": "scheduled",
+      "alarm": {
+        "scheduleIds": [
+          1
+        ],
+        "at": "2026-10-29T14:00:00.000Z",
+        "originalAt": "2026-10-29T14:00:00.000Z",
+        "time": "07:00",
+        "source": "routine",
+        "duration": 20,
+        "wakeWindow": 0,
+        "alarmTemperatureF": 105
+      },
+      "followingAt": "2026-11-05T15:00:00.000Z",
+      "canChange": false,
+      "reason": "",
+      "execution": null,
+      "warming": {
+        "startsAt": "2026-10-29T13:30:00.000Z",
+        "endsAt": "2026-10-29T14:15:20.000Z",
+        "earliestVibrationAt": "2026-10-29T14:00:00.000Z",
+        "targetF": 105
+      },
+      "acknowledgment": "accepted_not_physically_verified",
+      "change": null
+    },
+    "effect": "read_only"
+  }
+}

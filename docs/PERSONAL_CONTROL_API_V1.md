@@ -29,6 +29,7 @@ Every response uses `Cache-Control: private, no-store` and
 |---|---|---|
 | `/api/v1/household/session` | GET | Existing session; `capabilities.personalControls` reflects the current runtime and arrangement |
 | `/api/v1/me/bed` | GET | `personalBedSchema` |
+| `/api/v1/me/alarm/next` | GET | `personalNextWakeSchema`; effective occurrence for the authenticated sleeper, read only |
 | `/api/v1/me/controls` | POST | `personalControlRequestSchema` → `personalControlReceiptSchema` |
 | `/api/v1/me/controls/{requestId}` | GET | Own `personalControlReceiptSchema`, or indistinguishable 404 for absent/another person's receipt |
 
@@ -69,6 +70,35 @@ roster. Device revocation, account switch and configuration changes during an
 asynchronous read invalidate that read before it can be returned.
 
 ## Commands and durable reconciliation
+
+### Reading the next wake
+
+`GET /api/v1/me/alarm/next` accepts no query parameters. The server resolves the
+current personal account and derives its routine source inside the same SQLite
+transaction as the alarm read. Solo thermal following does not create a second
+scheduled vibration. Assigned sleepers see only their own published schedule.
+
+The response contains the same `scope` as the bed reading, `sourceSide`, an
+epoch-millisecond `observedAt`, `effect: "read_only"`, and `plan`. The plan uses
+the scheduler's existing effective-occurrence calculation, including one-time
+changes, skips, away mode, warming and execution acknowledgments. Its
+`canChange` is always false: this endpoint does not grant an alarm-edit route.
+Preparation drafts are not used as if they were published routines.
+
+A disabled or changed assignment, revoked identity, missing admission record,
+or active maintenance hold withholds the read. Browser identity is checked again
+before a private response is returned. No sensor polling, scheduler refresh or
+hardware command is needed. Clients bind the response to their current bed scope
+and require an observation less than 15 seconds old and not in the future before
+presenting it as a fresh remote wake plan.
+
+Schema: `src/household/personalWake.ts`. The synthetic
+`src/household/fixtures/personal-next-wake-v1.json` is shared unchanged with iOS;
+it contains a solo bed whose temperature follows both sides while only its left
+routine supplies a 07:00 wake, 06:30 warming toward 105°F and 20-second vibration.
+The fixture is contract evidence, not a live routine or physical observation.
+
+### Sending a control request
 
 The client persists the exact request before sending it. A request has a random
 UUID, the complete last reviewed scope, `issuedAt`, `expiresAt` and one action:
