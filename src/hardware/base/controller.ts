@@ -31,6 +31,7 @@ export class BaseController {
     private readonly loadConfig: () => Promise<unknown>,
     private readonly now = Date.now,
     private readonly delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+    private readonly assertMovementAllowed: () => void = () => {},
   ) {}
 
   start(): Promise<void> {
@@ -140,6 +141,7 @@ export class BaseController {
     const write = this.writes.catch(() => {}).then(async () => {
       if (generation !== undefined && generation !== this.generation) throw new BaseError('cancelled', 'Base movement cancelled')
       this.assertReady(generation !== undefined)
+      if (generation !== undefined) this.assertMovementAllowed()
       recordMechanicalCommand('base', 0, generation === undefined)
       try {
         await this.transport.write(packet)
@@ -158,6 +160,7 @@ export class BaseController {
     const position = baseMoveSchema.parse(input)
     if (position.sides.length !== 2) throw new BaseError('unavailable', 'This base supports whole-bed movement only')
     this.assertReady(true)
+    this.assertMovementAllowed()
     if (this.busy || this.stopping) throw new BaseError('busy', 'Another base command is in progress')
     this.busy = true
     const generation = ++this.generation

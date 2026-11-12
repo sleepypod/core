@@ -838,6 +838,15 @@ export const householdMutationReceipts = sqliteTable('household_mutation_receipt
   createdAt: integer('created_at').notNull(),
 })
 
+// Either person may pause shared actions; clearing one request preserves the other.
+export const householdQuietRequests = sqliteTable('household_quiet_requests', {
+  accountId: text('account_id').primaryKey().references(() => householdAccounts.id),
+  householdId: text('household_id').notNull().references(() => households.id),
+  revision: text('revision').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+  quietUntil: integer('quiet_until'),
+})
+
 // A self-reported check-in belongs to a person, never to their current mattress zone.
 export const householdJournalEntries = sqliteTable('household_journal_entries', {
   accountId: text('account_id').notNull().references(() => householdAccounts.id),

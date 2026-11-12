@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ start: vi.fn().mockResolvedValue(undefined), construct: vi.fn(), transport: vi.fn() }))
+const mocks = vi.hoisted(() => ({ start: vi.fn().mockResolvedValue(undefined), construct: vi.fn(), transport: vi.fn(), quietGuard: vi.fn() }))
+vi.mock('@/src/household/quietRuntime', () => ({ assertSharedBaseMovementAllowed: mocks.quietGuard }))
 vi.mock('../bluez', () => ({ BluezTransport: vi.fn(function () {
   mocks.transport()
 }) }))
 vi.mock('../configuration', () => ({ readBaseConfiguration: vi.fn() }))
 vi.mock('../controller', () => ({ BaseController: class {
-  constructor() { mocks.construct() }
+  constructor(...args: unknown[]) { mocks.construct(...args) }
   start = mocks.start
 } }))
 const { getBaseController, getBaseControllerIfRunning } = await import('../instance')
@@ -31,5 +32,6 @@ describe('passive base discovery', () => {
     expect(getBaseControllerIfRunning()).toBe(controller)
     expect(getBaseControllerIfRunning()).toBe(controller)
     expect(mocks.start).toHaveBeenCalledOnce()
+    expect(mocks.construct.mock.calls[0][4]).toBe(mocks.quietGuard)
   })
 })

@@ -46,6 +46,16 @@ blueprint:
             device_class: shade
           - domain: cover
             device_class: curtain
+    shared_quiet_entity:
+      name: Sleepypod shared bedroom quiet
+      description: >-
+        Required Core MQTT quiet sensor. Either person's quiet request pauses
+        further commands. Missing or unavailable status also pauses this routine.
+        Use the shade's Stop control for movement already in progress.
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
     pause_entities:
       name: Pause while any of these helpers is on
       description: >-
@@ -91,6 +101,7 @@ variables:
   occupancy_entities: !input occupancy_entities
   shades: !input shades
   pause_entities: !input pause_entities
+  shared_quiet_entity: !input shared_quiet_entity
   position: !input position
 triggers:
 - trigger: state
@@ -105,6 +116,8 @@ actions:
 - condition: template
   value_template: >-
     {{ allow_actions is sameas true
+       and shared_quiet_entity is string and shared_quiet_entity.startswith('binary_sensor.')
+       and is_state(shared_quiet_entity, 'off')
        and occupancy_entities is list and 1 <= occupancy_entities | count <= 2
        and occupancy_entities | unique | list | count == occupancy_entities | count
        and shades is list and 0 <= shades | count <= 20
@@ -130,6 +143,7 @@ actions:
     - condition: template
       value_template: >-
         {{ allow_actions is sameas true and entered_at is number
+           and is_state(shared_quiet_entity, 'off')
            and 60 <= now().timestamp() - entered_at <= 90
            and is_state(trigger.entity_id, 'on')
            and as_timestamp(states[trigger.entity_id].last_changed, none) == entered_at

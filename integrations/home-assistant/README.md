@@ -70,6 +70,14 @@ flowchart LR
 
 ## Import and configure
 
+The bedtime-light, shade and purifier templates now require the Core MQTT
+**Shared bedroom quiet** binary sensor. Select it in the new required input when
+creating or updating an automation. Either person's active quiet request, missing
+status or an unavailable broker pauses further commands. Existing optional pause
+helpers still apply. See [shared quiet](../../docs/HOUSEHOLD_QUIET.md) for expiry,
+privacy and the distinction between withholding requests and stopping a device
+already moving. Importing this update does not enable any automation.
+
 Requires Home Assistant 2026.10 or later. Follow the official
 [blueprint import workflow](https://www.home-assistant.io/docs/automation/using_blueprints/):
 

@@ -8,13 +8,16 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { migratedComfortDatabase } from '@/src/comfort/tests/databaseFixture'
 import { createRoomContextStore } from '../store'
 import { createBedroomStore } from '@/src/bedroom/store'
+import { HouseholdQuietStore } from '@/src/household/quiet'
+import { HouseholdStore } from '@/src/household/store'
 
 vi.mock('mqtt', async () => ({ default: (await import('node:module')).createRequire(import.meta.url)('mqtt') }))
 const runtime = vi.hoisted(() => ({ url: '', store: null as ReturnType<typeof createRoomContextStore> | null,
-  bedroom: null as ReturnType<typeof createBedroomStore> | null, submit: vi.fn() }))
+  bedroom: null as ReturnType<typeof createBedroomStore> | null, quiet: null as HouseholdQuietStore | null, submit: vi.fn() }))
 vi.mock('@/src/db', () => ({ db: { select: () => ({ from: () => ({ limit: async () => [{ mqttEnabled: true, mqttUrl: runtime.url, mqttHaDiscovery: false }] }) }) } }))
 vi.mock('@/src/home-context/instance', () => ({ getRoomContext: () => runtime.store, getRoomContextIfRunning: () => runtime.store }))
 vi.mock('@/src/bedroom/instance', () => ({ getBedroom: () => runtime.bedroom, getBedroomIfRunning: () => runtime.bedroom }))
+vi.mock('@/src/household/quietRuntime', () => ({ getHouseholdQuiet: () => runtime.quiet }))
 vi.mock('@/src/streaming/piezoStream', () => ({ onServerFrame: () => () => {} }))
 vi.mock('@/src/telemetry/home', () => ({ readHomeTelemetry: () => ({}) }))
 vi.mock('@/src/controls/instance', () => ({ getControlService: () => ({ submit: runtime.submit }) }))
@@ -32,6 +35,7 @@ afterEach(async () => {
   for (const action of cleanup.splice(0)) await action()
   runtime.store = null
   runtime.bedroom = null
+  runtime.quiet = null
   vi.unstubAllEnvs()
 })
 
@@ -44,6 +48,7 @@ it('receives mapped telemetry through the real MQTT library without enabling com
   const store = createRoomContextStore(database, () => now)
   runtime.store = store
   runtime.bedroom = createBedroomStore(database, () => now)
+  runtime.quiet = new HouseholdQuietStore(database, new HouseholdStore(database), () => now)
   store.configure({ enabled: true, roomName: 'Fixture', mappings: [{ metric: 'humidity', entityId: 'sensor.fixture_humidity', unit: '%', maxAgeSeconds: 60, timestampAttribute: 'sample_time', timestampFormat: 'iso8601' }] }, 0)
   const peers = new Set<Socket>()
   const subscriptions: string[] = []

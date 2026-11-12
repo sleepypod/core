@@ -10,6 +10,7 @@ import { PersonalJournalWorkspace } from './journal'
 import { HouseholdMaintenanceWorkspace } from './maintenance'
 import { ArrangementMaintenancePanel } from './ArrangementMaintenancePanel'
 import { personalReportWorkspace } from './reports'
+import { PersonalQuietWorkspace } from './quiet'
 export { BrowserRecoveryJournal } from './recovery'
 export { contextKey } from './protocol'
 /** Mounted outside the owner application: no owner provider, transport or stream. */
@@ -30,6 +31,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     learning.dispose()
     journal.dispose()
     reports.dispose()
+    quiet.dispose()
     reportClient.dispose()
     maintenance.dispose()
     invalidated()
@@ -38,6 +40,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
   const history = new PersonalHistoryWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const learning = new PersonalLearningWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const journal = new PersonalJournalWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
+  const quiet = new PersonalQuietWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const reportClient = new PersonalBrowserClient(session)
   const reports = personalReportWorkspace(session, reportClient)
   const maintenance = new HouseholdMaintenanceWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate,
@@ -47,6 +50,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       history.dispose()
       learning.dispose()
       journal.dispose()
+      quiet.dispose()
       reports.dispose()
       reportClient.dispose()
       lifecycle?.maintenanceModeChanged(mode)
@@ -58,7 +62,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     if (disposed) return
     currentPreferences = value
     root.render(mode === 'ordinary'
-      ? <PersonalWorkspace workspace={workspace} history={history} learning={learning} journal={journal} reports={reports} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
+      ? <PersonalWorkspace workspace={workspace} history={history} learning={learning} journal={journal} reports={reports} quiet={quiet} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
       : <div className="personal-runtime"><ArrangementMaintenancePanel workspace={maintenance} standalone /></div>)
   }
   const unsubscribe = maintenance.subscribe(() => {
@@ -69,18 +73,27 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       lifecycle?.maintenanceModeChanged(mode)
       render(currentPreferences)
       void workspace.start()
+      void quiet.refresh()
     }
   })
   lifecycle?.maintenanceModeChanged(mode)
   render(preferences)
   if (supportsMaintenance) void maintenance.refresh()
-  else void workspace.start()
+  else {
+    void workspace.start()
+    void quiet.refresh()
+  }
   const polling = setInterval(() => {
-    if (mode === 'ordinary' && document.visibilityState === 'visible')
+    if (mode === 'ordinary' && document.visibilityState === 'visible') {
       void workspace.refresh()
+      void quiet.refresh()
+    }
   }, 5000)
   const freshness = setInterval(() => {
-    if (mode === 'ordinary') workspace.tick()
+    if (mode === 'ordinary') {
+      workspace.tick()
+      quiet.tick()
+    }
   }, 1000)
   // Never restore a private recording page from a backgrounded account view.
   const hideHistory = () => {
@@ -88,6 +101,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       history.clear()
       learning.clear()
       journal.clear()
+      quiet.clear()
       reports.clear()
       maintenance.clear()
     }
@@ -111,6 +125,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     history.dispose()
     learning.dispose()
     journal.dispose()
+    quiet.dispose()
     reports.dispose()
     reportClient.dispose()
     unsubscribe()

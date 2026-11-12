@@ -109,7 +109,7 @@ connection.close()
     assert(['two', 'solo-left', 'solo-right'].includes(original.bed_mode))
     assert(['off', 'follow', 'independent'].includes(original.unused_zone_mode))
     configSqlite.transaction(() => {
-      for (const table of ['household_invitations', 'household_mutation_receipts', 'household_personal_settings', 'household_devices', 'household_accounts', 'households']) configSqlite.prepare(`DELETE FROM ${table}`).run()
+      for (const table of ['household_invitations', 'household_quiet_requests', 'household_mutation_receipts', 'household_personal_settings', 'household_devices', 'household_accounts', 'households']) configSqlite.prepare(`DELETE FROM ${table}`).run()
       configSqlite.prepare('UPDATE device_settings SET bed_mode = ?, unused_zone_mode = ? WHERE id = 1').run(original.bed_mode, original.unused_zone_mode)
     })()
   }

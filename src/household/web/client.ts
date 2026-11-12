@@ -6,6 +6,7 @@ import { maintenancePathAllowed } from './maintenanceProtocol'
 import { learningReadPath, learningRemovalPath } from './learningPaths'
 import { learningArchiveLimits } from '../learningArchiveContract'
 import { personalJournalPath } from './journalPaths'
+import { personalQuietPath } from './quietPaths'
 export interface PersonalWebTransport {
   read(path: string, method?: 'GET' | 'PUT' | 'POST', body?: unknown): Promise<unknown>
   dispose(): void
@@ -40,7 +41,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
     const allowedMethod = method === 'GET'
       ? !['me/controls', 'me/routines/publish', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
       : method === 'PUT' ? path === 'me/routines' : ['me/controls', 'me/routines/publish', 'household/arrangement', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
-    if (this.disposed || (!reportRead && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
+    if (this.disposed || (!reportRead && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !personalQuietPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
       throw new PersonalWebError('account_changed', 'Reconnect the personal workspace before continuing.')
     const controller = new AbortController()
     this.requests.add(controller)

@@ -112,6 +112,9 @@ vi.mock('@/src/controls/instance', () => ({ getControlService: () => controlMock
 
 const telemetryMock = vi.hoisted(() => ({ read: vi.fn((): Record<string, unknown> => ({ 'state/device-status': { available: false, ts: null } })) }))
 vi.mock('@/src/telemetry/home', () => ({ readHomeTelemetry: telemetryMock.read }))
+const quietMock = vi.hoisted(() => ({ telemetry: vi.fn((): Record<string, unknown> => ({ schemaVersion: 1, source: 'household_quiet',
+  available: false, ts: null, expiresAt: null, paused: null, until: null })) }))
+vi.mock('@/src/household/quietRuntime', () => ({ getHouseholdQuiet: () => quietMock }))
 
 // Hoisted onServerFrame mock — lifecycle tests need to capture the frame
 // listener so they can assert frame-driven publishes.
@@ -1447,6 +1450,24 @@ describe('mqttBridge — testConnection TLS option matrix (mutation coverage)', 
 })
 
 describe('mqttBridge — qualified non-retained state', () => {
+  it('clears retained quiet state and publishes fresh private-free status even when actuator commands are disabled', async () => {
+    const observation = { schemaVersion: 1, source: 'household_quiet', available: true,
+      ts: 1700000000000, expiresAt: 1700000015000, paused: true, until: 1700003600000 }
+    quietMock.telemetry.mockReturnValueOnce(observation)
+    const fake = await startBridgeWithFake({ commands: false })
+    fake.connected = true
+    fake.emit('connect')
+    const calls = fake.publish.mock.calls
+    const online = calls.findIndex(([, payload]) => payload === 'online')
+    const quietCalls = calls.filter(([path]) => String(path).endsWith('/state/household/quiet'))
+    expect(quietCalls[0]).toEqual(expect.arrayContaining(['', expect.objectContaining({ retain: true })]))
+    expect(calls.indexOf(quietCalls[0])).toBeLessThan(online)
+    expect(calls.indexOf(quietCalls[1])).toBeGreaterThan(online)
+    expect(quietCalls[1][2]).toMatchObject({ retain: false })
+    expect(JSON.parse(String(quietCalls[1][1]))).toEqual(observation)
+    expect(controlMock.submit).not.toHaveBeenCalled()
+    await shutdownMqttBridge()
+  })
   it('clears legacy retained state before coming online and publishes source timestamps unchanged', async () => {
     const reading = { available: true, ts: 1700000000000, expiresAt: 1700000015000, temperature: 21 }
     telemetryMock.read.mockReturnValueOnce({ 'state/environment/ambient': reading }).mockReturnValueOnce({ 'state/environment/ambient': reading })

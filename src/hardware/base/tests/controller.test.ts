@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { withSideLock } from '../../sideLock'
 import { BaseController } from '../controller'
-import type { BaseTransport } from '../types'
+import { BaseError, type BaseTransport } from '../types'
 import { telemetry } from './fixtures'
 import { installMechanicalObserver } from '@/src/biometrics/mechanical/dispatch'
 import { admissionFixture } from '../../tests/admissionFixture'
@@ -41,6 +41,50 @@ async function ready() {
 }
 
 describe('whole-bed controller', () => {
+  it('blocks movement during shared quiet without disconnecting Bluetooth or disabling Stop', async () => {
+    controller = new BaseController(transport, async () => config, () => now, undefined,
+      () => { throw new BaseError('unavailable', 'Shared quiet is active') })
+    await ready()
+    await expect(controller.setPosition(target)).rejects.toThrow('Shared quiet')
+    expect(transport.write).not.toHaveBeenCalled()
+    expect(controller.status()).toMatchObject({ state: 'connected', busy: false })
+    await controller.stop()
+    expect(transport.write).toHaveBeenCalledExactlyOnceWith(stopPacket())
+  })
+  it('rechecks quiet after waiting for side locks and immediately before a queued write', async () => {
+    let quiet = false
+    controller = new BaseController(transport, async () => config, () => now, undefined, () => {
+      if (quiet) throw new BaseError('unavailable', 'Shared quiet is active')
+    })
+    await ready()
+    const release = Promise.withResolvers<undefined>()
+    const held = withSideLock('left', () => release.promise)
+    const result = expect(controller.setPosition(target)).rejects.toThrow('Shared quiet')
+    await flush()
+    quiet = true
+    release.resolve(undefined)
+    await held
+    await result
+    expect(transport.write).not.toHaveBeenCalled()
+    expect(controller.status().state).toBe('connected')
+  })
+  it('withholds the second movement when quiet begins between head and feet writes', async () => {
+    let quiet = false
+    controller = new BaseController(transport, async () => config, () => now, undefined, () => {
+      if (quiet) throw new BaseError('unavailable', 'Shared quiet is active')
+    })
+    await ready()
+    const result = expect(controller.setPosition(target)).rejects.toThrow('Shared quiet')
+    await flush()
+    expect(transport.write).toHaveBeenCalledTimes(1)
+    quiet = true
+    await vi.advanceTimersByTimeAsync(500)
+    await result
+    expect(transport.write).toHaveBeenCalledTimes(1)
+    expect(controller.status()).toMatchObject({ state: 'connected', busy: false })
+    await controller.stop()
+    expect(transport.write).toHaveBeenLastCalledWith(stopPacket())
+  })
   it('does not report drained writes before an explicit Stop is acknowledged', async () => {
     await ready()
     const reply = Promise.withResolvers<undefined>()

@@ -91,6 +91,16 @@ blueprint:
           filter:
             domain: binary_sensor
             device_class: occupancy
+    shared_quiet_entity:
+      name: Sleepypod shared bedroom quiet
+      description: >-
+        Required Core MQTT quiet sensor. It must remain known off during the
+        decision window. Either person's quiet request, missing status or a
+        broker outage withholds the speed request.
+      selector:
+        entity:
+          filter:
+            domain: binary_sensor
     pause_entities:
       name: Pause while any of these helpers is on
       description: >-
@@ -127,6 +137,7 @@ variables:
   percentage: !input percentage
   occupancy_entities: !input occupancy_entities
   pause_entities: !input pause_entities
+  shared_quiet_entity: !input shared_quiet_entity
 triggers:
 - trigger: numeric_state
   entity_id: !input sensor
@@ -141,6 +152,8 @@ actions:
 - condition: template
   value_template: >-
     {{ allow_actions is sameas true
+       and shared_quiet_entity is string and shared_quiet_entity.startswith('binary_sensor.')
+       and is_state(shared_quiet_entity, 'off')
        and sensor is string and sensor.startswith('sensor.')
        and purifier is string and purifier.startswith('fan.')
        and threshold is number and threshold is not boolean and 1 <= threshold <= 1000
@@ -213,7 +226,7 @@ actions:
       {% endif %}
     {% endfor %}
     {% set pauses = namespace(clear=true) %}
-    {% for entity in pause_entities %}
+    {% for entity in [shared_quiet_entity] + pause_entities %}
       {% if entity is not string or not (entity.startswith('input_boolean.') or entity.startswith('binary_sensor.'))
             or not is_state(entity, 'off')
             or as_timestamp(states[entity].last_changed, none) is not number
@@ -228,6 +241,7 @@ actions:
     {% set features = state_attr(purifier, 'supported_features') %}
     {% set current = state_attr(purifier, 'percentage') %}
     {{ is_state(purifier, 'on')
+       and is_state(shared_quiet_entity, 'off')
        and features is integer and features >= 0 and features | bitwise_and(1) == 1
        and current is number and current is not boolean and 0 < current < percentage
        and state_attr(purifier, 'preset_mode') is none

@@ -15,6 +15,7 @@ import type { PersonalLearningApi } from './learningApi'
 import type { PersonalJournalApi } from './personalJournalApi'
 import type { ArrangementCoordinator } from './arrangementCoordinator'
 import type { PersonalReportsApi } from './personalReportsApi'
+import type { HouseholdQuietApi } from './quietApi'
 import { readReportBody, reportErrorResponse } from '@/src/reports/http'
 import { ReportError } from '@/src/reports/store'
 const MAX_BODY_BYTES = 128 * 1024
@@ -56,6 +57,7 @@ export interface HouseholdHttpDependencies {
   personalLearning?: PersonalLearningApi
   personalJournal?: PersonalJournalApi
   personalReports?: PersonalReportsApi
+  householdQuiet?: HouseholdQuietApi
   arrangementCoordinator?: ArrangementCoordinator
 }
 /** This namespace authorizes every route itself; personal credentials never enter legacy APIs. */
@@ -71,7 +73,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const reports = dependencies.personalReports?.present(journal) ?? journal
     // A native client may enroll its own Health library against this authenticated identity.
     // This grants no Health upload route, legacy history access or cloud-analysis permission.
-    const maintenance = dependencies.arrangementCoordinator?.present(reports) ?? reports
+    const quiet = dependencies.householdQuiet?.present(reports) ?? reports
+    const maintenance = dependencies.arrangementCoordinator?.present(quiet) ?? quiet
     return { ...maintenance, capabilities: { ...maintenance.capabilities, healthImport: true } }
   }
   const url = new URL(request.url)
@@ -156,6 +159,9 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
       return reply(present(store.session(credential)))
     if (dependencies.personalReports && reportPath)
       return dependencies.personalReports.response(request, credential, mutationBody, assertRequestCurrent)
+    if (dependencies.householdQuiet && ['GET', 'HEAD', 'POST'].includes(method)
+      && (path === '/api/v1/me/quiet' || (method !== 'POST' && /^\/api\/v1\/me\/quiet\/requests\/[^/]+$/.test(path))))
+      return dependencies.householdQuiet.response(request, credential, mutationBody, assertRequestCurrent)
     if (dependencies.personalHistory && ['GET', 'HEAD'].includes(method)
       && (path === '/api/v1/me/sleep' || /^\/api\/v1\/me\/sleep\/[^/]+$/.test(path)))
       return dependencies.personalHistory.response(request, credential, assertRequestCurrent)

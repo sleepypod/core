@@ -12,6 +12,8 @@ import { PersonalLearningApi } from './learningApi'
 import { PersonalLearningLibrary } from './learningLibrary'
 import { PersonalJournalApi } from './personalJournalApi'
 import { PersonalJournalStore } from './personalJournal'
+import { HouseholdQuietApi } from './quietApi'
+import { getHouseholdQuiet } from './quietRuntime'
 import { PersonalReportsApi } from './personalReportsApi'
 import { MorningReportStore } from '@/src/reports/store'
 import { ArrangementCoordinator } from './arrangementCoordinator'
@@ -29,6 +31,7 @@ const shared = globalThis as typeof globalThis & {
     personalLearning?: PersonalLearningApi
     personalJournal?: PersonalJournalApi
     personalReports?: PersonalReportsApi
+    householdQuiet?: HouseholdQuietApi
     arrangementCoordinator?: ArrangementCoordinator
     runId?: string
     publicAttempts: number
@@ -88,6 +91,7 @@ export async function handleHouseholdRequest(request: Request) {
       return settings?.timezone ?? ''
     }), enabled: () => preparationEnabled() && process.env.SLEEPYPOD_PERSONAL_JOURNAL === '1' })
   runtime.personalReports ??= new PersonalReportsApi(runtime.store, new MorningReportStore(sqlite))
+  runtime.householdQuiet ??= new HouseholdQuietApi({ identities: runtime.store, quiet: getHouseholdQuiet() })
   const historySource = new PersonHistorySource(sqlite, biometricsDb.$client)
   runtime.arrangementCoordinator ??= new ArrangementCoordinator({ database: sqlite, biometrics: biometricsDb.$client,
     identities: runtime.store, reviews: runtime.arrangementReviews, historySource,
@@ -102,6 +106,7 @@ export async function handleHouseholdRequest(request: Request) {
     personalLearning: runtime.personalLearning,
     personalJournal: runtime.personalJournal,
     personalReports: runtime.personalReports,
+    householdQuiet: runtime.householdQuiet,
     arrangementCoordinator: runtime.arrangementCoordinator,
     verifySoloConfiguration: (side) => {
       const row = sqlite.prepare('SELECT bed_mode, unused_zone_mode FROM device_settings LIMIT 1').get() as {

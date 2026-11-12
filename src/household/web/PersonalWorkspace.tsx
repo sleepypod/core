@@ -13,12 +13,15 @@ import type { PersonalJournalWorkspace } from './journal'
 import { ControlPractice } from '@/src/components/Practice/ControlPractice'
 import { ReportLibrary } from '@/src/components/Reports/ReportLibrary'
 import type { MorningReportBrowserWorkspace } from '@/src/reports/browserWorkspace'
-export function PersonalWorkspace({ workspace, history, learning, journal, reports, maintenance, preferredTemperatureF, displayUnit }: {
+import { QuietPanel } from './QuietPanel'
+import type { PersonalQuietWorkspace } from './quiet'
+export function PersonalWorkspace({ workspace, history, learning, journal, reports, quiet, maintenance, preferredTemperatureF, displayUnit }: {
   workspace: PersonalWebWorkspace
   history: PersonalHistoryWorkspace
   learning?: PersonalLearningWorkspace
   journal?: PersonalJournalWorkspace
   reports?: MorningReportBrowserWorkspace
+  quiet?: PersonalQuietWorkspace
   maintenance?: HouseholdMaintenanceWorkspace
   preferredTemperatureF: number
   displayUnit: 'F' | 'C'
@@ -131,6 +134,7 @@ export function PersonalWorkspace({ workspace, history, learning, journal, repor
             )}
         {!state.storageReady && <p className="small">Checking private request recovery storage. New commands stay unavailable until it is ready.</p>}
       </article>
+      {quiet && <QuietPanel quiet={quiet} />}
       {state.references.length > 0 && (
         <article aria-label="Saved request recovery">
           <h2>Check a previous result</h2>

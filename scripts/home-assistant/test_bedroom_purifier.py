@@ -49,6 +49,18 @@ class BedroomPurifier(existing.BlueprintHarness):
         values.update(inputs or {})
         return await self.run_actions('bedroom_purifier.yaml', values, trigger)
 
+    async def test_shared_quiet_must_remain_known_off_throughout_decision_window(self):
+        for state in ['on', 'unknown', 'unavailable']:
+            self.hass.states.async_set('binary_sensor.test_shared_quiet', state)
+            self.assertEqual(await self.run_purifier(trigger=self.crossing()), [])
+        self.hass.states._states['binary_sensor.test_shared_quiet'] = State('binary_sensor.test_shared_quiet', 'off',
+            last_changed=existing.NOW - timedelta(seconds=30))
+        self.assertEqual(await self.run_purifier(trigger=self.crossing()), [])
+        self.hass.states._states['binary_sensor.test_shared_quiet'] = State('binary_sensor.test_shared_quiet', 'off',
+            last_changed=existing.NOW - timedelta(seconds=600))
+        self.assertEqual(len(await self.run_purifier(trigger=self.crossing())), 1)
+        self.assertEqual(await self.run_purifier({'shared_quiet_entity': 'binary_sensor.missing'}, self.crossing()), [])
+
     async def test_fresh_sustained_crossing_requests_only_reviewed_speed(self):
         calls = await self.run_purifier(trigger=self.crossing())
         self.assertEqual(calls, [('fan', 'set_percentage',
@@ -177,6 +189,8 @@ class BedroomPurifier(existing.BlueprintHarness):
                 self.occupied()
                 self.purifier()
                 self.sample()
+                self.hass.states._states['binary_sensor.test_shared_quiet'] = State('binary_sensor.test_shared_quiet', 'off',
+                    last_changed=now - timedelta(minutes=10))
                 self.assertEqual(len(await self.run_purifier(trigger=self.crossing())), expected)
 
     async def test_configuration_bounds_and_entity_lists_are_enforced_at_dispatch(self):

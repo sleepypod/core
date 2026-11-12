@@ -30,6 +30,7 @@ export function homeDiscovery(id: string, base: string, commands: boolean): Arra
   add('sensor', 'water_level', 'Water level', 'state/water-level', 'level')
   add('sensor', 'ambient_temperature', 'Ambient temperature', 'state/environment/ambient', 'temperature', '°C', 'temperature')
   add('sensor', 'ambient_humidity', 'Ambient humidity', 'state/environment/ambient', 'humidity', '%', 'humidity')
+  add('binary_sensor', 'household_quiet', 'Shared bedroom quiet', 'state/household/quiet', 'paused')
   for (const side of ['left', 'right'] as const) {
     const label = side === 'left' ? 'Left' : 'Right'
     const path = `state/${side}/climate`

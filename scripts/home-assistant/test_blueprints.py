@@ -30,6 +30,7 @@ def configuration(filename, supplied=None):
         'left_occupancy': 'binary_sensor.test_left', 'right_occupancy': 'binary_sensor.test_right',
         'sensor': 'sensor.test_room', 'timestamp_attribute': 'sampled_at',
         'purifier': 'fan.test_purifier',
+        'shared_quiet_entity': 'binary_sensor.test_shared_quiet',
     }
     inputs = {key: value for key, value in examples.items() if key in blueprint.inputs}
     inputs.update(supplied or {})
@@ -56,6 +57,8 @@ class BlueprintHarness(unittest.IsolatedAsyncioTestCase):
         self.hass.states.async_set('scene.test_bedroom', 'unknown')
         self.hass.states.async_set('binary_sensor.test_left', 'off')
         self.hass.states.async_set('binary_sensor.test_right', 'off')
+        self.hass.states._states['binary_sensor.test_shared_quiet'] = State('binary_sensor.test_shared_quiet', 'off',
+            last_changed=NOW - timedelta(minutes=10))
         self.clock = patch.object(dt_util, 'now', return_value=NOW.astimezone(dt_util.get_time_zone('America/Los_Angeles')))
         self.clock.start()
 

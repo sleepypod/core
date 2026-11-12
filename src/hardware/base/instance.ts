@@ -1,6 +1,7 @@
 import { readBaseConfiguration } from './configuration'
 import { BluezTransport } from './bluez'
 import { BaseController } from './controller'
+import { assertSharedBaseMovementAllowed } from '@/src/household/quietRuntime'
 
 const globalBase = globalThis as typeof globalThis & { __sleepypodBase?: BaseController }
 /** Observe an existing controller without creating a Bluetooth connection. */
@@ -9,7 +10,7 @@ export function getBaseControllerIfRunning(): BaseController | null {
 }
 export function getBaseController(): BaseController {
   if (!globalBase.__sleepypodBase) {
-    globalBase.__sleepypodBase = new BaseController(new BluezTransport(), readBaseConfiguration)
+    globalBase.__sleepypodBase = new BaseController(new BluezTransport(), readBaseConfiguration, undefined, undefined, assertSharedBaseMovementAllowed)
     void globalBase.__sleepypodBase.start()
   }
   return globalBase.__sleepypodBase

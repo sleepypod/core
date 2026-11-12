@@ -97,6 +97,14 @@ class BedtimeLights(existing.BlueprintHarness):
                 self.assertEqual(len(await self.run_lights({'pause_entities': ['input_boolean.partner_resting']}, self.entry())), expected)
         self.assertEqual(await self.run_lights({'pause_entities': ['input_boolean.missing']}, self.entry()), [])
 
+    async def test_shared_quiet_must_be_selected_and_known_off_even_without_optional_pauses(self):
+        self.light()
+        for state, expected in [('on', 0), ('unknown', 0), ('unavailable', 0), ('off', 1)]:
+            self.hass.states.async_set('binary_sensor.test_shared_quiet', state)
+            self.assertEqual(len(await self.run_lights(trigger=self.entry())), expected)
+        for entity in ['', 'binary_sensor.missing', 'input_boolean.other']:
+            self.assertEqual(await self.run_lights({'shared_quiet_entity': entity}, self.entry()), [])
+
     async def test_groups_and_unsupported_or_missing_brightness_are_skipped(self):
         variants = [
             ('on', 180, {'entity_id': ['light.child']}),
@@ -134,14 +142,17 @@ class BedtimeLights(existing.BlueprintHarness):
     async def test_lost_occupancy_or_new_pause_stops_remaining_lamps(self):
         self.light('light.first')
         self.light('light.second')
-        for interrupt in ['occupancy', 'pause']:
+        for interrupt in ['occupancy', 'pause', 'shared_quiet']:
             self.hass.states.async_set('input_boolean.pause', 'off')
+            self.hass.states.async_set('binary_sensor.test_shared_quiet', 'off')
             async def capture(call):
                 self.calls.append((call.domain, call.service, dict(call.data)))
                 if interrupt == 'occupancy':
                     self.hass.states.async_set('binary_sensor.test_left', 'unavailable')
-                else:
+                elif interrupt == 'pause':
                     self.hass.states.async_set('input_boolean.pause', 'on')
+                else:
+                    self.hass.states.async_set('binary_sensor.test_shared_quiet', 'on')
             self.hass.services.async_register('light', 'turn_on', capture)
             calls = await self.run_lights({'lights': ['light.first', 'light.second'], 'pause_entities': ['input_boolean.pause']}, self.entry())
             self.assertEqual([call[2]['entity_id'] for call in calls], [['light.first']])

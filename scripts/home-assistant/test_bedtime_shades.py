@@ -30,6 +30,20 @@ class BedtimeShades(existing.BlueprintHarness):
         values.update(inputs or {})
         return await self.run_actions('bedtime_shades.yaml', values, trigger)
 
+    async def test_shared_quiet_requires_fresh_known_off_before_each_shade(self):
+        self.shade()
+        for state, expected in [('on', 0), ('unknown', 0), ('unavailable', 0), ('off', 1)]:
+            self.hass.states.async_set('binary_sensor.test_shared_quiet', state)
+            self.assertEqual(len(await self.run_shades(trigger=self.entry())), expected)
+        self.assertEqual(await self.run_shades({'shared_quiet_entity': 'binary_sensor.missing'}, self.entry()), [])
+        self.shade('cover.second')
+        async def pause_after_first(call):
+            self.calls.append((call.domain, call.service, dict(call.data)))
+            self.hass.states.async_set('binary_sensor.test_shared_quiet', 'on')
+        self.hass.services.async_register('cover', 'set_cover_position', pause_after_first)
+        calls = await self.run_shades({'shades': ['cover.selected', 'cover.second']}, self.entry())
+        self.assertEqual([call[2]['entity_id'] for call in calls], [['cover.selected']])
+
     async def test_known_entry_sets_only_selected_shades_and_never_opens_lower_ones(self):
         self.shade()
         self.shade('cover.closed', 'closed', 0)

@@ -24,6 +24,10 @@ it('advertises only qualified measurement fields with individual availability an
   ]))
   expect(configs.get('binary_sensor/pod/left_occupancy/config')?.value_template).toContain('else \'None\'')
   expect(configs.get('sensor/pod/left_hrv/config')?.name).toBe('Left beat interval variability')
+  expect(configs.get('binary_sensor/pod/household_quiet/config')).toMatchObject({
+    state_topic: 'private/pod/state/household/quiet', expire_after: 15, payload_on: 'on', payload_off: 'off',
+  })
+  expect(configs.get('binary_sensor/pod/household_quiet/config')?.value_template).toContain('value_json.paused')
 })
 
 it('keeps the existing entity identifiers and command opt-in', () => {

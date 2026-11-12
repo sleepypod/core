@@ -41,6 +41,7 @@ import { readHomeTelemetry } from '@/src/telemetry/home'
 import { homeDiscovery } from './mqttDiscovery'
 import { mqttEndpointIssue } from './mqttEndpoint'
 import { legacyPrivacyState } from '@/src/household/legacyPrivacy'
+import { getHouseholdQuiet } from '@/src/household/quietRuntime'
 
 // ---------------------------------------------------------------------------
 // Configuration resolution
@@ -272,6 +273,8 @@ function publishState(clearRetained = false): void {
     if (clearRetained) safePublish(topic(path), '', RETAINED_QOS_0)
     else safePublish(topic(path), JSON.stringify(reading), VOLATILE_QOS_0)
   }
+  if (clearRetained) safePublish(topic('state', 'household', 'quiet'), '', RETAINED_QOS_0)
+  else safePublish(topic('state', 'household', 'quiet'), JSON.stringify(getHouseholdQuiet().telemetry()), VOLATILE_QOS_0)
   if (clearRetained) {
     for (const side of ['left', 'right']) safePublish(topic('pump', side, 'clog_detected'), '', RETAINED_QOS_0)
   }
