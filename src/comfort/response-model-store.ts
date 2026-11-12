@@ -100,18 +100,21 @@ export function createResponseModels(database: Database.Database, biometrics: Da
     })
     return status(side)
   }
-  function compare(side: Side, inputs: Array<ResponseInput | null>, configuration: string | null) {
+  function evidenceCompare(side: Side, inputs: Array<ResponseInput | null>, configuration: string | null) {
     if (inputs.length > 2) throw new PreviewReportError('At most two nearby target candidates can be compared.', 'PRECONDITION_FAILED')
     return database.transaction(() => {
       const { now, evidence } = inspect(side), stored = latest(side)
       if (!stored || stored.artifact.model.configuration !== configuration || !current(stored.artifact.model, stored.artifact.references, evidence, now)) {
-        return inputs.map(() => ({ predictions: [], reason: 'Current reviewed response evidence, model and live configuration are required.' }))
+        return { identity: null, results: inputs.map(() => ({ predictions: [], reason: 'Current reviewed response evidence, model and live configuration are required.' })) }
       }
-      return inputs.map(input => predictResponseModel(stored.artifact.model, input, now))
+      return { identity: { id: stored.id, datasetHash: stored.artifact.model.datasetHash }, results: inputs.map(input => predictResponseModel(stored.artifact.model, input, now)) }
     })()
+  }
+  function compare(side: Side, inputs: Array<ResponseInput | null>, configuration: string | null) {
+    return evidenceCompare(side, inputs, configuration).results
   }
   function preview(side: Side, input: ResponseInput | null, configuration: string | null) {
     return compare(side, [input], configuration)[0]
   }
-  return { status, train, preview, compare }
+  return { status, train, preview, compare, evidenceCompare }
 }

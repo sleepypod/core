@@ -6,6 +6,8 @@ import type { Side } from '@/src/hardware/types'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { trpc } from '@/src/utils/trpc'
 import { predictiveTargetPreviewSchema } from '@/src/comfort/predictive-contract'
+import { PredictiveRecordingStatus } from './PredictiveRecordingStatus'
+import { PredictiveOutcomeReview } from './PredictiveOutcomeReview'
 
 /** Explicit, short-lived research reads. There is deliberately no Apply action. */
 export function PredictiveTargetPreview({ side }: { side: Side }) {
@@ -90,6 +92,8 @@ export function PredictiveTargetPreview({ side }: { side: Side }) {
               : 'This comparison has expired or could not be verified. Refresh to use current readings.'}
         </p>
       )}
+      <PredictiveRecordingStatus side={side} />
+      <PredictiveOutcomeReview side={side} />
     </section>
   )
 }

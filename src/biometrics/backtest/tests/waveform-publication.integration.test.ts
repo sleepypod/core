@@ -227,4 +227,7 @@ connection.close()
     sqlite.close()
     rmSync(directory, { recursive: true, force: true })
   }
-}, 30000)
+// This end-to-end test launches twenty bounded coordinator tasks, scientific
+// replay and durable publication. The measured aggregate exceeded 30s on a busy
+// host; per-operation production budgets and all failure assertions stay intact.
+}, 90_000)

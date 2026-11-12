@@ -6,7 +6,7 @@ export const learningLabels: Record<LearningRecordDetail['sourceTable'], string>
   comfort_states: 'Comfort settings', comfort_feedback: 'Comfort check-in', journal_entries: 'Journal entry',
   comfort_moments: 'Comfort moment', comfort_models: 'Temperature learning model', comfort_reviews: 'Learning review',
   comfort_events: 'Automatic adjustment history', thermal_forecasts: 'Water-temperature forecast',
-  target_response_models: 'Bed response model', side_stage_models: 'Sleep-stage model', stage_model_library: 'Saved sleep-stage model',
+  target_response_models: 'Bed response model', predictive_recordings: 'Prospective temperature comparisons', side_stage_models: 'Sleep-stage model', stage_model_library: 'Saved sleep-stage model',
   stage_classifier_changes: 'Sleep-stage settings change', biometric_profile_revisions: 'Sensor processing profile',
   biometric_profile_bindings: 'Sensor profile assignment',
 }

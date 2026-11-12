@@ -19,7 +19,7 @@ export function WaterForecastCard({ side }: { side: Side }) {
   } })
   const data = query.data, busy = query.isFetching || train.isPending
   return (
-    <section aria-label="Water temperature forecast" className="mt-6 space-y-4 rounded-card border border-line bg-surface p-4 sm:p-5">
+    <section aria-label="Water temperature forecast" className="mt-6 space-y-4 border-t border-line pt-4 sm:rounded-card sm:border sm:bg-surface sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-base font-medium">How your bed responds</h3>
         <span className="rounded-full bg-cool/10 px-3 py-1 text-xs text-cool">Water forecast · Preview</span>

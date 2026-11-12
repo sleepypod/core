@@ -38,6 +38,10 @@ import { createResponseModels } from './response-model-store'
 import type { ForecastInput } from './thermal-forecast'
 import { previewPredictiveTarget } from './predictive-policy'
 import { predictiveTargetPreviewSchema } from './predictive-contract'
+import { PredictiveCollector } from './predictive-collector'
+import { createPredictiveRecordings } from './predictive-recording-store'
+import { readPredictiveRecordingStatus, readPredictiveOutcomes, runPredictiveWorker } from './predictive-worker-client'
+import type { PreviewEvidence } from './report-contract'
 
 /** Inspect retained evidence without starting the comfort runtime or sending hardware commands. */
 export function getTargetResponseAudit(side: Side) {
@@ -60,7 +64,7 @@ export function getThermalForecasts() {
 function readForecastObservation(side: Side): {
   now: number
   reason: string
-  observation: { input: ForecastInput, configuration: string, observedAt: number, state: ComfortState, context: ComfortContext } | null
+  observation: { input: ForecastInput, configuration: string, observedAt: number, state: ComfortState, context: ComfortContext, evidence: PreviewEvidence } | null
 } {
   const state = createComfortStore(sqlite).read(side), now = Date.now()
   const { context, timezone } = readComfortContext(side, state, now, false)
@@ -79,7 +83,7 @@ function readForecastObservation(side: Side): {
   catch { /* A malformed source cannot provide a preceding measurement. */ }
   const input = previousForecastInput(previous, { at: now, session: evidence.session, configuration, context: context.thermalContext }, row?.at ?? null)
   if (!input) return { now, observation: null, reason: 'Waiting for an actual five-minute predecessor from this same quiet session and target.' }
-  return { now, observation: { input, configuration, observedAt: context.device.observedAt, state, context }, reason: 'Fresh guarded observation available.' }
+  return { now, observation: { input, configuration, observedAt: context.device.observedAt, state, context, evidence }, reason: 'Fresh guarded observation available.' }
 }
 
 /** All candidate measurements originate here. Viewing the comparison never starts an actuator or runtime. */
@@ -134,7 +138,33 @@ export function previewThermalModel(side: Side) {
   return getThermalModels().preview(side, receipt ? context.thermalContext ?? null : null, configuration)
 }
 
-const globals = globalThis as typeof globalThis & { __sp_comfortRuntime?: ComfortRuntime, __sp_comfortSignals?: ComfortSignalReader, __sp_comfortOwner?: ReturnType<typeof createComfortOwner>, __sp_comfortApplication?: ComfortApplicationAdapter }
+const globals = globalThis as typeof globalThis & { __sp_comfortRuntime?: ComfortRuntime, __sp_comfortSignals?: ComfortSignalReader, __sp_comfortOwner?: ReturnType<typeof createComfortOwner>, __sp_comfortApplication?: ComfortApplicationAdapter, __sp_predictiveCollector?: PredictiveCollector }
+
+function getPredictiveCollector() {
+  return globals.__sp_predictiveCollector ??= new PredictiveCollector({
+    now: Date.now,
+    capture: (side) => {
+      const { now, observation } = readForecastObservation(side)
+      if (!observation) return null
+      const { input, configuration, observedAt, state, context, evidence } = observation
+      return { request: { version: 1, side, at: now, input, configuration, observedAt }, evidence, state, context }
+    },
+    evaluate: (request, signal) => runPredictiveWorker(request, { database: sqlite.name, biometrics: biometricsDb.$client.name }, signal),
+    save: (record, now) => { createPredictiveRecordings(sqlite).append(record, now) },
+    prune: now => createPredictiveRecordings(sqlite).prune(now),
+  })
+}
+
+/** Read-only status does not start collection or fit either forecast. */
+export async function getPredictiveRecordingStatus(side: Side) {
+  const status = await readPredictiveRecordingStatus(side, Date.now(), { database: sqlite.name, biometrics: biometricsDb.$client.name }, new AbortController().signal)
+  return { ...status,
+    collector: globals.__sp_predictiveCollector?.status() ?? { running: false, fault: null } }
+}
+
+export function getPredictiveOutcomes(side: Side) {
+  return readPredictiveOutcomes(side, Date.now(), { database: sqlite.name, biometrics: biometricsDb.$client.name }, new AbortController().signal)
+}
 function signalsReader() {
   return globals.__sp_comfortSignals ??= new ComfortSignalReader(biometricsDb.$client)
 }
@@ -264,8 +294,10 @@ export async function startComfortPreview(): Promise<void> {
   await getComfortRuntime().start()
   const { getExperimentExecution } = await import('./experiments/execution-instance')
   await getExperimentExecution().start()
+  getPredictiveCollector().start()
 }
 export async function stopComfortPreview(): Promise<void> {
+  await globals.__sp_predictiveCollector?.stop()
   const { getExperimentExecutionIfRunning } = await import('./experiments/execution-instance')
   await getExperimentExecutionIfRunning()?.stop()
   await globals.__sp_comfortRuntime?.stop()

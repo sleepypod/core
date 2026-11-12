@@ -10,6 +10,13 @@ function rejectDemoWrite(): never {
 }
 
 export const comfort: DemoHandlers<'comfort'> = {
+  predictiveOutcomes: ({ side }) => ({ apiVersion: 1, side, generatedAt: Date.now(), purpose: 'prospective_water_accuracy',
+    activationAvailable: false, considered: 0, pending: 0, withheld: 0, scored: 0, models: [], exclusions: [],
+    notice: 'Only the unchanged target is scored. Unapplied alternatives have no measured outcome, and water accuracy is not evidence of better sleep.' }),
+  predictiveRecordings: ({ side }) => ({ apiVersion: 1, side, generatedAt: Date.now(), mode: 'research_preview', activationAvailable: false,
+    records: 0, sessions: 0, candidates: 0, holds: 0, withheld: 0, latestAt: null, collector: { running: false, fault: null },
+    outcomeNotice: 'Unapplied targets have no observed outcome. These records do not establish comfort benefit.',
+    reason: 'Demonstration only. No production observations are recorded.' }),
   predictiveTargetPreview: ({ side }) => ({ apiVersion: 1, policy: 'bounded-water-tracking-v1', side, generatedAt: Date.now(),
     mode: 'research_preview', activationAvailable: false, objective: 'bounded-routine-water-target', disposition: 'withheld',
     currentTargetF: null, desiredWaterF: null, proposedTargetF: null, expiresAt: null, minimumF: null, maximumF: null,

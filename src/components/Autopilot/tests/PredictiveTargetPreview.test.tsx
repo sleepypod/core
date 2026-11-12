@@ -11,7 +11,8 @@ vi.mock('@/src/utils/trpc', () => ({ trpc: { comfort: { predictiveTargetPreview:
     mock.options = options
     return mock.query
   },
-} } } }))
+}, predictiveRecordings: { useQuery: () => ({ data: undefined, error: null, isFetching: false, refetch: vi.fn() }) },
+predictiveOutcomes: { useQuery: () => ({ data: undefined, error: null, isFetching: false, refetch: vi.fn() }) } } } }))
 vi.mock('@/src/hooks/useTemperatureUnit', () => ({ useTemperatureUnit: () => ({ formatTemp: (celsius: number) => `${Math.round(celsius * 9 / 5 + 32)}°F` }) }))
 
 beforeEach(() => {

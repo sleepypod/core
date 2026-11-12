@@ -11,7 +11,9 @@ test.use({ serviceWorkers: 'block' })
 test('predictive reads require owner authentication and cannot accept targets or activate controls', async ({ request, playwright, baseURL }) => {
   const anonymous = await playwright.request.newContext({ baseURL, storageState: { cookies: [], origins: [] } })
   try {
-    for (const path of ['/api/v1/comfort/predictive/preview?side=left', '/api/trpc/comfort.predictiveTargetPreview']) {
+    for (const path of ['/api/v1/comfort/predictive/preview?side=left', '/api/trpc/comfort.predictiveTargetPreview',
+      '/api/v1/comfort/predictive/recordings?side=left', '/api/trpc/comfort.predictiveRecordings',
+      '/api/v1/comfort/predictive/outcomes?side=left', '/api/trpc/comfort.predictiveOutcomes']) {
       expect((await anonymous.get(path)).status()).toBe(401)
     }
   }
@@ -22,6 +24,14 @@ test('predictive reads require owner authentication and cannot accept targets or
   expect(response.status()).toBe(200)
   expect(response.headers()['cache-control']).toContain('no-store')
   expect(await response.json()).toMatchObject({ side: 'left', disposition: 'withheld', activationAvailable: false, proposedTargetF: null })
+  const recordings = await request.get('/api/v1/comfort/predictive/recordings?side=left', { headers })
+  expect(recordings.status()).toBe(200)
+  expect(recordings.headers()['cache-control']).toContain('no-store')
+  expect(await recordings.json()).toMatchObject({ records: 0, sessions: 0, activationAvailable: false })
+  const outcomes = await request.get('/api/v1/comfort/predictive/outcomes?side=left', { headers })
+  expect(outcomes.status()).toBe(200)
+  expect(outcomes.headers()['cache-control']).toContain('no-store')
+  expect(await outcomes.json()).toMatchObject({ considered: 0, scored: 0, models: [], activationAvailable: false })
   expect((await request.get('/api/v1/comfort/predictive/preview?side=middle', { headers })).status()).toBe(400)
   expect((await (await request.get('/api/v1/comfort?side=left', { headers })).json()).state).toEqual(before.state)
 })
@@ -92,6 +102,13 @@ for (const width of [390, 1440]) {
     await button.click()
     await expect(section.getByRole('alert')).toContainText('comparison could not be read')
     await expect(section.getByText('A comparison is not ready yet')).toHaveCount(0)
+    const recordings = section.getByRole('region', { name: 'Preview recordings' })
+    await recordings.getByRole('button', { name: 'Check Preview recordings' }).click()
+    await expect(recordings.getByText('0 comparisons · 0 routine sessions')).toBeVisible()
+    await expect(recordings.getByText(/Unapplied targets have no observed outcome/)).toBeVisible()
+    await recordings.evaluate(element => element.scrollIntoView({ block: 'start' }))
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`predictive-recordings-${width}-large.png`) })
     expect(mutations).toEqual([])
     expect(calls).toBe(4)
   })

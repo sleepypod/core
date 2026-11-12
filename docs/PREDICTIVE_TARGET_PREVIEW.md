@@ -53,18 +53,19 @@ and no-store boundary apply to both REST and tRPC.
 
 ## What remains before control
 
-This is an on-demand, conditional research comparison. It does **not** collect a
-prospective night series or automatically update the bed. The two observational
+This is a conditional research comparison. The background collector described
+in [Prospective Preview recording](PREDICTIVE_RECORDINGS.md) now retains eligible
+production observations without an open app. Neither path automatically updates the bed. The two observational
 forecast models may have selection bias and their empirical ranges are not a
 causal confidence guarantee. A candidate is therefore an experiment to consider,
 not evidence that intervening will reproduce the estimate.
 
-Next work must record source-bound prospective Preview decisions, preserve
-unobserved counterfactual outcomes as unknown, evaluate actual approved small
+Next work must evaluate source-bound prospective decisions against subsequent
+measurements, preserve unobserved counterfactual outcomes as unknown, and evaluate actual approved small
 experiments, and review their comfort and unwanted-adjustment outcomes. Only a
 separately qualified policy can join the single command authority. Native
-presentation and personal-account exposure also need their own contract and
-privacy review before parity is claimed.
+collection-status presentation and personal-account exposure need their own
+contract and privacy review before parity is claimed.
 
 ```mermaid
 flowchart LR

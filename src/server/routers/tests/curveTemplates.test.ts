@@ -106,7 +106,8 @@ describe('curveTemplates router', () => {
     importedNight('right')
     const before = raw.serialize()
     await expect(curve('Both', { left: ['saturday'], right: ['saturday'] })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' })
-    expect(raw.serialize()).toEqual(before)
+    // Compare every byte natively instead of deep-walking the entire SQLite image.
+    expect(raw.serialize().equals(before)).toBe(true)
     expect(jobs.calls).toEqual([])
   })
 

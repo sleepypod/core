@@ -472,6 +472,18 @@ export const targetResponseModels = sqliteTable('target_response_models', {
   record: text('record', { mode: 'json' }).notNull(),
 }, table => [index('idx_target_response_models_side_created').on(table.side, table.createdAt)])
 
+/** Prospective research decisions are immutable, never actuator requests or training outcomes. */
+export const predictiveRecordings = sqliteTable('predictive_recordings', {
+  id: text('id').primaryKey(),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  observedAt: integer('observed_at').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  session: text('session').notNull(),
+  contentHash: text('content_hash').notNull(),
+  record: text('record').notNull(),
+}, table => [index('idx_predictive_recordings_side_recorded').on(table.side, table.recordedAt),
+  uniqueIndex('uq_predictive_recordings_observation').on(table.side, table.observedAt)])
+
 /** Immutable personal experiment assignments with revisioned observations; no schedule or alarm writes. */
 export const comfortExperiments = sqliteTable('comfort_experiments', {
   id: text('id').primaryKey(),

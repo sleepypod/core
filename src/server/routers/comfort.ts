@@ -3,8 +3,10 @@ import { PreviewReportError } from '@/src/comfort/report-summary'
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { comfortConfigSchema, comfortFeedbackSchema, comfortStatusSchema } from '@/src/comfort/contract'
-import { getComfortOwner, getComfortRuntime, getPreviewReports, getThermalModels, previewThermalModel, getThermalForecasts, previewWaterForecast, getTargetResponseAudit, getTargetResponseModels, previewTargetResponse, previewPredictiveControl } from '@/src/comfort/instance'
+import { getComfortOwner, getComfortRuntime, getPreviewReports, getThermalModels, previewThermalModel, getThermalForecasts, previewWaterForecast, getTargetResponseAudit, getTargetResponseModels, previewTargetResponse, previewPredictiveControl, getPredictiveRecordingStatus, getPredictiveOutcomes } from '@/src/comfort/instance'
+import { predictiveOutcomeSchema } from '@/src/comfort/predictive-outcome-contract'
 import { predictiveTargetPreviewSchema } from '@/src/comfort/predictive-contract'
+import { predictiveRecordingStatusSchema } from '@/src/comfort/predictive-recording-contract'
 import { responseAuditSchema } from '@/src/comfort/response-contract'
 import { responseModelPreviewSchema, responseModelStatusSchema } from '@/src/comfort/response-model-contract'
 import { forecastStatusSchema } from '@/src/comfort/thermal-forecast-store'
@@ -27,6 +29,14 @@ async function reportResult<Result>(work: () => Promise<Result>): Promise<Result
 }
 
 export const comfortRouter = router({
+  predictiveOutcomes: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/comfort/predictive/outcomes', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(predictiveOutcomeSchema)
+    .query(({ input }) => reportResult(async () => getPredictiveOutcomes(input.side))),
+  predictiveRecordings: publicProcedure
+    .meta({ openapi: { method: 'GET', path: '/v1/comfort/predictive/recordings', tags: ['Autopilot'] } })
+    .input(z.object({ side: sideSchema }).strict()).output(predictiveRecordingStatusSchema)
+    .query(({ input }) => reportResult(async () => getPredictiveRecordingStatus(input.side))),
   predictiveTargetPreview: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/v1/comfort/predictive/preview', tags: ['Autopilot'] } })
     .input(z.object({ side: sideSchema }).strict()).output(predictiveTargetPreviewSchema)

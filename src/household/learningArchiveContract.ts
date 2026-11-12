@@ -23,6 +23,7 @@ export const learningArchiveSources = [
   { table: 'comfort_events', key: ['id'], kind: 'personal' },
   { table: 'thermal_forecasts', key: ['id'], kind: 'physical' },
   { table: 'target_response_models', key: ['id'], kind: 'physical' },
+  { table: 'predictive_recordings', key: ['id'], kind: 'physical' },
   { table: 'side_stage_models', key: ['side'], kind: 'processing' },
   { table: 'stage_model_library', key: ['id'], kind: 'processing' },
   { table: 'stage_classifier_changes', key: ['id'], kind: 'processing' },

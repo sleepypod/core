@@ -1518,6 +1518,16 @@ describe('biometrics.getSleepStages complete-night selection', () => {
     expect(sleepStagesMock.classifySleepStages).toHaveBeenCalledTimes(3)
   })
 
+  it('includes the entire oldest eligible night instead of cutting off its first segment', async () => {
+    vi.setSystemTime(new Date('2026-06-11T22:30:00Z'))
+    dbState.rowsQueue.push([third, second, first], [], [], [])
+    const result = await caller.getSleepStages({ side: 'left' })
+    expect(toQuery(dbState.whereArgs[0]).params).toEqual([
+      'left', Date.parse('2026-06-04T12:00:00Z') / 1000, Date.parse('2026-06-11T22:30:00Z') / 1000,
+    ])
+    expect(result.recording?.recordIds).toEqual([2, 3, 4])
+  })
+
   it('uses the requested Pod-local night and clips overlapping records before staging', async () => {
     const overlapping = makeRecord(5, '2026-06-04T23:00:00Z', '2026-06-05T02:00:00Z')
     dbState.rowsQueue.push([second, overlapping, first, older], [], [], [])

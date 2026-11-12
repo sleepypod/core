@@ -26,7 +26,9 @@ import {
 } from '@/src/lib/movement'
 import { recordLegacyReferenceImport } from '@/src/biometrics/references/legacy'
 import { getOccupancy } from '@/src/lib/occupancy'
-import { recordingWindows, selectNightRecords, summarizeRecording, type RecordingWindow, type SleepRecordingSummary } from '@/src/lib/sleep-recording'
+import { recordingWindows, selectNightRecords, sleepNightKey, summarizeRecording, type RecordingWindow, type SleepRecordingSummary } from '@/src/lib/sleep-recording'
+import { shiftHistoryDate } from '@/src/lib/localDates'
+import { nightWindow } from '@/src/night/window'
 
 /**
  * SQL fragment: movement.timestamp falls inside an existing sleep_records
@@ -1554,7 +1556,12 @@ export const biometricsRouter = router({
           const now = new Date()
           const anchor = input.nightDate ? Date.parse(`${input.nightDate}T00:00:00Z`) : now.getTime()
           // A broad UTC envelope includes the selected local day across time zones/DST.
-          const lower = new Date(anchor - (input.nightDate ? 1 : 7) * 86_400_000)
+          // Include the oldest eligible night's local noon, not a rolling cutoff
+          // through its middle; otherwise an early fragment silently disappears.
+          const oldestNight = sleepNightKey(new Date(anchor - 7 * 86_400_000), timeZone)
+          const lower = new Date(input.nightDate
+            ? anchor - 86_400_000
+            : nightWindow(timeZone, now.getTime(), shiftHistoryDate(oldestNight, 1)).start)
           const upper = new Date(input.nightDate ? anchor + 3 * 86_400_000 : now.getTime())
           const recentRecords = await biometricsDb.select().from(sleepRecords)
             .where(and(eq(sleepRecords.side, input.side), gte(sleepRecords.enteredBedAt, lower), lte(sleepRecords.enteredBedAt, upper)))

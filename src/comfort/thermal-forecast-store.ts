@@ -103,14 +103,18 @@ export function createThermalForecasts(database: Database.Database, clock: () =>
     })
     return status(side)
   }
-  function preview(side: Side, input: ForecastInput | null, configuration: string | null) {
+  function evidencePreview(side: Side, input: ForecastInput | null, configuration: string | null) {
     return database.transaction(() => {
       const { now, data } = inspect(side), stored = latest(side)
       if (!stored || !evidenceCurrent(stored.artifact.model, data, now) || stored.artifact.model.configuration !== configuration) {
-        return { predictions: [], reason: 'A current fitted water forecast and matching live configuration are required.' }
+        return { identity: null, predictions: [], reason: 'A current fitted water forecast and matching live configuration are required.' }
       }
-      return predictThermalForecast(stored.artifact.model, input)
+      return { identity: { id: stored.id, datasetHash: stored.artifact.model.datasetHash }, ...predictThermalForecast(stored.artifact.model, input) }
     })()
   }
-  return { status, train, preview }
+  function preview(side: Side, input: ForecastInput | null, configuration: string | null) {
+    const result = evidencePreview(side, input, configuration)
+    return { predictions: result.predictions, reason: result.reason }
+  }
+  return { status, train, preview, evidencePreview }
 }

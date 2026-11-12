@@ -9,6 +9,7 @@ import { join } from 'node:path'
 
 const serverOnlyTestStub = '\0server-only-test-stub'
 const thermalForecastIntegration = 'src/comfort/tests/thermal-forecast-integration.test.ts'
+const waveformPublicationIntegration = 'src/biometrics/backtest/tests/waveform-publication.integration.test.ts'
 const shellIntegration = ['scripts/tests/diagnosticCli.test.ts', 'scripts/tests/biometricsArchiver.test.ts', 'tests/updateDeploy.test.ts', 'tests/fixtureCommand.test.ts']
 
 export default defineConfig({
@@ -53,8 +54,20 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'unit',
-          exclude: [thermalForecastIntegration, ...shellIntegration],
+          exclude: [thermalForecastIntegration, waveformPublicationIntegration, ...shellIntegration],
           sequence: { groupOrder: 0 },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'waveform-publication-integration',
+          include: [waveformPublicationIntegration],
+          // Real scientific child processes and durable storage should not compete
+          // with the coordinator fault-injection suite for the same local budget.
+          sequence: { groupOrder: 1 },
+          fileParallelism: false,
+          maxWorkers: 1,
         },
       },
       {
@@ -64,7 +77,7 @@ export default defineConfig({
           include: [thermalForecastIntegration],
           // Full-night provenance audits need a worker without competing test files.
           // Keep the existing fixture, timeout and assertions, with shared coverage.
-          sequence: { groupOrder: 1 },
+          sequence: { groupOrder: 2 },
           fileParallelism: false,
           maxWorkers: 1,
         },
@@ -76,7 +89,7 @@ export default defineConfig({
           include: shellIntegration,
           // Real process bundles have a separate budget; fixtureCommand also kills
           // stalled children after 10s. Unit tests retain their normal 5s limit.
-          sequence: { groupOrder: 2 },
+          sequence: { groupOrder: 3 },
           fileParallelism: false,
           maxWorkers: 1,
           environment: 'node',
