@@ -95,7 +95,11 @@ export async function handleHouseholdRequest(request: Request) {
     }), enabled: () => preparationEnabled() && process.env.SLEEPYPOD_PERSONAL_JOURNAL === '1' })
   runtime.personalReports ??= new PersonalReportsApi(runtime.store, new MorningReportStore(sqlite))
   runtime.householdQuiet ??= new HouseholdQuietApi({ identities: runtime.store, quiet: getHouseholdQuiet() })
-  runtime.personalExperiments ??= new PersonalExperimentApi(runtime.store, runtime.personalRuntime.authority, getComfortExperiments(sqlite))
+  runtime.personalExperiments ??= new PersonalExperimentApi(runtime.store, runtime.personalRuntime.authority, getComfortExperiments(sqlite), Date.now,
+    async (credential) => {
+      const { getExperimentExecution, getExperimentExecutionIdentity } = await import('@/src/comfort/experiments/execution-instance')
+      return { host: getExperimentExecution(), principal: () => getExperimentExecutionIdentity().personalPrincipal(credential) }
+    })
   const historySource = new PersonHistorySource(sqlite, biometricsDb.$client)
   runtime.arrangementCoordinator ??= new ArrangementCoordinator({ database: sqlite, biometrics: biometricsDb.$client,
     identities: runtime.store, reviews: runtime.arrangementReviews, historySource,

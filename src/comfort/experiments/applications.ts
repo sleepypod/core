@@ -31,6 +31,14 @@ export class ExperimentApplicationStore {
     return row ? this.decode(row) : null
   }
 
+  forAdmission(planId: string, admissionId: string, side: Side): ExperimentApplication | null {
+    const row = this.database.prepare(`SELECT * FROM comfort_experiment_applications
+      WHERE plan_id = ? AND side = ? AND json_extract(record, '$.reservation.admissionRevision') = ?
+      ORDER BY sequence DESC LIMIT 1`).get(z.string().uuid().parse(planId),
+      z.enum(['left', 'right']).parse(side), z.string().uuid().parse(admissionId)) as Row | undefined
+    return row ? this.decode(row) : null
+  }
+
   /** Bounded retained command evidence, scoped to the original admission and night. */
   window(planId: string, admissionId: string, start: number, end: number): ExperimentApplication[] {
     z.string().uuid().parse(planId)
@@ -116,7 +124,7 @@ export class ExperimentApplicationStore {
       assertCurrent()
       const current = this.read(id), now = experimentInstantSchema.parse(this.now())
       if (!['attempting', 'unknown'].includes(current.outcome) || !Number.isSafeInteger(observation.observedAt)
-        || observation.observedAt <= current.reservation.reservedAt || observation.observedAt > now
+        || observation.observedAt <= Math.max(current.reservation.reservedAt, current.finishedAt ?? 0) || observation.observedAt > now
         || now - observation.observedAt >= DEVICE_MAX_AGE_MS)
         throw new Error('Recovery needs a fresh observation after the unresolved application')
       const updated = experimentApplicationSchema.parse({ ...current, outcome: 'resolved',

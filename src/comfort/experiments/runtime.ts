@@ -4,6 +4,7 @@ import { privateApiResponse } from '@/src/auth/privateResponse'
 import { legacyExperimentAccess } from './access'
 import { experimentErrorResponse, experimentResponse, readExperimentBody } from './http'
 import { ComfortExperimentService } from './service'
+import { experimentExecutionResponse, isExperimentExecutionRequest } from './execution-http'
 
 const shared = globalThis as typeof globalThis & { __sleepypodExperiments?: WeakMap<Database.Database, ComfortExperimentService> }
 export function getComfortExperiments(database: Database.Database) {
@@ -28,6 +29,12 @@ export async function handleOwnerExperimentRequest(request: Request): Promise<Re
       const changed = requireAccess(request)
       if (changed) throw changed
       return legacyExperimentAccess(sqlite)
+    }
+    if (isExperimentExecutionRequest(request)) {
+      authorize()
+      const { getExperimentExecution, getExperimentExecutionIdentity } = await import('./execution-instance')
+      return privateApiResponse(request, await experimentExecutionResponse(request, body, getExperimentExecution(),
+        () => ({ access: authorize(), principal: getExperimentExecutionIdentity().legacyPrincipal() })))
     }
     return privateApiResponse(request, experimentResponse(request, body, getComfortExperiments(sqlite), authorize))
   }

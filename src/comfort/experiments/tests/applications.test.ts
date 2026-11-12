@@ -108,6 +108,19 @@ describe('durable experiment application journal', () => {
     expect(() => test.journal.resolve(test.reservation.id, { targetF: 69, observedAt: test.now() - DEVICE_MAX_AGE_MS }, () => {})).toThrow('fresh observation')
   })
 
+  it('requires readback after completion uncertainty, not merely after command reservation', () => {
+    const test = fixture()
+    test.journal.reserve(test.reservation, () => {})
+    test.advance(1_000)
+    const duringAttempt = test.now()
+    test.advance(1_000)
+    test.journal.finish(test.reservation, null)
+    expect(() => test.journal.resolve(test.reservation.id, { targetF: 70, observedAt: duringAttempt }, () => {})).toThrow('fresh observation')
+    test.advance(1)
+    test.journal.resolve(test.reservation.id, { targetF: 70, observedAt: test.now() }, () => {})
+    expect(test.journal.latest('left')?.outcome).toBe('resolved')
+  })
+
   it('rolls back reserved intent if its admission changes during the transaction', () => {
     const test = fixture()
     let calls = 0

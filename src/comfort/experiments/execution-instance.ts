@@ -5,6 +5,8 @@ import { pendingManualPause } from '../manual'
 import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
 import { withSideLock } from '@/src/hardware/sideLock'
 import { getOccupancy } from '@/src/lib/occupancy'
+import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
+import { DEVICE_MAX_AGE_MS } from '../policy'
 import { HouseholdStore } from '@/src/household/store'
 import { PersonalRuntimeAuthority } from '@/src/household/runtimeAuthority'
 import { experimentDigest } from './access'
@@ -43,6 +45,11 @@ export function getExperimentExecution(): ExperimentExecutionHost {
         return authority.replacePolicy(...arguments_)
       } },
       selection: side => getTemperatureControllerIfRunning()?.selectedRequest(side) ?? null,
+      readback: (side) => {
+        const monitor = getDacMonitorIfRunning(), status = monitor?.getFreshStatus(DEVICE_MAX_AGE_MS)
+        const reported = side === 'left' ? status?.leftSide : status?.rightSide
+        return { targetF: reported?.targetTemperature ?? null, observedAt: status ? monitor?.getLastPollAt() ?? null : null }
+      },
       sample: (side, at, identity) => {
         const state = createComfortStore(sqlite).read(side)
         const { context } = readComfortContext(side, state, at, false)

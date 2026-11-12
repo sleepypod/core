@@ -186,6 +186,14 @@ export class ExperimentAdmissions {
     return this.grant(id)
   }
 
+  /** Read back the latest admission after a lost reply without confirming or dispatching again. */
+  forPlan(subjectKey: string, planId: string): ExperimentGrant | null {
+    const row = this.database.prepare(`SELECT id FROM comfort_experiment_admissions
+      WHERE subject_key = ? AND plan_id = ? ORDER BY admitted_at DESC, rowid DESC LIMIT 1`)
+      .get(experimentHashSchema.parse(subjectKey), z.string().uuid().parse(planId)) as { id: string } | undefined
+    return row ? this.read(subjectKey, row.id) : null
+  }
+
   review(subjectKey: string, scopeHash: string, id: string): ExperimentExecutionReview {
     const row = this.database.prepare('SELECT * FROM comfort_experiment_execution_reviews WHERE id = ? AND subject_key = ? AND scope_hash = ?')
       .get(z.string().uuid().parse(id), experimentHashSchema.parse(subjectKey), experimentHashSchema.parse(scopeHash)) as ReviewRow | undefined
@@ -206,7 +214,9 @@ export class ExperimentAdmissions {
       const previous = this.grant(id)
       if (previous.review.subjectKey !== subjectKey) throw new Error('This experiment belongs to another account')
       if (previous.revokedAt !== null) return
-      for (const zone of previous.review.zones) this.deps.revokeLease(zone.side)
+      for (const zone of previous.review.zones) {
+        if (this.claimed(zone.side)?.review.id === id) this.deps.revokeLease(zone.side)
+      }
       const value = experimentGrantSchema.parse({ ...previous, revokedAt: this.now(), reason })
       this.database.prepare('UPDATE comfort_experiment_admissions SET revoked_at = ?, record = ? WHERE id = ?')
         .run(value.revokedAt, JSON.stringify(value), id)

@@ -14,6 +14,8 @@ import type { ExperimentSample } from './exposure'
 import { experimentContextMatches } from './plan'
 import { ComfortExperimentStore } from './store'
 import { ExperimentRecorder } from './recorder'
+import { ExperimentError } from './service'
+import { z } from 'zod'
 
 export interface ExperimentExecutionDeps {
   database: Database.Database
@@ -30,6 +32,8 @@ export interface ExperimentExecutionDeps {
   sample(side: Side, at: number, context: NonNullable<ReturnType<typeof readExperimentAvailability>['context']>): ExperimentSample
   /** Read selection only from the recorder, outside the authority's policy-validation callback. */
   selection(side: Side): { id: string, expiresAt: number } | null
+  /** Firmware readback only; recovery must not accept a target or timestamp supplied by a client. */
+  readback(side: Side): { targetF: number | null, observedAt: number | null }
 }
 
 /** Own reviewed experiment leases within the existing automatic-service lifecycle. */
@@ -106,10 +110,13 @@ export class ExperimentExecutionHost {
       planId, proofs, assertCurrent, principal))
   }
 
-  async confirm(principal: ExperimentPrincipal, id: string, planHash: string, assertCurrent: () => void): Promise<ExperimentGrant> {
+  async confirm(principal: ExperimentPrincipal, id: string, planHash: string, assertCurrent: () => void,
+    expectedPlanId?: string): Promise<ExperimentGrant> {
     assertCurrent()
     const { access } = this.deps.resolve(principal), scope = experimentDigest(access.scope)
     const review = this.admissions.review(access.subjectKey, scope, id)
+    if (expectedPlanId !== undefined && review.planId !== expectedPlanId)
+      throw new ExperimentError('conflict', 409, 'This review belongs to another experiment.')
     if (JSON.stringify(review.principal) !== JSON.stringify(principal)) throw new Error('Use the device that prepared this execution review')
     return this.withZones(review.zones.map(zone => zone.side), async () => this.admissions.confirm(access.subjectKey,
       scope, id, planHash, () => {
@@ -121,14 +128,67 @@ export class ExperimentExecutionHost {
   }
 
   /** A valid personal device may cancel its own grant even when the original reviewing device was revoked. */
-  async cancel(principal: ExperimentPrincipal, id: string, assertCurrent: () => void): Promise<void> {
+  async cancel(principal: ExperimentPrincipal, id: string, assertCurrent: () => void, expectedPlanId?: string): Promise<void> {
     assertCurrent()
     const subject = this.deps.subject(principal), grant = this.admissions.read(subject, id)
+    if (expectedPlanId !== undefined && grant.review.planId !== expectedPlanId)
+      throw new ExperimentError('conflict', 409, 'This admission belongs to another experiment.')
     await this.withZones(grant.review.zones.map(zone => zone.side), async () => this.admissions.revoke(subject, id,
       'Cancelled by the sleeper', () => {
         assertCurrent()
         if (this.deps.subject(principal) !== subject) throw new Error('The account changed while cancelling execution')
       }))
+  }
+
+  /** Read-only recovery remains available after service shutdown or an arrangement change. */
+  describe(principal: ExperimentPrincipal, planId: string) {
+    const subject = this.deps.subject(principal)
+    const record = new ComfortExperimentStore(this.deps.database, subject, this.deps.now).read(z.string().uuid().parse(planId))
+    if (!record) throw new ExperimentError('not_found', 404, 'This experiment is not in your library.')
+    const grant = this.admissions.forPlan(subject, planId)
+    const applications = grant
+      ? grant.review.zones.flatMap((zone) => {
+          const application = this.applications.forAdmission(planId, grant.review.id, zone.side)
+          return application ? [application] : []
+        })
+      : []
+    return { record, grant, applications, running: this.running && this.deps.enabled() }
+  }
+
+  prepared(principal: ExperimentPrincipal, planId: string, reviewId: string) {
+    const { access } = this.deps.resolve(principal)
+    const review = this.admissions.review(access.subjectKey, experimentDigest(access.scope), reviewId)
+    if (review.planId !== planId || JSON.stringify(review.principal) !== JSON.stringify(principal))
+      throw new ExperimentError('conflict', 409, 'Use the account and device that prepared this review.')
+    return review
+  }
+
+  /** End the old grant and record current firmware state; never replay an uncertain command. */
+  async recover(principal: ExperimentPrincipal, planId: string, admissionId: string, applicationId: string,
+    assertCurrent: () => void): Promise<void> {
+    assertCurrent()
+    const subject = this.deps.subject(principal), grant = this.admissions.read(subject, admissionId)
+    if (grant.review.planId !== planId) throw new ExperimentError('conflict', 409, 'This admission belongs to another experiment.')
+    z.string().uuid().parse(applicationId)
+    const assertSubject = () => {
+      assertCurrent()
+      if (this.deps.subject(principal) !== subject) throw new ExperimentError('conflict', 409, 'Your account changed during recovery.')
+    }
+    await this.withZones(grant.review.zones.map(zone => zone.side), async () => {
+      assertSubject()
+      const application = grant.review.zones.map(zone => this.applications.forAdmission(planId, admissionId, zone.side))
+        .find(value => value?.reservation.id === applicationId)
+      if (!application) throw new ExperimentError('not_found', 404, 'This attempt is not available for this experiment.')
+      if (application.outcome === 'resolved') return
+      if (!['attempting', 'unknown'].includes(application.outcome))
+        throw new ExperimentError('conflict', 409, 'This attempt does not need uncertain-command recovery.')
+      const observation = this.deps.readback(application.reservation.side)
+      if (observation.targetF === null || observation.observedAt === null)
+        throw new ExperimentError('not_ready', 409, 'Wait for a fresh Pod reading before recovering this attempt.')
+      this.admissions.revoke(subject, admissionId, 'Ended for explicit uncertain-command recovery', assertSubject)
+      this.applications.resolve(applicationId, { targetF: observation.targetF, observedAt: observation.observedAt }, assertSubject)
+      assertSubject()
+    })
   }
 
   private snapshot(side: Side, at: number): ExperimentExecutionSnapshot | null {

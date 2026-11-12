@@ -535,8 +535,9 @@ The source reference also covers original manual interruptions and the retained
 command journal. Resolving an uncertain command later does not turn it into an
 acknowledged treatment. Comparison reads revalidate the retained observations and
 interruption sources; missing, edited or unreferenced scheduled evidence is shown
-as withdrawn. The current production API still exposes planning only. Activation
-and recovery transport/UI work and attended prospective observations remain.
+as withdrawn. At the recorder-only stage, the production API exposed planning
+only. The following section records the subsequent execution transport work;
+app controls and attended prospective observations remain separate.
 
 Regular packets follow lease renewal and include its actual expiry. A missing
 later packet cannot extend treatment beyond that expiry, and recorded manual or
@@ -558,3 +559,65 @@ Core PR 131 passed all seven hosted checks and merged as
 `9d9fba96a2e73dc209103013bb0f38c5c5c18782` exactly matches tested head
 `fc3fe6040052d6a3f02bc06d1dc99eb0672007dd`. The recorder is a subsequent change;
 that merge is not evidence of recorder deployment or real-night acceptance.
+
+## Authenticated execution and recovery transport
+
+Execution now has separate owner and personal-account endpoints below
+`/api/v1/comfort/experiments/:planId/execution` and
+`/api/v1/me/comfort-experiments/:planId/execution` respectively:
+
+| Method / suffix | Behavior |
+| --- | --- |
+| GET or HEAD | Read the account's saved admission and latest attempt per original zone; no control or retry |
+| POST `/preview` with `{}` | Prepare the one-minute execution review from actual server qualification and reviewed-night evidence |
+| POST `/confirm` | Confirm the exact `reviewId` and `planHash`, with `confirmed: true` |
+| POST `/cancel` | Withdraw `admissionId` under all its original zone locks; no restoration of a saved old target |
+| POST `/recover` | Resolve `applicationId` within `admissionId`, with `confirmed: true`, using fresh server firmware readback only |
+
+```mermaid
+flowchart LR
+  Account[Current authenticated account] --> Review[Qualified execution review]
+  Review --> Confirm[Explicit confirmation]
+  Confirm --> Grant[Durable admission]
+  Grant --> Runtime[Shared controller and recorder]
+  Grant --> Read[Read after lost reply]
+  Runtime --> Uncertain[Uncertain attempt]
+  Uncertain --> Recovery[Cancel old admission and read current firmware]
+  Recovery --> NewReview[New review required before another experiment]
+```
+
+The caller cannot supply a physical side, qualification, source file, measured
+target or observation timestamp. Public receipts omit principal/device references,
+credential digests and source history. Admission means the reviewed plan was
+accepted; it is not proof of active hardware or a physically verified change.
+Acknowledged requests are explicitly labeled `accepted_not_physically_verified`.
+Recovery keeps earlier uncertain observations unconfirmed.
+
+Authorization is checked after streamed input, after asynchronous qualification and
+side-lock waits, before durable commits and again at response delivery. The
+personal HTTP wrapper awaits errors so revoked credentials retain the correct
+authentication status. Current devices of the same person may read and cancel
+after a service stop or arrangement change. Cancellation of an expired retained
+admission cannot remove a newer admission's zone lease.
+
+A lost response is reconciled through GET. Confirming the same consumed review
+does not create another grant. Cancellation and completed recovery are idempotent;
+recovery never replays the old command. Readback must follow the end of the
+uncertain attempt, not just its initial reservation, and must still be fresh.
+
+The personal session advertises `comfortExperimentExecution` when its handler is
+installed. The existing planning response retains its compatibility field
+`execution: planning_only`; clients must use the separate execution receipt for
+admission state. Browser/native execution controls are the next integration step.
+
+Local verification currently passes **294 focused tests**, including real migrated
+storage, actual owner credentials and two personal identities with fake firmware.
+The production build, TypeScript and focused lint checks pass. Mandatory pre-push
+gates and hosted validation are tracked separately. No real qualification was
+created and no hardware, deployed routine or live adaptation mode was changed.
+
+Core recorder PR 132 passed all seven hosted checks and merged as
+`0a1001aa75375ea3032031e2fe817382cb7103c7`. Its tree
+`248b834c2fb95c52e868dc0210691885b592b39b` equals tested head
+`d9d501b9a9a085a102d74b289d2b7b523905bf8c`. The execution API branch was rebased
+onto that merge with an unchanged tree before this documentation receipt.

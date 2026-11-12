@@ -143,6 +143,28 @@ describe('reviewed experiment admission with real qualification and migrated sto
     expect(test.store.read('left').config.mode).toBe('preview')
   })
 
+  it('does not revoke a newer zone lease when cancelling an expired retained admission', async () => {
+    const test = await fixture(), first = test.prepare()
+    const older = test.confirm(first.id)
+    test.refresh(older.endsAt + 1)
+    // Isolate zone ownership here; source qualification has separate real-store tests above.
+    test.deps.validate = () => {}
+    test.deps.suspend = () => {}
+    const current = test.plans.read(test.plan.id)
+    if (!current) throw new Error('Missing fixture plan')
+    test.plans.stop(test.plan.id, current.revision)
+    const laterPlan = createScheduledExperimentPlan(test.plan.context, 74,
+      resolveExperimentSchedule(fixtureSchedule(), new Date(test.now()).toISOString().slice(0, 10), test.now()), test.now())
+    test.plans.create(laterPlan)
+    const later = test.admissions.prepare(context.subjectKey, scopeHash, laterPlan.id,
+      [{ side: 'left', evidence: test.proof, interruptionHash }], () => {}, principal)
+    test.admissions.confirm(context.subjectKey, scopeHash, later.id, experimentPlanHash(laterPlan), () => {})
+    vi.mocked(test.deps.revokeLease).mockClear()
+    test.admissions.revoke(context.subjectKey, first.id, 'Cancel old retained admission', () => {})
+    expect(test.deps.revokeLease).not.toHaveBeenCalled()
+    expect(test.admissions.claim('left')?.review.id).toBe(later.id)
+  })
+
   it('retains uncertain hardware intent from a prior experiment instead of granting a retry', async () => {
     const test = await fixture(), review = test.prepare(), before = test.now() - 8 * 86_400_000
     const older = createScheduledExperimentPlan({ ...context, subjectKey: 'c'.repeat(64) }, 69,

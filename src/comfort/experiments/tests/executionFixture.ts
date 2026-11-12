@@ -73,6 +73,7 @@ export async function executionFixture() {
       return { access, zones }
     }, owner: test.owner, withSideLock: test.deps.withSideLock, authority,
     selection: side => authority.selectedRequest(side),
+    readback: side => ({ targetF: samples[side].targetF, observedAt: samples[side].deviceAt }),
     sample: (side, at, context) => ({ ...samples[side], at, waterAdequate: true, priming: false, vibrating: false, baseMoving: false,
       bindingHash: context.bindingHash, routineHash: context.routineHash, wakeHash: context.wakeHash,
       selectedRequestId: null, attributionAmbiguous: false }) }

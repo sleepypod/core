@@ -166,7 +166,7 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     if (dependencies.personalReports && reportPath)
       return dependencies.personalReports.response(request, credential, mutationBody, assertRequestCurrent)
     if (dependencies.personalExperiments && experimentPath)
-      return dependencies.personalExperiments.response(request, credential, mutationBody, assertRequestCurrent)
+      return await dependencies.personalExperiments.response(request, credential, mutationBody, assertRequestCurrent)
     if (dependencies.householdQuiet && ['GET', 'HEAD', 'POST'].includes(method)
       && (path === '/api/v1/me/quiet' || (method !== 'POST' && /^\/api\/v1\/me\/quiet\/requests\/[^/]+$/.test(path))))
       return dependencies.householdQuiet.response(request, credential, mutationBody, assertRequestCurrent)
