@@ -3,7 +3,8 @@
 This is the implemented protocol, evidence collector, durable repository,
 authenticated planning API and owner/personal browser interface for approved
 improvement 10. It is **planning-only, not an enabled temperature controller**.
-Native screens, guarded runtime admission and lease cancellation remain integration work. No
+Native screens, reviewed activation and runtime observation collection remain integration work. The
+guarded execution adapter and durable attempt journal are implemented but not registered in production. No
 experiment was started on Luca's Pod and no schedule, alarm or live setting was
 changed by this implementation.
 
@@ -332,3 +333,67 @@ restoration after Back/expiry and spacing around interpolated copy. All five
 browser scenarios passed again with explicit focus and readable-text assertions.
 This verdict covers those fixes and the supplied planning-interface evidence,
 not controller execution or physical qualification.
+
+Core PR 128 passed all seven hosted checks and merged as
+`38eef9e91bf4a941fe51df7253dfa1a48df158f0`. The merged tree
+`883d452fb55e88e715caa3637aaa12d771f25d89` matches tested head
+`14e01bbdfe86cd291c57a31e0a886d53a9209498`. This releases source, not a live experiment.
+
+## Guarded execution and recovery
+
+The internal `ExperimentApplicationAdapter` supplies a ten-second, continuously
+revalidated proposal to the existing `TemperatureController`; it never opens a
+hardware connection directly or powers a side on. Manual changes and run-once
+wake requests retain their higher priority. Treatment ends at the exact reviewed
+window boundary. Withdrawal reveals the currently valid independent plan, rather
+than writing a temperature saved before a later manual adjustment.
+
+Saving an experiment does **not** create an execution admission. A separate
+reviewed admission must identify the immutable plan and authorized physical
+zones; ordinary adaptive control must be suspended during the comparison. Each
+lease checks current assignment, routine and wake identities, fresh device and
+occupancy clocks, water, power, priming, vibration, base state and manual pause.
+These checks run again after queue waits and before each actual DAC write, using
+both wall and monotonic clock bounds. Legacy calendar-only plans cannot execute.
+
+Migration `0074_majestic_liz_osborn.sql` adds a private pre-dispatch journal.
+Reservation is committed with FULL synchronization before the shared temperature
+journal or hardware write. An interrupted, partial or unrecorded result remains
+`attempting` or `unknown`, including after process/database restart. Acknowledgment
+requires the actual shared journal's matching side, request, target and timestamps;
+it means acceptance, not physical temperature verification. Firmware readback has
+a bounded grace period, and a contradictory fresh target withdraws the admission.
+
+Explicit recovery requires a fresh observation after the attempt and rechecked
+authority. It records a resolution but does not resurrect the old admission.
+Unknown intents cannot be overwritten by a new plan. Per-side failure latches do
+not silently block another independently admitted zone. Solo-anywhere coordination
+and atomic multi-zone admission remain obligations of the activation host.
+
+The exposure collector now uses the actual prefixed authority request identifier.
+A matching temperature with an unsubmitted proposal ID cannot qualify exposure.
+Existing recorded evidence is not rewritten or retrospectively upgraded.
+
+The new source tests exercise real migrated SQLite stores and the real shared
+controller, with synthetic grants/readings and a two-write fake DAC. They cover
+scheduled wake handoff, manual Stop/override, expiry while queued, admission and
+identity replacement, partial dispatch, persistence failure, reopened databases,
+forged/mismatched receipts, explicit recovery and transaction rollback. Production
+registration, authenticated activation/recovery screens, retained live observation
+references and prospective/physical acceptance are still required. No live grant,
+routine, hardware state or phone was changed for these tests.
+
+Validation on 12 November 2026: the focused integration suite passed 331 tests,
+including shared temperature arbitration and migrated storage. TypeScript,
+ESLint, Drizzle consistency and the final production build passed. A new-worktree
+full run initially lacked the locked Python environment; installing it with
+`uv sync --project modules/piezo-processor --frozen --offline` corrected that
+setup. The next unrestricted run had three Python subprocess timeouts; all 32
+tests in those files passed together in isolation. A further unrestricted run
+passed 10,215 tests with 19 skips but failed one owner-stream handshake assertion
+(HTTP 404 instead of 101). Its cause is not established and that failure is
+retained. No timeout, retry or assertion was relaxed. The full suite then passed
+10,216 tests with 19 skips across 717 passing files (one skipped file), using the
+existing CI settings: `VITEST_MAX_WORKERS=2`, `OPENBLAS_NUM_THREADS=1` and
+`OMP_NUM_THREADS=1`. This passing run does not establish the cause of the earlier
+intermittent handshake response or prove physical treatment behavior.

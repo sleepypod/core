@@ -4,6 +4,7 @@ import { DEVICE_MAX_AGE_MS, PRESENCE_MAX_AGE_MS } from '../policy'
 import { experimentExposureSchema, experimentHashSchema, experimentInstantSchema, experimentPlanSchema,
   type ExperimentExposure, type ExperimentPlan } from './contract'
 import { experimentNightAt, experimentPlanHash } from './plan'
+import { EXPERIMENT_POLICY } from './application-contract'
 
 const sampleSchema = z.object({
   at: experimentInstantSchema,
@@ -35,6 +36,11 @@ export function experimentRequestId(plan: ExperimentPlan, date: string): string 
   return `experiment:${plan.id}:${date}`
 }
 
+/** Preserve the shared authority's producer prefix in observed execution evidence. */
+export function experimentAuthorityRequestId(plan: ExperimentPlan, date: string): string {
+  return `policy:${EXPERIMENT_POLICY}:${experimentRequestId(plan, date)}`
+}
+
 /** Fold nonoverlapping intervals; no repeated stale observation can fill a recording gap. */
 export function collectExperimentExposure(planInput: ExperimentPlan, windowInput: z.infer<typeof windowSchema>,
   sampleInput: ExperimentSample[], eventInput: z.infer<typeof eventSchema>[]): ExperimentExposure {
@@ -54,7 +60,7 @@ export function collectExperimentExposure(planInput: ExperimentPlan, windowInput
     || (sample.presenceAt !== null && sample.presenceAt > sample.at)))
     throw new Error('Collector samples must have ordered, nonfuture source clocks')
 
-  const requestId = experimentRequestId(plan, night.date)
+  const requestId = experimentAuthorityRequestId(plan, night.date)
   let observedMs = 0, matchedTargetMs = 0, occupiedMs = 0, qualifiedMs = 0
   for (const [index, sample] of samples.entries()) {
     if (sample.deviceAt === null) continue

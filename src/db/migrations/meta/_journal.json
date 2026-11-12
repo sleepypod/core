@@ -519,6 +519,13 @@
       "when": 1794476199967,
       "tag": "0073_aspiring_brother_voodoo",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "6",
+      "when": 1794479757129,
+      "tag": "0074_majestic_liz_osborn",
+      "breakpoints": true
     }
   ]
 }

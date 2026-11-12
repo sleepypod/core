@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { collectExperimentExposure, experimentRequestId, type ExperimentSample } from '../exposure'
+import { collectExperimentExposure, experimentAuthorityRequestId, experimentRequestId, type ExperimentSample } from '../exposure'
 import { fixturePlan } from './fixture'
 
 function fixture() {
@@ -10,7 +10,7 @@ function fixture() {
     deviceAt: start + offset, presenceAt: start + offset, targetF: 70, powered: true, occupied: true,
     waterAdequate: true, priming: false, vibrating: false, baseMoving: false,
     bindingHash: plan.context.bindingHash, routineHash: plan.context.routineHash, wakeHash: plan.context.wakeHash,
-    selectedRequestId: experimentRequestId(plan, '2026-11-13'), attributionAmbiguous: false })
+    selectedRequestId: experimentAuthorityRequestId(plan, '2026-11-13'), attributionAmbiguous: false })
   return { plan, start, end, window, sample }
 }
 
@@ -28,6 +28,13 @@ describe('experiment exposure interval collection', () => {
     expect(collectExperimentExposure(plan, window, [sample(0)], []).qualifiedMs).toBe(15_000)
     const repeated = [sample(0), { ...sample(10_000), deviceAt: start }, { ...sample(20_000), deviceAt: start }]
     expect(collectExperimentExposure(plan, window, repeated, []).qualifiedMs).toBe(15_000)
+  })
+
+  it('requires the real authority producer ID, not the unsubmitted proposal ID', () => {
+    const { plan, window, sample } = fixture()
+    const result = collectExperimentExposure(plan, window, [{ ...sample(0), selectedRequestId: experimentRequestId(plan, '2026-11-13') }], [])
+    expect(result.matchedTargetMs).toBe(15_000)
+    expect(result.qualifiedMs).toBe(0)
   })
 
   it('expires presence separately and never assumes an empty bed is identified', () => {

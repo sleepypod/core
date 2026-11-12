@@ -494,6 +494,19 @@ export const comfortExperimentReviews = sqliteTable('comfort_experiment_reviews'
   plan: text('plan').notNull(),
 }, table => [index('idx_comfort_experiment_reviews_subject_expiry').on(table.subjectKey, table.expiresAt)])
 
+/** Durable pre-dispatch intent: a crash never grants permission to retry an uncertain treatment. */
+export const comfortExperimentApplications = sqliteTable('comfort_experiment_applications', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+  id: text('id').notNull().unique(),
+  planId: text('plan_id').notNull().references(() => comfortExperiments.id),
+  side: text('side', { enum: ['left', 'right'] }).notNull(),
+  outcome: text('outcome', { enum: ['attempting', 'acknowledged', 'unknown', 'resolved'] }).notNull(),
+  reservedAt: integer('reserved_at').notNull(),
+  record: text('record').notNull(),
+}, table => [index('idx_experiment_applications_side_sequence').on(table.side, table.sequence),
+  uniqueIndex('uq_experiment_application_unresolved_side').on(table.side)
+    .where(sql`${table.outcome} IN ('attempting', 'unknown')`)])
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

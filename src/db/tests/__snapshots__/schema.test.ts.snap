@@ -1194,6 +1194,29 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
   {
     "checks": 0,
     "columns": [
+      "sequence | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
+      "id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | unique:comfort_experiment_applications_id_unique | not-autoincrement | enum:none",
+      "plan_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
+      "outcome | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:attempting,acknowledged,unknown,resolved",
+      "reserved_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "record | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "comfortExperimentApplications",
+    "foreignKeys": [
+      "comfort_experiment_applications_plan_id_comfort_experiments_id_fk | columns:plan_id | references:comfort_experiments(id) | on-delete:none | on-update:none",
+    ],
+    "indexes": [
+      "idx_experiment_applications_side_sequence | non-unique | columns:side,sequence | where:none",
+      "uq_experiment_application_unresolved_side | unique | columns:side | where:"comfort_experiment_applications"."outcome" IN ('attempting', 'unknown')",
+    ],
+    "name": "comfort_experiment_applications",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
       "subject_key | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "scope_hash | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
