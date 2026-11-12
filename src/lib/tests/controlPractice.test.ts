@@ -3,7 +3,7 @@ import { initialControlPractice, practiceCompletion, practiceWarmTime, reduceCon
 
 describe('local control practice', () => {
   it('keeps a chosen temperature separate until it is deliberately applied', () => {
-    const initial = initialControlPractice()
+    const initial = initialControlPractice('personal')
     const chosen = reduceControlPractice(initial, { type: 'temperature.step', degrees: -1 })
     expect(chosen.draftTargetF).toBe(75)
     expect(chosen.appliedTargetF).toBe(76)
@@ -12,7 +12,21 @@ describe('local control practice', () => {
     expect(applied.appliedTargetF).toBe(75)
     expect(practiceCompletion(applied).temperature).toBe(true)
     expect(practiceCompletion(reduceControlPractice(applied, { type: 'temperature.step', degrees: 1 })).temperature).toBe(false)
-    expect(initial).toEqual(initialControlPractice())
+    expect(initial).toEqual(initialControlPractice('personal'))
+    expect(reduceControlPractice(applied, { type: 'reset' }).surface).toBe('personal')
+  })
+
+  it('matches owner controls by requesting a new target on each step without Apply', () => {
+    const initial = initialControlPractice('owner')
+    const colder = reduceControlPractice(initial, { type: 'temperature.step', degrees: -1 })
+    expect(colder.draftTargetF).toBe(75)
+    expect(colder.appliedTargetF).toBe(75)
+    expect(practiceCompletion(colder).temperature).toBe(true)
+    expect(reduceControlPractice(colder, { type: 'temperature.apply' })).toEqual(colder)
+    const warmer = reduceControlPractice(colder, { type: 'temperature.step', degrees: 1 })
+    expect(warmer.appliedTargetF).toBe(76)
+    expect(practiceCompletion(warmer).temperature).toBe(true)
+    expect(reduceControlPractice(warmer, { type: 'reset' })).toEqual(initial)
   })
 
   it('keeps repeated example adjustments bounded without changing the other lessons', () => {

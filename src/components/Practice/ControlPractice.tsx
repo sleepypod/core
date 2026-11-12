@@ -1,15 +1,17 @@
 'use client'
 
 import { useEffect, useId, useReducer, useRef } from 'react'
-import { AlarmClock, Check, CircleStop, Thermometer } from 'lucide-react'
+import { AlarmClock, Check, CircleStop, Power, Thermometer } from 'lucide-react'
 import { initialControlPractice, PRACTICE_LESSONS, practiceCompletion, practiceWarmTime, reduceControlPractice, validPracticeTime } from '@/src/lib/controlPractice'
+import type { PracticeSurface } from '@/src/lib/controlPractice'
 
 const lessonNames = { temperature: 'Temperature', wake: 'Tomorrow’s alarm', stop: 'Stop an action' }
 const lessonIcons = { temperature: Thermometer, wake: AlarmClock, stop: CircleStop }
 
 /** The same local lessons open in the owner app and the isolated personal workspace. */
-export function ControlPractice({ onClose }: { onClose: () => void }) {
-  const [state, dispatch] = useReducer(reduceControlPractice, undefined, initialControlPractice)
+export function ControlPractice({ onClose, surface = 'owner' }: { onClose: () => void, surface?: PracticeSurface }) {
+  const [state, dispatch] = useReducer(reduceControlPractice, surface, initialControlPractice)
+  const needsApply = state.surface === 'personal'
   const headingId = useId(), lessonId = useId(), timeId = useId()
   const lessonHeading = useRef<HTMLHeadingElement>(null)
   const completed = practiceCompletion(state)
@@ -49,32 +51,38 @@ export function ControlPractice({ onClose }: { onClose: () => void }) {
         <h3 id={lessonId} ref={lessonHeading} tabIndex={-1}>{state.lesson === 'temperature' ? 'Try a cooler target.' : state.lesson === 'wake' ? 'Give tomorrow a later start.' : 'Know what each Stop does.'}</h3>
         {state.lesson === 'temperature' && (
           <>
-            <p>Choose a target, then apply it. In the real app, the measured water temperature can take time to reach your target.</p>
+            <p>
+              {needsApply ? 'Choose a target, then select Apply my target in your personal controls.' : 'A cooler or warmer tap requests a new target right away.'}
+              {' '}
+              In the real app, measured water temperature can take time to reach your target.
+            </p>
             <div className="practice-temperature">
-              <div className="practice-zone" role="img" aria-label={`Example side, applied target ${state.appliedTargetF} degrees Fahrenheit`}>
+              <div className="practice-zone" role="img" aria-label={`Example side, requested target ${state.appliedTargetF} degrees Fahrenheit`}>
                 <span className="practice-pillow" aria-hidden />
                 <span>Example side</span>
                 <strong>
                   {state.appliedTargetF}
                   °F
                 </strong>
-                <span>Applied practice target</span>
+                <span>Requested practice target</span>
               </div>
               <div className="practice-adjustment">
-                <p>
-                  New practice target:
-                  {' '}
-                  <strong>
-                    {state.draftTargetF}
-                    °F
-                  </strong>
-                </p>
+                {needsApply && (
+                  <p>
+                    New practice target:
+                    {' '}
+                    <strong>
+                      {state.draftTargetF}
+                      °F
+                    </strong>
+                  </p>
+                )}
                 <div className="practice-actions">
                   <button type="button" disabled={state.draftTargetF <= 65} onClick={() => dispatch({ type: 'temperature.step', degrees: -1 })}>1°F cooler</button>
                   <button type="button" disabled={state.draftTargetF >= 90} onClick={() => dispatch({ type: 'temperature.step', degrees: 1 })}>1°F warmer</button>
                 </div>
-                <button type="button" className="practice-primary" disabled={state.draftTargetF === state.appliedTargetF} onClick={() => dispatch({ type: 'temperature.apply' })}>Apply practice target</button>
-                <p className="practice-feedback" role="status">{state.draftTargetF !== state.appliedTargetF ? 'Chosen, not applied yet.' : completed.temperature ? 'Example target applied. Your real bed did not change.' : 'Try choosing one degree cooler.'}</p>
+                {needsApply && <button type="button" className="practice-primary" disabled={state.draftTargetF === state.appliedTargetF} onClick={() => dispatch({ type: 'temperature.apply' })}>Apply my target</button>}
+                <p className="practice-feedback" role="status">{state.draftTargetF !== state.appliedTargetF ? 'Chosen, not requested yet.' : completed.temperature ? `Example request changed to ${state.appliedTargetF}°F. Your real bed did not change.` : 'Try choosing one degree cooler.'}</p>
               </div>
             </div>
           </>
@@ -115,7 +123,11 @@ export function ControlPractice({ onClose }: { onClose: () => void }) {
         )}
         {state.lesson === 'stop' && (
           <>
-            <p>Temperature and vibration have separate Stop controls. Try both below. Stopping an action does not delete the next scheduled alarm.</p>
+            <p>
+              {needsApply ? 'Stop temperature stops heating and cooling in your personal controls.' : 'The power symbol turns off heating and cooling in the bed controls.'}
+              {' '}
+              Vibration has its own Stop. Neither deletes the next scheduled alarm.
+            </p>
             <dl className="practice-stop-state">
               <div>
                 <dt>Example temperature</dt>
@@ -135,8 +147,11 @@ export function ControlPractice({ onClose }: { onClose: () => void }) {
               </div>
             </dl>
             <div className="practice-actions">
-              <button type="button" disabled={!state.temperatureOn} onClick={() => dispatch({ type: 'stop.temperature' })}>Stop practice temperature</button>
-              <button type="button" disabled={!state.vibrationOn} onClick={() => dispatch({ type: 'stop.vibration' })}>Stop practice vibration</button>
+              <button type="button" disabled={!state.temperatureOn} onClick={() => dispatch({ type: 'stop.temperature' })}>
+                {!needsApply && <Power size={20} aria-hidden />}
+                {needsApply ? 'Stop temperature' : 'Turn off'}
+              </button>
+              <button type="button" disabled={!state.vibrationOn} onClick={() => dispatch({ type: 'stop.vibration' })}>Stop vibration</button>
             </div>
             <p className="practice-feedback" role="status">{completed.stop ? 'Both example actions stopped. Your real bed is unchanged.' : 'The next scheduled alarm stays saved when you press Stop.'}</p>
           </>

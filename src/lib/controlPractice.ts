@@ -1,7 +1,9 @@
 /** Local examples only. This module has no controller, account, storage or network dependency. */
 export const PRACTICE_LESSONS = ['temperature', 'wake', 'stop'] as const
 export type PracticeLesson = typeof PRACTICE_LESSONS[number]
+export type PracticeSurface = 'owner' | 'personal'
 export interface ControlPracticeState {
+  surface: PracticeSurface
   lesson: PracticeLesson
   draftTargetF: number
   appliedTargetF: number
@@ -24,8 +26,8 @@ export type ControlPracticeAction
     | { type: 'stop.vibration' }
     | { type: 'reset' }
 
-export function initialControlPractice(): ControlPracticeState {
-  return { lesson: 'temperature', draftTargetF: 76, appliedTargetF: 76, temperatureTried: false,
+export function initialControlPractice(surface: PracticeSurface = 'owner'): ControlPracticeState {
+  return { surface, lesson: 'temperature', draftTargetF: 76, appliedTargetF: 76, temperatureTried: false,
     draftWake: '08:00', savedWake: '07:00', reviewedWake: null, wakeTried: false,
     temperatureOn: true, vibrationOn: true }
 }
@@ -53,10 +55,17 @@ export function practiceCompletion(state: ControlPracticeState): Record<Practice
 /** Advance an example only after its deliberate action; changing a reviewed alarm invalidates that review. */
 export function reduceControlPractice(state: ControlPracticeState, action: ControlPracticeAction): ControlPracticeState {
   switch (action.type) {
-    case 'reset': return initialControlPractice()
+    case 'reset': return initialControlPractice(state.surface)
     case 'lesson': return { ...state, lesson: action.lesson }
-    case 'temperature.step': return { ...state, draftTargetF: Math.max(65, Math.min(90, state.draftTargetF + action.degrees)) }
-    case 'temperature.apply': return { ...state, appliedTargetF: state.draftTargetF, temperatureTried: state.temperatureTried || state.draftTargetF !== 76 }
+    case 'temperature.step': {
+      const target = Math.max(65, Math.min(90, state.draftTargetF + action.degrees))
+      // Owner taps request immediately; personal web controls require Apply my target.
+      return { ...state, draftTargetF: target,
+        ...(state.surface === 'owner' ? { appliedTargetF: target, temperatureTried: state.temperatureTried || target !== 76 } : {}) }
+    }
+    case 'temperature.apply': return state.surface === 'personal'
+      ? { ...state, appliedTargetF: state.draftTargetF, temperatureTried: state.temperatureTried || state.draftTargetF !== 76 }
+      : state
     case 'wake.edit': return { ...state, draftWake: action.time, reviewedWake: null }
     case 'wake.review': return { ...state, reviewedWake: validPracticeTime(state.draftWake) ? state.draftWake : null }
     case 'wake.save': return state.reviewedWake === state.draftWake && validPracticeTime(state.draftWake)

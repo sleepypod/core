@@ -35,7 +35,7 @@ export function PersonalWorkspace({ workspace, history, learning, journal, maint
   const reportedTargets = bed?.zones.map(zone => zone.reportedTargetF) ?? []
   const common = state.fresh && reportedTargets.length && reportedTargets.every(value => value !== null && value === reportedTargets[0]) ? reportedTargets[0] : null
   const starting = target !== null && Number.isFinite(target) ? target : Math.round(common ?? preferredTemperatureF)
-  if (practicing) return <ControlPractice onClose={() => setPracticing(false)} />
+  if (practicing) return <ControlPractice surface="personal" onClose={() => setPracticing(false)} />
   return (
     <div className="personal-runtime">
       {state.error && <p role="alert" className="notice">{state.error}</p>}
