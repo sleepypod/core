@@ -131,6 +131,7 @@ export const experimentExposureSchema = z.object({
   routineHash: experimentHashSchema,
   wakeHash: experimentHashSchema,
   sourceHash: experimentHashSchema,
+  observationWindowId: z.string().uuid().optional(),
   sourceState: z.enum(['current', 'withdrawn']),
   execution: z.enum(['preview', 'active']),
   windowStart: experimentInstantSchema,

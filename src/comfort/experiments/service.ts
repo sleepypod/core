@@ -8,6 +8,7 @@ import { experimentDigest, readExperimentAvailability, type ExperimentAccess, ty
 import { ComfortExperimentStore } from './store'
 import { ComfortExperimentReviews } from './reviews'
 import { ExperimentScheduleError, resolveExperimentSchedule } from './schedule'
+import { auditObservedExperiment } from './observation-source'
 
 export class ExperimentError extends Error {
   constructor(readonly code: 'invalid_request' | 'conflict' | 'not_found' | 'not_ready', readonly status: number, message: string) { super(message) }
@@ -39,7 +40,8 @@ export class ComfortExperimentService {
   }
 
   private describe(record: ExperimentRecord, current: ExperimentAvailability) {
-    return { record, comparison: compareExperiment(record),
+    const observed = auditObservedExperiment(this.database, this.now, record)
+    return { record: observed, comparison: compareExperiment(observed),
       contextCurrent: current.context !== null && experimentContextMatches(record.plan, current.context),
       contextReason: current.reason, execution: 'planning_only' as const }
   }

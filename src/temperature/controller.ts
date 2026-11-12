@@ -166,6 +166,12 @@ export class TemperatureController {
       && (deadline === null || deadline > this.deps.now())
   }
 
+  /** Internal observation provenance; selecting a request is not an acknowledgment of hardware movement. */
+  selectedRequest(side: Side): Pick<TemperatureRequest, 'id' | 'expiresAt'> | null {
+    const selected = this.select(side, this.deps.now())
+    return selected ? { id: selected.id, expiresAt: selected.expiresAt } : null
+  }
+
   status(side: Side): TemperatureControlStatus {
     const now = this.deps.now()
     const hold = this.deps.readHold(side)

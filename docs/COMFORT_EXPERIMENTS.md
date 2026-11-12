@@ -484,3 +484,77 @@ predates this final regression and is not represented as an exact final-head che
 The production package also builds successfully. Final hosted regression and
 deployment remain distinct requirements. Logs are retained under
 `/tmp/sleepypod-experiment-host-*`, including the failing Stop regression.
+
+## Retained observation journal
+
+Migration `0076_square_stellaris.sql` adds private observation windows and their
+ordered sensor packets. Each window binds an actual admitted plan, its exact
+scheduled start/end and its original physical zones. Packets retain each zone's
+own device/presence clocks, target, control provenance and unavailable readings.
+The journal accepts no observations outside that admission or after cancellation.
+
+Writes use FULL SQLite synchronization with authorization checked at both ends
+of the transaction. Identical retries keep one packet; reusing a clock with
+different measurements is rejected. Collection is bounded to one packet per ten
+seconds and at most 10,000 packets per window. Missing intervals remain gaps.
+The header and packet roll back together on a storage or authorization failure.
+
+Independent reads verify the original admission, plan and complete content-digest
+chain, so a deleted or altered input cannot silently support a saved comparison.
+Finalization waits for the original reviewed end, including cancelled or partial
+windows. Reopening a database preserves both those boundaries and source identity.
+
+The focused experiment/schema suite passes 275 tests, TypeScript and focused lint
+pass. The initial schema-contract run detected the two newly generated tables;
+the reviewed snapshot update adds only those tables. These are source-level
+storage checks. The runtime collector, source-backed exposure publication and
+withdrawal, execution/recovery endpoints, native interface and prospective
+hardware acceptance remain unfinished. No live source, admission, routine or
+hardware state was changed.
+
+## Runtime observation collection
+
+The production host now creates the first source packet before an experimental
+hardware write can occur. A recording failure withdraws every zone in that
+admission. Subsequent packets use the current shared authority's request identity
+and each physical zone's independent observation clocks. This read happens outside
+the authority's policy callback, avoiding recursive selection.
+
+Completed-window publication and source sealing use one durable transaction.
+Failure rolls back both, so restarting can retry without losing the original
+window or duplicating a completed result. Each tick processes at most two pending
+windows; a corrupt source cannot prevent later windows from being considered.
+
+For solo-anywhere treatment, overlapping physical zones count once. Every occupied
+zone must match the treatment; an unknown zone is not presumed empty. Sensor loss
+reduces usable coverage without inventing a different sleeper. The collection
+interval caps each contribution, leaving missing ticks unknown. Matching target
+values without an active selected experiment request do not qualify.
+
+The source reference also covers original manual interruptions and the retained
+command journal. Resolving an uncertain command later does not turn it into an
+acknowledged treatment. Comparison reads revalidate the retained observations and
+interruption sources; missing, edited or unreferenced scheduled evidence is shown
+as withdrawn. The current production API still exposes planning only. Activation
+and recovery transport/UI work and attended prospective observations remain.
+
+Regular packets follow lease renewal and include its actual expiry. A missing
+later packet cannot extend treatment beyond that expiry, and recorded manual or
+uncertain-command times clip the affected interval without shortening the original
+reviewed night. The verification cache holds only hashes and withdrawal flags,
+is bounded to eight entries per database, and invalidates on same-connection
+changes, other-connection commits, clock reversal or sixty seconds of age.
+
+The integration coverage run passed **10,289 tests with 19 existing skips**.
+That run predates the final expiry/interruption and verification-cache refinements;
+the final focused experiment, temperature-controller and schema suite passed
+**466 tests**, and the production build passed. Both the earlier failed nested-
+transaction tests and the passing correction are retained in
+`/tmp/sleepypod-experiment-collector-*`. Hosted checks and physical acceptance are
+separate requirements; nothing has been deployed to the Pod from this change.
+
+Core PR 131 passed all seven hosted checks and merged as
+`e91ffcbc02e0ffd6e7f4814385c8127bcddc8bb3`. Its tree
+`9d9fba96a2e73dc209103013bb0f38c5c5c18782` exactly matches tested head
+`fc3fe6040052d6a3f02bc06d1dc99eb0672007dd`. The recorder is a subsequent change;
+that merge is not evidence of recorder deployment or real-night acceptance.

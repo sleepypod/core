@@ -533,6 +533,13 @@
       "when": 1794481173331,
       "tag": "0075_young_risque",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "6",
+      "when": 1794483656500,
+      "tag": "0076_square_stellaris",
+      "breakpoints": true
     }
   ]
 }

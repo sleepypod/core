@@ -535,6 +535,31 @@ export const comfortExperimentZoneClaims = sqliteTable('comfort_experiment_zone_
   admissionId: text('admission_id').notNull().references(() => comfortExperimentAdmissions.id),
 })
 
+/** Retained source windows make completed exposure independently re-verifiable after restart. */
+export const comfortExperimentObservationWindows = sqliteTable('comfort_experiment_observation_windows', {
+  id: text('id').primaryKey(),
+  subjectKey: text('subject_key').notNull(),
+  admissionId: text('admission_id').notNull().references(() => comfortExperimentAdmissions.id),
+  planId: text('plan_id').notNull().references(() => comfortExperiments.id),
+  nightDate: text('night_date').notNull(),
+  windowEnd: integer('window_end').notNull(),
+  sampleCount: integer('sample_count').notNull().default(0),
+  tailDigest: text('tail_digest').notNull(),
+  finalizedAt: integer('finalized_at'),
+  binding: text('binding').notNull(),
+}, table => [uniqueIndex('uq_experiment_observation_window').on(table.admissionId, table.nightDate),
+  index('idx_experiment_observation_subject_end').on(table.subjectKey, table.windowEnd)])
+
+export const comfortExperimentObservations = sqliteTable('comfort_experiment_observations', {
+  id: text('id').primaryKey(),
+  windowId: text('window_id').notNull().references(() => comfortExperimentObservationWindows.id),
+  position: integer('position').notNull(),
+  observedAt: integer('observed_at').notNull(),
+  digest: text('digest').notNull(),
+  record: text('record').notNull(),
+}, table => [uniqueIndex('uq_experiment_observation_position').on(table.windowId, table.position),
+  uniqueIndex('uq_experiment_observation_clock').on(table.windowId, table.observedAt)])
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

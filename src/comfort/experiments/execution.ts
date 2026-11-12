@@ -13,6 +13,7 @@ import type { ExperimentPrincipal } from './execution-principal'
 import type { ExperimentSample } from './exposure'
 import { experimentContextMatches } from './plan'
 import { ComfortExperimentStore } from './store'
+import { ExperimentRecorder } from './recorder'
 
 export interface ExperimentExecutionDeps {
   database: Database.Database
@@ -27,6 +28,8 @@ export interface ExperimentExecutionDeps {
   authority: Pick<TemperatureController, 'replacePolicy'>
   /** Reads existing physical-zone observations only; never consult authority.status() recursively. */
   sample(side: Side, at: number, context: NonNullable<ReturnType<typeof readExperimentAvailability>['context']>): ExperimentSample
+  /** Read selection only from the recorder, outside the authority's policy-validation callback. */
+  selection(side: Side): { id: string, expiresAt: number } | null
 }
 
 /** Own reviewed experiment leases within the existing automatic-service lifecycle. */
@@ -34,6 +37,7 @@ export class ExperimentExecutionHost {
   readonly admissions: ExperimentAdmissions
   private readonly applications: ExperimentApplicationStore
   private readonly adapter: ExperimentApplicationAdapter
+  private readonly recorder: ExperimentRecorder
   private running = false
   private generation = 0
   private pending?: Promise<void>
@@ -47,6 +51,8 @@ export class ExperimentExecutionHost {
       validate: (review, sources) => this.validate(review, sources),
       suspend: zone => deps.owner.suspendForExperiment(zone.side, zone.evidence),
       revokeLease: side => this.adapter.revoke(side) })
+    this.recorder = new ExperimentRecorder({ database: deps.database, now: deps.now,
+      grant: (subject, id) => this.admissions.read(subject, id) })
     this.adapter = new ExperimentApplicationAdapter({ now: deps.now, monotonicNow: deps.monotonicNow,
       withSideLock: deps.withSideLock, authority: deps.authority,
       read: (side, at) => this.snapshot(side, at),
@@ -146,6 +152,7 @@ export class ExperimentExecutionHost {
       const auditedAt = this.audited.get(grant.review.id), now = this.deps.now()
       const auditSource = auditedAt === undefined || now < auditedAt || now - auditedAt >= 60_000
       this.validate(grant.review, auditSource)
+      if (auditSource) this.recorder.audit(grant)
       const state = createComfortStore(this.deps.database).read(side), application = this.applications.latest(side)
       if (grant.endsAt <= this.deps.now() || state.config.mode !== 'preview'
         || (application && ['unknown', 'attempting'].includes(application.outcome))
@@ -164,11 +171,44 @@ export class ExperimentExecutionHost {
     }
   }
 
+  private async recordCurrent(initialOnly = false) {
+    const recorded = new Set<string>()
+    for (const side of ['left', 'right'] as const) {
+      const grant = this.admissions.current(side)?.grant
+      if (!grant || recorded.has(grant.review.id)) continue
+      recorded.add(grant.review.id)
+      await this.withZones(grant.review.zones.map(zone => zone.side), async () => {
+        try {
+          this.recorder.record(grant, () => {
+            const context = this.validate(grant.review, false), at = this.deps.now()
+            return { at, zones: grant.review.zones.map((zone) => {
+              const selection = this.deps.selection(zone.side)
+              return { side: zone.side, sample: { ...this.deps.sample(zone.side, at, context),
+                selectedRequestId: selection?.id ?? null, selectedUntil: selection?.expiresAt ?? null } }
+            }) }
+          }, () => { this.validate(grant.review, false) }, initialOnly)
+        }
+        catch {
+          this.failed.add(grant.review.id)
+          for (const zone of grant.review.zones) this.adapter.revoke(zone.side)
+          this.admissions.revoke(grant.review.subjectKey, grant.review.id, 'Observation recording failed; review before a new admission', () => {})
+        }
+      })
+    }
+  }
+
   tick(): Promise<void> {
     if (this.pending) return this.pending
     if (!this.running) return Promise.resolve()
     const generation = this.generation
     this.pending = (async () => {
+      for (const side of ['left', 'right'] as const) {
+        if (!this.running || generation !== this.generation) return
+        await this.deps.withSideLock(side, () => this.inspect(side))
+      }
+      if (!this.running || generation !== this.generation) return
+      // Persist the first real observation before any experimental write; later gaps remain explicit.
+      await this.recordCurrent(true)
       for (const side of ['left', 'right'] as const) {
         if (!this.running || generation !== this.generation) break
         await this.deps.withSideLock(side, () => this.inspect(side))
@@ -181,6 +221,8 @@ export class ExperimentExecutionHost {
         if (this.running && generation === this.generation)
           await this.deps.withSideLock(side, () => this.inspect(side))
       }
+      if (this.running && generation === this.generation) await this.recordCurrent()
+      if (this.running && generation === this.generation) this.recorder.finishReady()
     })().finally(() => { this.pending = undefined })
     return this.pending
   }

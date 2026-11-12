@@ -72,6 +72,7 @@ export async function executionFixture() {
       if (!admitted) throw new Error('Device revoked')
       return { access, zones }
     }, owner: test.owner, withSideLock: test.deps.withSideLock, authority,
+    selection: side => authority.selectedRequest(side),
     sample: (side, at, context) => ({ ...samples[side], at, waterAdequate: true, priming: false, vibrating: false, baseMoving: false,
       bindingHash: context.bindingHash, routineHash: context.routineHash, wakeHash: context.wakeHash,
       selectedRequestId: null, attributionAmbiguous: false }) }

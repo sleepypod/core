@@ -42,6 +42,7 @@ export function getExperimentExecution(): ExperimentExecutionHost {
         if (!authority) throw new Error('The shared temperature authority is not running')
         return authority.replacePolicy(...arguments_)
       } },
+      selection: side => getTemperatureControllerIfRunning()?.selectedRequest(side) ?? null,
       sample: (side, at, identity) => {
         const state = createComfortStore(sqlite).read(side)
         const { context } = readComfortContext(side, state, at, false)
@@ -56,7 +57,8 @@ export function getExperimentExecution(): ExperimentExecutionHost {
           vibrating: context.device.vibrating, baseMoving: context.device.baseMoving,
           bindingHash: identity.bindingHash, routineHash: identity.routineHash, wakeHash: identity.wakeHash,
           // Execution must not recursively call authority.status; the separate collector reads selection provenance.
-          selectedRequestId: null, attributionAmbiguous: !known }
+          // Unknown presence withdraws qualification; it does not identify a different sleeper.
+          selectedRequestId: null, attributionAmbiguous: false }
       },
     })
   }

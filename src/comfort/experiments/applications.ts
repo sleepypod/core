@@ -31,6 +31,20 @@ export class ExperimentApplicationStore {
     return row ? this.decode(row) : null
   }
 
+  /** Bounded retained command evidence, scoped to the original admission and night. */
+  window(planId: string, admissionId: string, start: number, end: number): ExperimentApplication[] {
+    z.string().uuid().parse(planId)
+    z.string().uuid().parse(admissionId)
+    experimentInstantSchema.parse(start)
+    experimentInstantSchema.parse(end)
+    if (end <= start || end - start > 26 * 3_600_000) throw new Error('Invalid experiment application window')
+    const rows = this.database.prepare(`SELECT * FROM comfort_experiment_applications
+      WHERE plan_id = ? AND reserved_at >= ? AND reserved_at < ? ORDER BY sequence LIMIT 10001`)
+      .all(planId, start, end) as Row[]
+    if (rows.length > 10_000) throw new Error('The experiment application window exceeds its evidence limit')
+    return rows.map(row => this.decode(row)).filter(value => value.reservation.admissionRevision === admissionId)
+  }
+
   private read(id: string): ExperimentApplication {
     const row = this.database.prepare('SELECT * FROM comfort_experiment_applications WHERE id = ?').get(id) as Row | undefined
     if (!row) throw new Error('The experiment application is unavailable')

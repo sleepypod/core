@@ -6,7 +6,7 @@ import { experimentExposureSchema, experimentHashSchema, experimentInstantSchema
 import { experimentNightAt, experimentPlanHash } from './plan'
 import { EXPERIMENT_POLICY } from './application-contract'
 
-const sampleSchema = z.object({
+export const experimentSampleSchema = z.object({
   at: experimentInstantSchema,
   deviceAt: experimentInstantSchema.nullable(),
   presenceAt: experimentInstantSchema.nullable(),
@@ -16,9 +16,10 @@ const sampleSchema = z.object({
   bindingHash: experimentHashSchema, routineHash: experimentHashSchema, wakeHash: experimentHashSchema,
   // Selection provenance must come from the shared authority, not a matching temperature alone.
   selectedRequestId: z.string().max(200).nullable(),
+  selectedUntil: experimentInstantSchema.nullable().optional(),
   attributionAmbiguous: z.boolean(),
 }).strict()
-export type ExperimentSample = z.infer<typeof sampleSchema>
+export type ExperimentSample = z.infer<typeof experimentSampleSchema>
 
 const eventSchema = z.object({
   id: z.string().uuid(), at: experimentInstantSchema,
@@ -52,7 +53,7 @@ export function collectExperimentExposure(planInput: ExperimentPlan, windowInput
     if (!scheduled || window.end !== scheduled.windowEnd || window.wakeStartsAt !== (scheduled.wake?.startsAt ?? null))
       throw new Error('Exposure must retain the exact reviewed night and wake boundaries')
   }
-  const samples = z.array(sampleSchema).max(10_000).parse(sampleInput)
+  const samples = z.array(experimentSampleSchema).max(10_000).parse(sampleInput)
   const events = z.array(eventSchema).max(10_000).parse(eventInput)
   if (samples.some((sample, index) => sample.at < window.start - PRESENCE_MAX_AGE_MS || sample.at > window.end
     || (index > 0 && sample.at <= samples[index - 1].at)
