@@ -118,8 +118,12 @@ export class ComfortExperimentStore {
   saveFeedback(id: string, expectedRevision: string, input: unknown) {
     const feedback = feedbackInput.parse(input)
     return this.update(id, expectedRevision, (record, now) => {
-      if (feedback.nightDate >= dateInTimeZone(now, record.plan.context.timezone)
-        || Date.parse(dateInTimeZone(now, record.plan.context.timezone)) - Date.parse(feedback.nightDate) > 15 * 86_400_000)
+      const scheduled = record.plan.version === 2 ? record.plan.schedule.windows.find(window => window.date === feedback.nightDate) : null
+      if (scheduled
+        ? (now < scheduled.windowEnd || now > scheduled.windowEnd + 14 * 86_400_000)
+        : (feedback.nightDate >= dateInTimeZone(now, record.plan.context.timezone)
+          || Date.parse(dateInTimeZone(now, record.plan.context.timezone)) - Date.parse(feedback.nightDate) > 15 * 86_400_000)
+      )
         throw new ExperimentFeedbackError('Feedback must describe a completed night within the last fourteen mornings')
       if (!experimentNights(record.plan).some(night => night.date === feedback.nightDate))
         throw new ExperimentFeedbackError('Feedback cannot describe an unassigned experiment night')

@@ -4,7 +4,7 @@ import { migratedComfortDatabase } from '../../tests/databaseFixture'
 import { ComfortExperimentService } from '../service'
 import { experimentResponse, readExperimentBody } from '../http'
 import type { ExperimentAccess } from '../access'
-import { context, createdAt } from './fixture'
+import { context, createdAt, fixtureSchedule } from './fixture'
 
 let database: Database.Database, service: ComfortExperimentService, access: ExperimentAccess, now: number
 const proposal = { firstNightDate: '2026-11-13', variantF: 69 }
@@ -18,7 +18,7 @@ beforeEach(() => {
   database = migratedComfortDatabase()
   now = createdAt
   access = { subjectKey: context.subjectKey, scope: { account: 'first' }, binding: {}, routineSide: 'left', ready: true }
-  service = new ComfortExperimentService(database, () => now, () => ({ context, reason: 'fixture' }))
+  service = new ComfortExperimentService(database, () => now, () => ({ context, reason: 'fixture', schedule: fixtureSchedule() }))
 })
 afterEach(() => database.close())
 

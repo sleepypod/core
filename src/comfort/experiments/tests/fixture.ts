@@ -1,10 +1,22 @@
 import { randomUUID } from 'node:crypto'
 import type { ExperimentContext, ExperimentExposure, ExperimentPlan, ExperimentRecord } from '../contract'
 import { createExperimentPlan, experimentNights, experimentPlanHash } from '../plan'
+import { DAYS_OF_WEEK, type DayOfWeek } from '@/src/lib/scheduleTime'
+import { alarmRowSchema } from '@/src/alarms/model'
+import type { ExperimentScheduleSource } from '../schedule'
 
 export const createdAt = Date.parse('2026-11-12T12:00:00Z')
 export const context: ExperimentContext = { subjectKey: 'a'.repeat(64), bindingHash: 'b'.repeat(64),
   routineHash: 'c'.repeat(64), wakeHash: 'd'.repeat(64), timezone: 'UTC', baselineF: 70, minimumF: 68, maximumF: 72 }
+
+export function fixtureSchedule(days: DayOfWeek[] = [...DAYS_OF_WEEK], timezone = 'UTC'): ExperimentScheduleSource {
+  return { powers: days.map((dayOfWeek, index) => ({ id: index + 1, dayOfWeek, onTime: '22:00', offTime: '07:15',
+    offDayOffset: 1, onTemperature: 70, endAction: 'turn_off' as const })),
+  alarm: { side: 'left', timeZone: timezone, available: true, configured: true, revision: null, override: null,
+    rows: days.map((day, index) => alarmRowSchema.parse({ id: index + 1, side: 'left',
+      dayOfWeek: DAYS_OF_WEEK[(DAYS_OF_WEEK.indexOf(day) + 1) % 7], time: '07:00', vibrationIntensity: 50,
+      vibrationPattern: 'rise', duration: 20, alarmTemperature: 105, wakeWindow: 0, snoozeDuration: 300, snoozeTaper: 0 })) } }
+}
 
 export function fixturePlan(): ExperimentPlan {
   return createExperimentPlan(context, { firstNightDate: '2026-11-13', variantF: 69 }, createdAt, upper => upper - 1)

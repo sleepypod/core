@@ -25,7 +25,8 @@ beforeEach(() => {
   fixture.database = migratedComfortDatabase()
   fixture.database.exec(`INSERT INTO device_settings (id, bed_mode, unused_zone_mode, timezone) VALUES (1, 'solo-left', 'follow', 'UTC');
     INSERT INTO side_settings (side, name) VALUES ('left', 'Left'), ('right', 'Right');
-    INSERT INTO power_schedules (side, day_of_week, on_time, off_time, off_day_offset, on_temperature) VALUES ('left', 'monday', '22:00', '07:15', 1, 70);`)
+    INSERT INTO power_schedules (side, day_of_week, on_time, off_time, off_day_offset, on_temperature) VALUES
+      ('left', 'monday', '22:00', '07:15', 1, 70), ('left', 'tuesday', '22:00', '07:15', 1, 70);`)
   createComfortLimitStore(fixture.database).save('left', 0, { enabled: true, minF: 70, maxF: 72 })
   vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', TEST_OWNER_TOKEN)
 })

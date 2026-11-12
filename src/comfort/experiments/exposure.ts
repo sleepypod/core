@@ -41,6 +41,11 @@ export function collectExperimentExposure(planInput: ExperimentPlan, windowInput
   const plan = experimentPlanSchema.parse(planInput), window = windowSchema.parse(windowInput)
   const night = experimentNightAt(plan, window.start)
   if (!night) throw new Error('The routine window is not an assigned experiment night')
+  if (plan.version === 2) {
+    const scheduled = plan.schedule.windows.find(value => value.date === night.date)
+    if (!scheduled || window.end !== scheduled.windowEnd || window.wakeStartsAt !== (scheduled.wake?.startsAt ?? null))
+      throw new Error('Exposure must retain the exact reviewed night and wake boundaries')
+  }
   const samples = z.array(sampleSchema).max(10_000).parse(sampleInput)
   const events = z.array(eventSchema).max(10_000).parse(eventInput)
   if (samples.some((sample, index) => sample.at < window.start - PRESENCE_MAX_AGE_MS || sample.at > window.end

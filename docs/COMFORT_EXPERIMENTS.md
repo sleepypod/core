@@ -28,28 +28,66 @@ baseline, limits and wake-plan identity. The frontend proposal accepts only the
 first local night date and the nearby setting; it cannot supply identity,
 measurement evidence or assignment order.
 
-The first version uses four pairs of treatment periods, sixteen calendar nights
+New reviews use four pairs of treatment periods, sixteen **scheduled nights**
 in total. Each pair contains both baseline and variant. There are exactly two
 baseline-first and two variant-first pairs, shuffled with Node's cryptographic
 random generator. Every one of the six balanced orderings has the same
 probability. Creating another copy of the same saved plan cannot redraw its order.
 
 Each treatment period has a settling night followed by a scored night. Settling
-nights remain visible and their problems remain outcomes. The scored night is
+nights remain visible and their problems remain outcomes. Each settling/scored
+period uses consecutive local dates. Gaps between periods remain visible; a
+missing routine never becomes an experiment heating job. The scored night is
 withheld if the preceding settling exposure was not verified. This addresses
 carryover explicitly; **one settling night has not been shown to eliminate
 carryover on this bed**. Calendar labels are independent of 24-hour clock
-durations, including across DST. The routine adapter must supply the actual
-bounded start/end times and leave all wake warming and vibration with the alarm
-owner.
+durations, including across DST. Version 2 plans retain the actual scheduler's
+bounded start/end instants and leave all wake warming and vibration with the
+alarm owner. Existing version 1 calendar plans remain readable and stoppable;
+they are never silently upgraded into executable scheduled plans.
 
 These choices follow the general principles of balanced randomized comparisons
 in [NIST's experimental-design guidance](https://www.itl.nist.gov/div898/handbook/pri/section3/pri331.htm).
 The need to consider carryover and intervention reversibility is described in
 the [UK government's N-of-1 evaluation guide](https://www.gov.uk/guidance/n-of-1-study-comparative-studies)
 and [AHRQ's N-of-1 design guide](https://effectivehealthcare.ahrq.gov/sites/default/files/pdf/n-1-trials_research-2014-5.pdf).
-Sixteen nights, the settling interval and the numerical thresholds below are
+Sixteen scheduled nights, the settling interval and the numerical thresholds below are
 versioned project choices, not published claims of sleep benefit.
+
+## Scheduled dates and wake boundaries
+
+The resolver reads only existing enabled power routines for the authenticated
+person's assigned source. It searches at most nine weeks from the requested date
+and selects eight two-night periods before drawing the balanced treatment order.
+It requires an explicit bounded routine, at least four hours before the wake
+exception, and an unambiguous session for each local date. Duplicate starts,
+overlaps, unsupported/unbounded shutdowns, conflicting alarms and already-started
+routines are withheld with explicit reasons. Isolated eligible nights are shown
+as needing a following scheduled night. No routine, device state or alarm is
+created or edited by this calculation.
+
+For Luca's Sunday–Thursday bedtimes and Monday–Friday wakes, a Friday requested
+start advances to Sunday. Friday and Saturday remain unscheduled; the unused
+Thursday at the end of a four-night block is explicitly shown rather than being
+paired across a weekend gap. A weekend-only Friday/Saturday routine also works,
+with the comparison spanning more weeks. Every local date through the last
+planned night is either included once or explained in the review.
+
+Times use the same occurrence resolver as the controller, including the explicit
+power-off weekday offset, spring gaps and the first occurrence of repeated fall
+clock times. Each immutable window ends at its configured routine boundary or
+the first effective wake-warming start, whichever is earlier. One-occurrence
+later/skip edits and longer smart-wake lead times use the existing alarm policy.
+When warming falls outside a routine, the experiment does not extend that routine.
+The retained wake snapshot includes its actual time, target and vibration duration.
+The 105°F wake target remains separate from the nearby overnight treatment.
+
+Confirmation recomputes all windows under the same transaction and refuses a
+changed window or a first night that began during the five-minute review. New
+collector observations must cover the exact reviewed window; shortened samples
+cannot turn an incomplete night into a successful comparison. Feedback is allowed
+only after that window ends and within fourteen days. Physical qualification and
+runtime lease admission remain required before any treatment can run.
 
 ## Observations and interpretation
 
@@ -145,26 +183,25 @@ reactivate a stopped record. Authority and writes share a database transaction w
 and private response delivery rechecks authority and selected content. Input is
 strict UTF-8 JSON limited to 8 KiB. Cache headers prohibit shared caching.
 
-All responses explicitly identify execution as `planning_only`. Sixteen calendar
-dates do not establish sixteen scheduled or observed nights. The runtime adapter
-must review actual eligible routine windows and surface unscheduled dates before
-offering an executable comparison; it must not add weekend routines implicitly.
+All responses explicitly identify execution as `planning_only`. The preview now
+returns the exact scheduled windows, wake snapshots and skipped dates. The saved
+version 2 plan binds them into its hash. Sixteen scheduled windows do not establish
+sixteen observed or physically qualified nights.
 
 ## Remaining controller and app integration
 
 The next implementation must connect these parts to the single controller:
 
-1. Resolve the real scheduled windows for the reviewed comparison, including
-   unscheduled nights, overlaps and DST; preserve the existing wake plan.
-2. Add matching web/native review and results screens, including all exclusions.
-3. Connect authenticated planning and recovery to those screens.
-4. Admit only explicitly reviewed, qualified treatment leases. Pause normal
+1. Add matching web/native review and results screens, including all skipped
+   dates, exact night/wake boundaries and evidence exclusions.
+2. Connect authenticated planning and recovery to those screens.
+3. Admit only explicitly reviewed, qualified treatment leases. Pause normal
    adaptation during a comparison; preserve manual priority and the alarm window.
-5. Persist live observation references and reconcile source withdrawal. On stop,
+4. Persist live observation references and reconcile source withdrawal. On stop,
    expiry, reassignment, manual intervention or restart uncertainty, revoke the
    experiment lease. Resume only the current valid plan; never restore a stale
    saved target over a newer manual control.
-6. Run prospective Preview and attended qualification before actual treatment.
+5. Run prospective Preview and attended qualification before actual treatment.
 
 The currently saved `planned`/`stopped` record states deliberately express what
 this stage implements. They must not be presented as active or completed trials.
@@ -222,3 +259,31 @@ and 22 schema tests. Evidence is retained in
 `/tmp/sleepypod-experiment-api-lint-all.log` and
 `/tmp/sleepypod-experiment-api-migration-check.log`. Hosted checks and deployment
 are separate acceptance steps.
+
+## Scheduled-window validation
+
+The version 2 integration passes **10,149 tests**, with nineteen existing skips
+and no failures in the final full run. It includes 143 experiment/API scenarios.
+Full lint, production build and TypeScript checks pass. New cases cover Luca's
+weekday wake pattern, weekend-only periods, skipped dates, actual DST durations,
+ambiguous/spring-gap clocks, one-occurrence alarm changes, overlapping routines,
+an already-started first night, exact exposure bounds and feedback deadlines.
+Owner and personal HTTP fixtures use actual bounded scheduled periods. Preview
+requests contain only the earliest start date and comparison setting; clients
+cannot select assigned windows or supply measurement evidence. Subjective
+feedback still identifies its own assigned night.
+
+Two preceding full runs each reported a connection reset in a different existing
+piezo WebSocket case. The isolated 137-case streaming suite passed unchanged.
+The test connection helper now includes port and socket-reuse context on a failed
+handshake, without changing any assertions, retries or timeouts. The subsequent
+full run passed, but this does not establish the cause of the intermittent reset
+or prove that it has been repaired. Both failure logs remain retained.
+
+Evidence: `/tmp/sleepypod-experiment-windows-full.log`,
+`/tmp/sleepypod-experiment-windows-full-final.log`,
+`/tmp/sleepypod-experiment-windows-stream-check.log`,
+`/tmp/sleepypod-experiment-windows-full-diagnostic.log`,
+`/tmp/sleepypod-experiment-windows-build.log` and
+`/tmp/sleepypod-experiment-windows-lint-all.log`. Hosted checks and physical
+qualification remain separate.

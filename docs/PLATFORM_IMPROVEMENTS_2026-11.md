@@ -36,7 +36,7 @@ priority and acceptance; it does not introduce an additional approval gate.
 | 07 | Guided learning | Separate stage, baseline and temperature readiness with accurate missing evidence and usable next actions | Core PR 86 merged; native guided learning is consolidated and locally tested in PR 69 |
 | 08 | Predictive temperature control | Target-change dataset, held-out response validation, bounded Preview evaluation, reviewed activation and prospective outcomes | Core PRs 93 and 94 merged evidence audit and response-model research; native parity is consolidated in PR 69. Prospective target-changing control remains pending |
 | 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Native owner-scoped context import and review consolidated in PR 69; local tests passed, hosted release and physical delivery remain |
-| 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Balanced plans, exposure collection, private storage and paired comparisons merged in Core PR 125. Authenticated owner/personal planning, review confirmation, recovery, Stop and feedback APIs are implemented on the follow-up branch. Screens, scheduled-window resolution, guarded controller admission, physical cancellation/reversion and prospective observations remain. See COMFORT_EXPERIMENTS.md |
+| 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Balanced plans, exposure collection, private storage and paired comparisons merged in Core PR 125. Authenticated owner/personal planning, review confirmation, recovery, Stop and feedback APIs merged in Core PR 126 after all seven hosted checks. The next branch binds real scheduled windows, preserves wake boundaries, explains skipped nights and rejects shortened exposure. Screens, guarded controller admission, physical cancellation/reversion and prospective observations remain. See COMFORT_EXPERIMENTS.md |
 | 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Core PRs 95 and 112 merged owner/legacy and private personal comparisons. Native owner parity is consolidated in PR 69; the private editor and comparisons are now consolidated into PR 69 with passing local model/UI evidence and a resolved independent text-layout review. Native hosted integration, distribution and live acceptance remain |
 | 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Native morning brief consolidated in PR 69; authenticated report storage merged in Core PR 115 and owner/personal browser reading in PR 116 after all hosted checks. Explicit owner sharing is in native PR 74. Local transport, privacy and UI checks pass, and independent reviewers scored both final accessibility findings resolved. Native hosted release and physical delivery remain; browser questions, personal report enrollment and reviewed owner-history transfer are unfinished. See MORNING_BRIEF.md |
 | 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 merged after hosted checks; native explanation timeline consolidated in PR 69; live acceptance remains |
@@ -295,3 +295,24 @@ Native hosted checks, merge, TestFlight and physical acceptance remain pending.
 The [bedtime-light routine](../integrations/home-assistant/BEDTIME_LIGHTS.md)
 implements the selected currently-on lamp portion of workstream 19. It is not
 shades, purifier, Endel, shared-person policy or a deployed household routine.
+
+### Current consolidated release verification — 12 November, 09:56 UTC
+
+Native PR 69 head `27b802531b52751e9e75c16c31f7619c97595cf3` includes the
+quiet-time and everyday Watch work in addition to the earlier consolidation.
+Its application source is `655d87a78c14f325727ff76e3a23d36262561755`; the final
+commit changes documentation only. Local verification passes 1,626 unit/framework
+tests with nine existing live-service skips, 15 iPhone UI cases and 15 iPad UI
+cases, strict SwiftLint and the unsigned physical-iOS Release build including
+Watch. Hosted checks still run against Xcode 26.3 separately from local Xcode 27.2.
+
+GitHub ended the first household bundle job without assigning a runner or running
+any steps. Its annotation reports macOS arm64 capacity constraints. Only that
+terminal job was resubmitted as attempt 2 of run `43190108080`; other live checks
+were not cancelled. The native release remains unmerged and undistributed while
+those checks are pending. No live hardware or household activation occurred.
+
+Core PR 126 merged as `84dfc405aa3ed22b8f35fc52c93ef8ec57497541` after all
+seven hosted checks passed. The merged tree
+`469a37c9ac537de21cf7b94deb417a7437b912b9` matches the tested API head exactly.
+This establishes source integration, not Pod deployment or experiment execution.

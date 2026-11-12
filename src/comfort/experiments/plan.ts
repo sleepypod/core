@@ -1,7 +1,7 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { dateInTimeZone } from '@/src/lib/timeZoneDate'
 import { experimentContextSchema, experimentDateSchema, experimentPlanSchema, experimentProposalSchema, experimentRecordSchema,
-  type ExperimentArm, type ExperimentContext, type ExperimentNight, type ExperimentPlan } from './contract'
+  type ExperimentArm, type ExperimentContext, type ExperimentNight, type ExperimentPlan, type ExperimentSchedule } from './contract'
 
 /** Canonical parsed objects keep the reviewed plan identity independent of input key order. */
 export function experimentPlanHash(plan: ExperimentPlan): string {
@@ -24,7 +24,13 @@ export function createExperimentPlan(context: ExperimentContext, proposal: unkno
     context: experimentContextSchema.parse(context), ...parsed, orders })
 }
 
-/** Dates are calendar labels, not 24-hour actuator windows; DST is resolved by the routine adapter. */
+/** Window selection precedes randomization and cannot depend on the assigned treatment. */
+export function createScheduledExperimentPlan(context: ExperimentContext, variantF: number, schedule: ExperimentSchedule, now: number): ExperimentPlan {
+  const plan = createExperimentPlan(context, { firstNightDate: schedule.windows[0].date, variantF }, now)
+  return experimentPlanSchema.parse({ ...plan, version: 2, schedule })
+}
+
+/** Legacy calendar plans remain readable; new plans use their immutable scheduled dates. */
 export function experimentNights(plan: ExperimentPlan): ExperimentNight[] {
   const validated = experimentPlanSchema.parse(plan)
   const nights: ExperimentNight[] = []
@@ -32,7 +38,9 @@ export function experimentNights(plan: ExperimentPlan): ExperimentNight[] {
     const arms: ExperimentArm[] = order === 'baseline_first' ? ['baseline', 'variant'] : ['variant', 'baseline']
     for (const [period, arm] of arms.entries()) {
       for (const role of ['settling', 'scored'] as const) {
-        const date = experimentDateSchema.parse(new Date(Date.parse(validated.firstNightDate) + nights.length * 86_400_000).toISOString().slice(0, 10))
+        const date = validated.version === 2
+          ? validated.schedule.windows[nights.length].date
+          : experimentDateSchema.parse(new Date(Date.parse(validated.firstNightDate) + nights.length * 86_400_000).toISOString().slice(0, 10))
         nights.push({ date, pair, period, role, arm,
           targetF: arm === 'baseline' ? validated.context.baselineF : validated.variantF })
       }
@@ -56,5 +64,6 @@ export function experimentContextMatches(plan: ExperimentPlan, context: Experime
 
 export function experimentNightAt(plan: ExperimentPlan, routineStart: number): ExperimentNight | null {
   if (!Number.isSafeInteger(routineStart) || routineStart < plan.createdAt) return null
+  if (plan.version === 2 && !plan.schedule.windows.some(window => window.windowStart === routineStart)) return null
   return experimentNights(plan).find(night => night.date === dateInTimeZone(routineStart, plan.context.timezone)) ?? null
 }

@@ -620,6 +620,11 @@ interface ConnectedClient {
 
 async function connectClient(port: number): Promise<ConnectedClient> {
   const ws = new WsClient(`ws://127.0.0.1:${port}`, { headers: { Authorization: `Bearer ${TEST_OWNER_TOKEN}` } })
+  const request = (ws as any)._req
+  let socketAddress: { local?: number, remote?: number } = {}
+  request?.once('socket', (socket: any) => socket.once('connect', () => {
+    socketAddress = { local: socket.localPort, remote: socket.remotePort }
+  }))
   const messages: any[] = []
   ws.on('message', (data: Buffer) => {
     try {
@@ -631,7 +636,9 @@ async function connectClient(port: number): Promise<ConnectedClient> {
   })
   await new Promise<void>((resolve, reject) => {
     ws.once('open', () => resolve())
-    ws.once('error', reject)
+    ws.once('error', error => reject(new Error(`${error.message}; handshake=${JSON.stringify({
+      port, reusedSocket: request?.reusedSocket, socketAddress,
+    })}`, { cause: error })))
   })
   return {
     ws,

@@ -7,6 +7,7 @@ import { createComfortLimitStore } from '@/src/temperature/limitStore'
 import { createComfortStore } from '../store'
 import { comfortScheduleRevision, type ComfortSchedules } from '../routines'
 import { experimentContextSchema, type ExperimentContext } from './contract'
+import type { ExperimentScheduleSource } from './schedule'
 
 export interface ExperimentAccess {
   subjectKey: string
@@ -15,7 +16,7 @@ export interface ExperimentAccess {
   routineSide: Side | null
   ready: boolean
 }
-export interface ExperimentAvailability { context: ExperimentContext | null, reason: string }
+export interface ExperimentAvailability { context: ExperimentContext | null, reason: string, schedule?: ExperimentScheduleSource }
 
 export function experimentDigest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -51,7 +52,7 @@ export function readExperimentAvailability(database: Database.Database, access: 
     const maximumF = Math.min(limit.config.maxF, adaptive.maximumF)
     const powers = database.prepare(`SELECT id, day_of_week AS dayOfWeek, on_time AS onTime, off_time AS offTime,
       off_day_offset AS offDayOffset, end_action AS endAction, on_temperature AS onTemperature
-      FROM power_schedules WHERE side = ? AND enabled = 1 ORDER BY id`).all(side) as ComfortSchedules['powers']
+      FROM power_schedules WHERE side = ? AND enabled = 1 ORDER BY id`).all(side) as ExperimentScheduleSource['powers']
     const targets = database.prepare(`SELECT id, day_of_week AS dayOfWeek, time, temperature
       FROM temperature_schedules WHERE side = ? AND enabled = 1 ORDER BY id`).all(side) as ComfortSchedules['targets']
     const schedules: ComfortSchedules = { powers, targets, alarms: alarm.rows, timezone: alarm.timeZone, source: side }
@@ -68,6 +69,7 @@ export function readExperimentAvailability(database: Database.Database, access: 
       bindingHash: experimentDigest({ binding: access.binding, side, limit, policy }),
       routineHash: experimentDigest({ revision, powers, targets }),
       wakeHash: experimentDigest(alarm), timezone: alarm.timeZone, baselineF, minimumF, maximumF })
-    return { context, reason: 'Review a nearby setting inside your existing overnight range. Saving a plan does not activate temperature adjustments.' }
+    return { context, schedule: { powers, alarm },
+      reason: 'Review a nearby setting inside your existing overnight range. Saving a plan does not activate temperature adjustments.' }
   })()
 }

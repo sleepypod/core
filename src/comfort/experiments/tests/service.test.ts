@@ -6,22 +6,24 @@ import { ComfortExperimentService } from '../service'
 import { ComfortExperimentStore } from '../store'
 import { EXPERIMENT_REVIEW_MS } from '../contract'
 import { type ExperimentAccess } from '../access'
-import { context, createdAt } from './fixture'
+import { context, createdAt, fixturePlan, fixtureSchedule } from './fixture'
 
 let database: Database.Database, service: ComfortExperimentService, now: number, current: typeof context, unreadable: boolean
+let schedule: ReturnType<typeof fixtureSchedule>
 const access: ExperimentAccess = { subjectKey: context.subjectKey, scope: { account: 'first', session: 1 },
   binding: { assignment: 1 }, routineSide: 'left', ready: true }
 const proposal = { firstNightDate: '2026-11-13', variantF: 69 }
 const confirmation = (review: ReturnType<ComfortExperimentService['prepare']>) => ({ reviewId: review.reviewId, planHash: review.planHash })
 const createService = () => new ComfortExperimentService(database, () => now, () => {
   if (unreadable) throw new Error('fixture settings failure')
-  return { context: current, reason: 'fixture policy' }
+  return { context: current, reason: 'fixture policy', schedule }
 })
 beforeEach(() => {
   database = migratedComfortDatabase()
   now = createdAt
   current = { ...context }
   unreadable = false
+  schedule = fixtureSchedule()
   service = createService()
 })
 afterEach(() => database.close())
@@ -122,4 +124,49 @@ it('paginates more than fifty tied-clock records without duplication or cross-pe
   expect(new Set(ids).size).toBe(55)
   expect(() => service.overview({ ...access, subjectKey: 'f'.repeat(64) }, ids[0])).toThrow('unavailable')
   expect(() => service.overview(access, randomUUID())).toThrow('unavailable')
+})
+
+it('does not expose raw schedule sources in the overview and never accepts client-picked windows', () => {
+  expect(service.overview(access).availability).not.toHaveProperty('schedule')
+  expect(() => service.prepare(access, { ...proposal, schedule: { windows: [] } })).toThrow()
+  const review = service.prepare(access, proposal)
+  expect(review.plan.version).toBe(2)
+  expect(review.schedule.windows).toHaveLength(16)
+  expect(review.schedule.windows[0].wake).toMatchObject({ temperatureF: 105, vibrationSeconds: 20 })
+})
+
+it('rejects confirmation once the first routine begins even inside the five-minute review deadline', () => {
+  now = Date.parse('2026-11-13T21:58:00Z')
+  const review = service.prepare(access, proposal)
+  now += 3 * 60_000
+  expect(() => service.confirm(access, confirmation(review))).toThrow('no longer available')
+  expect(service.overview(access).experiments).toEqual([])
+})
+
+it('recomputes all windows on confirmation instead of trusting a still-matching mocked context hash', () => {
+  const review = service.prepare(access, proposal)
+  const friday = schedule.powers.find(row => row.dayOfWeek === 'friday')
+  if (!friday) throw new Error('Expected Friday fixture')
+  friday.onTime = '21:00'
+  expect(() => service.confirm(access, confirmation(review))).toThrow('windows changed')
+  expect(service.overview(access).experiments).toEqual([])
+})
+
+it('keeps legacy plans readable and stoppable without converting their unreviewed calendar dates', () => {
+  const record = new ComfortExperimentStore(database, access.subjectKey, () => now).create(fixturePlan())
+  expect(service.detail(access, record.plan.id).record.plan.version).toBe(1)
+  expect(service.stop(access, record.plan.id, { expectedRevision: record.revision }).record.status).toBe('stopped')
+})
+
+it('accepts feedback only after the exact scheduled window ends and within fourteen days', () => {
+  const review = service.prepare(access, proposal), record = service.confirm(access, confirmation(review)).record
+  const report = { expectedRevision: record.revision, feedback: { nightDate: '2026-11-13', confirmedFullNight: true,
+    comfort: 7, unwantedAdjustments: 0, problem: false } }
+  now = review.schedule.windows[0].windowEnd - 1
+  expect(() => service.saveFeedback(access, record.plan.id, report)).toThrow('completed night')
+  now++
+  const saved = service.saveFeedback(access, record.plan.id, report).record
+  expect(saved.feedback[0].recordedAt).toBe(now)
+  now += 14 * 86_400_000 + 1
+  expect(() => service.saveFeedback(access, record.plan.id, { ...report, expectedRevision: saved.revision })).toThrow('fourteen mornings')
 })

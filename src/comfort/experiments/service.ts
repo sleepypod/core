@@ -1,12 +1,13 @@
 import type Database from 'better-sqlite3'
 import { z } from 'zod'
 import { durableTransaction } from '@/src/db/durable'
-import { experimentFeedbackSchema, experimentHashSchema, EXPERIMENT_REVIEW_MS, type ExperimentRecord } from './contract'
+import { experimentFeedbackSchema, experimentHashSchema, experimentProposalSchema, EXPERIMENT_REVIEW_MS, type ExperimentRecord } from './contract'
 import { compareExperiment } from './analysis'
-import { createExperimentPlan, experimentContextMatches, experimentNights, experimentPlanHash } from './plan'
+import { createScheduledExperimentPlan, experimentContextMatches, experimentNights, experimentPlanHash } from './plan'
 import { experimentDigest, readExperimentAvailability, type ExperimentAccess, type ExperimentAvailability } from './access'
 import { ComfortExperimentStore } from './store'
 import { ComfortExperimentReviews } from './reviews'
+import { ExperimentScheduleError, resolveExperimentSchedule } from './schedule'
 
 export class ExperimentError extends Error {
   constructor(readonly code: 'invalid_request' | 'conflict' | 'not_found' | 'not_ready', readonly status: number, message: string) { super(message) }
@@ -46,7 +47,7 @@ export class ComfortExperimentService {
   overview(access: ExperimentAccess, afterId?: string) {
     const current = this.currentAvailability(access)
     const page = this.store(access).page(afterId)
-    return { availability: current, execution: 'planning_only' as const, nextId: page.nextId,
+    return { availability: { context: current.context, reason: current.reason }, execution: 'planning_only' as const, nextId: page.nextId,
       experiments: page.records.map(record => ({ id: record.plan.id, revision: record.revision, status: record.status,
         createdAt: record.plan.createdAt, updatedAt: record.updatedAt, firstNightDate: record.plan.firstNightDate,
         baselineF: record.plan.context.baselineF, variantF: record.plan.variantF,
@@ -60,14 +61,24 @@ export class ComfortExperimentService {
   }
 
   prepare(access: ExperimentAccess, proposal: unknown) {
+    const parsed = experimentProposalSchema.parse(proposal)
     const current = this.currentAvailability(access)
     if (!current.context) throw new ExperimentError('not_ready', 409, current.reason)
+    if (!current.schedule) throw new ExperimentError('not_ready', 409, 'Your scheduled nights could not be read. Review your routine before planning a comparison.')
     if (this.store(access).open()) throw new ExperimentError('conflict', 409, 'Stop your existing experiment before reviewing another.')
     const now = this.now()
-    const plan = createExperimentPlan(current.context, proposal, now)
+    let schedule
+    try {
+      schedule = resolveExperimentSchedule(current.schedule, parsed.firstNightDate, now)
+    }
+    catch (error) {
+      if (error instanceof ExperimentScheduleError) throw new ExperimentError('not_ready', 409, error.message)
+      throw error
+    }
+    const plan = createScheduledExperimentPlan(current.context, parsed.variantF, schedule, now)
     this.reviews(access).create(plan, experimentDigest(access.scope))
     return { reviewId: plan.id, planHash: experimentPlanHash(plan), expiresAt: now + EXPERIMENT_REVIEW_MS,
-      plan, nights: experimentNights(plan), execution: 'planning_only' as const,
+      plan, nights: experimentNights(plan), schedule, execution: 'planning_only' as const,
       notice: 'This saves a comparison plan only. Temperature adjustments require a separately qualified controller. Your wake routine is unchanged.' }
   }
 
@@ -84,6 +95,14 @@ export class ComfortExperimentService {
     const current = this.currentAvailability(access)
     if (!current.context || !experimentContextMatches(plan, current.context))
       throw new ExperimentError('conflict', 409, 'Your assignment, overnight policy or wake routine changed. Review the comparison again.')
+    // A five-minute review can cross the first scheduled start; never confirm a shortened or already-started treatment.
+    if (plan.version !== 2 || !current.schedule || this.now() >= plan.schedule.windows[0].windowStart)
+      throw new ExperimentError('conflict', 409, 'The reviewed night windows are no longer available. Review the comparison again.')
+    try {
+      const schedule = resolveExperimentSchedule(current.schedule, plan.schedule.requestedFirstNightDate, this.now())
+      if (experimentDigest(schedule) !== experimentDigest(plan.schedule)) throw new Error('Changed night windows')
+    }
+    catch { throw new ExperimentError('conflict', 409, 'The scheduled or wake windows changed. Review the comparison again.') }
     if (store.open()) throw new ExperimentError('conflict', 409, 'Another experiment was saved. Open its current record before continuing.')
     const saved = store.create(plan)
     this.reviews(access).remove(plan.id)

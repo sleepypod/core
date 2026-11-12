@@ -28,7 +28,8 @@ beforeEach(() => {
   vi.stubEnv('DATABASE_URL', filename)
   vi.stubEnv('SLEEPYPOD_AUTH_TOKEN', 'fixture-owner-signing-key-not-a-real-credential')
   fixture.database.exec(`INSERT INTO power_schedules (side, day_of_week, on_time, off_time, off_day_offset, on_temperature)
-    VALUES ('left', 'monday', '22:00', '07:15', 1, 70), ('right', 'monday', '22:00', '07:15', 1, 72);`)
+    VALUES ('left', 'monday', '22:00', '07:15', 1, 70), ('right', 'monday', '22:00', '07:15', 1, 72),
+      ('left', 'tuesday', '22:00', '07:15', 1, 70), ('right', 'tuesday', '22:00', '07:15', 1, 72);`)
   createComfortLimitStore(fixture.database).save('left', 0, { enabled: true, minF: 70, maxF: 72 })
   createComfortLimitStore(fixture.database).save('right', 0, { enabled: true, minF: 71, maxF: 74 })
   const service = new ComfortExperimentService(fixture.database, () => fixture.clock.now)

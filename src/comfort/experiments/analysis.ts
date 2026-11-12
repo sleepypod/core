@@ -18,8 +18,10 @@ export function experimentExposureIssues(plan: ExperimentPlan, night: Experiment
   if (exposure.sourceState !== 'current') issues.push('source_withdrawn')
   if (exposure.planHash !== experimentPlanHash(plan) || exposure.bindingHash !== plan.context.bindingHash
     || exposure.routineHash !== plan.context.routineHash || exposure.wakeHash !== plan.context.wakeHash) issues.push('context_changed')
+  const scheduled = plan.version === 2 ? plan.schedule.windows.find(window => window.date === night.date) : null
   if (exposure.nightDate !== night.date || dateInTimeZone(exposure.windowStart, plan.context.timezone) !== night.date
-    || exposure.windowStart < plan.createdAt) issues.push('wrong_window')
+    || exposure.windowStart < plan.createdAt || (scheduled && (exposure.windowStart !== scheduled.windowStart
+      || exposure.windowEnd !== scheduled.windowEnd || exposure.wakeStartsAt !== (scheduled.wake?.startsAt ?? null)))) issues.push('wrong_window')
   if (exposure.wakeStartsAt !== null && exposure.windowEnd > exposure.wakeStartsAt) issues.push('wake_overlap')
   if (exposure.targetF !== night.targetF) issues.push('wrong_target')
   const windowMs = exposure.windowEnd - exposure.windowStart
