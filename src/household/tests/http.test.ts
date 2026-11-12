@@ -70,6 +70,21 @@ it('requires legacy owner authority and current solo/follow setup before househo
   expect((await householdHttp(request('household/setup', 'POST', input, member), dependencies)).status).toBe(403)
   expect((await householdHttp(request('household/setup', 'POST', input, owner), { ...dependencies, verifySoloConfiguration: () => false })).status).toBe(409)
 })
+it('binds local Health enrollment to authenticated personal identity without exposing Health upload or owner routes', async () => {
+  for (const credential of [personal, member]) {
+    const response = await householdHttp(request('household/session', 'GET', undefined, credential), dependencies)
+    const session = contract.householdSessionSchema.parse(await response.json())
+    expect(session.accountId).toBe(store.session(credential).accountId)
+    expect(session.selfSleeperId).toBe(store.session(credential).selfSleeperId)
+    expect(session.capabilities).toMatchObject({ healthImport: true, cloudAnalysis: false, activateArrangement: false })
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect((await householdHttp(request('me/health', 'POST', { history: [] }, credential), dependencies)).status).toBe(404)
+    expect(authorized(new Headers({ authorization: `Bearer ${credential}` }), 'GET')).toBe(false)
+  }
+  for (const credential of [undefined, owner, secret()]) {
+    expect((await householdHttp(request('household/session', 'GET', undefined, credential), dependencies)).status).toBe(401)
+  }
+})
 it('creates a signed browser session with no reusable key and clears legacy owner cookies', async () => {
   const response = await householdHttp(request('household/session', 'POST', { token: member }, undefined, { origin: 'http://pod.test' }), dependencies)
   expect(response.status).toBe(200)

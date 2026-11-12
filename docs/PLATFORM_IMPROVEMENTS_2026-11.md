@@ -38,7 +38,7 @@ priority and acceptance; it does not introduce an additional approval gate.
 | 09 | Optional daytime context | Consented workout/activity/history imports, source/time semantics, missingness and per-person isolation tests | Native owner-scoped context import and review consolidated in PR 69; local tests passed, hosted release and physical delivery remain |
 | 10 | Comfort experiments | Reviewable nearby treatments, fixed wake, randomization/carryover handling, feedback, stop/revert and prospective observations | Pending |
 | 11 | Habit discoveries | Optional timing/quantity, comparable counts, missing-data/confounding explanations; no causal claims | Core PRs 95 and 112 merged owner/legacy and private personal comparisons. Native owner parity is consolidated in PR 69; the private editor and comparisons are now consolidated into PR 69 with passing local model/UI evidence and a resolved independent text-layout review. Native hosted integration, distribution and live acceptance remain |
-| 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Native morning brief consolidated in PR 69; authenticated report storage merged in Core PR 115. Explicit owner sharing is in native PR 74; the owner/personal browser reader is implemented. Local transport, privacy and UI checks pass, and independent reviewers scored both final accessibility findings resolved. Hosted release and physical delivery remain; browser questions, personal Health/report enrollment and reviewed owner-history transfer are unfinished. See MORNING_BRIEF.md |
+| 12 | Morning brief | Three evidence-backed takeaways, comparison chart, badges, one experiment, grounded follow-up and expandable provenance | Native morning brief consolidated in PR 69; authenticated report storage merged in Core PR 115 and owner/personal browser reading in PR 116 after all hosted checks. Explicit owner sharing is in native PR 74. Local transport, privacy and UI checks pass, and independent reviewers scored both final accessibility findings resolved. Native hosted release and physical delivery remain; browser questions, personal report enrollment and reviewed owner-history transfer are unfinished. See MORNING_BRIEF.md |
 | 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 merged after hosted checks; native explanation timeline consolidated in PR 69; live acceptance remains |
 | 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Core and native PR 69 provide the clear plan and app-owned backup workflow; physical alarm and selected accessory acceptance remain |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Core PR 98 merged after hosted checks; native PR 69 includes reviewed Pod and app-owned phone coordination with fresh phone-state reconciliation. Qualified house devices and live acceptance remain |
@@ -53,6 +53,12 @@ priority and acceptance; it does not introduce an additional approval gate.
 | 24 | Base and snoring assistance | Attended movement/Stop/position qualification first; trustworthy snore signal and whole-bed partner constraints before automation | Pending |
 
 ## Cross-cutting contracts
+
+Personal device-local Health enrollment is now being integrated against authenticated
+account/sleeper identities. Its Core capability and native privacy/lifecycle checks
+are source work; the paired native screen is undergoing phone/tablet validation.
+This does not finish personal model/report enrollment or the shared-bed activation.
+See [the enrollment boundary](PERSONAL_HEALTH_ENROLLMENT.md).
 
 - The Pod remains the sole hardware authority. Network recovery performs reads;
   queued or expired actuator commands are never replayed.

@@ -75,8 +75,8 @@ describe('personal history HTTP', () => {
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM household_attribution_epochs').get()).toEqual({ count: 0 })
   })
 
-  it('advertises only the enabled read capability; Health and assignment activation stay unavailable', async () => {
-    expect(await (await serve(request('household/session'))).json()).toMatchObject({ capabilities: { personalHistory: true, healthImport: false, activateArrangement: false } })
+  it('advertises enabled history and local Health enrollment without assignment activation or cloud analysis', async () => {
+    expect(await (await serve(request('household/session'))).json()).toMatchObject({ capabilities: { personalHistory: true, healthImport: true, activateArrangement: false, cloudAnalysis: false } })
     enabled = false
     expect(await (await serve(request('household/session'))).json()).toMatchObject({ capabilities: { personalHistory: false } })
     expect((await serve()).status).toBe(409)

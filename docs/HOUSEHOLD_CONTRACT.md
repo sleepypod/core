@@ -84,7 +84,13 @@ existing owner capabilities advertise `features.householdPreparation` with reaso
   are excluded from legacy database browsing. Whole-database HTTP downloads are
   disabled when preparation is enabled or household data exists; encrypted
   administrator backups remain a separate operational responsibility.
-- `activateArrangement`, `healthImport` and `cloudAnalysis` remain false.
+- `healthImport` permits explicit, device-local Health enrollment against the
+  authenticated account/sleeper identity. The native app must confirm that the
+  device's Health records belong to this person, isolate its encrypted import,
+  and reject late reads after access changes. This does not enable a server Health
+  upload, automatic owner-history transfer, model training or cloud analysis.
+  The original preparation fixtures retain `healthImport: false` for older clients.
+  `activateArrangement` and `cloudAnalysis` remain false in the preparation boundary.
   `personalHistory` remains false unless its separately gated read API below is
   enabled. `personalControls` remains false unless the separately gated
   [personal runtime](PERSONAL_CONTROL_API_V1.md) is enabled and the current

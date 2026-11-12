@@ -68,7 +68,10 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const history = dependencies.personalHistory?.present(arrangement) ?? arrangement
     const learning = dependencies.personalLearning?.present(history) ?? history
     const journal = dependencies.personalJournal?.present(learning) ?? learning
-    return dependencies.personalReports?.present(journal) ?? journal
+    const reports = dependencies.personalReports?.present(journal) ?? journal
+    // A native client may enroll its own Health library against this authenticated identity.
+    // This grants no Health upload route, legacy history access or cloud-analysis permission.
+    return { ...reports, capabilities: { ...reports.capabilities, healthImport: true } }
   }
   const url = new URL(request.url)
   const path = url.pathname.replace(/\/$/, '')
