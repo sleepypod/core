@@ -1194,6 +1194,27 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
   {
     "checks": 0,
     "columns": [
+      "id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
+      "subject_key | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "revision | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "status | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:planned,stopped",
+      "created_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "updated_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "record | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "comfortExperiments",
+    "foreignKeys": [],
+    "indexes": [
+      "idx_comfort_experiments_subject_created | non-unique | columns:subject_key,created_at | where:none",
+      "uq_comfort_experiments_open_subject | unique | columns:subject_key | where:"comfort_experiments"."status" = 'planned'",
+    ],
+    "name": "comfort_experiments",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "id | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
       "side | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:left,right",
       "local_date | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",

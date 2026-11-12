@@ -472,6 +472,18 @@ export const targetResponseModels = sqliteTable('target_response_models', {
   record: text('record', { mode: 'json' }).notNull(),
 }, table => [index('idx_target_response_models_side_created').on(table.side, table.createdAt)])
 
+/** Immutable personal experiment assignments with revisioned observations; no schedule or alarm writes. */
+export const comfortExperiments = sqliteTable('comfort_experiments', {
+  id: text('id').primaryKey(),
+  subjectKey: text('subject_key').notNull(),
+  revision: text('revision').notNull(),
+  status: text('status', { enum: ['planned', 'stopped'] }).notNull(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+  record: text('record').notNull(),
+}, table => [index('idx_comfort_experiments_subject_created').on(table.subjectKey, table.createdAt),
+  uniqueIndex('uq_comfort_experiments_open_subject').on(table.subjectKey).where(sql`${table.status} = 'planned'`)])
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

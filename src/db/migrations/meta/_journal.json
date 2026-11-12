@@ -505,6 +505,13 @@
       "when": 1794467783144,
       "tag": "0071_dusty_deathbird",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "6",
+      "when": 1794473342282,
+      "tag": "0072_nosy_umar",
+      "breakpoints": true
     }
   ]
 }
