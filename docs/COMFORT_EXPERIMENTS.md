@@ -397,3 +397,36 @@ retained. No timeout, retry or assertion was relaxed. The full suite then passed
 existing CI settings: `VITEST_MAX_WORKERS=2`, `OPENBLAS_NUM_THREADS=1` and
 `OMP_NUM_THREADS=1`. This passing run does not establish the cause of the earlier
 intermittent handshake response or prove physical treatment behavior.
+
+## Reviewed admission journal
+
+Migration `0075_young_risque.sql` adds short-lived execution reviews, consumed
+admissions and exclusive physical-zone claims. These are separate from planning
+reviews. Only the trusted controller host may supply physical zones and evidence;
+an HTTP client cannot manufacture a qualification or assign itself another side.
+
+An execution review lasts one minute and binds the plan hash, current record
+revision, account scope and each zone's existing thermal qualification. Admission
+requires the actual attended checks and seven matching, source-backed, reviewed
+Preview nights. Changed source evidence, policy, identity or an uncertain earlier
+command prevents confirmation. A review cannot begin an already-started first
+night or change the preserved wake plan.
+
+Confirmation commits the admission, every zone claim and suspension of ordinary
+personal adaptation together under FULL SQLite synchronization. Failure on either
+half rolls the complete transaction back. The host must hold the affected side
+locks in a consistent order. In-memory revocation of a queued ordinary proposal
+is conservative even if the durable transaction rolls back.
+
+A lost confirmation can read the original consumed review. It cannot create a
+second admission, renew an expired one or resurrect one that was cancelled.
+Stopping releases only that admission's claims and does not reactivate an older
+adaptive grant. A retained, invalid claim needs explicit cancellation before a
+replacement; an uncertain application needs the existing recovery process first.
+
+The tests use real migrated stores and qualification/report machinery with
+explicitly synthetic observations. They cover account isolation, expiry,
+revocation, source withdrawal, atomic two-zone rollback and independent claims.
+This is an internal integration stage: the production host, authenticated
+activation/recovery API, retained observation collector and matching app screens
+remain to be connected. No live admission, mode or hardware changed.

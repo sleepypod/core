@@ -507,6 +507,34 @@ export const comfortExperimentApplications = sqliteTable('comfort_experiment_app
   uniqueIndex('uq_experiment_application_unresolved_side').on(table.side)
     .where(sql`${table.outcome} IN ('attempting', 'unknown')`)])
 
+/** Reviews are separate from saved plans and cannot become grants after expiry or identity changes. */
+export const comfortExperimentExecutionReviews = sqliteTable('comfort_experiment_execution_reviews', {
+  id: text('id').primaryKey(),
+  subjectKey: text('subject_key').notNull(),
+  scopeHash: text('scope_hash').notNull(),
+  planId: text('plan_id').notNull().references(() => comfortExperiments.id),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  consumedAt: integer('consumed_at'),
+  record: text('record').notNull(),
+}, table => [index('idx_experiment_execution_reviews_subject_expiry').on(table.subjectKey, table.expiresAt)])
+
+export const comfortExperimentAdmissions = sqliteTable('comfort_experiment_admissions', {
+  id: text('id').primaryKey().references(() => comfortExperimentExecutionReviews.id),
+  subjectKey: text('subject_key').notNull(),
+  planId: text('plan_id').notNull().references(() => comfortExperiments.id),
+  admittedAt: integer('admitted_at').notNull(),
+  endsAt: integer('ends_at').notNull(),
+  revokedAt: integer('revoked_at'),
+  record: text('record').notNull(),
+}, table => [index('idx_experiment_admissions_subject_plan').on(table.subjectKey, table.planId)])
+
+/** Claim all authorized zones in one transaction, keeping two people's experiments independent. */
+export const comfortExperimentZoneClaims = sqliteTable('comfort_experiment_zone_claims', {
+  side: text('side', { enum: ['left', 'right'] }).primaryKey(),
+  admissionId: text('admission_id').notNull().references(() => comfortExperimentAdmissions.id),
+})
+
 export const comfortFeedback = sqliteTable('comfort_feedback', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   side: text('side', { enum: ['left', 'right'] }).notNull(),

@@ -526,6 +526,13 @@
       "when": 1794479757129,
       "tag": "0074_majestic_liz_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1794481173331,
+      "tag": "0075_young_risque",
+      "breakpoints": true
     }
   ]
 }

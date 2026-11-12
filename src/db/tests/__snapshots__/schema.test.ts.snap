@@ -1194,6 +1194,29 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
   {
     "checks": 0,
     "columns": [
+      "id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
+      "subject_key | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "plan_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "admitted_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "ends_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "revoked_at | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "record | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "comfortExperimentAdmissions",
+    "foreignKeys": [
+      "comfort_experiment_admissions_id_comfort_experiment_execution_reviews_id_fk | columns:id | references:comfort_experiment_execution_reviews(id) | on-delete:none | on-update:none",
+      "comfort_experiment_admissions_plan_id_comfort_experiments_id_fk | columns:plan_id | references:comfort_experiments(id) | on-delete:none | on-update:none",
+    ],
+    "indexes": [
+      "idx_experiment_admissions_subject_plan | non-unique | columns:subject_key,plan_id | where:none",
+    ],
+    "name": "comfort_experiment_admissions",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
       "sequence | sql:integer | logical:number/SQLiteInteger | not-null | default:auto | primary-key | not-unique | autoincrement | enum:none",
       "id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | unique:comfort_experiment_applications_id_unique | not-autoincrement | enum:none",
       "plan_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
@@ -1211,6 +1234,29 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "uq_experiment_application_unresolved_side | unique | columns:side | where:"comfort_experiment_applications"."outcome" IN ('attempting', 'unknown')",
     ],
     "name": "comfort_experiment_applications",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "id | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:none",
+      "subject_key | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "scope_hash | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "plan_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "created_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "expires_at | sql:integer | logical:number/SQLiteInteger | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "consumed_at | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "record | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "comfortExperimentExecutionReviews",
+    "foreignKeys": [
+      "comfort_experiment_execution_reviews_plan_id_comfort_experiments_id_fk | columns:plan_id | references:comfort_experiments(id) | on-delete:none | on-update:none",
+    ],
+    "indexes": [
+      "idx_experiment_execution_reviews_subject_expiry | non-unique | columns:subject_key,expires_at | where:none",
+    ],
+    "name": "comfort_experiment_execution_reviews",
     "primaryKeys": [],
     "uniqueConstraints": [],
   },
@@ -1251,6 +1297,21 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "uq_comfort_experiments_open_subject | unique | columns:subject_key | where:"comfort_experiments"."status" = 'planned'",
     ],
     "name": "comfort_experiments",
+    "primaryKeys": [],
+    "uniqueConstraints": [],
+  },
+  {
+    "checks": 0,
+    "columns": [
+      "side | sql:text | logical:string/SQLiteText | not-null | default:none | primary-key | not-unique | not-autoincrement | enum:left,right",
+      "admission_id | sql:text | logical:string/SQLiteText | not-null | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+    ],
+    "exportName": "comfortExperimentZoneClaims",
+    "foreignKeys": [
+      "comfort_experiment_zone_claims_admission_id_comfort_experiment_admissions_id_fk | columns:admission_id | references:comfort_experiment_admissions(id) | on-delete:none | on-update:none",
+    ],
+    "indexes": [],
+    "name": "comfort_experiment_zone_claims",
     "primaryKeys": [],
     "uniqueConstraints": [],
   },

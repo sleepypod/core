@@ -112,6 +112,41 @@ export function createComfortOwner(deps: ComfortOwnerDeps) {
     return ownerStatusSchema.parse({ apiVersion: 1, generatedAt: at, side, identity: current, qualifications: recorded,
       nights, reasons, active, canActivate: !active && state.config.mode === 'preview' && reasons.length === 0, application: state.application ?? null })
   }
+
+  /** Experiments reuse the actual thermal qualification proofs; saving a plan is never evidence. */
+  function assertExperimentEvidence(side: Side, input: OwnerSnapshot, includeSource: boolean) {
+    const snapshot = ownerSnapshotSchema.parse(input), state = store.read(side)
+    requireOwner(deps.running() && deps.autopilotEnabled(), 'The qualified comfort controller must be running with Autopilot enabled.')
+    requireOwner(['preview', 'active'].includes(state.config.mode) && !state.config.followBedtime,
+      'Experiments require Preview or qualified Active mode with an unshifted routine.')
+    requireOwner(same(identity(side, state), snapshot.identity), 'The experiment hardware, calibration, routine or comfort policy changed.')
+    requireOwner(!state.application || state.application.outcome === 'acknowledged', 'Resolve the unconfirmed comfort application first.')
+    assertReferences(side, snapshot, includeSource)
+    return snapshot
+  }
+
+  /** Inspect source-backed nights without changing mode, starting services or issuing hardware commands. */
+  async function experimentEvidence(side: Side): Promise<OwnerSnapshot> {
+    const inspection = await status(side)
+    requireOwner(inspection.identity && (inspection.canActivate || inspection.active),
+      inspection.reasons.join(' ') || 'Attended qualification and seven reviewed Preview nights are required.')
+    const snapshot: OwnerSnapshot = { identity: inspection.identity, qualifications: matchingQualifications(side, inspection.identity),
+      nights: inspection.nights, evidence: null, application: inspection.application }
+    return assertExperimentEvidence(side, snapshot, true)
+  }
+
+  /** Called inside the experiment host's durable transaction and side locks, before publishing its grant. */
+  function suspendForExperiment(side: Side, snapshot: OwnerSnapshot) {
+    requireOwner(database.inTransaction && database.pragma('synchronous', { simple: true }) === 2,
+      'Experiment suspension must be committed durably with its reviewed admission.')
+    assertExperimentEvidence(side, snapshot, true)
+    deps.revokeLease(side)
+    const state = store.read(side), at = now()
+    database.prepare('UPDATE comfort_activations SET revoked_at = ?, reason = ? WHERE side = ? AND revoked_at IS NULL')
+      .run(at, 'Reviewed comfort experiment owns the upcoming treatment windows', side)
+    store.commit(side, { ...state, config: { ...state.config, mode: 'preview' } },
+      comfortEvent(at, 'configuration', 'Personal adaptation is in Preview for a reviewed comfort experiment. The independent schedule and wake plan remain unchanged.'))
+  }
   async function prepare(input: z.infer<typeof ownerPrepareSchema>) {
     const request = ownerPrepareSchema.parse(input)
     // Night parsing yields; no side lock is held while inspecting a month of history.
@@ -217,5 +252,5 @@ export function createComfortOwner(deps: ComfortOwnerDeps) {
       return { saved: true as const }
     })
   }
-  return { status, prepare, confirm, retest, admission, revoke }
+  return { status, prepare, confirm, retest, admission, revoke, experimentEvidence, assertExperimentEvidence, suspendForExperiment }
 }
