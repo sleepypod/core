@@ -3,6 +3,7 @@
 import { trpc } from '@/src/utils/trpc'
 import type { Side } from '@/src/hardware/types'
 import { TargetResponseEvidence } from './TargetResponseEvidence'
+import { PredictiveTargetPreview } from './PredictiveTargetPreview'
 import { Button } from '@/src/components/ds'
 
 /** Forecast measurements stay separate from comfort suggestions and actuator controls. */
@@ -118,6 +119,7 @@ export function WaterForecastCard({ side }: { side: Side }) {
       {train.isSuccess && <p role="status" className="text-sm">Forecast evaluation finished. Review the results; your bed settings were not changed.</p>}
       <p className="text-xs text-fg-2">The unchanged-target forecast uses complete, reviewed thermal nights. Partial data, wake warming, unstable targets and long gaps are excluded. Its predictions assume a steady target and similar room conditions; they do not establish the effect of changing a target.</p>
       <TargetResponseEvidence key={side} side={side} />
+      <PredictiveTargetPreview key={`predictive-${side}`} side={side} />
     </section>
   )
 }

@@ -10,6 +10,10 @@ function rejectDemoWrite(): never {
 }
 
 export const comfort: DemoHandlers<'comfort'> = {
+  predictiveTargetPreview: ({ side }) => ({ apiVersion: 1, policy: 'bounded-water-tracking-v1', side, generatedAt: Date.now(),
+    mode: 'research_preview', activationAvailable: false, objective: 'bounded-routine-water-target', disposition: 'withheld',
+    currentTargetF: null, desiredWaterF: null, proposedTargetF: null, expiresAt: null, minimumF: null, maximumF: null,
+    comparisons: [], reason: unavailable }),
   targetResponseModel: ({ side }) => {
     const generatedAt = Date.now()
     return { apiVersion: 1, generatedAt, side, requiredNights: 20, completeNights: 0, datasetHash: '0'.repeat(64),

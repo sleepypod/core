@@ -5,10 +5,15 @@ import { thermalModelStatusSchema } from '@/src/comfort/thermal-model-store'
 import { responseAuditSchema } from '@/src/comfort/response-contract'
 import { responseModelStatusSchema, responseModelPreviewSchema } from '@/src/comfort/response-model-contract'
 import { forecastStatusSchema } from '@/src/comfort/thermal-forecast-store'
+import { predictiveTargetPreviewSchema } from '@/src/comfort/predictive-contract'
 import { resolveDemoCall } from '../handlers'
 
 describe('personal comfort in the demo', () => {
   it.each(['left', 'right'])('reports no learning, observations or hardware for %s', async (side) => {
+    expect(predictiveTargetPreviewSchema.parse(await resolveDemoCall('comfort.predictiveTargetPreview', { side }))).toMatchObject({
+      side, disposition: 'withheld', currentTargetF: null, proposedTargetF: null, desiredWaterF: null,
+      comparisons: [], expiresAt: null, activationAvailable: false,
+    })
     const status = comfortStatusSchema.parse(await resolveDemoCall('comfort.get', { side }))
     expect(status).toMatchObject({
       side, state: null, evaluatedAt: null, decision: null, history: [], runtime: 'stopped',

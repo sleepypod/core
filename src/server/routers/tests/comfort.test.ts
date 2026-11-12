@@ -8,9 +8,11 @@ const owner = vi.hoisted(() => ({ status: vi.fn(), prepare: vi.fn(), confirm: vi
 const targetResponse = vi.hoisted(() => vi.fn())
 const responseModels = vi.hoisted(() => ({ status: vi.fn(), train: vi.fn() }))
 const responsePreview = vi.hoisted(() => vi.fn())
+const predictivePreview = vi.hoisted(() => vi.fn())
 const reports = vi.hoisted(() => ({ list: vi.fn(), detail: vi.fn(), review: vi.fn() }))
 vi.mock('@/src/comfort/instance', () => ({ getComfortRuntime: () => runtime, getPreviewReports: () => reports, getComfortOwner: () => owner,
-  getTargetResponseAudit: targetResponse, getTargetResponseModels: () => responseModels, previewTargetResponse: responsePreview }))
+  getTargetResponseAudit: targetResponse, getTargetResponseModels: () => responseModels, previewTargetResponse: responsePreview,
+  previewPredictiveControl: predictivePreview }))
 const { comfortRouter } = await import('../comfort')
 const caller = comfortRouter.createCaller({})
 
@@ -29,6 +31,18 @@ beforeEach(() => {
 })
 
 describe('personal comfort API contract', () => {
+  it('reads predictive research without accepting client targets or starting controls', async () => {
+    const result = { apiVersion: 1, policy: 'bounded-water-tracking-v1', side: 'left', generatedAt: 1,
+      mode: 'research_preview', activationAvailable: false, objective: 'bounded-routine-water-target', disposition: 'withheld',
+      currentTargetF: null, desiredWaterF: null, proposedTargetF: null, expiresAt: null,
+      minimumF: null, maximumF: null, comparisons: [], reason: 'Fresh readings required' }
+    predictivePreview.mockReturnValue(result)
+    expect(await caller.predictiveTargetPreview({ side: 'left' })).toEqual(result)
+    await expect(caller.predictiveTargetPreview({ side: 'left', targetF: 69, activate: true } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(predictivePreview).toHaveBeenCalledExactlyOnceWith('left')
+    expect(runtime.status).not.toHaveBeenCalled()
+    expect(runtime.configure).not.toHaveBeenCalled()
+  })
   it('exposes inert response-model status and preserves explicit fit conflicts', async () => {
     const status = { apiVersion: 1, side: 'left', generatedAt: 1, completeNights: 0, requiredNights: 20,
       datasetHash: 'a'.repeat(64), canTrain: false, activationAvailable: false, reason: 'Collecting', model: null,

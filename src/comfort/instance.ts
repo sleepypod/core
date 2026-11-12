@@ -36,6 +36,8 @@ import { readResponseAudit } from './response-audit'
 import { previousForecastInput } from './thermal-forecast-input'
 import { createResponseModels } from './response-model-store'
 import type { ForecastInput } from './thermal-forecast'
+import { previewPredictiveTarget } from './predictive-policy'
+import { predictiveTargetPreviewSchema } from './predictive-contract'
 
 /** Inspect retained evidence without starting the comfort runtime or sending hardware commands. */
 export function getTargetResponseAudit(side: Side) {
@@ -58,7 +60,7 @@ export function getThermalForecasts() {
 function readForecastObservation(side: Side): {
   now: number
   reason: string
-  observation: { input: ForecastInput, configuration: string, observedAt: number } | null
+  observation: { input: ForecastInput, configuration: string, observedAt: number, state: ComfortState, context: ComfortContext } | null
 } {
   const state = createComfortStore(sqlite).read(side), now = Date.now()
   const { context, timezone } = readComfortContext(side, state, now, false)
@@ -77,7 +79,27 @@ function readForecastObservation(side: Side): {
   catch { /* A malformed source cannot provide a preceding measurement. */ }
   const input = previousForecastInput(previous, { at: now, session: evidence.session, configuration, context: context.thermalContext }, row?.at ?? null)
   if (!input) return { now, observation: null, reason: 'Waiting for an actual five-minute predecessor from this same quiet session and target.' }
-  return { now, observation: { input, configuration, observedAt: context.device.observedAt }, reason: 'Fresh guarded observation available.' }
+  return { now, observation: { input, configuration, observedAt: context.device.observedAt, state, context }, reason: 'Fresh guarded observation available.' }
+}
+
+/** All candidate measurements originate here. Viewing the comparison never starts an actuator or runtime. */
+export function previewPredictiveControl(side: Side) {
+  const { now, observation, reason } = readForecastObservation(side)
+  if (!observation) return predictiveTargetPreviewSchema.parse({
+    apiVersion: 1, policy: 'bounded-water-tracking-v1', side, generatedAt: now,
+    mode: 'research_preview', activationAvailable: false, objective: 'bounded-routine-water-target',
+    disposition: 'withheld', currentTargetF: null, desiredWaterF: null, proposedTargetF: null,
+    expiresAt: null, minimumF: null, maximumF: null, comparisons: [], reason,
+  })
+  const { input, configuration, observedAt, state, context } = observation
+  const candidates = [input.targetF - 1, input.targetF + 1].filter(target => target >= 55 && target <= 110)
+  const hold = getThermalForecasts().preview(side, input, configuration)
+  const responses = getTargetResponseModels().compare(side, candidates.map(requestedTargetF => ({ observedAt,
+    previousTargetF: input.targetF, requestedTargetF, waterBeforeF: input.waterF,
+    waterChange5mF: input.change5mF, roomF: input.roomF, humidity: input.humidity })), configuration)
+  // Synchronous source reads may take time. Recheck freshness against completion, not the first read.
+  return previewPredictiveTarget({ side, state, context: { ...context, now: Date.now() }, hold,
+    steps: candidates.map((targetF, index) => ({ targetF, ...responses[index] })) })
 }
 
 /** Read a guarded current observation and its actual five-minute predecessor; never send a command. */

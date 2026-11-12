@@ -118,6 +118,12 @@ function validState(state: ComfortState): boolean {
     && Number.isFinite(state.lastAppliedAt) && state.lastAppliedAt >= 0
 }
 
+/** Shared preference objective after eligibility checks; rate limiting is a separate command constraint. */
+export function boundedComfortTarget(state: ComfortState, baselineF: number, bedroomOffsetF = 0): number {
+  const offsetF = Math.max(-3, Math.min(3, state.offsetF + (state.config.roomAware ? bedroomOffsetF : 0)))
+  return Math.max(state.config.minimumF, Math.min(state.config.maximumF, baselineF + offsetF))
+}
+
 /** All inputs are observations, never instructions from an LLM or a room sensor. */
 export function decideComfort(state: ComfortState, context: ComfortContext): ComfortDecision {
   const { now, window, device, presence } = context
@@ -173,8 +179,7 @@ export function decideComfort(state: ComfortState, context: ComfortContext): Com
   const scheduledBaselineF = window.scheduledBaselineF ?? baselineF
   if (!Number.isFinite(scheduledBaselineF) || scheduledBaselineF < state.config.minimumF || scheduledBaselineF > state.config.maximumF) return stop('Original routine target is outside your comfort limits.')
   // Room context shares the learner's total three-degree budget and existing command authority.
-  const offsetF = Math.max(-3, Math.min(3, state.offsetF + (state.config.roomAware ? context.bedroom?.offsetF ?? 0 : 0)))
-  const desiredF = Math.max(state.config.minimumF, Math.min(state.config.maximumF, baselineF + offsetF))
+  const desiredF = boundedComfortTarget(state, baselineF, context.bedroom?.offsetF ?? 0)
   const proposedF = Math.max(device.targetF - 1, Math.min(device.targetF + 1, desiredF))
   if (proposedF < state.config.minimumF || proposedF > state.config.maximumF || Math.abs(proposedF - scheduledBaselineF) > 3) {
     return stop('Waiting for the routine target to enter your Autopilot limits.')
