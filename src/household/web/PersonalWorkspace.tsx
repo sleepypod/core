@@ -138,6 +138,10 @@ export function PersonalWorkspace({ workspace, history, learning, journal, repor
         {!state.storageReady && <p className="small">Checking private request recovery storage. New commands stay unavailable until it is ready.</p>}
       </article>
       {quiet && <QuietPanel quiet={quiet} />}
+      <div className="row">
+        <p>Prepare bedtime audio on your iPhone or iPad. The guide never starts your speakers.</p>
+        <a href="/guide/bedtime-audio.html">Set up Endel bedtime audio</a>
+      </div>
       {state.references.length > 0 && (
         <article aria-label="Saved request recovery">
           <h2>Check a previous result</h2>

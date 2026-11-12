@@ -10,6 +10,11 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
     <>
       <PageHeader title="Home" />
       <BedroomSensors />
+      <section className="border-b border-line pb-5">
+        <h2 className="text-base font-medium">Bedtime audio</h2>
+        <p className="mt-2 max-w-xl text-fg-2">Prepare Endel, your bedside speakers and a separate Pause action on your iPhone or iPad.</p>
+        <a className="mt-3 inline-flex min-h-11 items-center text-link underline underline-offset-4" href="/guide/bedtime-audio.html">Set up Endel bedtime audio</a>
+      </section>
       <section className="rounded-card border border-line bg-surface p-4">
         <House className="mb-5 text-cool" size={36} aria-hidden />
         <h2 className="text-base font-medium">Connect your room</h2>

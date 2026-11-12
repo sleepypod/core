@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Bedtime audio · Sleepypod</title>
+  <link rel="stylesheet" href="/guide/bedtime-audio.css">
+  <script src="/guide/bedtime-audio.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#steps">Skip to the steps</a>
+  <header><a href="/en/home">Sleepypod Home</a><a href="/household/index.html">My personal account</a></header>
+  <main>
+    <h1>Endel, ready for bed.</h1>
+    <p class="intro">Set up one bedtime action on your iPhone or iPad. Choose the sound, bedside speakers, volume and timer, then check that you hear it where you expect.</p>
+    <p class="scope">This browser guide explains the setup. It does not play audio, connect to speakers or change your Pod.</p>
+    <div class="layout" id="steps">
+      <nav aria-label="Audio setup steps">
+        <a href="#prepare" data-step-link="0">1. Prepare Endel</a>
+        <a href="#shortcuts" data-step-link="1">2. Make two Shortcuts</a>
+        <a href="#review" data-step-link="2">3. Review in Sleepypod</a>
+        <a href="#results" data-step-link="3">4. Check the result</a>
+      </nav>
+      <div class="reading">
+        <noscript><p>All four steps are shown below. You can follow this guide without JavaScript.</p></noscript>
+        <section id="prepare" data-step="0" aria-labelledby="prepare-title">
+          <h2 id="prepare-title" tabindex="-1">Start with the sound you want.</h2>
+          <ol>
+            <li>On the device you will use at bedtime, open Endel and try <strong>Sleep</strong> or <strong>Relax</strong>.</li>
+            <li>Open Endel’s account/settings area, find <strong>Siri Shortcuts</strong>, then choose <strong>Configure</strong>. Add your chosen mode.</li>
+            <li>Use Endel’s AirPlay control to select your bedside HomePods. Listen nearby and check the volume. <strong>35%</strong> is your suggested starting point, not a reading from the speakers.</li>
+          </ol>
+          <p>Try this while you are awake and the speakers are available. Your phone, Endel and the selected speakers all need to cooperate; the Pod does not stream the sound.</p>
+          <a href="https://endel.zendesk.com/hc/en-us/articles/360021256179-You-want-to-launch-Endel-on-your-iPhone-with-Siri-Shortcuts" target="_blank" rel="noreferrer">Endel’s instructions for Siri Shortcuts</a>
+        </section>
+        <section id="shortcuts" data-step="1" aria-labelledby="shortcuts-title">
+          <h2 id="shortcuts-title" tabindex="-1">Give Start and Pause their own names.</h2>
+          <h3>The Start Shortcut</h3>
+          <p>In Apple Shortcuts, create a routine using your Endel mode action. Add the available playback-destination and volume actions for your bedside HomePods. Run it once and check their order works on your device.</p>
+          <p>Choose a name you will recognize, such as <strong>Sleepypod Sleep</strong>. The exact name is what Sleepypod will open.</p>
+          <h3>The Pause Shortcut</h3>
+          <p>Create a separate routine, such as <strong>Sleepypod Pause</strong>, that pauses that same audio. Use an explicit Pause action, not a Play/Pause toggle that could start stopped audio. Test it on the same speakers.</p>
+          <h3>Check the timer</h3>
+          <p>If your installed Endel action offers a timer, configure it there. Otherwise set the timer directly in Endel before each start. A long Wait action is not a reliable overnight timer.</p>
+          <p>If Pause cannot reliably stop the intended audio, keep using Endel directly and leave the Sleepypod setup unfinished.</p>
+          <details><summary>Can the Shortcut use Sleepypod’s selected settings?</summary><p>Sleepypod sends the requested mode, speaker name, volume and duration as text. The Shortcut must be configured to read those fields to use them. Otherwise its own saved settings apply. Changing a value in Sleepypod does not edit your Shortcut.</p></details>
+        </section>
+        <section id="review" data-step="2" aria-labelledby="review-title">
+          <h2 id="review-title" tabindex="-1">Save the setup you actually tested.</h2>
+          <ol>
+            <li>In the Sleepypod iOS app, open <strong>Tonight → Bedtime audio</strong>. Personal accounts have it under <strong>Wind down</strong>.</li>
+            <li>Choose <strong>Set up bedtime audio</strong>. Enter the exact Start and Pause Shortcut names, the mode, speaker destination, volume and timer.</li>
+            <li>Check both Shortcuts match those settings. Confirm that review, then save. Saving does not start audio.</li>
+            <li>When ready, tap <strong>Start Endel</strong>. Sleepypod checks fresh shared quiet status before opening Shortcuts.</li>
+          </ol>
+          <a class="primary" href="sleepypod-bedtime://open">Open Bedtime audio in the iOS app</a>
+          <p class="small">This link only opens the review screen on this device. If it does not open, launch Sleepypod manually. If Bedtime audio is missing, update the app first. Your setup stays private to the current account on that device.</p>
+          <p>A quiet request prevents a new Start. Quiet requested after audio has started does not automatically stop it; use Pause when needed.</p>
+        </section>
+        <section id="results" data-step="3" aria-labelledby="results-title">
+          <h2 id="results-title" tabindex="-1">A returned Shortcut is only part of the story.</h2>
+          <dl>
+            <dt>Your reviewed setup</dt><dd>The mode, speakers, volume and timer you asked for. These are not live speaker measurements.</dd>
+            <dt>Shortcut reported completion</dt><dd>The Shortcut returned. Listen at your selected speakers, then use “I hear it on these speakers” or “I don’t hear it.”</dd>
+            <dt>After Pause</dt><dd>Check that the audio stopped. A Shortcut return does not confirm it stopped; your observation is recorded separately.</dd>
+          </dl>
+          <div class="example" hidden>
+            <label for="example-status">Try an example result</label>
+            <select id="example-status">
+              <option value="waiting">Waiting for Shortcuts</option>
+              <option value="unknown">No return from Shortcuts</option>
+              <option value="quiet">Someone requested quiet</option>
+              <option value="pause">Pause reported completion</option>
+            </select>
+            <p id="example-response" aria-live="polite">Finish any steps in Shortcuts or Endel, then return to Sleepypod. Do not start a second copy while the result is pending.</p>
+            <p class="small">Practice only. This example has no connection to your phone, speakers or account.</p>
+          </div>
+        </section>
+        <div class="step-actions" hidden>
+          <button id="previous" type="button">Previous step</button>
+          <p id="step-progress" role="status">Step 1 of 4</p>
+          <button id="next" type="button">Next step</button>
+        </div>
+        <aside aria-labelledby="stop-title">
+          <h2 id="stop-title">Need the sound to stop?</h2>
+          <p>Open Endel on the device playing the sound and tap <strong>Pause</strong>, then listen at the speakers. This manual option still works independently of your Sleepypod account connection.</p>
+          <p>If a call, another app or a different speaker route has taken over, check Endel directly before running the saved Pause Shortcut. Sleepypod never automatically resends a lost audio request.</p>
+        </aside>
+      </div>
+    </div>
+    <footer><p>Your saved audio setup and listening observations stay in the iOS app. Check playback, routing, volume and the timer on your actual device and speakers.</p><a href="https://endel.zendesk.com/hc/en-us/articles/360015068699-User-Guide" target="_blank" rel="noreferrer">Endel’s guide to AirPlay, Pause and timers</a></footer>
+  </main>
+</body>
+</html>
