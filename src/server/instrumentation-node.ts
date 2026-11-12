@@ -129,7 +129,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // Step 3: Stop Bonjour announcement
   try {
-    stopBonjourAnnouncement()
+    await stopBonjourAnnouncement()
   }
   catch (error) {
     console.error('Error stopping Bonjour:', error)
@@ -490,7 +490,7 @@ function startObservability(): void {
     if (lifecycle.isShuttingDown) return shutdownMqttBridge()
     recordStartupPhase('mqtt-started')
   }).catch(error => console.warn('WARNING: MQTT bridge failed to start:', error instanceof Error ? error.message : error))
-  startBonjourAnnouncement()
+  void startBonjourAnnouncement()
   void startHomeKitIfEnabled().then(() => {
     if (lifecycle.isShuttingDown) return shutdownHomeKit()
   }).catch(error => console.warn('[homekit] startup failed:', error instanceof Error ? error.message : error))

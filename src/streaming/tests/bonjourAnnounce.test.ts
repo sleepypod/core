@@ -1,309 +1,356 @@
-/**
- * Tests for the Bonjour/mDNS Avahi service-file orchestration.
- *
- * The module shells out via node:fs and node:child_process; we mock both so
- * tests stay hermetic. Coverage targets the dev-mode skip, the read-only-fs
- * fallback, the write-then-reload happy path, the unlink-on-stop path, and
- * the outer error guards.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Hoisted state shared with the node:fs / node:child_process mocks. Each test
-// drives behaviour by toggling these flags rather than reaching into the mocks
-// directly.
-interface FsState {
-  existing: Set<string>
-  writeThrows: boolean
-  mkdirThrows: boolean
-  unlinkThrows: boolean
-}
-
-const fsMock = vi.hoisted(() => {
-  const state: FsState = {
-    existing: new Set<string>(),
-    writeThrows: false,
-    mkdirThrows: false,
-    unlinkThrows: false,
-  }
-  return {
-    state,
-    existsSync: vi.fn((p: string) => state.existing.has(p)),
-    writeFileSync: vi.fn((p: string, _body: string) => {
-      if (state.writeThrows) throw new Error('EROFS: read-only')
-      state.existing.add(p)
-      return _body
-    }),
-    mkdirSync: vi.fn(() => {
-      if (state.mkdirThrows) throw new Error('EROFS: read-only')
-    }),
-    unlinkSync: vi.fn((p: string) => {
-      if (state.unlinkThrows) throw new Error('EROFS: read-only')
-      state.existing.delete(p)
-    }),
-  }
-})
-
-const childMock = vi.hoisted(() => {
-  const state: { execThrows: boolean } = { execThrows: false }
-  return {
-    state,
-    execSync: vi.fn(() => {
-      if (state.execThrows) throw new Error('no avahi-daemon running')
-      return Buffer.from('')
-    }),
-  }
-})
+const mocks = vi.hoisted(() => ({
+  files: new Map<string, string>(),
+  existsSync: vi.fn(),
+  readFileSync: vi.fn(),
+  mkdirSync: vi.fn(),
+  writeFileSync: vi.fn(),
+  unlinkSync: vi.fn(),
+  execFileSync: vi.fn(),
+  advertise: vi.fn(),
+  destroy: vi.fn(),
+  shutdown: vi.fn(),
+  createService: vi.fn(),
+  getResponder: vi.fn(),
+}))
 
 vi.mock('node:fs', () => {
   const api = {
-    existsSync: fsMock.existsSync,
-    writeFileSync: fsMock.writeFileSync,
-    mkdirSync: fsMock.mkdirSync,
-    unlinkSync: fsMock.unlinkSync,
+    existsSync: mocks.existsSync,
+    readFileSync: mocks.readFileSync,
+    mkdirSync: mocks.mkdirSync,
+    writeFileSync: mocks.writeFileSync,
+    unlinkSync: mocks.unlinkSync,
   }
   return { ...api, default: api }
 })
-
 vi.mock('node:child_process', () => {
-  const api = { execSync: childMock.execSync }
+  const api = { execFileSync: mocks.execFileSync }
   return { ...api, default: api }
 })
+vi.mock('node:os', () => {
+  const api = { hostname: () => 'eight-pod' }
+  return { ...api, default: api }
+})
+vi.mock('../mdnsResponder', () => ({ loadDiscoveryResponder: () => ({ getResponder: mocks.getResponder }) }))
 
 const SERVICE_FILE = '/etc/avahi/services/sleepypod.service'
-const originalPort = process.env.PORT
-const originalWsPort = process.env.PIEZO_WS_PORT
+const STATE_KEY = '__sleepypod_bonjour_lifecycle__'
+let signal: ReturnType<typeof vi.spyOn>
+let logs: ReturnType<typeof vi.spyOn>
+let warnings: ReturnType<typeof vi.spyOn>
 
-let logSpy: ReturnType<typeof vi.spyOn>
-let warnSpy: ReturnType<typeof vi.spyOn>
+function deferred() {
+  let resolve!: () => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<void>((accept, fail) => {
+    resolve = accept
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
 
 beforeEach(() => {
   vi.resetModules()
-  delete process.env.PORT
-  delete process.env.PIEZO_WS_PORT
-  fsMock.state.existing = new Set<string>()
-  fsMock.state.writeThrows = false
-  fsMock.state.mkdirThrows = false
-  fsMock.state.unlinkThrows = false
-  childMock.state.execThrows = false
-  fsMock.existsSync.mockClear()
-  fsMock.writeFileSync.mockClear()
-  fsMock.mkdirSync.mockClear()
-  fsMock.unlinkSync.mockClear()
-  childMock.execSync.mockClear()
-  logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-  warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.resetAllMocks()
+  Reflect.deleteProperty(globalThis, STATE_KEY)
+  vi.stubEnv('NODE_ENV', 'production')
+  vi.stubEnv('PORT', undefined)
+  vi.stubEnv('PIEZO_WS_PORT', undefined)
+  vi.stubEnv('SLEEPYPOD_MDNS', undefined)
+  mocks.files.clear()
+  mocks.existsSync.mockImplementation(path => mocks.files.has(path))
+  mocks.readFileSync.mockImplementation(path => mocks.files.get(path))
+  mocks.writeFileSync.mockImplementation((path, contents) => {
+    mocks.files.set(path, contents)
+  })
+  mocks.unlinkSync.mockImplementation((path) => {
+    mocks.files.delete(path)
+  })
+  mocks.execFileSync.mockImplementation(() => {
+    throw new Error('No Avahi process')
+  })
+  mocks.advertise.mockResolvedValue(undefined)
+  mocks.destroy.mockResolvedValue(undefined)
+  mocks.shutdown.mockResolvedValue(undefined)
+  mocks.createService.mockReturnValue({ advertise: mocks.advertise, destroy: mocks.destroy })
+  mocks.getResponder.mockReturnValue({ createService: mocks.createService, shutdown: mocks.shutdown })
+  signal = vi.spyOn(process, 'kill').mockReturnValue(true)
+  logs = vi.spyOn(console, 'log').mockImplementation(() => {})
+  warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
-afterEach(() => {
-  if (originalPort === undefined) delete process.env.PORT
-  else process.env.PORT = originalPort
-  if (originalWsPort === undefined) delete process.env.PIEZO_WS_PORT
-  else process.env.PIEZO_WS_PORT = originalWsPort
-  logSpy.mockRestore()
-  warnSpy.mockRestore()
+afterEach(async () => {
+  const { stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+  await stopBonjourAnnouncement()
+  Reflect.deleteProperty(globalThis, STATE_KEY)
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
-async function loadModule() {
-  return await import('../bonjourAnnounce')
-}
-
-describe('startBonjourAnnouncement', () => {
-  it('skips with a dev-mode log when /etc/avahi is absent', async () => {
-    const { startBonjourAnnouncement } = await loadModule()
-
-    startBonjourAnnouncement()
-
-    expect(fsMock.writeFileSync).not.toHaveBeenCalled()
-    expect(childMock.execSync).not.toHaveBeenCalled()
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('No Avahi found (dev mode)'),
-    )
-  })
-
-  it('writes the service file and reloads avahi when /etc/avahi exists but file does not', async () => {
-    fsMock.state.existing.add('/etc/avahi')
-    const { startBonjourAnnouncement } = await loadModule()
-
-    startBonjourAnnouncement()
-
-    expect(fsMock.mkdirSync).toHaveBeenCalledWith('/etc/avahi/services', { recursive: true })
-    expect(fsMock.writeFileSync).toHaveBeenCalledTimes(1)
-    const [path, body] = fsMock.writeFileSync.mock.calls[0] as [string, string]
-    expect(path).toBe(SERVICE_FILE)
-    expect(body).toContain('<type>_sleepypod._tcp</type>')
-    expect(body).toContain('<port>3000</port>')
-    expect(body).toContain('wsPort=3001')
-    expect(body).toContain('version=1.0.0')
-    expect(childMock.execSync).toHaveBeenCalledWith(
-      expect.stringContaining('kill -HUP'),
-      expect.objectContaining({ stdio: 'ignore' }),
-    )
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Advertising _sleepypod._tcp on port 3000'),
-    )
-  })
-
-  it('writes configured HTTP and WebSocket ports into the service announcement', async () => {
-    process.env.PORT = '4310'
-    process.env.PIEZO_WS_PORT = '4311'
-    fsMock.state.existing.add('/etc/avahi')
-    const { startBonjourAnnouncement } = await loadModule()
-
-    startBonjourAnnouncement()
-
-    const [, body] = fsMock.writeFileSync.mock.calls[0] as [string, string]
-    expect(body).toContain('<port>4310</port>')
-    expect(body).toContain('<txt-record>wsPort=4311</txt-record>')
-    expect(logSpy).toHaveBeenCalledWith(
-      '[bonjour] Advertising _sleepypod._tcp on port 4310 (wsPort=4311) via Avahi',
-    )
-  })
-
-  it('reloads avahi without rewriting when the service file is already present', async () => {
-    fsMock.state.existing.add('/etc/avahi')
-    fsMock.state.existing.add(SERVICE_FILE)
-    const { startBonjourAnnouncement } = await loadModule()
-
-    startBonjourAnnouncement()
-
-    expect(fsMock.writeFileSync).not.toHaveBeenCalled()
-    expect(fsMock.mkdirSync).not.toHaveBeenCalled()
-    expect(childMock.execSync).toHaveBeenCalledTimes(1)
-  })
-
-  it('logs the read-only fallback when writing the service file is forbidden', async () => {
-    fsMock.state.existing.add('/etc/avahi')
-    fsMock.state.writeThrows = true
-    const { startBonjourAnnouncement } = await loadModule()
-
-    startBonjourAnnouncement()
-
-    expect(fsMock.writeFileSync).toHaveBeenCalled()
-    expect(childMock.execSync).not.toHaveBeenCalled()
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('mDNS unavailable'),
-    )
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Re-run the installer'),
-    )
-  })
-
-  it('also takes the read-only fallback when mkdirSync fails', async () => {
-    fsMock.state.existing.add('/etc/avahi')
-    fsMock.state.mkdirThrows = true
-    const { startBonjourAnnouncement } = await loadModule()
-
-    startBonjourAnnouncement()
-
-    expect(fsMock.writeFileSync).not.toHaveBeenCalled()
-    expect(childMock.execSync).not.toHaveBeenCalled()
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('mDNS unavailable'),
-    )
-  })
-
-  it('swallows execSync failure when avahi-daemon is not running', async () => {
-    fsMock.state.existing.add('/etc/avahi')
-    fsMock.state.existing.add(SERVICE_FILE)
-    childMock.state.execThrows = true
-    const { startBonjourAnnouncement } = await loadModule()
-
-    expect(() => startBonjourAnnouncement()).not.toThrow()
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Advertising _sleepypod._tcp on port 3000'),
-    )
-  })
-
-  it('warns via the outer guard when existsSync throws unexpectedly', async () => {
-    fsMock.existsSync.mockImplementationOnce(() => {
-      throw new Error('fs blew up')
+describe('Pod discovery without Avahi', () => {
+  it('publishes the existing DNS-SD contract and stable hostname without credentials', async () => {
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.createService).toHaveBeenCalledWith({
+      name: 'sleepypod', type: 'sleepypod', hostname: 'eight-pod', port: 3000,
+      txt: { wsPort: '3001', version: '1.0.0' },
     })
-    const { startBonjourAnnouncement } = await loadModule()
+    expect(mocks.advertise).toHaveBeenCalledOnce()
+    expect(mocks.writeFileSync).not.toHaveBeenCalled()
+    expect(logs).toHaveBeenCalledWith(expect.stringContaining('via ciao'))
+  })
 
-    expect(() => startBonjourAnnouncement()).not.toThrow()
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to configure Avahi service'),
-      expect.anything(),
-    )
+  it('does not mistake a leftover Avahi directory or file for a running daemon', async () => {
+    mocks.files.set('/etc/avahi', '')
+    mocks.files.set(SERVICE_FILE, 'installed service')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.advertise).toHaveBeenCalledOnce()
+    expect(signal).not.toHaveBeenCalled()
+    expect(mocks.files.get(SERVICE_FILE)).toBe('installed service')
+  })
+
+  it('does not advertise a development server by default', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.getResponder).not.toHaveBeenCalled()
+    expect(mocks.execFileSync).not.toHaveBeenCalled()
+  })
+
+  it('supports explicit discovery in development and configured ports', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    vi.stubEnv('SLEEPYPOD_MDNS', '1')
+    vi.stubEnv('PORT', '4310')
+    vi.stubEnv('PIEZO_WS_PORT', '4311')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.createService).toHaveBeenCalledWith(expect.objectContaining({
+      port: 4310, txt: { wsPort: '4311', version: '1.0.0' },
+    }))
+  })
+
+  it('supports an explicit production opt-out', async () => {
+    vi.stubEnv('SLEEPYPOD_MDNS', '0')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.getResponder).not.toHaveBeenCalled()
+  })
+
+  it.each(['0', '65536', '-1', '3000<xml>', '3e3', ''])('rejects an invalid HTTP port %j without publication', async (value) => {
+    vi.stubEnv('PORT', value)
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await expect(startBonjourAnnouncement()).resolves.toBeUndefined()
+    expect(mocks.getResponder).not.toHaveBeenCalled()
+    expect(mocks.writeFileSync).not.toHaveBeenCalled()
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('startup failed'), expect.any(Error))
+  })
+
+  it('also rejects an invalid WebSocket port', async () => {
+    vi.stubEnv('PIEZO_WS_PORT', '70000')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.getResponder).not.toHaveBeenCalled()
   })
 })
 
-describe('stopBonjourAnnouncement', () => {
-  it('does nothing observable when the service file does not exist', async () => {
-    const { stopBonjourAnnouncement } = await loadModule()
-
-    stopBonjourAnnouncement()
-
-    expect(fsMock.unlinkSync).not.toHaveBeenCalled()
-    expect(childMock.execSync).not.toHaveBeenCalled()
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('mDNS announcement stopped'),
-    )
+describe('existing Avahi installations', () => {
+  beforeEach(() => {
+    mocks.execFileSync.mockReturnValue('432\n')
   })
 
-  it('removes the service file and reloads avahi when present', async () => {
-    fsMock.state.existing.add(SERVICE_FILE)
-    const { stopBonjourAnnouncement } = await loadModule()
-
-    stopBonjourAnnouncement()
-
-    expect(fsMock.unlinkSync).toHaveBeenCalledWith(SERVICE_FILE)
-    expect(childMock.execSync).toHaveBeenCalledWith(
-      expect.stringContaining('kill -HUP'),
-      expect.objectContaining({ stdio: 'ignore' }),
-    )
+  it('installs valid service data and reloads an actual daemon', async () => {
+    vi.stubEnv('PORT', '4310')
+    vi.stubEnv('PIEZO_WS_PORT', '4311')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    const document = mocks.files.get(SERVICE_FILE)
+    expect(document).toContain('<type>_sleepypod._tcp</type>')
+    expect(document).toContain('<port>4310</port>')
+    expect(document).toContain('wsPort=4311')
+    expect(signal).toHaveBeenCalledWith(432, 'SIGHUP')
+    expect(mocks.getResponder).not.toHaveBeenCalled()
   })
 
-  it('swallows unlink/execSync failure on a read-only rootfs', async () => {
-    fsMock.state.existing.add(SERVICE_FILE)
-    fsMock.state.unlinkThrows = true
-    const { stopBonjourAnnouncement } = await loadModule()
-
-    expect(() => stopBonjourAnnouncement()).not.toThrow()
-    // execSync must NOT run if unlink threw
-    expect(childMock.execSync).not.toHaveBeenCalled()
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('mDNS announcement stopped'),
-    )
+  it('updates a stale port rather than announcing the wrong endpoint', async () => {
+    mocks.files.set(SERVICE_FILE, '<port>9999</port>')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.files.get(SERVICE_FILE)).toContain('<port>3000</port>')
   })
 
-  it('warns via the outer guard when existsSync throws unexpectedly', async () => {
-    fsMock.existsSync.mockImplementationOnce(() => {
-      throw new Error('fs blew up')
+  it('can reuse a matching installer-owned file on a read-only filesystem', async () => {
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    const document = mocks.files.get(SERVICE_FILE) ?? ''
+    expect(document).not.toBe('')
+    await stopBonjourAnnouncement()
+    mocks.files.set(SERVICE_FILE, document)
+    mocks.writeFileSync.mockClear().mockImplementation(() => {
+      throw new Error('EROFS')
     })
-    const { stopBonjourAnnouncement } = await loadModule()
+    await startBonjourAnnouncement()
+    expect(mocks.writeFileSync).not.toHaveBeenCalled()
+    expect(mocks.getResponder).not.toHaveBeenCalled()
+  })
 
-    expect(() => stopBonjourAnnouncement()).not.toThrow()
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Error during shutdown'),
-      expect.anything(),
-    )
+  it('falls back when a required service file cannot be written', async () => {
+    mocks.writeFileSync.mockImplementation(() => {
+      throw new Error('EROFS')
+    })
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.advertise).toHaveBeenCalledOnce()
+  })
+
+  it('falls back when the daemon exits before reload', async () => {
+    signal.mockImplementation(() => {
+      throw new Error('ESRCH')
+    })
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.advertise).toHaveBeenCalledOnce()
+    expect(logs).not.toHaveBeenCalledWith(expect.stringContaining('via Avahi'))
+  })
+
+  it('does not signal invalid process IDs', async () => {
+    mocks.execFileSync.mockReturnValue('0 1 -1 garbage')
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(signal).not.toHaveBeenCalled()
+    expect(mocks.advertise).toHaveBeenCalledOnce()
+  })
+
+  it('withdraws its file and reports read-only withdrawal failures honestly', async () => {
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    mocks.unlinkSync.mockImplementation(() => {
+      throw new Error('EROFS')
+    })
+    await expect(stopBonjourAnnouncement()).resolves.toBeUndefined()
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('Could not withdraw'), expect.any(Error))
   })
 })
 
-describe('lifecycle / idempotency', () => {
-  it('start → stop → start drives writeFile only once across the cycle', async () => {
-    fsMock.state.existing.add('/etc/avahi')
-    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await loadModule()
-
-    startBonjourAnnouncement() // writes file
-    stopBonjourAnnouncement() // unlinks file
-    startBonjourAnnouncement() // writes file again (file is gone)
-
-    expect(fsMock.writeFileSync).toHaveBeenCalledTimes(2)
-    expect(fsMock.unlinkSync).toHaveBeenCalledTimes(1)
+describe('concurrent discovery lifecycle', () => {
+  it('shares one announcement across repeated starts and module copies', async () => {
+    const firstModule = await import('../bonjourAnnounce')
+    const firstStart = firstModule.startBonjourAnnouncement()
+    expect(firstModule.startBonjourAnnouncement()).toBe(firstStart)
+    await firstStart
+    vi.resetModules()
+    const secondModule = await import('../bonjourAnnounce')
+    await secondModule.startBonjourAnnouncement()
+    expect(mocks.getResponder).toHaveBeenCalledOnce()
+    await secondModule.stopBonjourAnnouncement()
+    await firstModule.stopBonjourAnnouncement()
+    expect(mocks.destroy).toHaveBeenCalledOnce()
+    expect(mocks.shutdown).toHaveBeenCalledOnce()
+    expect(mocks.destroy.mock.invocationCallOrder[0]).toBeLessThan(mocks.shutdown.mock.invocationCallOrder[0])
   })
 
-  it('repeated starts after the file is in place reload avahi each time without rewriting', async () => {
-    fsMock.state.existing.add('/etc/avahi')
-    fsMock.state.existing.add(SERVICE_FILE)
-    const { startBonjourAnnouncement } = await loadModule()
+  it('cancels before startup without acquiring a responder', async () => {
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    const starting = startBonjourAnnouncement()
+    await stopBonjourAnnouncement()
+    await starting
+    expect(mocks.getResponder).not.toHaveBeenCalled()
+  })
 
-    startBonjourAnnouncement()
-    startBonjourAnnouncement()
-    startBonjourAnnouncement()
+  it('withdraws a pending publication once and never reports it as active afterward', async () => {
+    const publication = deferred()
+    mocks.advertise.mockReturnValue(publication.promise)
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    const starting = startBonjourAnnouncement()
+    await vi.waitFor(() => expect(mocks.advertise).toHaveBeenCalledOnce())
+    await stopBonjourAnnouncement()
+    publication.reject(new Error('Publication cancelled'))
+    await starting
+    expect(mocks.destroy).toHaveBeenCalledOnce()
+    expect(mocks.shutdown).toHaveBeenCalledOnce()
+    expect(logs).not.toHaveBeenCalledWith(expect.stringContaining('Advertising'))
+    expect(warnings).not.toHaveBeenCalled()
+  })
 
-    expect(fsMock.writeFileSync).not.toHaveBeenCalled()
-    expect(childMock.execSync).toHaveBeenCalledTimes(3)
+  it('waits for shutdown before acquiring a new responder', async () => {
+    const withdrawal = deferred()
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    mocks.destroy.mockReturnValueOnce(withdrawal.promise)
+    const stopping = stopBonjourAnnouncement()
+    const restarting = startBonjourAnnouncement()
+    await Promise.resolve()
+    expect(mocks.getResponder).toHaveBeenCalledOnce()
+    withdrawal.resolve()
+    await stopping
+    await restarting
+    expect(mocks.getResponder).toHaveBeenCalledTimes(2)
+  })
+
+  it('cleans up failed publication and allows a later retry', async () => {
+    mocks.advertise.mockRejectedValueOnce(new Error('Multicast unavailable'))
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.destroy).toHaveBeenCalledOnce()
+    expect(mocks.shutdown).toHaveBeenCalledOnce()
+    await startBonjourAnnouncement()
+    expect(mocks.advertise).toHaveBeenCalledTimes(2)
+  })
+
+  it('automatically retries a transient startup failure without restarting the controller', async () => {
+    vi.useFakeTimers()
+    mocks.advertise.mockRejectedValueOnce(new Error('Network not ready'))
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(mocks.advertise).toHaveBeenCalledTimes(2)
+  })
+
+  it('cancels automatic retry during shutdown', async () => {
+    vi.useFakeTimers()
+    mocks.advertise.mockRejectedValueOnce(new Error('Network not ready'))
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    await stopBonjourAnnouncement()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mocks.advertise).toHaveBeenCalledOnce()
+  })
+
+  it('preserves pending withdrawal across a cancelled queued restart', async () => {
+    const withdrawal = deferred()
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    mocks.destroy.mockReturnValueOnce(withdrawal.promise)
+    const firstStop = stopBonjourAnnouncement()
+    const cancelledStart = startBonjourAnnouncement()
+    const secondStop = stopBonjourAnnouncement()
+    const finalStart = startBonjourAnnouncement()
+    await Promise.resolve()
+    expect(mocks.getResponder).toHaveBeenCalledOnce()
+    withdrawal.resolve()
+    await Promise.all([firstStop, cancelledStart, secondStop, finalStart])
+    expect(mocks.getResponder).toHaveBeenCalledTimes(2)
+  })
+
+  it('releases an acquired responder if service creation fails', async () => {
+    mocks.createService.mockImplementationOnce(() => {
+      throw new Error('Interface unavailable')
+    })
+    const { startBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    expect(mocks.shutdown).toHaveBeenCalledOnce()
+    expect(mocks.destroy).not.toHaveBeenCalled()
+  })
+
+  it('still releases its shared responder reference when service withdrawal fails', async () => {
+    const { startBonjourAnnouncement, stopBonjourAnnouncement } = await import('../bonjourAnnounce')
+    await startBonjourAnnouncement()
+    mocks.destroy.mockRejectedValueOnce(new Error('Network disappeared'))
+    await stopBonjourAnnouncement()
+    expect(mocks.shutdown).toHaveBeenCalledOnce()
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('Could not withdraw'), expect.any(Error))
   })
 })

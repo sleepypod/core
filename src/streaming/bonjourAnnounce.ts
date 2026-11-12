@@ -1,111 +1,184 @@
-/**
- * Bonjour/mDNS service announcement for local network discovery.
- *
- * The Pod's Avahi daemon handles mDNS via a static service file at
- * /etc/avahi/services/sleepypod.service (installed by scripts/install).
- *
- * This module ensures the service file exists and Avahi is reloaded.
- * No Node.js mDNS library needed — Avahi is a proper mDNS responder
- * that correctly answers queries (the bonjour-service npm package
- * only announces but doesn't respond to lookups).
- *
- * Service type: _sleepypod._tcp
- * Advertised port: 3000 (tRPC HTTP API)
- * TXT records include the WebSocket port and protocol version.
- */
+/** Local discovery uses a running Avahi daemon, or ciao on Pods without one. */
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { hostname } from 'node:os'
+import { loadDiscoveryResponder, type DiscoveryService, type DiscoveryResponder } from './mdnsResponder'
 
-import { writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
-import { execSync } from 'node:child_process'
-
-const TRPC_PORT = Number(process.env.PORT ?? 3000)
-const WS_PORT = String(process.env.PIEZO_WS_PORT ?? 3001)
-const VERSION = '1.0.0'
 const SERVICE_FILE = '/etc/avahi/services/sleepypod.service'
+const STATE_KEY = '__sleepypod_bonjour_lifecycle__'
 
-const SERVICE_XML = `<?xml version="1.0" standalone="no"?>
+interface Announcement {
+  cancelled: boolean
+  started: Promise<void>
+  cleanup?: Promise<void>
+  avahi: boolean
+  service?: DiscoveryService
+  responder?: DiscoveryResponder
+}
+
+interface Lifecycle {
+  current?: Announcement
+  stopping: Promise<void>
+  desired: boolean
+  retry?: ReturnType<typeof setTimeout>
+}
+
+// Instrumentation and route bundles can import separate copies of this module.
+function lifecycle(): Lifecycle {
+  const shared = globalThis as Record<string, unknown>
+  return (shared[STATE_KEY] ??= { stopping: Promise.resolve(), desired: false }) as Lifecycle
+}
+
+function portNumber(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback
+  if (!/^\d{1,5}$/.test(value) || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error('Discovery requires valid HTTP and WebSocket ports')
+  }
+  return Number(value)
+}
+
+function avahiProcesses(): number[] {
+  try {
+    return execFileSync('pidof', ['avahi-daemon'], { encoding: 'utf8', timeout: 1000 })
+      .trim().split(/\s+/).filter(value => /^\d+$/.test(value))
+      .map(Number).filter(value => Number.isSafeInteger(value) && value > 1)
+  }
+  catch {
+    return []
+  }
+}
+
+/** A directory or service file alone does not establish that Avahi is running. */
+function announceWithAvahi(httpPort: number, websocketPort: number): boolean {
+  const processes = avahiProcesses()
+  if (processes.length === 0) return false
+  const document = `<?xml version="1.0" standalone="no"?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
   <name>sleepypod</name>
   <service>
     <type>_sleepypod._tcp</type>
-    <port>${TRPC_PORT}</port>
-    <txt-record>wsPort=${WS_PORT}</txt-record>
-    <txt-record>version=${VERSION}</txt-record>
+    <port>${httpPort}</port>
+    <txt-record>wsPort=${websocketPort}</txt-record>
+    <txt-record>version=1.0.0</txt-record>
   </service>
 </service-group>
 `
-
-/**
- * Ensure the Avahi service file exists and reload the daemon.
- * Non-blocking — logs a warning on failure but does not crash.
- */
-export function startBonjourAnnouncement(): void {
   try {
-    // In dev mode (no avahi), just log and skip
-    if (!existsSync('/etc/avahi')) {
-      console.log('[bonjour] No Avahi found (dev mode) — skipping mDNS announcement')
-      return
+    if (!existsSync(SERVICE_FILE) || readFileSync(SERVICE_FILE, 'utf8') !== document) {
+      mkdirSync('/etc/avahi/services', { recursive: true })
+      writeFileSync(SERVICE_FILE, document)
     }
-
-    // The service file is installed by scripts/install (which runs as root
-    // before ProtectSystem=strict makes /etc read-only). If it's already
-    // there, just reload Avahi. Only attempt to write as a fallback.
-    if (!existsSync(SERVICE_FILE)) {
-      try {
-        mkdirSync('/etc/avahi/services', { recursive: true })
-        writeFileSync(SERVICE_FILE, SERVICE_XML)
-      }
-      catch {
-        // ProtectSystem=strict or read-only rootfs — can't write to /etc.
-        // The install script should have placed the file already.
-        console.log('[bonjour] Service file not found and /etc is read-only — mDNS unavailable')
-        console.log('[bonjour] Re-run the installer to create /etc/avahi/services/sleepypod.service')
-        return
-      }
-    }
-
-    // Reload avahi to pick up the service file
-    try {
-      execSync('kill -HUP $(pidof avahi-daemon) 2>/dev/null', { stdio: 'ignore' })
-    }
-    catch {
-      // avahi-daemon might not be running
-    }
-
-    console.log(
-      `[bonjour] Advertising _sleepypod._tcp on port ${TRPC_PORT} (wsPort=${WS_PORT}) via Avahi`
-    )
+    for (const processId of processes) process.kill(processId, 'SIGHUP')
+    return true
   }
   catch (error) {
-    console.warn(
-      '[bonjour] Failed to configure Avahi service:',
-      error instanceof Error ? error.message : error
-    )
+    console.warn('[bonjour] Avahi configuration unavailable; using ciao:', error)
+    return false
   }
 }
 
-/**
- * Remove the Avahi service file and reload.
- */
-export function stopBonjourAnnouncement(): void {
-  try {
-    if (existsSync(SERVICE_FILE)) {
+/** Destroy our service before releasing our reference to HomeKit's shared responder. */
+function cleanup(announcement: Announcement): Promise<void> {
+  announcement.cleanup ??= (async () => {
+    if (announcement.avahi) {
       try {
         unlinkSync(SERVICE_FILE)
-        execSync('kill -HUP $(pidof avahi-daemon) 2>/dev/null', { stdio: 'ignore' })
+        for (const processId of avahiProcesses()) process.kill(processId, 'SIGHUP')
       }
-      catch {
-        // ProtectSystem=strict makes /etc read-only — the service file
-        // persists until the next install run. Avahi keeps advertising,
-        // which is acceptable (the iOS app handles offline pods gracefully).
+      catch (error) {
+        console.warn('[bonjour] Could not withdraw the Avahi service file:', error)
       }
     }
-    console.log('[bonjour] mDNS announcement stopped')
+    try {
+      await announcement.service?.destroy()
+    }
+    catch (error) {
+      console.warn('[bonjour] Could not withdraw the discovery service:', error)
+    }
+    try {
+      await announcement.responder?.shutdown()
+    }
+    catch (error) {
+      console.warn('[bonjour] Could not release the discovery responder:', error)
+    }
+  })()
+  return announcement.cleanup
+}
+
+async function announce(announcement: Announcement, previousStop: Promise<void>): Promise<void> {
+  try {
+    await previousStop
+    if (announcement.cancelled) return
+    const httpPort = portNumber(process.env.PORT, 3000)
+    const websocketPort = portNumber(process.env.PIEZO_WS_PORT, 3001)
+    if (announceWithAvahi(httpPort, websocketPort)) {
+      announcement.avahi = true
+      console.log(`[bonjour] Advertising _sleepypod._tcp on port ${httpPort} via Avahi`)
+      return
+    }
+
+    const { getResponder } = loadDiscoveryResponder()
+    if (announcement.cancelled) return
+    announcement.responder = getResponder()
+    announcement.service = announcement.responder.createService({
+      name: 'sleepypod',
+      type: 'sleepypod',
+      hostname: hostname().split('.')[0] || 'sleepypod',
+      port: httpPort,
+      txt: { wsPort: String(websocketPort), version: '1.0.0' },
+    })
+    await announcement.service.advertise()
+    if (!announcement.cancelled) {
+      console.log(`[bonjour] Advertising _sleepypod._tcp on port ${httpPort} via ciao`)
+    }
   }
   catch (error) {
-    console.warn(
-      '[bonjour] Error during shutdown:',
-      error instanceof Error ? error.message : error
-    )
+    if (!announcement.cancelled) console.warn('[bonjour] Discovery startup failed:', error)
+    announcement.cancelled = true
+    await cleanup(announcement)
+    const state = lifecycle()
+    if (state.current === announcement) {
+      state.current = undefined
+      if (state.desired) {
+        state.retry = setTimeout(() => {
+          void startBonjourAnnouncement()
+        }, 30_000)
+        state.retry.unref?.()
+      }
+    }
   }
+}
+
+/** Start once; discovery failures must not stop local routines or hardware service. */
+export function startBonjourAnnouncement(): Promise<void> {
+  const state = lifecycle()
+  if (state.current) return state.current.started
+  clearTimeout(state.retry)
+  state.retry = undefined
+  if (process.env.SLEEPYPOD_MDNS === '0'
+    || (process.env.NODE_ENV !== 'production' && process.env.SLEEPYPOD_MDNS !== '1')) {
+    state.desired = false
+    return Promise.resolve()
+  }
+  state.desired = true
+  const announcement: Announcement = { cancelled: false, avahi: false, started: Promise.resolve() }
+  state.current = announcement
+  announcement.started = announce(announcement, state.stopping)
+  return announcement.started
+}
+
+/** Cancel pending publication immediately, then await goodbye packets and cleanup. */
+export function stopBonjourAnnouncement(): Promise<void> {
+  const state = lifecycle()
+  state.desired = false
+  clearTimeout(state.retry)
+  state.retry = undefined
+  const announcement = state.current
+  if (!announcement) return state.stopping
+  state.current = undefined
+  announcement.cancelled = true
+  // A cancelled queued start must not discard an earlier in-flight withdrawal.
+  state.stopping = Promise.all([state.stopping, cleanup(announcement)]).then(() => {})
+  return state.stopping
 }
