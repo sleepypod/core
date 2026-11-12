@@ -3,8 +3,10 @@
 This work implements approved item 12. The native brief already has a saved,
 encrypted report and grounded follow-up flow. Web integration is in progress.
 The authenticated storage service is merged. The explicit native sharing interface
-and browser reader are implemented and undergoing release validation. Live
-installation and browser question generation remain outstanding.
+and browser reader are implemented and undergoing release validation. Browser
+questions are now implemented with explicit provider and save consent; see
+[their contract and validation](BROWSER_REPORT_QUESTIONS.md). Live installation,
+real-provider acceptance and native distribution remain outstanding.
 
 ## Frozen evidence
 
@@ -31,15 +33,14 @@ remain available. A report without three supporting facts gets fewer cards.
 
 ## Remaining integration
 
-- Release and verify the explicit native owner sharing action. Finish personal
-  Health/report enrollment and sharing; the personal wire protocol and reading
-  surface do not make this enrollment complete. Device-local reports and API keys
-  are not automatically uploaded.
-- Add grounded questions using only the original calculated facts and fresh
-  sharing consent. Preserve current provider/model selection and discard late
-  answers after cancellation, account changes, revocation or report deletion.
-  Apple local generation is not a browser capability and must not silently fall
-  back to a cloud service.
+- Release and verify the explicit native owner sharing action. Personal Health,
+  report enrollment and sharing now have a locally tested native implementation
+  in PR 78; hosted checks, distribution and actual-account acceptance remain.
+  Device-local reports and API keys are not automatically uploaded.
+- Release browser questions using the original calculated facts and fresh
+  sharing consent. Local tests cover the selected provider/model, cancellation,
+  account changes, revocation and report deletion. Apple local generation stays
+  in the native app; a browser cloud provider is always an explicit choice.
 - Exercise both legacy owner and personal-account privacy boundaries, chart and
   report rendering, provider errors, offline reading and physical delivery.
 - Complete reviewed transfer of the original owner's shared reports during the

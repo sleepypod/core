@@ -8,8 +8,9 @@ const connection = z.object({ schemaVersion: z.literal(1), controller: z.literal
 
 /** Owner browser cookies stay at this origin. The client has no token input or actuator route. */
 export function ownerReportWorkspace(fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init)) {
-  const read = async (path: string, signal: AbortSignal) => {
-    const response = await fetcher(path, { method: 'GET', cache: 'no-store', credentials: 'same-origin', redirect: 'error', signal })
+  const read = async (path: string, signal: AbortSignal, body?: unknown) => {
+    const response = await fetcher(path, { method: body === undefined ? 'GET' : 'PUT', cache: 'no-store', credentials: 'same-origin', redirect: 'error', signal,
+      ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) })
     if (!response.ok || response.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') throw new Error('Report request failed.')
     const reader = response.body?.getReader()
     if (!reader) throw new Error('Empty report response.')
@@ -46,6 +47,8 @@ export function ownerReportWorkspace(fetcher: typeof fetch = (input, init) => gl
       return { scope: { kind: 'legacy', installationId: identity.installationId }, revision: session.browserScopeRevision }
     },
     read: (id, signal) => read(id === null ? '/api/v1/reports' : `/api/v1/reports/${reportIdSchema.parse(id)}`, signal),
+    write: (id, revision, report, signal) => read(`/api/v1/reports/${reportIdSchema.parse(id)}`, signal,
+      { expectedRevision: reportIdSchema.parse(revision), document: { version: 1, report } }),
   }
   return new MorningReportBrowserWorkspace(transport)
 }

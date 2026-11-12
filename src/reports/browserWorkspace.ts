@@ -1,10 +1,12 @@
 import { readReportCopy, readReportLibrary, sameReportScope, type ReportBrowserScope, type ReportMetadata } from './browserContract'
 import { reportIdSchema, type SavedMorningReport } from './morning'
+import { MorningReportQuestions } from './browserQuestions'
 
 export interface ReportBrowserAccess { scope: ReportBrowserScope, revision: string }
 export interface ReportBrowserTransport {
   access(signal: AbortSignal): Promise<ReportBrowserAccess>
   read(id: string | null, signal: AbortSignal): Promise<unknown>
+  write?(id: string, revision: string, report: SavedMorningReport, signal: AbortSignal): Promise<unknown>
 }
 export interface ReportLibraryState {
   reports: ReportMetadata[] | null
@@ -17,15 +19,24 @@ export interface ReportLibraryState {
 }
 const empty = (): ReportLibraryState => ({ reports: null, report: null, selectedId: null, checkedAt: null, busy: false, error: null, withdrawn: false })
 
-/** Display-only, in-memory library. Account changes and hidden pages discard late reads. */
+/** In-memory library. Explicit questions and saves share its account and visibility lifetime. */
 export class MorningReportBrowserWorkspace {
+  readonly questions: MorningReportQuestions
   private state = empty()
   private listeners = new Set<() => void>()
   private generation = 0
   private controller: AbortController | null = null
   private anchor: ReportBrowserAccess | null = null
   private disposed = false
-  constructor(private readonly transport: ReportBrowserTransport, private readonly now = Date.now) {}
+  constructor(private readonly transport: ReportBrowserTransport, private readonly now = Date.now) {
+    this.questions = new MorningReportQuestions(transport, (copy) => {
+      if (!this.anchor || !sameReportScope(copy.scope, this.anchor.scope) || copy.receipt.id !== this.state.selectedId || !copy.report) return
+      this.update({ report: copy.report, checkedAt: this.now(), reports: this.state.reports?.map(item => item.id === copy.receipt.id
+        ? { ...item, ...copy.receipt }
+        : item) ?? null })
+    }, undefined, now)
+  }
+
   getSnapshot = () => this.state
   subscribe = (listener: () => void) => {
     this.listeners.add(listener)
@@ -44,11 +55,13 @@ export class MorningReportBrowserWorkspace {
     ++this.generation
     this.controller?.abort()
     this.controller = null
+    this.questions.clear()
     this.update(empty())
   }
 
   dispose() {
     this.clear()
+    this.questions.dispose()
     this.disposed = true
     this.listeners.clear()
   }
@@ -80,6 +93,7 @@ export class MorningReportBrowserWorkspace {
       // A changed revision between metadata and content is safe to read only after refreshing the list.
       const listed = library.reports.find(report => report.id === selected)
       if (copy && !copy.receipt.deleted && (!listed || copy.receipt.revision !== listed.revision)) throw new Error('Report changed during loading.')
+      if (copy) this.questions.bind(after, copy)
       this.update({ reports: library.reports, selectedId: selected, report: copy?.report ?? null,
         withdrawn: copy?.receipt.deleted ?? false, checkedAt: this.now(), busy: false })
     }
@@ -94,7 +108,7 @@ export class MorningReportBrowserWorkspace {
   }
 
   async checkAccess() {
-    if (this.disposed || this.state.busy || this.controller || this.state.reports === null) return
+    if (this.disposed || this.state.busy || this.controller || this.state.reports === null || this.questions.getSnapshot().phase === 'saving') return
     const generation = this.generation, controller = new AbortController()
     this.controller = controller
     const timeout = setTimeout(() => controller.abort(), 15000)

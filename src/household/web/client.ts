@@ -9,6 +9,7 @@ import { learningArchiveLimits } from '../learningArchiveContract'
 import { personalJournalPath } from './journalPaths'
 import { personalQuietPath } from './quietPaths'
 import { personalExperimentPath } from './experiments'
+import { personalReportPath } from './reportPaths'
 export interface PersonalWebTransport {
   read(path: string, method?: 'GET' | 'PUT' | 'POST', body?: unknown): Promise<unknown>
   dispose(): void
@@ -22,8 +23,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
 
   async read(path: string, method: 'GET' | 'PUT' | 'POST' = 'GET', body?: unknown): Promise<unknown> {
     const learningRead = learningReadPath(path, method, body)
-    const reportRead = method === 'GET' && body === undefined && (path === 'me/reports'
-      || (path.startsWith('me/reports/') && householdIdSchema.safeParse(path.slice('me/reports/'.length)).success))
+    const reportAllowed = personalReportPath(path, method, body)
     let historyRead = false
     if (method === 'GET' && body === undefined && !path.includes('#')) {
       const [pathname, search, extra] = path.split('?')
@@ -43,7 +43,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
     const allowedMethod = method === 'GET'
       ? !['me/controls', 'me/routines/publish', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
       : method === 'PUT' ? path === 'me/routines' : ['me/controls', 'me/routines/publish', 'household/arrangement', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
-    if (this.disposed || (!personalExperimentPath(path, method, body) && !reportRead && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !personalQuietPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
+    if (this.disposed || (!personalExperimentPath(path, method, body) && !reportAllowed && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !personalQuietPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
       throw new PersonalWebError('account_changed', 'Reconnect the personal workspace before continuing.')
     const controller = new AbortController()
     this.requests.add(controller)

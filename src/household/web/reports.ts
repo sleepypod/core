@@ -21,5 +21,12 @@ export function personalReportWorkspace(session: HouseholdSession, client: Perso
       if (signal.aborted) throw new Error('Report read interrupted.')
       return response
     },
+    async write(id, revision, report, signal) {
+      if (signal.aborted) throw new Error('Report save interrupted.')
+      const response = await client.read(`me/reports/${reportIdSchema.parse(id)}`, 'PUT',
+        { expectedRevision: reportIdSchema.parse(revision), document: { version: 1, report } })
+      if (signal.aborted) throw new Error('Report save interrupted. Check the saved result.')
+      return response
+    },
   })
 }

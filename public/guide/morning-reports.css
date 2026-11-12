@@ -71,5 +71,16 @@
 .report-picker select { width: 100%; min-width: 0; }
 .morning-library .report-message { padding: 16px; border: 1px solid var(--report-line); border-radius: 12px; margin-bottom: 20px; }
 .morning-library .report-checked { margin-top: 24px; }
+.report-questions { border-top: 1px solid var(--report-line); margin-top: 32px; padding-top: 24px; display: grid; gap: 16px; }
+.report-question-form, .report-question-review { display: grid; gap: 12px; max-width: 44rem; min-width: 0; }
+.report-question-form label { font-weight: 500; margin-top: 8px; }
+.report-question-form :is(input, textarea, select) { width: 100%; min-width: 0; border: 1px solid var(--report-line); border-radius: 8px; background: var(--report-paper); color: var(--report-ink); padding: 12px; font: inherit; caret-color: var(--report-accent); }
+.report-question-form textarea { resize: vertical; min-height: 96px; }
+.report-question-form button { justify-self: start; margin-top: 8px; }
+.report-question-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.report-question-check { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0; cursor: pointer; }
+.report-question-check input { flex: 0 0 auto; width: 20px; height: 20px; margin-top: 3px; accent-color: var(--report-accent); }
+.report-question-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.report-question-review dd { overflow-wrap: anywhere; }
 @media(min-width:1000px) { .report-takeaways { grid-template-columns: repeat(3,minmax(0,1fr)); gap: 28px; } }
 @media(max-width:480px) { .morning-library { padding: 20px 0; } .report-heading { align-items: flex-start; } }

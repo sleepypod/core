@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import preparation from '../../fixtures/preparation-v1.json'
 import { personalReportWorkspace } from '../reports'
 import { PersonalBrowserClient } from '../client'
-import { reportFixture, reportNow } from '@/src/reports/tests/fixture'
+import { appendAnswer, reportFixture, reportNow } from '@/src/reports/tests/fixture'
 import { randomUUID } from 'node:crypto'
 import { householdSessionSchema } from '../../contract'
 
@@ -40,5 +40,24 @@ describe('personal report reads', () => {
       expect(workspace.getSnapshot().report).toBeNull()
       expect(read).toHaveBeenCalledExactlyOnceWith('household/session')
     }
+  })
+  it('admits only a conditional personal report append and retains its sleeper header', async () => {
+    const document = appendAnswer(reportFixture()), revision = randomUUID()
+    const fetcher = vi.fn(async () => Response.json({ accepted: true }))
+    const client = new PersonalBrowserClient(session, fetcher)
+    await client.read(`me/reports/${document.report.id}`, 'PUT', { expectedRevision: revision, document })
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/v1/me/reports/${document.report.id}`, expect.objectContaining({
+      method: 'PUT', credentials: 'same-origin', redirect: 'error',
+      headers: { 'X-Sleepypod-Sleeper-Id': session.selfSleeperId, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: revision, document }),
+    }))
+    for (const [path, body] of [
+      [`reports/${document.report.id}`, { expectedRevision: revision, document }],
+      [`me/reports/${randomUUID()}`, { expectedRevision: revision, document }],
+      [`me/reports/${document.report.id}`, { expectedRevision: null, document }],
+      [`me/reports/${document.report.id}?sleeper=other`, { expectedRevision: revision, document }],
+      [`me/reports/${document.report.id}`, { expectedRevision: revision, document, accountId: randomUUID() }],
+    ] as const) await expect(client.read(path, 'PUT', body)).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 })

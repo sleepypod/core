@@ -1,6 +1,7 @@
 import { useEffect, useId, useSyncExternalStore } from 'react'
 import type { MorningReportBrowserWorkspace } from '@/src/reports/browserWorkspace'
 import { ReportReading, reportDate } from './ReportReading'
+import { ReportQuestions } from './ReportQuestions'
 
 /** Both browser account types share this renderer; their transports remain separate. */
 export function ReportLibrary({ workspace, autoOpen = false, compact = false, personal = false }: {
@@ -75,7 +76,8 @@ export function ReportLibrary({ workspace, autoOpen = false, compact = false, pe
         </div>
       )}
       {state.withdrawn && <p className="report-message">This web copy was withdrawn. The original on your device and existing backups are unchanged.</p>}
-      {state.report && <ReportReading key={state.report.id} report={state.report} compact={compact} />}
+      {state.report && <ReportReading key={`reading-${state.report.id}`} report={state.report} compact={compact} />}
+      {state.report && !compact && <ReportQuestions key={`questions-${state.report.id}`} workspace={workspace.questions} report={state.report} personal={personal} refresh={() => void workspace.open(state.selectedId)} />}
       {state.checkedAt !== null && (
         <p className="report-muted report-checked">
           Library checked

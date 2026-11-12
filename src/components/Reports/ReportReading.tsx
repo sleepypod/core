@@ -243,7 +243,7 @@ export function ReportReading({ report, compact = false }: { report: SavedMornin
                 <ReportProse blocks={reportBlocks(answer.text, report.facts)} facts={report.facts} />
               </div>
             ))}
-            <p className="report-muted">You can ask new questions in the iPhone app, then explicitly share the updated answers. Reading this page does not call an AI provider.</p>
+            <p className="report-muted">Answers use this report’s saved facts. Reading this page does not call an AI provider.</p>
           </section>
         </>
       )}
