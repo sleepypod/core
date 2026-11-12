@@ -72,7 +72,10 @@ test('import, freeze, replay, review, manually apply, acknowledge, and roll back
   await candidate.getByRole('button', { name: 'Compare with saved profile', exact: true }).click()
   await candidate.getByLabel('I intend to apply this exact revision without validation evidence.', { exact: true }).check()
   await candidate.getByRole('button', { name: 'Apply unvalidated revision', exact: true }).click()
-  await expect(candidate.getByText('Waiting for delivery', { exact: true })).toBeVisible()
+  // The runtime can deliver the revision before the browser reads its receipt;
+  // neither pending state proves that a processor has adopted it.
+  await expect(candidate.getByText(/^Waiting for (delivery|a processing boundary)$/)).toBeVisible()
+  await expect(candidate.getByText('Applied', { exact: true })).toHaveCount(0)
   await fixture('adopt')
   await expect(candidate.getByText('Applied', { exact: true })).toBeVisible({ timeout: 15_000 })
   expect(configuration()).toContainEqual({ side: 'left', desired_revision_id: candidateId, generation: 1 })
@@ -83,7 +86,8 @@ test('import, freeze, replay, review, manually apply, acknowledge, and roll back
   await page.getByLabel('I intend to restore the exact previous profile without validation evidence.', { exact: true }).check()
   await page.getByRole('button', { name: 'Restore previous profile', exact: true }).click()
   const recovery = page.getByRole('region', { name: 'Manual activation' })
-  await expect(recovery.getByText('Waiting for delivery', { exact: true })).toBeVisible()
+  await expect(recovery.getByText(/^Waiting for (delivery|a processing boundary)$/)).toBeVisible()
+  await expect(recovery.getByText('Applied', { exact: true })).toHaveCount(0)
   await fixture('adopt')
   await expect(recovery.getByText('Applied', { exact: true })).toBeVisible({ timeout: 15_000 })
   expect(configuration()).toContainEqual({ side: 'left', desired_revision_id: null, generation: 2 })
