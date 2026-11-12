@@ -1,0 +1,148 @@
+# Installing this blueprint never enables a house automation.
+blueprint:
+  name: SleepyPod — Dim lights already on at bedtime
+  description: >-
+    After a known bed-entry transition lasts one minute in the night window,
+    dim selected individual lights that are still on and brighter than the chosen
+    level. Defaults to 10% after 22:00. Off, unavailable, non-dimmable and grouped
+    lights are skipped. Nothing is restored later. Starts disabled; qualify the
+    occupancy source and each selected light before enabling.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Allow bedtime dimming
+      description: Enable only after reviewing the selected lights and testing the bed-entry sensor.
+      default: false
+      selector:
+        boolean: {}
+    occupancy_entities:
+      name: Qualified bed occupancy
+      description: >-
+        Choose one or both calibrated, expiring Core occupancy sensors. A known
+        empty-to-occupied transition is required; unavailable-to-occupied recovery
+        does not run this routine. Occupancy does not identify a person or sleep.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            domain: binary_sensor
+            device_class: occupancy
+    lights:
+      name: Individual lights allowed to dim
+      description: >-
+        Choose individual lamps, not rooms, zones or groups. The routine checks
+        each lamp again immediately before its command and skips lights that are
+        off or already dimmer. Unknown integration-specific group entities must
+        be excluded during qualification.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            domain: light
+    pause_entities:
+      name: Pause while any of these helpers is on
+      description: >-
+        Optional existing helpers such as Partner resting or Pause bedtime lights.
+        Every selected helper must be off; unknown or unavailable also pauses.
+        No helper or household pairing is created automatically.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+          - domain: input_boolean
+          - domain: binary_sensor
+    brightness_percent:
+      name: Dim to
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 50
+          unit_of_measurement: '%'
+          mode: box
+    window_start:
+      name: Window starts (Home Assistant timezone)
+      default: '22:00:00'
+      selector:
+        time: {}
+    window_end:
+      name: Window ends (Home Assistant timezone)
+      default: '05:00:00'
+      selector:
+        time: {}
+initial_state: false
+mode: single
+max_exceeded: silent
+variables:
+  allow_actions: !input allow_actions
+  occupancy_entities: !input occupancy_entities
+  lights: !input lights
+  pause_entities: !input pause_entities
+  brightness_percent: !input brightness_percent
+triggers:
+- trigger: state
+  entity_id: !input occupancy_entities
+  from: 'off'
+  to: 'on'
+  for:
+    seconds: 60
+conditions: []
+actions:
+# Keep every guard in actions too: HA's Run actions skips top-level conditions.
+- condition: template
+  value_template: >-
+    {{ allow_actions is sameas true
+       and occupancy_entities is list and 1 <= occupancy_entities | count <= 2
+       and occupancy_entities | unique | list | count == occupancy_entities | count
+       and lights is list and 0 <= lights | count <= 100
+       and pause_entities is list and pause_entities | count <= 20
+       and brightness_percent is number and brightness_percent is not boolean
+       and 1 <= brightness_percent <= 50
+       and trigger is defined and trigger.platform == 'state'
+       and trigger.entity_id in occupancy_entities
+       and trigger.from_state is not none and trigger.from_state.state == 'off'
+       and trigger.to_state is not none and trigger.to_state.state == 'on'
+       and trigger.from_state.entity_id == trigger.entity_id
+       and trigger.to_state.entity_id == trigger.entity_id }}
+- condition: time
+  after: !input window_start
+  before: !input window_end
+- variables:
+    entered_at: '{{ as_timestamp(trigger.to_state.last_changed, none) }}'
+    target_level: '{{ (brightness_percent * 255 / 100) | round(0) | int }}'
+    selected_lights: '{{ lights | unique | list }}'
+- repeat:
+    for_each: '{{ selected_lights }}'
+    sequence:
+    # Re-read the source, pauses and clock for every lamp; no stored command queue.
+    - condition: template
+      value_template: >-
+        {{ allow_actions is sameas true and entered_at is number
+           and 60 <= now().timestamp() - entered_at <= 90
+           and is_state(trigger.entity_id, 'on')
+           and as_timestamp(states[trigger.entity_id].last_changed, none) == entered_at
+           and pause_entities | select('is_state', 'off') | list | count == pause_entities | count }}
+    - condition: time
+      after: !input window_start
+      before: !input window_end
+    - if:
+      - condition: template
+        value_template: >-
+          {% set modes = state_attr(repeat.item, 'supported_color_modes') %}
+          {% set level = state_attr(repeat.item, 'brightness') %}
+          {{ repeat.item is string and repeat.item.startswith('light.')
+             and is_state(repeat.item, 'on')
+             and state_attr(repeat.item, 'entity_id') is none
+             and state_attr(repeat.item, 'is_hue_group') is not sameas true
+             and modes is list and modes | select('in', ['brightness', 'color_temp', 'hs', 'xy', 'rgb', 'rgbw', 'rgbww', 'white']) | list | count > 0
+             and level is number and level is not boolean and target_level < level <= 255 }}
+      then:
+      - action: light.turn_on
+        target:
+          entity_id: '{{ repeat.item }}'
+        data:
+          brightness: '{{ target_level }}'

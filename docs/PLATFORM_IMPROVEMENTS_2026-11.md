@@ -42,10 +42,10 @@ priority and acceptance; it does not introduce an additional approval gate.
 | 13 | Explanation timeline | Requested/reported values, environment, manual origin and applied/withheld decisions joined without fabricated causality | Core PR 91 merged after hosted checks; native explanation timeline consolidated in PR 69; live acceptance remains |
 | 14 | Clear wake plan | Actual warming/vibration summary, simple editor, advanced disclosure, app-owned backup alarm and qualified accessory receipts | Core and native PR 69 provide the clear plan and app-owned backup workflow; physical alarm and selected accessory acceptance remain |
 | 15 | Sleep in tomorrow | One-occurrence preview, cross-device receipts, partial failure/recovery and recurring schedule restoration | Core PR 98 merged after hosted checks; native PR 69 includes reviewed Pod and app-owned phone coordination with fresh phone-state reconciliation. Qualified house devices and live acceptance remain |
-| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99–110 integrate identity, history ingestion, command admission, reviewed storage/recovery, web maintenance and the private learning library. Native maintenance/library work is consolidated in PR 69 after local phone/tablet checks. Person-owned check-in storage/API, web editor and comparisons merged in Core PR 112 after hosted checks. The matching native editor and comparisons are integrated into PR 69; their hosted checks and distribution remain. Archived-copy removal merged in Core PR 118; its matching native change is tested, independently reviewed and pushed in PR 75. Personal Health enrollment is merged in Core PR 117 and locally validated in native PR 75. Public activation is now connected to the attended coordinator in local source, with real HTTP/workspace lifecycle coverage; hosted validation and deployment remain. Personal models/reports, native release and physical acceptance remain. Live solo behavior is unchanged |
+| 16 | Complete two-person experience | Invite/sign-in/privacy/preferences/publication plus atomic reviewed Marissa-left/Luca-right activation; immutable historical attribution; solo until activation | Core PRs 99–110 integrate identity, history ingestion, command admission, reviewed storage/recovery, web maintenance and the private learning library. Native maintenance/library work is consolidated in PR 69 after local phone/tablet checks. Person-owned check-in storage/API, web editor and comparisons merged in Core PR 112 after hosted checks. The matching native editor and comparisons are integrated into PR 69; their hosted checks and distribution remain. Archived-copy removal merged in Core PR 118; its matching native change is tested, independently reviewed and pushed in PR 75. Personal Health enrollment is merged in Core PR 117 and locally validated in native PR 75. Public activation is connected to the attended coordinator in merged Core PR 119 after all seven hosted checks passed. Matching native recovery is consolidated in PR 69; hosted native validation and deployment remain. Personal models/reports, native release and physical acceptance remain. Live solo behavior is unchanged |
 | 17 | Quiet and temporary arrangements | Explicit partner-resting/guest/side-swap state; shared-action arbitration and ambiguous-night training exclusion | Pending |
 | 18 | In-app practice | Illustrated guide reused, interactive temperature/alarm/Stop practice; secure invitation without owner key | Web lessons and their behavior correction merged in Core PRs 113/114 after hosted checks. Matching native lessons and invitation-link entry pass local phone/tablet tests and independent review in PR 72; hosted validation, release and actual pairing remain. See CONTROL_PRACTICE.md |
-| 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | Pending |
+| 19 | Coordinated bedroom | Fresh sensor requirements, approved currently-on lights/shades/purifier capabilities; separate physical tests and dry-run receipts | The bedtime-light blueprint now implements known bed-entry dimming of selected currently-on individual lamps, with source expiry, pause helpers and no delayed restoration. Real HA-engine checks pass locally; hosted validation, installation and physical qualification remain. Shades and supported purifier/humidity routines remain pending |
 | 20 | Endel bedtime ritual | Supported Shortcuts/AirPlay flow, selected volume/duration, actual route state and tested tap-to-finish fallback | Pending |
 | 21 | Watch, ESP32 and widgets | Temperature/Stop/next alarm, person assignment and freshness parity; simulator and physical verification | Pending |
 | 22 | Temporary cooling | Modest bounded request, explicit feedback, expiry/cancellation, no stale restoration over a newer manual command | Core PR 90 merged after hosted checks; native cooling flow consolidated in PR 69 with local phone/tablet review; live release remains |
@@ -266,3 +266,25 @@ result. Hosted checks and the attended client workflow remain separate work.
   independent reviewer scored the exclusion-order correction resolved after
   recapture; hosted release and native parity remain in progress. The
   findings never train a model or change hardware.
+
+
+### Public activation and consolidated native delivery — 12 November UTC
+
+Core PR 119 merged as `f90ca872d07c42860aa22714bb06e59823e0d4a3` after all
+seven hosted checks passed. Its tree `2eb37efb00871774ade49301595f64b8b136679d`
+exactly matches tested head `c0f0dd0862eddba610484b0b2cf98eb5c655aef6`.
+No live deployment, opt-in flags or solo arrangement changed.
+
+Native PR 69 now contains every head from open PRs 60–64, 66–69 and 72–75,
+including practice, offline personal reading, report sharing, Health enrollment,
+learning-copy removal and public-activation recovery. Consolidated head
+`e8a62ca884fd7cbc8b1a944fd7ffc659d6faf268` passes 1,557 application/framework
+tests with nine existing live-service skips, strict lint and an unsigned physical-
+iOS Release build. The history consolidation has the same tree as the independently
+reviewed activation source. Superseded workflows were cancelled only after the
+new head and its replacement checks existed; original results remain retained.
+Native hosted checks, merge, TestFlight and physical acceptance remain pending.
+
+The [bedtime-light routine](../integrations/home-assistant/BEDTIME_LIGHTS.md)
+implements the selected currently-on lamp portion of workstream 19. It is not
+shades, purifier, Endel, shared-person policy or a deployed household routine.

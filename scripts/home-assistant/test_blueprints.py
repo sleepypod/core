@@ -26,6 +26,7 @@ def configuration(filename, supplied=None):
         raise AssertionError(blueprint.validate())
     examples = {
         'scene': 'scene.test_bedroom', 'occupancy': 'binary_sensor.test_left',
+        'occupancy_entities': ['binary_sensor.test_left', 'binary_sensor.test_right'],
         'left_occupancy': 'binary_sensor.test_left', 'right_occupancy': 'binary_sensor.test_right',
         'sensor': 'sensor.test_room', 'timestamp_attribute': 'sampled_at',
     }
@@ -37,7 +38,7 @@ def configuration(filename, supplied=None):
     return PLATFORM_SCHEMA(config.async_substitute())
 
 
-class Blueprints(unittest.IsolatedAsyncioTestCase):
+class BlueprintHarness(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = TemporaryDirectory()
         self.hass = HomeAssistant(self.directory.name)
@@ -48,7 +49,7 @@ class Blueprints(unittest.IsolatedAsyncioTestCase):
         async def capture(call):
             self.calls.append((call.domain, call.service, dict(call.data)))
         for domain, service in [('scene', 'turn_on'), ('persistent_notification', 'create'),
-                                ('persistent_notification', 'dismiss')]:
+                                ('persistent_notification', 'dismiss'), ('light', 'turn_on')]:
             self.hass.services.async_register(domain, service, capture)
         self.hass.states.async_set('scene.test_bedroom', 'unknown')
         self.hass.states.async_set('binary_sensor.test_left', 'off')
@@ -85,6 +86,8 @@ class Blueprints(unittest.IsolatedAsyncioTestCase):
             'sampled_at': sampled_at if sampled_at is not None else (NOW - timedelta(seconds=5)).isoformat(),
         })
 
+
+class Blueprints(BlueprintHarness):
     async def test_every_blueprint_has_valid_ha_schema_and_starts_disabled(self):
         for filename in BLUEPRINTS.glob('*.yaml'):
             with self.subTest(filename=filename.name):

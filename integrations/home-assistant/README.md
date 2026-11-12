@@ -6,7 +6,7 @@ app links for routines and controls and keeps house automations opt-in. The
 [Free Sleep HA compatibility review](../../docs/research/free-sleep-ha-assessment.md)
 explains why Core uses its native integration rather than the legacy component.
 
-These six Home Assistant blueprints are an opt-in starting point for qualified
+These seven Home Assistant blueprints are an opt-in starting point for qualified
 house integrations. Installing a blueprint does not create an automation or
 select a device. Every created automation starts **disabled**, and its separate
 **Allow** input defaults to **off**. That input is checked inside the action
@@ -15,6 +15,7 @@ sequence as well as the normal conditions, so **Run actions** cannot skip it.
 | Blueprint | Behavior after review and explicit activation |
 | --- | --- |
 | [Wind-down](blueprints/wind_down.yaml) | Activate a selected scene at a chosen Home Assistant local time. This is a separate house schedule, not the Pod's bedtime routine. |
+| [Bedtime lights already on](blueprints/bedtime_lights.yaml) | After a known bed entry lasts one minute after 22:00, dim selected individual lamps that remain on and above 10%. Optional resting/pause helpers inhibit the routine. See [setup and limitations](BEDTIME_LIGHTS.md). |
 | [Nighttime path](blueprints/night_path.yaml) | Activate a dim-light scene after a known occupied-to-empty transition lasts five seconds within the night window. |
 | [Morning scene](blueprints/morning_scene.yaml) | Activate a scene after a known occupied-to-empty transition lasts thirty seconds within the morning window. This follows bed exit; it is **not** alarm synchronization. |
 | [Empty bed](blueprints/empty_bed.yaml) | Activate a scene after both distinct sides have been continuously known empty for five minutes. |
@@ -33,6 +34,13 @@ only the intended, tested house accessories. There is no delayed restoration tha
 could overwrite a later manual change. The room reviews never call appliance
 services: power-only diffusers and discrete purifier speeds must be qualified
 before implementing appliance automation.
+
+The separate bedtime-light template sends bounded `light.turn_on` brightness
+requests only to selected, currently-on individual lamps. It skips grouped lights,
+unsupported brightness, unavailable values and lamps already at or below the
+target. It rechecks occupancy, pauses and each lamp before dispatch, and never
+restores or queues a later action. [Its acceptance guide](BEDTIME_LIGHTS.md)
+describes the remaining integration and physical checks.
 
 ```mermaid
 flowchart LR
