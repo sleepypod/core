@@ -29,6 +29,7 @@ def configuration(filename, supplied=None):
         'occupancy_entities': ['binary_sensor.test_left', 'binary_sensor.test_right'],
         'left_occupancy': 'binary_sensor.test_left', 'right_occupancy': 'binary_sensor.test_right',
         'sensor': 'sensor.test_room', 'timestamp_attribute': 'sampled_at',
+        'purifier': 'fan.test_purifier',
     }
     inputs = {key: value for key, value in examples.items() if key in blueprint.inputs}
     inputs.update(supplied or {})
@@ -50,7 +51,7 @@ class BlueprintHarness(unittest.IsolatedAsyncioTestCase):
             self.calls.append((call.domain, call.service, dict(call.data)))
         for domain, service in [('scene', 'turn_on'), ('persistent_notification', 'create'),
                                 ('persistent_notification', 'dismiss'), ('light', 'turn_on'),
-                                ('cover', 'set_cover_position')]:
+                                ('cover', 'set_cover_position'), ('fan', 'set_percentage')]:
             self.hass.services.async_register(domain, service, capture)
         self.hass.states.async_set('scene.test_bedroom', 'unknown')
         self.hass.states.async_set('binary_sensor.test_left', 'off')

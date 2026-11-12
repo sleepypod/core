@@ -1,0 +1,242 @@
+# Importing this file does not enable an automation or select an appliance.
+blueprint:
+  name: SleepyPod — Respond to bedroom particles
+  description: >-
+    When measured PM2.5 crosses a reviewed threshold and stays above it for two
+    minutes at night, request a reviewed speed on one already-running purifier.
+    Requires fresh source timestamps, qualified bed presence and reported fan
+    speed. Does not start an off purifier, replace an active preset, lower a
+    higher speed, or restore a previous setting later. Starts disabled.
+  domain: automation
+  homeassistant:
+    min_version: 2026.10.0
+  input:
+    allow_actions:
+      name: Allow purifier speed requests
+      description: Enable only after qualifying the sensor and this purifier's speed controls.
+      default: false
+      selector:
+        boolean: {}
+    sensor:
+      name: Qualified bedroom PM2.5 sensor
+      selector:
+        entity:
+          filter:
+            domain: sensor
+            device_class: pm25
+    timestamp_attribute:
+      name: Source measurement timestamp attribute
+      description: >-
+        Verify that this is the physical measurement time, including unchanged
+        readings. Home Assistant receipt clocks and generated current-time
+        attributes cannot establish measurement freshness.
+      selector:
+        text: {}
+    timestamp_format:
+      name: Source timestamp format
+      default: iso8601
+      selector:
+        select:
+          options: [iso8601, unix_seconds, unix_milliseconds]
+    maximum_age:
+      name: Maximum measurement age
+      default: 120
+      selector:
+        number:
+          min: 30
+          max: 900
+          unit_of_measurement: s
+          mode: box
+    threshold:
+      name: Reviewed particle threshold
+      description: An editable automation setting, not a clinical threshold or clean-air assurance.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 1000
+          unit_of_measurement: µg/m³
+          mode: box
+    purifier:
+      name: Qualified individual purifier fan
+      description: >-
+        Choose one tested purifier fan entity, not a group, room fan or diffuser.
+        Confirm the requested percentage maps to an acceptable physical speed.
+      selector:
+        entity:
+          filter:
+            domain: fan
+    percentage:
+      name: Reviewed response speed
+      description: >-
+        Home Assistant speed percentage, not measured airflow. Discrete speeds
+        depend on the integration. A higher existing speed is left unchanged.
+      default: 66
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: '%'
+          mode: box
+    occupancy_entities:
+      name: Qualified bed occupancy
+      description: >-
+        Choose one or both calibrated, expiring Core occupancy sensors. At least
+        one must have remained occupied since the particle threshold crossing.
+        Bed presence does not identify a person.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            domain: binary_sensor
+            device_class: occupancy
+    pause_entities:
+      name: Pause while any of these helpers is on
+      description: >-
+        Optional existing Partner resting or Pause room routines helpers. Each
+        must remain known off throughout the two-minute decision window.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+          - domain: input_boolean
+          - domain: binary_sensor
+    window_start:
+      name: Window starts (Home Assistant timezone)
+      default: '22:00:00'
+      selector:
+        time: {}
+    window_end:
+      name: Window ends (Home Assistant timezone)
+      default: '05:00:00'
+      selector:
+        time: {}
+initial_state: false
+mode: single
+max_exceeded: silent
+variables:
+  allow_actions: !input allow_actions
+  sensor: !input sensor
+  timestamp_attribute: !input timestamp_attribute
+  timestamp_format: !input timestamp_format
+  maximum_age: !input maximum_age
+  threshold: !input threshold
+  purifier: !input purifier
+  percentage: !input percentage
+  occupancy_entities: !input occupancy_entities
+  pause_entities: !input pause_entities
+triggers:
+- trigger: numeric_state
+  entity_id: !input sensor
+  above: !input threshold
+  for:
+    minutes: 2
+conditions:
+- condition: template
+  value_template: '{{ allow_actions is sameas true }}'
+actions:
+# Run actions cannot manufacture a threshold crossing or bypass the Allow input.
+- condition: template
+  value_template: >-
+    {{ allow_actions is sameas true
+       and sensor is string and sensor.startswith('sensor.')
+       and purifier is string and purifier.startswith('fan.')
+       and threshold is number and threshold is not boolean and 1 <= threshold <= 1000
+       and percentage is integer and 1 <= percentage <= 100
+       and maximum_age is number and maximum_age is not boolean and 30 <= maximum_age <= 900
+       and occupancy_entities is list and 1 <= occupancy_entities | count <= 2
+       and occupancy_entities | unique | list | count == occupancy_entities | count
+       and pause_entities is list and pause_entities | count <= 20
+       and trigger is defined and trigger.platform == 'numeric_state'
+       and trigger.entity_id == sensor
+       and trigger.from_state is not none and trigger.to_state is not none
+       and trigger.from_state.entity_id == sensor and trigger.to_state.entity_id == sensor
+       and trigger.from_state.state | float(none) is number
+       and 0 <= trigger.from_state.state | float <= threshold
+       and trigger.to_state.state | float(none) is number
+       and threshold < trigger.to_state.state | float <= 1000 }}
+- condition: time
+  after: !input window_start
+  before: !input window_end
+- variables:
+    crossed_at: '{{ as_timestamp(trigger.to_state.last_updated, none) }}'
+    reading: '{{ states(sensor) | float(none) }}'
+    measured_at: >-
+      {% set raw = state_attr(sensor, timestamp_attribute) %}
+      {% if timestamp_attribute in ['last_changed', 'last_updated', 'last_reported'] %}
+        {{ none }}
+      {% elif timestamp_format == 'iso8601' and raw is string %}
+        {{ as_timestamp(raw, none) }}
+      {% elif timestamp_format in ['unix_seconds', 'unix_milliseconds'] and raw is number and raw is not boolean %}
+        {{ raw / 1000 if timestamp_format == 'unix_milliseconds' else raw }}
+      {% else %}
+        {{ none }}
+      {% endif %}
+    crossing_measured_at: >-
+      {% set raw = trigger.to_state.attributes.get(timestamp_attribute) %}
+      {% if timestamp_attribute in ['last_changed', 'last_updated', 'last_reported'] %}
+        {{ none }}
+      {% elif timestamp_format == 'iso8601' and raw is string %}
+        {{ as_timestamp(raw, none) }}
+      {% elif timestamp_format in ['unix_seconds', 'unix_milliseconds'] and raw is number and raw is not boolean %}
+        {{ raw / 1000 if timestamp_format == 'unix_milliseconds' else raw }}
+      {% else %}
+        {{ none }}
+      {% endif %}
+# Recheck actual source clocks; a cached value or receipt timestamp is not a sample.
+- condition: template
+  value_template: >-
+    {{ crossed_at is number and 120 <= now().timestamp() - crossed_at <= 150
+       and measured_at is number and crossing_measured_at is number
+       and 0 <= crossed_at - crossing_measured_at < maximum_age
+       and crossed_at < measured_at <= now().timestamp()
+       and 0 <= now().timestamp() - measured_at < maximum_age
+       and trigger.from_state.attributes.get('unit_of_measurement') == 'µg/m³'
+       and trigger.from_state.attributes.get('device_class') == 'pm25'
+       and trigger.to_state.attributes.get('unit_of_measurement') == 'µg/m³'
+       and trigger.to_state.attributes.get('device_class') == 'pm25'
+       and state_attr(sensor, 'unit_of_measurement') == 'µg/m³'
+       and state_attr(sensor, 'device_class') == 'pm25'
+       and reading is number and threshold < reading <= 1000 }}
+- condition: template
+  value_template: >-
+    {% set occupied = namespace(found=false) %}
+    {% for entity in occupancy_entities %}
+      {% if entity is string and entity.startswith('binary_sensor.')
+            and is_state(entity, 'on')
+            and state_attr(entity, 'device_class') == 'occupancy'
+            and as_timestamp(states[entity].last_changed, none) is number
+            and as_timestamp(states[entity].last_changed) <= crossed_at %}
+        {% set occupied.found = true %}
+      {% endif %}
+    {% endfor %}
+    {% set pauses = namespace(clear=true) %}
+    {% for entity in pause_entities %}
+      {% if entity is not string or not (entity.startswith('input_boolean.') or entity.startswith('binary_sensor.'))
+            or not is_state(entity, 'off')
+            or as_timestamp(states[entity].last_changed, none) is not number
+            or as_timestamp(states[entity].last_changed) > crossed_at %}
+        {% set pauses.clear = false %}
+      {% endif %}
+    {% endfor %}
+    {{ occupied.found and pauses.clear }}
+# A reported fan change after the excursion began wins over this request.
+- condition: template
+  value_template: >-
+    {% set features = state_attr(purifier, 'supported_features') %}
+    {% set current = state_attr(purifier, 'percentage') %}
+    {{ is_state(purifier, 'on')
+       and features is integer and features >= 0 and features | bitwise_and(1) == 1
+       and current is number and current is not boolean and 0 < current < percentage
+       and state_attr(purifier, 'preset_mode') is none
+       and state_attr(purifier, 'entity_id') is none
+       and state_attr(purifier, 'assumed_state') is not sameas true
+       and as_timestamp(states[purifier].last_updated, none) is number
+       and as_timestamp(states[purifier].last_updated) <= crossed_at }}
+- action: fan.set_percentage
+  target:
+    entity_id: '{{ purifier }}'
+  data:
+    percentage: '{{ percentage }}'
