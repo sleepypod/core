@@ -75,12 +75,13 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const learning = dependencies.personalLearning?.present(history) ?? history
     const journal = dependencies.personalJournal?.present(learning) ?? learning
     const reports = dependencies.personalReports?.present(journal) ?? journal
-    // A native client may enroll its own Health library against this authenticated identity.
-    // This grants no Health upload route, legacy history access or cloud-analysis permission.
+    // The native client may enroll its own Health library and create identity-scoped reports.
+    // Device reports require per-request consent for off-device providers. This does not
+    // enable Pod cloud analysis, persistent cloud consent or a raw Health upload route.
     const quiet = dependencies.householdQuiet?.present(reports) ?? reports
     const experiments = dependencies.personalExperiments?.present(quiet) ?? quiet
     const maintenance = dependencies.arrangementCoordinator?.present(experiments) ?? experiments
-    return { ...maintenance, capabilities: { ...maintenance.capabilities, healthImport: true } }
+    return { ...maintenance, capabilities: { ...maintenance.capabilities, healthImport: true, personalDeviceReports: true } }
   }
   const url = new URL(request.url)
   const path = url.pathname.replace(/\/$/, '')

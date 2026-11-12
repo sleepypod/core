@@ -65,6 +65,21 @@ it('denies existing owner credentials at personal endpoints and personal credent
   expect(response.headers.get('cache-control')).toContain('no-store')
   expect((await response.json()).sleeperId).toBe(store.session(member).selfSleeperId)
 })
+it('keeps personal device report capability optional and separate from persistent cloud consent', async () => {
+  for (const advertised of [undefined, false, true]) {
+    const session = structuredClone(fixtures.memberSession)
+    const capabilities = { ...session.capabilities, personalDeviceReports: advertised }
+    const parsed = contract.householdSessionSchema.parse({ ...session, capabilities })
+    expect(parsed.capabilities.personalDeviceReports).toBe(advertised)
+    expect(parsed.capabilities.cloudAnalysis).toBe(false)
+  }
+  const response = await householdHttp(request('me/preferences', 'GET', undefined, member), dependencies)
+  expect(response.status).toBe(200)
+  expect(contract.personalPreferencesResponseSchema.parse(await response.json()).preferences.cloudAnalysisConsent).toBe(false)
+  expect(contract.householdSessionSchema.safeParse({ ...fixtures.memberSession,
+    capabilities: { ...fixtures.memberSession.capabilities, personalDeviceReports: 'true' },
+  }).success).toBe(false)
+})
 it('requires legacy owner authority and current solo/follow setup before household preparation', async () => {
   const input = { requestId: randomUUID(), displayName: 'Owner', deviceName: 'Owner phone', deviceSecret: personal, currentMode: 'solo-anywhere', sourceSide: 'left', acknowledgeExistingOwner: true }
   expect((await householdHttp(request('household/setup', 'POST', input, member), dependencies)).status).toBe(403)
@@ -76,7 +91,7 @@ it('binds local Health enrollment to authenticated personal identity without exp
     const session = contract.householdSessionSchema.parse(await response.json())
     expect(session.accountId).toBe(store.session(credential).accountId)
     expect(session.selfSleeperId).toBe(store.session(credential).selfSleeperId)
-    expect(session.capabilities).toMatchObject({ healthImport: true, cloudAnalysis: false, activateArrangement: false })
+    expect(session.capabilities).toMatchObject({ healthImport: true, personalDeviceReports: true, cloudAnalysis: false, activateArrangement: false })
     expect(response.headers.get('cache-control')).toContain('no-store')
     expect((await householdHttp(request('me/health', 'POST', { history: [] }, credential), dependencies)).status).toBe(404)
     expect(authorized(new Headers({ authorization: `Bearer ${credential}` }), 'GET')).toBe(false)
