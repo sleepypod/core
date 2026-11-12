@@ -4,17 +4,21 @@ import { HouseholdError, type HouseholdCredential, type HouseholdStore } from '.
 import type { PersonalLearningLibrary } from './learningLibrary'
 import { learningArchiveLimits } from './learningArchiveContract'
 import { learningArchivePageSchema, learningRecordDetailSchema, learningRecordPageSchema, parseLearningSearch } from './learningApiContract'
+import { learningRemovalResponse } from './learningRemovalApi'
 
 export class PersonalLearningApi {
   constructor(private readonly dependencies: { identities: HouseholdStore, library: PersonalLearningLibrary, enabled: () => boolean, now?: () => number }) {}
 
   present(session: HouseholdSession): HouseholdSession {
-    return { ...session, capabilities: { ...session.capabilities, personalLearningArchive: this.dependencies.enabled() } }
+    return { ...session, capabilities: { ...session.capabilities, personalLearningArchive: this.dependencies.enabled(),
+      personalLearningRemoval: this.dependencies.enabled() } }
   }
 
   /** Personal output is checked again on delivery; account switches and revocation withdraw queued bytes. */
-  response(request: Request, credential: HouseholdCredential, assertRequestCurrent: () => void): Response {
+  response(request: Request, credential: HouseholdCredential, assertRequestCurrent: () => void, body?: unknown): Response {
     const url = new URL(request.url), path = url.pathname.replace(/\/$/, '')
+    if (path.startsWith('/api/v1/me/learning/requests/') || path.endsWith('/remove'))
+      return learningRemovalResponse(this.dependencies, request, credential, assertRequestCurrent, body)
     const generatedAt = (this.dependencies.now ?? Date.now)()
     let select: () => object
     let schema: z.ZodType

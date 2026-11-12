@@ -102,9 +102,94 @@ describe('atomic reviewed arrangement storage', () => {
   const serveLearning = (incoming: Request, enabled = () => true) => householdHttp(incoming,
     { store: fixture.identities, verifySoloConfiguration: () => true,
       personalLearning: new PersonalLearningApi({ identities: fixture.identities,
-        library: new PersonalLearningLibrary(fixture.database, fixture.identities), enabled, now: () => fixture.clock.now }) })
+        library: new PersonalLearningLibrary(fixture.database, fixture.identities, () => fixture.clock.now), enabled, now: () => fixture.clock.now }) })
   const learningRequest = (route: string, key = fixture.ownerKey, enabled = () => true, signal?: AbortSignal) => serveLearning(
     new Request(`http://pod.local/api/v1/me/learning/${route}`, { headers: { authorization: `Bearer ${key}` }, signal }), enabled)
+
+  const archivedRemoval = () => {
+    transition.begin(fixture.ownerKey, request)
+    transition.commit(fixture.ownerKey, request)
+    const record = fixture.database.prepare('SELECT id, payload_hash FROM household_learning_records LIMIT 1').get() as { id: string, payload_hash: string }
+    return { ...context(), version: 1, archiveId: request.requestId, recordId: record.id,
+      expectedPayloadHash: record.payload_hash, confirmRemoveArchivedCopy: true }
+  }
+  const removeLearning = (input: ReturnType<typeof archivedRemoval>, key = fixture.ownerKey, enabled = () => true, signal?: AbortSignal) => serveLearning(
+    new Request(`http://pod.local/api/v1/me/learning/records/${input.recordId}/remove`, { method: 'POST',
+      headers: { 'authorization': `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(input), signal }), enabled)
+
+  it('removes only reviewed archived content, preserves custody integrity and original sources, and reconciles once', async () => {
+    const input = archivedRemoval()
+    const sourceState = state().slice(0, -1)
+    const before = verifyLearningArchive(fixture.database, request.requestId)
+    const response = await removeLearning(input)
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.interpretation).toBe('archived_copy_removal_not_source_deletion')
+    expect(result.receipt).toMatchObject({ requestId: input.requestId, recordId: input.recordId, archiveId: input.archiveId,
+      payloadHash: input.expectedPayloadHash, removedAt: fixture.clock.now, outcome: 'content_removed' })
+    expect(state().slice(0, -1)).toEqual(sourceState)
+    expect(verifyLearningArchive(fixture.database, request.requestId)).toEqual(before)
+    expect((await (await learningRequest(`records/${input.recordId}`)).json())).toMatchObject({ payload: null, redacted: true })
+    expect((await (await removeLearning(input)).json()).receipt).toEqual(result.receipt)
+    expect((await (await learningRequest(`requests/${input.requestId}`)).json()).receipt).toEqual(result.receipt)
+    expect((await (await learningRequest(`requests/${input.requestId}`, fixture.memberKey)).json()).receipt).toBeNull()
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM household_mutation_receipts WHERE kind = ?').get('learning_archive_removal'))
+      .toEqual({ count: 1 })
+    fixture.clock.now += 1000
+    const second = { ...input, requestId: randomUUID() }
+    expect((await (await removeLearning(second)).json()).receipt).toMatchObject({ requestId: second.requestId, removedAt: result.receipt.removedAt })
+  })
+
+  it.each(['other_person', 'stale_session', 'stale_assignment', 'wrong_archive', 'wrong_payload', 'disabled', 'corrupt', 'clock', 'abort'])('rejects archived-copy removal after %s without changing storage', async (kind) => {
+    const input = archivedRemoval()
+    if (kind === 'stale_session') input.expectedSessionRevision -= 1
+    if (kind === 'stale_assignment') input.expectedAssignmentRevision -= 1
+    if (kind === 'wrong_archive') input.archiveId = randomUUID()
+    if (kind === 'wrong_payload') input.expectedPayloadHash = 'e'.repeat(64)
+    if (kind === 'corrupt') fixture.database.prepare('UPDATE household_learning_records SET payload = ? WHERE id = ?').run('{}', input.recordId)
+    if (kind === 'clock') fixture.clock.now -= 1
+    const abort = new AbortController()
+    if (kind === 'abort') abort.abort()
+    const before = state()
+    const response = await removeLearning(kind === 'other_person' ? { ...input, ...context(fixture.memberKey) } : input,
+      kind === 'other_person' ? fixture.memberKey : fixture.ownerKey, () => kind !== 'disabled', abort.signal)
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(state()).toEqual(before)
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM household_mutation_receipts WHERE kind = ?').get('learning_archive_removal'))
+      .toEqual({ count: 0 })
+  })
+
+  it('rolls back content removal if the receipt cannot be committed', async () => {
+    const input = archivedRemoval(), before = state()
+    fixture.database.exec('CREATE TRIGGER reject_removal BEFORE INSERT ON household_mutation_receipts WHEN NEW.kind = \'learning_archive_removal\' BEGIN SELECT RAISE(ABORT, \'test receipt failure\'); END')
+    expect((await removeLearning(input)).status).toBeGreaterThanOrEqual(400)
+    expect(state()).toEqual(before)
+  })
+
+  it('cannot disclose a completed removal after access is revoked during response delivery', async () => {
+    const input = archivedRemoval()
+    const response = await removeLearning(input)
+    expect(response.status).toBe(200)
+    fixture.database.prepare('UPDATE household_devices SET revoked_at = ? WHERE account_id = ?').run(fixture.clock.now, fixture.owner.accountId)
+    await expect(response.text()).rejects.toThrow('before delivery')
+    expect(fixture.database.prepare('SELECT payload FROM household_learning_records WHERE id = ?').get(input.recordId)).toEqual({ payload: null })
+  })
+
+  it('withdraws previously queued payloads and prevents receipt request reuse for another record', async () => {
+    fixture.database.prepare('INSERT INTO journal_entries (side, local_date, revision, record) VALUES (?, ?, ?, ?)')
+      .run('left', '2026-10-30', randomUUID(), JSON.stringify({ note: 'Keep this independent original record' }))
+    const input = archivedRemoval()
+    const buffered = await learningRequest(`records/${input.recordId}`)
+    await (await removeLearning(input)).text()
+    await expect(buffered.text()).rejects.toThrow('before delivery')
+    const other = fixture.database.prepare('SELECT id, payload_hash FROM household_learning_records WHERE id <> ? LIMIT 1').get(input.recordId) as { id: string, payload_hash: string }
+    expect(other).toBeDefined()
+    expect((await removeLearning({ ...input, recordId: other.id, expectedPayloadHash: other.payload_hash })).status).toBe(409)
+    expect((await (await learningRequest(`records/${other.id}`)).json()).redacted).toBe(false)
+    const pending = await learningRequest(`requests/${input.requestId}`)
+    fixture.database.prepare('UPDATE household_devices SET revoked_at = ? WHERE account_id = ?').run(fixture.clock.now, fixture.owner.accountId)
+    await expect(pending.text()).rejects.toThrow('before delivery')
+  })
 
   it('preserves learning when committing an older held operation', () => {
     transition.begin(fixture.ownerKey, request)

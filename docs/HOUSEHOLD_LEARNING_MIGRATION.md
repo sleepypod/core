@@ -104,7 +104,8 @@ cannot downgrade a new receipt into that legacy recovery path.
 
 The `personalLearningArchive` capability follows the existing preparation and
 personal-history feature gates. It only offers the above reads; it does not enable
-training, deletion, controls, or the public arrangement-activation capability.
+training, controls, or the public arrangement-activation capability. Explicit
+copy removal is separately advertised as `personalLearningRemoval`.
 
 The new API must authorize the current personal credential on every page and
 resolve the original archive account independently of today's side. Use bounded
@@ -123,11 +124,50 @@ account; neither an invitation nor a bed-side change establishes that relationsh
 Account changes must withdraw prior local reports and training context. Cloud
 sharing consent remains separate.
 
+## Explicit archived-copy removal
+
+A personal user can review and remove one archived record's content in the web
+library. This is deliberately scoped to that preserved copy: original records,
+active models, routines, backups, downloaded files and existing device caches are
+not erased by this request. The UI states this before confirmation. Original
+custody metadata (including source/date and hashes) remains as a preservation
+receipt. This is logical content removal, not a forensic secure-erase guarantee.
+
+- `POST /api/v1/me/learning/records/<record UUID>/remove` accepts version 1,
+  request ID, current session/assignment revisions, archive/record UUIDs, the
+  reviewed payload hash and `confirmRemoveArchivedCopy: true`.
+- `GET /api/v1/me/learning/requests/<request UUID>` reads a metadata-only receipt.
+  A missing receipt leaves the outcome unknown; the browser never retries a POST.
+- The same original household/account/sleeper binding owns removal. Current bed
+  side cannot grant access. Browser requests require the pinned current sleeper.
+- An immediate SQLite transaction rechecks authority and exact reviewed content,
+  sets only that archived payload to NULL and stores a verified redaction plus
+  an idempotent receipt. A receipt-write failure rolls back content removal.
+- Archive integrity still verifies against the original immutable hashes. Neither
+  preservation identity nor arrangement/recovery state is rewritten. A duplicate
+  request returns its receipt; another record cannot reuse the same request ID.
+- A response queued before removal cannot deliver the removed content. Revoked
+  or changed sessions cannot receive even a pending removal receipt. Browser
+  account/visibility changes discard local state and late responses.
+- The web flow hides content once removal may have reached the Pod, then confirms
+  through a matching, scoped receipt. After a lost reply it offers a read-only
+  result check. Reloaded detail exposes a tombstone and no original download.
+
+Local evidence: production build, typecheck and lint; all 793 household tests
+passed, including transaction rollback, identity, clocks, corrupt storage, duplicate
+requests and response delivery. All six browser checks passed on phone/tablet,
+including enlarged text, cancel, confirmed removal and lost-reply recovery.
+An independent UI review found missing focus restoration after cancellation.
+Keyboard tests and recaptures now verify restored focus, retained content and zero
+POSTs at both widths; the same reviewer scored that finding resolved.
+Hosted validation, native removal controls and actual deployed acceptance remain
+pending. No live archive, personal record or hardware setting was changed.
+
 ## Remaining implementation
 
-- An explicit deletion flow must reconcile preserved copies, original personal
-  records and affected derived models. The storage format reserves verified
-  redaction tombstones; no deletion endpoint is exposed by this change.
+- Deletion initiated at an original personal source still needs propagation rules
+  for preserved copies and affected derived models. The archived-copy action above
+  must not be described as deleting the original source or every backup/cache.
 - [Person-owned check-ins](PERSONAL_JOURNAL.md) now have separate storage and a
   personally authenticated HTTP contract. Web/native editors, learning enrollment
   and compatible physical-zone provenance remain. The archive is never a

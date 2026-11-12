@@ -3,24 +3,94 @@ import { expect, test, type Page } from '@playwright/test'
 import { householdSessionSchema } from '../../src/household/contract'
 import { learningFixture } from '../../src/household/web/tests/learningFixture'
 import { mockPersonal } from './personal-fixture'
+import { learningRemovalRequestSchema, type LearningRemovalReceipt } from '../../src/household/learningRemovalContract'
 
 async function mockLearning(page: Page) {
   const personal = await mockPersonal(page)
-  Object.assign(personal.session.capabilities, { personalLearningArchive: true })
+  Object.assign(personal.session.capabilities, { personalLearningArchive: true, personalLearningRemoval: true })
   const examples = learningFixture(householdSessionSchema.parse(personal.session))
-  const fixture = { ...personal, examples, status: 200, beforeReply: async () => {} }
+  const fixture = { ...personal, examples, status: 200, beforeReply: async () => {}, loseRemovalReply: false,
+    removalPosts: [] as unknown[], removalReceipt: null as LearningRemovalReceipt | null }
   await page.route('**/api/v1/me/learning/**', async (route) => {
     const request = route.request(), path = new URL(request.url()).pathname
-    expect(request.method()).toBe('GET')
     expect(request.headers()['x-sleepypod-sleeper-id']).toBe(personal.session.selfSleeperId)
     expect(request.headers().authorization).toBeUndefined()
     await fixture.beforeReply()
+    if (path.endsWith('/remove')) {
+      expect(request.method()).toBe('POST')
+      const input = learningRemovalRequestSchema.parse(request.postDataJSON())
+      expect(input.recordId).toBe(examples.recordId)
+      expect(input.expectedPayloadHash).toBe(examples.detail.payloadHash)
+      fixture.removalPosts.push(input)
+      fixture.removalReceipt = { requestId: input.requestId, recordId: input.recordId, archiveId: input.archiveId,
+        payloadHash: input.expectedPayloadHash, removedAt: examples.detail.generatedAt, outcome: 'content_removed' }
+      examples.detail.payload = null
+      examples.detail.redacted = true
+      examples.records.records[0].redacted = true
+      if (fixture.loseRemovalReply) return route.abort('failed')
+    }
+    else expect(request.method()).toBe('GET')
+    if (path.includes('/requests/') || path.endsWith('/remove')) return route.fulfill({ json: {
+      version: 1, generatedAt: examples.detail.generatedAt, scope: examples.detail.scope,
+      interpretation: 'archived_copy_removal_not_source_deletion', receipt: fixture.removalReceipt,
+    } })
     await route.fulfill({ status: fixture.status, json: path.endsWith('/archives')
       ? examples.archives
       : path.endsWith('/records') ? examples.records : examples.detail })
   })
   return fixture
 }
+
+for (const width of [390, 1024]) {
+  test(`archived-copy removal is explicit and readable at ${width}px`, async ({ page }, testInfo) => {
+    const fixture = await mockLearning(page)
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1100 })
+    await page.emulateMedia({ colorScheme: width === 390 ? 'dark' : 'light', reducedMotion: 'reduce' })
+    await openLibrary(page)
+    if (width === 390) await page.addStyleTag({ content: ':root{font-size:24px}' })
+    await panel(page).getByRole('button', { name: 'Remove archived content…' }).click()
+    const removal = panel(page).getByRole('region', { name: 'Archived content removal' })
+    await expect(removal).toBeFocused()
+    await expect(removal).toContainText('existing backups')
+    await expect(removal).toContainText('This cannot be undone here.')
+    expect(fixture.removalPosts).toHaveLength(0)
+    await removal.screenshot({ path: testInfo.outputPath(`removal-review-${width}.png`) })
+    await page.screenshot({ path: testInfo.outputPath(`removal-context-${width}.png`) })
+    await removal.getByRole('button', { name: 'Keep this copy' }).focus()
+    await removal.getByRole('button', { name: 'Keep this copy' }).press('Enter')
+    await expect(panel(page).getByRole('button', { name: 'Remove archived content…' })).toBeFocused()
+    await expect(panel(page)).toContainText('Felt comfortable after an earlier bedtime.')
+    expect(fixture.removalPosts).toHaveLength(0)
+    await page.screenshot({ path: testInfo.outputPath(`removal-cancelled-${width}.png`) })
+    await panel(page).getByRole('button', { name: 'Remove archived content…' }).click()
+    await removal.getByRole('button', { name: 'Remove this archived content', exact: true }).click()
+    await expect(removal).toContainText('Archived content removed')
+    expect(fixture.removalPosts).toHaveLength(1)
+    await expect(panel(page)).not.toContainText('Felt comfortable after an earlier bedtime.')
+    await removal.screenshot({ path: testInfo.outputPath(`removal-confirmed-${width}.png`) })
+    await panel(page).getByRole('button', { name: /^Read Journal entry/ }).click()
+    await expect(panel(page).getByRole('region', { name: 'Selected saved record' })).toContainText('content was removed')
+    await expect(panel(page).getByRole('button', { name: 'Download original record' })).toHaveCount(0)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+  })
+}
+
+test('lost removal replies recover by receipt without sending a second removal', async ({ page }, testInfo) => {
+  const fixture = await mockLearning(page)
+  fixture.loseRemovalReply = true
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openLibrary(page)
+  await panel(page).getByRole('button', { name: 'Remove archived content…' }).click()
+  const removal = panel(page).getByRole('region', { name: 'Archived content removal' })
+  await removal.getByRole('button', { name: 'Remove this archived content', exact: true }).click()
+  await expect(removal).toContainText('Check whether removal completed')
+  await expect(panel(page)).not.toContainText('Felt comfortable after an earlier bedtime.')
+  expect(fixture.removalPosts).toHaveLength(1)
+  await removal.screenshot({ path: testInfo.outputPath('removal-uncertain-phone.png') })
+  await removal.getByRole('button', { name: 'Check removal result' }).click()
+  await expect(removal).toContainText('Archived content removed')
+  expect(fixture.removalPosts).toHaveLength(1)
+})
 const panel = (page: Page) => page.locator('article[aria-label="Your saved learning"]')
 async function openLibrary(page: Page) {
   await page.goto('/household/index.html')

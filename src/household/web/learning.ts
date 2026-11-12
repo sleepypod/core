@@ -2,7 +2,8 @@ import type { HouseholdSession } from '../contract'
 import { learningArchivePageSchema, learningRecordPageSchema, learningRecordDetailSchema,
   type LearningArchivePage, type LearningRecordPage, type LearningRecordDetail } from '../learningApiContract'
 import type { PersonalWebTransport } from './client'
-import { samePersonSession, PersonalWebError } from './protocol'
+import { samePersonSession, PersonalWebError, identifier } from './protocol'
+import { learningRemovalResponseSchema, type LearningRemovalRequest } from '../learningRemovalContract'
 
 type Archive = LearningArchivePage['archives'][number]
 type Scope = LearningArchivePage['scope']
@@ -18,6 +19,9 @@ export interface PersonalLearningState {
   selected: Archive | null
   records: LearningRecordPage | null
   detail: LearningRecordDetail | null
+  removalAvailable: boolean
+  removalRequest: LearningRemovalRequest | null
+  removalStatus: 'review' | 'uncertain' | 'removed' | null
 }
 
 /** One page and one selected record stay in memory; account and visibility changes discard both. */
@@ -29,7 +33,8 @@ export class PersonalLearningWorkspace {
   private state: PersonalLearningState
   constructor(private readonly dependencies: { session: HouseholdSession, client: PersonalWebTransport, invalidated: () => void }) {
     this.state = { available: dependencies.session.capabilities.personalLearningArchive === true,
-      busy: false, error: null, archives: null, selected: null, records: null, detail: null }
+      busy: false, error: null, archives: null, selected: null, records: null, detail: null,
+      removalAvailable: dependencies.session.capabilities.personalLearningRemoval === true, removalRequest: null, removalStatus: null }
   }
 
   getSnapshot = () => this.state
@@ -52,7 +57,7 @@ export class PersonalLearningWorkspace {
 
   clear() {
     this.generation += 1
-    this.update({ archives: null, selected: null, records: null, detail: null, busy: false, error: null })
+    this.update({ archives: null, selected: null, records: null, detail: null, busy: false, error: null, removalRequest: null, removalStatus: null })
   }
 
   private fail(error: unknown, generation: number) {
@@ -70,7 +75,7 @@ export class PersonalLearningWorkspace {
     const session = samePersonSession(await this.dependencies.client.read('household/session'), this.dependencies.session)
     this.current(generation)
     const available = session.capabilities.personalLearningArchive === true
-    this.update({ available })
+    this.update({ available, removalAvailable: session.capabilities.personalLearningRemoval === true })
     if (!available) throw new PersonalWebError('disabled', 'Saved learning is not available on this Pod yet.')
     return session
   }
@@ -88,7 +93,7 @@ export class PersonalLearningWorkspace {
   private async perform(operation: (generation: number) => Promise<void>) {
     if (this.disposed || this.state.busy) return
     const generation = ++this.generation
-    this.update({ busy: true, detail: null, error: null })
+    this.update({ busy: true, detail: null, error: null, removalRequest: null, removalStatus: null })
     try {
       await operation(generation)
     }
@@ -159,7 +164,74 @@ export class PersonalLearningWorkspace {
 
   closeRecord() {
     this.generation += 1
-    this.update({ detail: null, busy: false, error: null })
+    this.update({ detail: null, busy: false, error: null, removalRequest: null, removalStatus: null })
+  }
+
+  reviewRemoval() {
+    const { detail, busy, removalAvailable } = this.state
+    if (this.disposed || busy || !removalAvailable || !detail || detail.redacted) return
+    this.update({ removalStatus: 'review', error: null, removalRequest: { version: 1, requestId: identifier(),
+      recordId: detail.recordId, archiveId: detail.archiveId, expectedPayloadHash: detail.payloadHash,
+      expectedSessionRevision: detail.scope.sessionRevision, expectedAssignmentRevision: detail.scope.assignmentRevision,
+      confirmRemoveArchivedCopy: true } })
+  }
+
+  cancelRemoval() {
+    if (!this.state.busy && this.state.removalStatus === 'review') this.update({ removalRequest: null, removalStatus: null })
+  }
+
+  async confirmRemoval() {
+    if (this.state.removalStatus === 'review') await this.finishRemoval(true)
+  }
+
+  async checkRemoval() {
+    if (this.state.removalStatus === 'uncertain') await this.finishRemoval(false)
+  }
+
+  /** Never retry an uncertain write; only a scoped receipt can confirm removal. */
+  private async finishRemoval(submit: boolean) {
+    const request = this.state.removalRequest
+    if (this.disposed || this.state.busy || !request) return
+    const generation = ++this.generation
+    let sent = !submit
+    this.update({ busy: true, error: null })
+    try {
+      const before = await this.session(generation)
+      if (!this.state.removalAvailable) throw new PersonalWebError('disabled', 'Archived-copy removal is unavailable.')
+      if (before.sessionRevision !== request.expectedSessionRevision || before.assignmentRevision !== request.expectedAssignmentRevision)
+        throw new PersonalWebError('account_changed', 'The account changed before removal.')
+      let raw: unknown
+      if (submit) {
+        sent = true
+        // Hide the payload as soon as its removal may have reached the controller.
+        this.update({ detail: null, removalStatus: 'uncertain' })
+        raw = await this.dependencies.client.read(`me/learning/records/${request.recordId}/remove`, 'POST', request)
+      }
+      else raw = await this.dependencies.client.read(`me/learning/requests/${request.requestId}`)
+      this.current(generation)
+      const response = learningRemovalResponseSchema.parse(raw)
+      const after = await this.session(generation)
+      if (!sameScope(response.scope, sessionScope(after)) || !sameScope(sessionScope(before), sessionScope(after)))
+        throw new PersonalWebError('account_changed', 'The removal receipt belongs to a different account context.')
+      const receipt = response.receipt
+      if (!receipt) {
+        this.update({ error: 'No removal receipt is available yet. The outcome is still unknown; nothing was resent.' })
+        return
+      }
+      if (receipt.requestId !== request.requestId || receipt.recordId !== request.recordId || receipt.archiveId !== request.archiveId
+        || receipt.payloadHash !== request.expectedPayloadHash) throw new PersonalWebError('invalid', 'The removal receipt did not match.')
+      const records = this.state.records
+      this.update({ detail: null, removalStatus: 'removed', records: records
+        ? { ...records,
+            records: records.records.map(record => record.recordId === request.recordId ? { ...record, redacted: true } : record) }
+        : null })
+    }
+    catch (error) {
+      if (this.disposed || generation !== this.generation) return
+      if (!sent || (error instanceof PersonalWebError && ['authentication', 'account_changed'].includes(error.code))) this.fail(error, generation)
+      else this.update({ detail: null, removalStatus: 'uncertain', error: 'Removal could not be confirmed. Check the saved result; the request will not be resent.' })
+    }
+    finally { if (generation === this.generation) this.update({ busy: false }) }
   }
 
   async checkAccess() {

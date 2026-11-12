@@ -3,7 +3,7 @@ import type { HouseholdSession } from '../contract'
 import { householdIdSchema } from '../contract'
 import { parsePersonalHistorySearch } from '../historyApiContract'
 import { maintenancePathAllowed } from './maintenanceProtocol'
-import { learningReadPath } from './learningPaths'
+import { learningReadPath, learningRemovalPath } from './learningPaths'
 import { learningArchiveLimits } from '../learningArchiveContract'
 import { personalJournalPath } from './journalPaths'
 export interface PersonalWebTransport {
@@ -40,7 +40,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
     const allowedMethod = method === 'GET'
       ? !['me/controls', 'me/routines/publish', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
       : method === 'PUT' ? path === 'me/routines' : ['me/controls', 'me/routines/publish', 'household/arrangement', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
-    if (this.disposed || (!reportRead && !learningRead && !historyRead && !personalJournalPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
+    if (this.disposed || (!reportRead && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
       throw new PersonalWebError('account_changed', 'Reconnect the personal workspace before continuing.')
     const controller = new AbortController()
     this.requests.add(controller)

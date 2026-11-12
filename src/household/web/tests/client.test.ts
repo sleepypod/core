@@ -4,6 +4,27 @@ import { householdSessionSchema } from '../../contract'
 import { PersonalBrowserClient } from '../client'
 const session = householdSessionSchema.parse(preparation.ownerSession)
 describe('personal-only transport', () => {
+  it('sends only an explicitly confirmed, exactly addressed archived-copy removal and reads its receipt', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('{}'))
+    const client = new PersonalBrowserClient(session, fetcher)
+    const request = { version: 1, requestId: '30000000-0000-4000-8000-000000000001',
+      expectedSessionRevision: session.sessionRevision, expectedAssignmentRevision: session.assignmentRevision,
+      recordId: '30000000-0000-4000-8000-000000000002', archiveId: '30000000-0000-4000-8000-000000000003',
+      expectedPayloadHash: 'a'.repeat(64), confirmRemoveArchivedCopy: true }
+    const path = `me/learning/records/${request.recordId}/remove`
+    await client.read(path, 'POST', request)
+    await client.read(`me/learning/requests/${request.requestId}`)
+    expect(fetcher.mock.calls[0]).toEqual([`/api/v1/${path}`, expect.objectContaining({ method: 'POST',
+      redirect: 'error', credentials: 'same-origin', body: JSON.stringify(request),
+      headers: { 'X-Sleepypod-Sleeper-Id': session.selfSleeperId, 'Content-Type': 'application/json' } })])
+    for (const invalid of [`${path}?side=left`, `${path}#fragment`, path.replace(request.recordId, request.archiveId)])
+      await expect(client.read(invalid, 'POST', request)).rejects.toThrow()
+    await expect(client.read(path, 'POST', { ...request, confirmRemoveArchivedCopy: false })).rejects.toThrow()
+    await expect(client.read(path, 'POST', { ...request, removeOriginal: true })).rejects.toThrow()
+    await expect(client.read(`me/learning/requests/${request.requestId}?accountId=other`)).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
   it('allows only validated library reads and keeps their original payload bytes', async () => {
     const payload = JSON.stringify({ payload: 'a'.repeat(600000) })
     const fetcher = vi.fn<typeof fetch>(async () => new Response(payload))

@@ -1,5 +1,15 @@
 import { householdIdSchema } from '../contract'
 import { parseLearningSearch } from '../learningApiContract'
+import { learningRemovalRequestSchema } from '../learningRemovalContract'
+
+export function learningRemovalPath(path: string, method: string, body: unknown): boolean {
+  if (method === 'POST') {
+    const parsed = learningRemovalRequestSchema.safeParse(body)
+    return parsed.success && path === `me/learning/records/${parsed.data.recordId}/remove`
+  }
+  return method === 'GET' && body === undefined && path.startsWith('me/learning/requests/')
+    && householdIdSchema.safeParse(path.slice('me/learning/requests/'.length)).success
+}
 
 /** Only validated reads can use the larger single-record response budget. */
 export function learningReadPath(path: string, method: string, body: unknown): 'page' | 'detail' | null {

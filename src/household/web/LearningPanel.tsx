@@ -18,6 +18,9 @@ export function LearningPanel({ learning }: { learning: PersonalLearningWorkspac
   const state = useSyncExternalStore(learning.subscribe, learning.getSnapshot)
   const reading = state.detail ? learningReading(state.detail) : null
   const readingRef = useRef<HTMLElement>(null)
+  const removalRef = useRef<HTMLElement>(null)
+  const removalTrigger = useRef<HTMLButtonElement>(null)
+  const previousRemovalStatus = useRef(state.removalStatus)
   const recordButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (state.detail) {
@@ -25,6 +28,17 @@ export function LearningPanel({ learning }: { learning: PersonalLearningWorkspac
       readingRef.current?.scrollIntoView({ block: 'nearest' })
     }
   }, [state.detail])
+  useEffect(() => {
+    if (state.removalStatus) {
+      removalRef.current?.focus({ preventScroll: true })
+      removalRef.current?.scrollIntoView({ block: 'nearest' })
+    }
+    else if (previousRemovalStatus.current === 'review') {
+      removalTrigger.current?.focus({ preventScroll: true })
+      removalTrigger.current?.scrollIntoView({ block: 'nearest' })
+    }
+    previousRemovalStatus.current = state.removalStatus
+  }, [state.removalStatus])
   return (
     <article className="learning-panel" aria-label="Your saved learning" aria-busy={state.busy}>
       <div className="row">
@@ -34,7 +48,7 @@ export function LearningPanel({ learning }: { learning: PersonalLearningWorkspac
       <p>History kept when you change sides stays private to your account. Browse your earlier check-ins, notes and saved models here.</p>
       {!state.available && <p className="small">This library is not enabled on your Pod yet. You can check its availability below.</p>}
       <button type="button" className="primary" disabled={state.busy} onClick={() => void learning.load()}>
-        {state.busy ? 'Reading saved learning…' : state.archives ? 'Reload library' : state.available ? 'Open my library' : 'Check library availability'}
+        {state.busy ? state.removalStatus === 'uncertain' ? 'Waiting for removal…' : 'Reading saved learning…' : state.archives ? 'Reload library' : state.available ? 'Open my library' : 'Check library availability'}
       </button>
       {state.error && <p role="alert" className="learning-message">{state.error}</p>}
       {state.archives && (
@@ -152,8 +166,39 @@ export function LearningPanel({ learning }: { learning: PersonalLearningWorkspac
                       Download original record
                     </button>
                   </details>
+                  {state.removalAvailable && state.removalStatus !== 'review' && (
+                    <button ref={removalTrigger} type="button" disabled={state.busy} onClick={() => learning.reviewRemoval()}>Remove archived content…</button>
+                  )}
                 </>
               )}
+        </section>
+      )}
+      {state.removalStatus && (
+        <section ref={removalRef} tabIndex={-1} className="learning-reading" aria-label="Archived content removal">
+          {state.removalStatus === 'review' && (
+            <>
+              <h3>Remove this archived copy?</h3>
+              <p>Its content will be removed from this Pod’s saved library. A preservation receipt, including its source and date, remains.</p>
+              <p className="small">Original records, active models, bed routines, existing backups and copies already saved on other devices are not deleted. This cannot be undone here.</p>
+              <div className="actions">
+                <button type="button" disabled={state.busy} onClick={() => learning.cancelRemoval()}>Keep this copy</button>
+                <button type="button" disabled={state.busy} onClick={() => void learning.confirmRemoval()}>Remove this archived content</button>
+              </div>
+            </>
+          )}
+          {state.removalStatus === 'uncertain' && (
+            <>
+              <h3>{state.busy ? 'Waiting for confirmation…' : 'Check whether removal completed'}</h3>
+              <p>The archived content is hidden until we can confirm the result. Checking only reads the saved receipt; it never repeats the removal request.</p>
+              <button type="button" disabled={state.busy} onClick={() => void learning.checkRemoval()}>Check removal result</button>
+            </>
+          )}
+          {state.removalStatus === 'removed' && (
+            <>
+              <h3>Archived content removed</h3>
+              <p>The controller confirmed removal of this copy’s content. Its preservation receipt remains; original records and previously saved copies are unchanged.</p>
+            </>
+          )}
         </section>
       )}
     </article>

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { learningArchivePageSchema, learningRecordDetailSchema, learningRecordPageSchema, parseLearningSearch } from '../learningApiContract'
+import { learningRemovalRequestSchema, learningRemovalResponseSchema } from '../learningRemovalContract'
 
 const archiveId = randomUUID(), recordId = randomUUID(), capturedAt = Date.parse('2026-11-11T10:00:00Z')
 const envelope = { version: 1, generatedAt: capturedAt, scope: { podId: randomUUID(), householdId: randomUUID(),
@@ -16,6 +17,21 @@ const detail = { ...envelope, recordId, archiveId, sourceTable: 'comfort_states'
   encoding: 'sqlite_row_json_text', payload: '{"id":9007199254740993}', redacted: false }
 
 describe('private preserved-learning transport', () => {
+  it('requires explicit archived-copy confirmation, current revisions and exact payload identity', () => {
+    const request = { version: 1, requestId: randomUUID(), expectedSessionRevision: 2, expectedAssignmentRevision: 2,
+      recordId, archiveId, expectedPayloadHash: detail.payloadHash, confirmRemoveArchivedCopy: true }
+    expect(learningRemovalRequestSchema.parse(request)).toEqual(request)
+    for (const change of [{ confirmRemoveArchivedCopy: false }, { confirmRemoveArchivedCopy: undefined },
+      { expectedSessionRevision: 0 }, { expectedPayloadHash: 'wrong' }, { recordId: 'all' }, { side: 'left' }, { deleteOriginal: true }])
+      expect(() => learningRemovalRequestSchema.parse({ ...request, ...change })).toThrow()
+    const response = { version: 1, generatedAt: capturedAt, scope: envelope.scope,
+      interpretation: 'archived_copy_removal_not_source_deletion', receipt: { requestId: request.requestId, recordId, archiveId,
+        payloadHash: detail.payloadHash, removedAt: capturedAt, outcome: 'content_removed' } }
+    expect(learningRemovalResponseSchema.parse(response)).toEqual(response)
+    expect(() => learningRemovalResponseSchema.parse({ ...response, receipt: { ...response.receipt, removedAt: capturedAt + 1 } })).toThrow()
+    expect(() => learningRemovalResponseSchema.parse({ ...response, payload: detail.payload })).toThrow()
+  })
+
   it('keeps provenance, exact original JSON and bounded cursors distinct from training approval', () => {
     expect(learningArchivePageSchema.parse(archivePage)).toEqual(archivePage)
     expect(learningRecordPageSchema.parse(recordPage)).toEqual(recordPage)
