@@ -65,6 +65,33 @@ it('denies existing owner credentials at personal endpoints and personal credent
   expect(response.headers.get('cache-control')).toContain('no-store')
   expect((await response.json()).sleeperId).toBe(store.session(member).selfSleeperId)
 })
+it('echoes a fresh challenge only after authenticating the personal session', async () => {
+  for (const credential of [personal, member]) {
+    const challenge = secret()
+    const response = await householdHttp(request(`household/session?challenge=${challenge}`, 'GET', undefined, credential), dependencies)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Sleepypod-Connection-Challenge')).toBe(challenge)
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(contract.householdSessionSchema.parse(await response.json()).accountId).toBe(store.session(credential).accountId)
+  }
+  for (const credential of [owner, secret(), undefined]) {
+    const response = await householdHttp(request(`household/session?challenge=${secret()}`, 'GET', undefined, credential), dependencies)
+    expect(response.status).toBe(401)
+    expect(response.headers.has('X-Sleepypod-Connection-Challenge')).toBe(false)
+  }
+})
+it('rejects malformed or duplicate challenges and preserves ordinary session reads', async () => {
+  for (const query of ['challenge=', 'challenge=short', `challenge=${'a'.repeat(44)}`, `challenge=${'!'.repeat(43)}`,
+    `challenge=${secret()}&challenge=${secret()}`]) {
+    const response = await householdHttp(request(`household/session?${query}`, 'GET', undefined, member), dependencies)
+    expect(response.status).toBe(400)
+    expect(response.headers.has('X-Sleepypod-Connection-Challenge')).toBe(false)
+  }
+  const response = await householdHttp(request('household/session', 'GET', undefined, member), dependencies)
+  expect(response.status).toBe(200)
+  expect(response.headers.has('X-Sleepypod-Connection-Challenge')).toBe(false)
+  expect(contract.householdSessionSchema.parse(await response.json()).accountId).toBe(store.session(member).accountId)
+})
 it('keeps personal device report capability optional and separate from persistent cloud consent', async () => {
   for (const advertised of [undefined, false, true]) {
     const session = structuredClone(fixtures.memberSession)

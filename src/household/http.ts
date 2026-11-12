@@ -174,8 +174,18 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
         || (expectedSleeper !== null && store.session(current).selfSleeperId !== expectedSleeper))
         throw new HouseholdError('conflict', 409, 'The browser account changed. Reload before continuing.')
     }
-    if (path === '/api/v1/household/session' && method === 'GET')
-      return reply(present(store.session(credential)))
+    if (path === '/api/v1/household/session' && method === 'GET') {
+      const session = present(store.session(credential))
+      const response = reply(session)
+      // Route enrollment must distinguish a fresh personal reply from a proxy's cached session.
+      if (url.searchParams.has('challenge')) {
+        const challenges = url.searchParams.getAll('challenge')
+        if (challenges.length !== 1 || !/^[A-Za-z0-9_-]{43}$/.test(challenges[0]))
+          throw new HouseholdError('invalid_request', 400, 'Use one 32-byte connection challenge.')
+        response.headers.set('X-Sleepypod-Connection-Challenge', challenges[0])
+      }
+      return response
+    }
     if (dependencies.personalReports && reportPath)
       return dependencies.personalReports.response(request, credential, mutationBody, assertRequestCurrent)
     if (dependencies.personalExperiments && experimentPath)
