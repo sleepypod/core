@@ -71,7 +71,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const reports = dependencies.personalReports?.present(journal) ?? journal
     // A native client may enroll its own Health library against this authenticated identity.
     // This grants no Health upload route, legacy history access or cloud-analysis permission.
-    return { ...reports, capabilities: { ...reports.capabilities, healthImport: true } }
+    const maintenance = dependencies.arrangementCoordinator?.present(reports) ?? reports
+    return { ...maintenance, capabilities: { ...maintenance.capabilities, healthImport: true } }
   }
   const url = new URL(request.url)
   const path = url.pathname.replace(/\/$/, '')
@@ -181,17 +182,19 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
         return reply(await coordinator.cancel(credential, mutationBody, assertRequestCurrent))
     }
     if (dependencies.arrangementReviews) {
+      const presentReview = (review: ReturnType<ArrangementReviewService['latest']>) =>
+        dependencies.arrangementCoordinator?.presentReview(store.session(credential), review) ?? review
       if (path === '/api/v1/household/arrangement' && method === 'GET')
-        return reply({ version: 1, review: dependencies.arrangementReviews.latest(credential) })
+        return reply({ version: 1, review: presentReview(dependencies.arrangementReviews.latest(credential)) })
       if (path === '/api/v1/household/arrangement' && method === 'POST')
-        return reply(dependencies.arrangementReviews.propose(credential, mutationBody))
+        return reply(presentReview(dependencies.arrangementReviews.propose(credential, mutationBody)))
       if (path === '/api/v1/household/arrangement/approve' && method === 'POST')
-        return reply(dependencies.arrangementReviews.approve(credential, mutationBody))
+        return reply(presentReview(dependencies.arrangementReviews.approve(credential, mutationBody)))
       if (path === '/api/v1/household/arrangement/cancel' && method === 'POST')
-        return reply(dependencies.arrangementReviews.cancel(credential, mutationBody))
+        return reply(presentReview(dependencies.arrangementReviews.cancel(credential, mutationBody)))
       const reviewPath = path.match(/^\/api\/v1\/household\/arrangement\/([^/]+)$/)
       if (reviewPath && method === 'GET')
-        return reply(dependencies.arrangementReviews.get(credential, reviewPath[1]))
+        return reply(presentReview(dependencies.arrangementReviews.get(credential, reviewPath[1])))
     }
     if (dependencies.personalRuntime) {
       if (path === '/api/v1/me/bed' && method === 'GET')

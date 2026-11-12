@@ -7,7 +7,7 @@ import { arrangementRecoveryRequestSchema } from '../arrangementRecoveryContract
 import { arrangementCancellationPreviewSchema, arrangementCancellationRequestSchema, type ArrangementCancellationPreview } from '../arrangementCancellationContract'
 import type { PersonalWebTransport } from './client'
 import { contextKey, identifier, PersonalWebError, readArrangementReview } from './protocol'
-import { cancellationReplySchema, maintenanceOwner, readMaintenanceStatus, recoveryReplySchema, restartReplySchema, transitionReplySchema } from './maintenanceProtocol'
+import { cancellationReplySchema, maintenanceOwner, maintenanceAllowsReview, readMaintenanceStatus, recoveryReplySchema, restartReplySchema, transitionReplySchema } from './maintenanceProtocol'
 
 type Confirmation<Keys extends string> = Record<Keys, boolean>
 export type ActivationConfirmation = Confirmation<'confirmEmptyAndAttended' | 'confirmClearTemporaryActions' | 'confirmPauseLearningAndSharedAutomations' | 'acknowledgeHeldUntilRecovery'>
@@ -150,13 +150,14 @@ export class HouseholdMaintenanceWorkspace {
   }
 
   async activate(review: ArrangementReview, confirmation: ActivationConfirmation) {
+    if (this.state.entered) return
     await this.operation(async (generation, session, status) => {
-      if (!session.capabilities.activateArrangement || status.operation !== null || session.arrangement.mode !== 'solo-anywhere') throw unavailable()
+      if (!session.capabilities.activateArrangement || !maintenanceAllowsReview(status, review) || session.arrangement.mode !== 'solo-anywhere') throw unavailable()
       const index = arrangementIndexSchema.parse(await this.dependencies.client.read('household/arrangement'))
       this.current(generation)
       const current = readArrangementReview(index.review, session)
       if (current.reviewId !== review.reviewId || current.state !== 'approved_for_separate_activation'
-        || !current.canActivate || current.createdAt > this.now() || current.expiresAt <= this.now()) throw unavailable()
+        || !current.canActivate || !maintenanceAllowsReview(status, current) || current.createdAt > this.now() || current.expiresAt <= this.now()) throw unavailable()
       const after = await this.owner(generation)
       if (contextKey(after) !== contextKey(session)) throw unavailable()
       const request = arrangementTransitionRequestSchema.parse({ ...this.context(after), ...confirmation, reviewId: current.reviewId })

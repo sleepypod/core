@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { writeFileSync } from 'node:fs'
 import { mockPersonal } from './personal-fixture'
 import examples from '../../src/household/fixtures/arrangement-review-v1.json' with { type: 'json' }
 import controls from '../../src/household/fixtures/personal-controls-v1.json' with { type: 'json' }
@@ -8,8 +9,22 @@ const operationId = '10000000-0000-4000-8000-000000000088'
 const receiptId = '10000000-0000-4000-8000-000000000089'
 const emptyBed = 'The bed is empty, the cover is connected, the reservoir is filled, and I am beside the bed.'
 
+/** Tile long account pages below the software renderer's texture limit, without changing their layout. */
+async function captureFullPage(page: Page, name: string) {
+  await page.evaluate(() => window.scrollTo(0, 0))
+  const size = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }))
+  const parts = []
+  for (let offset = 0; offset < size.height; offset += 4000) {
+    const clip = { x: 0, y: offset, width: size.width, height: Math.min(4000, size.height - offset) }
+    const filename: string = `${name}-part-${parts.length + 1}.png`
+    await page.screenshot({ path: test.info().outputPath(filename), fullPage: true, clip })
+    parts.push({ filename, ...clip })
+  }
+  writeFileSync(test.info().outputPath(`${name}.json`), JSON.stringify({ ...size, parts }, null, 2))
+}
+
 // All device routes are intercepted; these checks never start a physical transition.
-async function maintenanceFixture(page: Page, initial: 'empty' | 'held' | 'committed' = 'committed') {
+async function maintenanceFixture(page: Page, initial: 'empty' | 'held' | 'committed' | 'cancelled' = 'committed') {
   const base = await mockPersonal(page)
   const session = base.session
   Object.assign(session.capabilities, { arrangementMaintenance: true, arrangementReview: true, activateArrangement: true })
@@ -30,7 +45,17 @@ async function maintenanceFixture(page: Page, initial: 'empty' | 'held' | 'commi
         committedAt: initial === 'committed' ? Date.now() - 500 : null,
         controllerRestarted: false, admission: 'held_for_this_transition', recovery: null, cancellation: null, restart: null,
       }
+  if (operation && initial === 'cancelled') {
+    operation.reviewId = '10000000-0000-4000-8000-000000000090'
+    operation.createdAt = Date.now() - 10_000
+    operation.controllerRestarted = true
+    operation.admission = 'open'
+    operation.cancellation = { operationId, reviewId: operation.reviewId, requestId: receiptId,
+      state: 'cancelled', completedAt: Date.now() - 5_000, admissionRevision: 3, controlDigest: 'a'.repeat(64),
+      arrangement: 'solo-anywhere', hardware: 'admission_released', physicalMovement: 'not_requested' }
+  }
   let loseRestart = false
+  let loseActivation = false
   let readGate: Promise<void> | null = null
   const posts: Array<{ path: string, body: Record<string, unknown> }> = []
   await page.route('**/api/v1/me/bed', (route) => {
@@ -57,6 +82,7 @@ async function maintenanceFixture(page: Page, initial: 'empty' | 'held' | 'commi
     const body = request.postDataJSON()
     posts.push({ path, body })
     if (path === '/api/v1/household/transition') {
+      if (loseActivation) return route.abort('failed')
       assigned()
       operation = { operationId: body.requestId, reviewId: review.reviewId, state: 'committed', createdAt: Date.now(),
         committedAt: Date.now(), controllerRestarted: false, admission: 'held_for_this_transition', recovery: null, cancellation: null, restart: null }
@@ -86,9 +112,61 @@ async function maintenanceFixture(page: Page, initial: 'empty' | 'held' | 'commi
   return { base, session, posts,
     restarted: () => { if (operation) operation.controllerRestarted = true },
     loseRestart: () => { loseRestart = true },
+    loseActivation: () => { loseActivation = true },
     gate: (pending: Promise<void> | null) => { readGate = pending },
   }
 }
+
+test('a completed cancellation preserves its receipt and allows a newly approved side review', async ({ page }) => {
+  const fixture = await maintenanceFixture(page, 'cancelled')
+  await page.goto('/household/index.html')
+  await page.getByRole('button', { name: 'Check current side review' }).click()
+  const panel = page.getByRole('article', { name: 'Side change maintenance' })
+  const start = panel.getByRole('button', { name: 'Start reviewed side change' })
+  await expect(panel).toContainText('Your solo arrangement is kept')
+  await expect(start).toBeDisabled()
+  await expect(panel.getByRole('checkbox')).toHaveCount(4)
+  await captureFullPage(page, 'activation-after-cancellation-desktop')
+  await panel.screenshot({ path: test.info().outputPath('activation-after-cancellation-desktop-panel.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+  await page.addStyleTag({ content: ':root{font-size:24px}' })
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await captureFullPage(page, 'activation-after-cancellation-phone')
+  await panel.screenshot({ path: test.info().outputPath('activation-after-cancellation-phone-panel.png') })
+  expect(fixture.posts).toEqual([])
+  for (const checkbox of await panel.getByRole('checkbox').all()) {
+    await expect(checkbox).not.toBeChecked()
+    await checkbox.check()
+  }
+  await start.click()
+  await expect(panel).toContainText('Side transition saved')
+  await expect(start).toHaveCount(0)
+  expect(fixture.posts).toHaveLength(1)
+  expect(fixture.posts[0].body.requestId).not.toBe(operationId)
+})
+
+test('a lost activation reply with no receipt cannot offer another attempt', async ({ page }) => {
+  const fixture = await maintenanceFixture(page, 'empty')
+  fixture.loseActivation()
+  await page.goto('/household/index.html')
+  await page.getByRole('button', { name: 'Check current side review' }).click()
+  const panel = page.getByRole('article', { name: 'Side change maintenance' })
+  await expect(panel.getByRole('checkbox')).toHaveCount(4)
+  for (const checkbox of await panel.getByRole('checkbox').all()) await checkbox.check()
+  await panel.getByRole('button', { name: 'Start reviewed side change' }).click()
+  await panel.getByRole('button', { name: 'Check saved transition' }).click()
+  await expect(panel).toContainText('Its outcome is still uncertain')
+  await expect(panel.getByRole('button', { name: 'Start reviewed side change' })).toHaveCount(0)
+  await captureFullPage(page, 'activation-uncertain-desktop')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+  await page.addStyleTag({ content: ':root{font-size:24px}' })
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await captureFullPage(page, 'activation-uncertain-phone')
+  await panel.getByRole('button', { name: 'Check saved transition' }).click()
+  expect(fixture.posts).toHaveLength(1)
+})
 
 test('account editors wait for the initial transition check before becoming available', async ({ page }) => {
   const fixture = await maintenanceFixture(page, 'empty')

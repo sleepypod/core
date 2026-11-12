@@ -3,7 +3,8 @@
 This is the storage and maintenance boundary for the reviewed move from
 solo-anywhere to two assigned sleepers. The internal stores are reached through
 the authenticated coordinator described below. Its mutating HTTP routes remain
-disabled by default; public `activateArrangement` and `canActivate` remain false.
+disabled by default. With every deployment prerequisite explicitly enabled,
+public capabilities expose the attended owner workflow; no side change runs at startup.
 This source change does not alter an installation, its feature flags, people,
 schedules, hardware, or reviewed history.
 
@@ -11,8 +12,8 @@ schedules, hardware, or reviewed history.
 
 `ArrangementCoordinator` connects the transaction, recovery and cancellation
 stores to a serialized runtime operation. The household host registers its
-authenticated maintenance routes, but no startup activation or public activation
-capability is enabled by this implementation.
+authenticated maintenance routes, and projects their availability onto the authenticated session and independently
+approved review. No startup activation is performed.
 Duplicate module instances share the operation exclusion for the same database.
 
 The coordinator reads evidence before placing a hold, suspends and drains
@@ -49,8 +50,8 @@ Behavioral tests use real migrated configuration and biometric stores with
 simulated external observations. They cover drain ordering, failure and expiry,
 duplicate coordinators, replay, original-owner authorization, processing
 acknowledgments, cancellation and failed startup. These are source checks, not
-physical household qualification. Runtime registration and maintenance routes
-are implemented; the attended web/native workflow remains pending.
+physical household qualification. Runtime registration, public availability and the attended web/native workflow
+are implemented. Deployment and attended physical qualification remain separate.
 
 ## Transaction and interruption behavior
 

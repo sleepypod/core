@@ -7,6 +7,7 @@ import { ArrangementCoordinator } from '../arrangementCoordinator'
 import { ArrangementReviewService } from '../arrangementReviews'
 import { PersonHistoryStore } from '../personHistory'
 import type { ArrangementEvidence } from '../arrangementEvidence'
+import type { ArrangementTransitionRequest } from '../arrangementTransitionContract'
 import { historySourceFixture } from './historySourceFixture'
 import { personalRuntimeFixture } from './runtimeFixture'
 
@@ -33,7 +34,7 @@ export function arrangementCoordinatorFixture(filename = ':memory:') {
   for (const key of [fixture.ownerKey, fixture.memberKey]) reviews.approve(key, { ...context(key), version: 1, reviewId: review.reviewId,
     issuedAt: fixture.clock.now, expiresAt: fixture.clock.now + 30000, confirmMySide: true, confirmMyRoutine: true, acknowledgeSeparateActivation: true })
   const runtime = { runId: randomUUID(), invocationId: 'a'.repeat(32), pid: 1000, ticks: '1000', bootId: randomUUID() }
-  const request = { ...context(), version: 1 as const, reviewId: review.reviewId, issuedAt: fixture.clock.now, expiresAt: fixture.clock.now + 30000,
+  const request: ArrangementTransitionRequest = { ...context(), version: 1 as const, reviewId: review.reviewId, issuedAt: fixture.clock.now, expiresAt: fixture.clock.now + 30000,
     confirmEmptyAndAttended: true as const, confirmClearTemporaryActions: true as const,
     confirmPauseLearningAndSharedAutomations: true as const, acknowledgeHeldUntilRecovery: true as const }
   const events: string[] = []

@@ -199,6 +199,8 @@ export class ArrangementReviewService {
   latest(credential: HouseholdCredential): ArrangementReview | null {
     return this.dependencies.database.transaction(() => {
       const session = this.dependencies.identities.session(credential)
+      // Old approvals remain in storage, but are not a proposal for the new assignment.
+      if (session.arrangement.mode !== 'solo-anywhere') return null
       const row = this.dependencies.database.prepare('SELECT * FROM household_arrangement_reviews WHERE household_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
         .get(session.householdId) as ReviewRow | undefined
       return row ? this.project(session, row) : null

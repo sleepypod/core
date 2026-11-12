@@ -15,7 +15,9 @@ import { arrangementRecoveryRequestSchema } from './arrangementRecoveryContract'
 import { arrangementCancellationRequestSchema } from './arrangementCancellationContract'
 import { arrangementTransitionContextSchema, readArrangementTransition } from './arrangementTransitionRecord'
 import { readArrangementEvidence, type ArrangementEvidence } from './arrangementEvidence'
-import { householdIdSchema } from './contract'
+import { householdIdSchema, type HouseholdSession } from './contract'
+import type { ArrangementReview } from './arrangementContract'
+import { arrangementCanStart, arrangementCanActivateReview } from './arrangementAvailability'
 import { arrangementMaintenanceStatusSchema, type ArrangementMaintenanceStatus } from './arrangementMaintenanceContract'
 import { ArrangementRestartStore } from './arrangementRestart'
 import { arrangementRestartRequestSchema, type ArrangementRestartRequest } from './arrangementRestartContract'
@@ -64,6 +66,19 @@ export class ArrangementCoordinator {
     this.recovery = new ArrangementRecoveryStore(storage)
     this.cancellation = new ArrangementCancellationStore(storage)
     this.restarts = new ArrangementRestartStore(dependencies.database, this.now)
+  }
+
+  present(session: HouseholdSession): HouseholdSession {
+    const available = arrangementCanStart(this.dependencies.database, session, this.dependencies.enabled() && !this.operation.busy)
+    return { ...session, capabilities: { ...session.capabilities,
+      arrangementReview: session.capabilities.arrangementReview === true && session.arrangement.mode === 'solo-anywhere',
+      arrangementMaintenance: session.role === 'owner', activateArrangement: available } }
+  }
+
+  presentReview(session: HouseholdSession, review: ArrangementReview | null): ArrangementReview | null {
+    if (!review) return null
+    return { ...review, canActivate: arrangementCanActivateReview(session, review, this.present(session).capabilities.activateArrangement)
+      && review.createdAt <= this.now() && review.expiresAt > this.now() }
   }
 
   private owner(credential: HouseholdCredential, assertRequestCurrent: () => void) {

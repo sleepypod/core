@@ -1,6 +1,7 @@
 import { useState, useSyncExternalStore } from 'react'
 import type { ArrangementReview } from '../arrangementContract'
 import type { HouseholdMaintenanceWorkspace } from './maintenance'
+import { maintenanceAllowsReview } from './maintenanceProtocol'
 
 type Confirmations = ReadonlyArray<readonly [string, string]>
 const emptyBed = ['confirmEmptyAndAttended', 'The bed is empty, the cover is connected, the reservoir is filled, and I am beside the bed.'] as const
@@ -44,7 +45,8 @@ export function ArrangementMaintenancePanel({ workspace, review, standalone = fa
   const pending = operation && ['held', 'committed'].includes(operation.state)
   const held = operation?.admission === 'held_for_this_transition'
   const freshKey = `${state.status?.observedAt}:${operation?.state}:${operation?.controllerRestarted}:${state.cancellation?.observedAt}`
-  const activationReady = state.loaded && !operation && state.canActivate && review?.canActivate && review.state === 'approved_for_separate_activation'
+  const activationReady = !state.entered && state.loaded && state.status && review && state.canActivate && review.canActivate
+    && review.state === 'approved_for_separate_activation' && maintenanceAllowsReview(state.status, review)
   const title = !state.loaded
     ? 'Check your side change'
     : !operation

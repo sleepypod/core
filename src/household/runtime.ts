@@ -15,6 +15,7 @@ import { PersonalJournalStore } from './personalJournal'
 import { PersonalReportsApi } from './personalReportsApi'
 import { MorningReportStore } from '@/src/reports/store'
 import { ArrangementCoordinator } from './arrangementCoordinator'
+import { arrangementActivationEnabled } from './arrangementAvailability'
 import { assertControlCurrent } from '@/src/controls/context'
 import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
 import { withSideLock } from '@/src/hardware/sideLock'
@@ -91,10 +92,7 @@ export async function handleHouseholdRequest(request: Request) {
   runtime.arrangementCoordinator ??= new ArrangementCoordinator({ database: sqlite, biometrics: biometricsDb.$client,
     identities: runtime.store, reviews: runtime.arrangementReviews, historySource,
     history: new PersonHistoryStore(sqlite, runtime.store, historySource), runId: runtime.runId,
-    // Disabled until the complete attended client flow and private learning migration are released.
-    enabled: () => preparationEnabled() && ['SLEEPYPOD_PERSONAL_RUNTIME', 'SLEEPYPOD_PERSONAL_ROUTINES',
-      'SLEEPYPOD_PERSONAL_HISTORY', 'SLEEPYPOD_ARRANGEMENT_REVIEW', 'SLEEPYPOD_ARRANGEMENT_ACTIVATION']
-      .every(name => process.env[name] === '1') })
+    enabled: () => arrangementActivationEnabled(process.env) })
   return householdHttp(request, {
     store: runtime.store,
     personalRuntime: runtime.personalRuntime,

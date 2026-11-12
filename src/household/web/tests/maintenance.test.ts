@@ -17,7 +17,7 @@ const restart = { confirmEmptyAndAttended: true, acknowledgeConnectionWillClose:
 const recovery = { confirmEmptyAndAttended: true, confirmAssignedSides: true, acknowledgeRecordingGap: true, acknowledgeLearningRemainsOff: true }
 const cancellation = { confirmEmptyAndAttended: true, confirmKeepSoloArrangement: true, acknowledgeSavedRoutinesMayResume: true }
 
-function setup(initial: 'empty' | 'held' | 'committed' = 'committed') {
+function setup(initial: 'empty' | 'held' | 'committed' | 'cancelled' = 'committed') {
   let now = reviewExample.ownerReview.createdAt + 2000
   const session = householdSessionSchema.parse(preparation.ownerSession)
   session.capabilities.activateArrangement = true
@@ -28,8 +28,13 @@ function setup(initial: 'empty' | 'held' | 'committed' = 'committed') {
     operation: initial === 'empty'
       ? null
       : { operationId, reviewId: review.reviewId, state: initial, createdAt: now - 1000,
-          committedAt: initial === 'committed' ? now - 500 : null, controllerRestarted: false,
-          admission: 'held_for_this_transition', recovery: null, cancellation: null, restart: null } })
+          committedAt: initial === 'committed' ? now - 500 : null, controllerRestarted: initial === 'cancelled',
+          admission: initial === 'cancelled' ? 'open' : 'held_for_this_transition', recovery: null, restart: null,
+          cancellation: initial === 'cancelled'
+            ? { operationId, reviewId: review.reviewId, requestId,
+                state: 'cancelled', completedAt: now - 500, admissionRevision: 3, controlDigest: 'a'.repeat(64),
+                arrangement: 'solo-anywhere', hardware: 'admission_released', physicalMovement: 'not_requested' }
+            : null } })
   const posts: Array<{ path: string, body: Record<string, unknown> }> = []
   const entered = vi.fn(), invalidated = vi.fn(), finished = vi.fn()
   let failure: string | null = null
@@ -91,6 +96,39 @@ function setup(initial: 'empty' | 'held' | 'committed' = 'committed') {
 }
 
 describe('attended personal web maintenance', () => {
+  it('allows a separately approved later review after a verified cancelled attempt', async () => {
+    const fixture = setup('cancelled')
+    fixture.review.reviewId = '10000000-0000-4000-8000-000000000090'
+    fixture.review.createdAt = fixture.status.observedAt
+    await fixture.workspace.refresh()
+    expect(fixture.workspace.getSnapshot().entered).toBe(false)
+    await fixture.workspace.activate(fixture.review, activation)
+    expect(fixture.posts).toHaveLength(1)
+    expect(fixture.posts[0].body.reviewId).toBe(fixture.review.reviewId)
+    expect(fixture.posts[0].body.requestId).not.toBe(operationId)
+    expect(fixture.workspace.getSnapshot().status?.operation?.state).toBe('committed')
+  })
+  it.each(['same_review', 'earlier_review', 'held_admission'])('rejects %s after a cancelled attempt', async (reason) => {
+    const fixture = setup('cancelled')
+    if (reason !== 'same_review') fixture.review.reviewId = '10000000-0000-4000-8000-000000000090'
+    if (reason !== 'earlier_review') fixture.review.createdAt = fixture.status.observedAt
+    if (reason === 'held_admission') fixture.operation().admission = 'held_for_another_transition'
+    await fixture.workspace.refresh()
+    await fixture.workspace.activate(fixture.review, activation)
+    expect(fixture.posts).toEqual([])
+  })
+  it('never creates another activation after a lost reply and an absent receipt', async () => {
+    const fixture = setup('empty')
+    fixture.fail('uncertain')
+    await fixture.workspace.refresh()
+    await fixture.workspace.activate(fixture.review, activation)
+    expect(fixture.posts).toHaveLength(1)
+    fixture.fail(null)
+    await fixture.workspace.refresh()
+    expect(fixture.workspace.getSnapshot()).toMatchObject({ loaded: true, entered: true, status: { operation: null } })
+    await fixture.workspace.activate(fixture.review, activation)
+    expect(fixture.posts).toHaveLength(1)
+  })
   it('reads a pending operation without writes, and enters maintenance only once', async () => {
     const fixture = setup()
     await fixture.workspace.refresh()

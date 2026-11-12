@@ -5,6 +5,8 @@ import { arrangementRestartReceiptSchema } from '../arrangementRestartContract'
 import { arrangementRecoveryReceiptSchema } from '../arrangementRecoveryContract'
 import { arrangementCancellationReceiptSchema } from '../arrangementCancellationContract'
 import { identityKey, PersonalWebError } from './protocol'
+import type { ArrangementReview } from '../arrangementContract'
+import type { ArrangementMaintenanceStatus } from '../arrangementMaintenanceContract'
 
 const instant = z.number().int().positive().max(8_640_000_000_000_000)
 export const transitionReplySchema = z.object({
@@ -17,6 +19,13 @@ export const restartReplySchema = z.object({ receipt: arrangementRestartReceiptS
 const automaticServices = z.enum(['resumed', 'unavailable', 'unchanged_by_replay'])
 export const recoveryReplySchema = z.object({ receipt: arrangementRecoveryReceiptSchema, automaticServices, replayed: z.boolean() }).strict()
 export const cancellationReplySchema = z.object({ receipt: arrangementCancellationReceiptSchema, automaticServices, replayed: z.boolean() }).strict()
+
+/** A cancelled attempt remains readable; only a new, later review can start another change. */
+export function maintenanceAllowsReview(status: ArrangementMaintenanceStatus, review: ArrangementReview) {
+  const prior = status.operation
+  return prior === null || (prior.state === 'cancelled' && prior.admission === 'open'
+    && prior.cancellation !== null && review.reviewId !== prior.reviewId && review.createdAt >= prior.cancellation.completedAt)
+}
 
 /** Only maintenance may reacquire revisions after its own transition. Ordinary controls stay strictly pinned. */
 export function maintenanceOwner(input: unknown, anchor: HouseholdSession) {
