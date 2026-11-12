@@ -54,6 +54,13 @@ priority and acceptance; it does not introduce an additional approval gate.
 
 ## Cross-cutting contracts
 
+The reviewed bedtime-light and shade blueprints from merged commit
+`5f6c962bad703c41567ff29f6ec6ffee58175df4` are imported into the live Home Assistant
+blueprint library. Both show **zero automations using them**. No device list was
+selected and no routine enabled. This establishes template installation only;
+device mapping, trace review and physical qualification still remain. The private
+installation receipt and screenshot are in the November 11 diagnostics folder.
+
 Personal device-local Health enrollment is now being integrated against authenticated
 account/sleeper identities. Its Core capability is merged in PR 117; native privacy/lifecycle checks and the
 paired screen pass local phone/tablet validation in PR 75, with the independent
