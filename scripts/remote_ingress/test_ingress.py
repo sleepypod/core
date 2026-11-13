@@ -83,6 +83,9 @@ class ConfigurationTests(unittest.TestCase):
             metadata = json.loads((target / 'deployment.json').read_text())
             self.assertFalse(metadata['published'])
             self.assertFalse(metadata['started'])
+            self.assertEqual(metadata['coreHostRequirement'], {
+                'variable': 'SLEEPYPOD_ALLOWED_HOSTS', 'appendExactHost': HOST,
+                'preserveExistingEntries': True, 'applied': False})
             with self.assertRaises(FileExistsError):
                 write_bundle(target, HOST, '10.0.1.70')
             self.assertIn('proxy_pass http://10.0.1.69:3000;', (target / 'nginx.conf').read_text())
@@ -169,6 +172,37 @@ class ProxyTests(unittest.TestCase):
         replies = [self.request('GET', '/api/v1/connection?challenge=same', Authorization='Bearer owner-fixture') for _ in range(2)]
         self.assertEqual([reply[0] for reply in replies], [200, 200])
         self.assertEqual(json.loads(replies[1][2])['calls'], json.loads(replies[0][2])['calls'] + 1)
+
+    def test_native_status_batch_and_passive_rest_equivalents_are_forwarded(self):
+        procedures = ['health.system', 'health.scheduler', 'health.hardware',
+                      'health.dacMonitor', 'system.wifiStatus', 'system.getLogSources']
+        paths = ['/api/trpc/' + ','.join(procedures) + '?batch=1&input=%7B%7D',
+                 *['/api/trpc/' + procedure for procedure in procedures],
+                 '/api/system/wifi-status', '/api/system/log-sources']
+        for path in paths:
+            with self.subTest(path=path):
+                status, _, body = self.request('GET', path, Authorization='Bearer owner-fixture')
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)['request']['path'], path)
+                self.assertEqual(self.request('GET', path)[0], 401)
+
+    def test_status_exception_never_admits_mixed_maintenance_or_writes(self):
+        paths = ['/api/trpc/health.system,system.getLogs',
+                 '/api/trpc/system.wifiStatus,device.execute',
+                 '/api/trpc/system.getLogSources,unknown.futureControl',
+                 '/api/trpc/system.getLogSourcesExtra', '/api/trpc/system.wifiStatus/extra',
+                 '/api/system/log-sources/extra']
+        for path in paths:
+            with self.subTest(path=path):
+                before = len(Origin.calls)
+                self.assertEqual(self.request('GET', path, Authorization='Bearer owner-fixture')[0], 403)
+                self.assertEqual(len(Origin.calls), before)
+        for path in ['/api/trpc/system.wifiStatus', '/api/trpc/health.system,system.getLogSources',
+                     '/api/system/wifi-status', '/api/system/log-sources']:
+            with self.subTest(write=path):
+                before = len(Origin.calls)
+                self.assertEqual(self.request('POST', path, '{}', Authorization='Bearer owner-fixture')[0], 403)
+                self.assertEqual(len(Origin.calls), before)
 
     def test_browser_session_cookies_remain_separate_and_secure(self):
         status, headers, _ = self.request('POST', '/api/auth/session', '{}',

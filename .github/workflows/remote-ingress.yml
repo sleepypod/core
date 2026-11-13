@@ -6,6 +6,12 @@ on:
       - 'scripts/remote_ingress/**'
       - 'docs/remote-ingress.md'
       - '.github/workflows/remote-ingress.yml'
+      - 'src/auth/**'
+      - 'src/connections/**'
+      - 'src/household/**'
+      - 'app/api/auth/session/**'
+      - 'app/api/v1/connection/**'
+      - 'proxy.ts'
   workflow_dispatch:
 
 permissions:
@@ -29,3 +35,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes nginx
       - name: Verify actual proxy behavior
         run: NGINX_BIN=/usr/sbin/nginx python3 scripts/remote_ingress/test_ingress.py -v
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+      - name: Install locked handler dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify Core account authorization through ingress
+        run: NGINX_BIN=/usr/sbin/nginx pnpm exec vitest run --config scripts/remote_ingress/vitest.config.mts
