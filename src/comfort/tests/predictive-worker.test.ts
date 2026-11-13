@@ -32,7 +32,9 @@ function files() {
 }
 function script(source: string) {
   const entry = join(directory, 'worker.cjs')
-  writeFileSync(entry, source)
+  // Match the real worker protocol: consume the request before replying.
+  // Exiting before stdin drains races EPIPE against response validation.
+  writeFileSync(entry, `process.stdin.resume(); process.stdin.once('end', () => { ${source} });`)
   return entry
 }
 describe('bounded read-only research process', () => {
