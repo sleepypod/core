@@ -40,6 +40,9 @@ def render(host, pod, listen_port=18080, pod_port=3000):
     listen_port, pod_port = validate_port(listen_port), validate_port(pod_port)
     if pod == '127.0.0.1' and listen_port == pod_port:
         raise ValueError('The Pod upstream cannot point back to this ingress listener')
+    # Native Status batches these six passive reads. Admit only whole reviewed
+    # procedure names; a mixed batch containing maintenance must still fail.
+    status_reads = r'health\.(system|scheduler|hardware|dacMonitor)|system\.(wifiStatus|getLogSources)'
     # Remote writes are explicit. Maintenance, priming, raw commands and
     # arrangement activation stay local even if an owner key is presented.
     writes = '|'.join([
@@ -75,6 +78,8 @@ http {{
         # All aliases of maintenance and unbounded raw-data surfaces stay closed.
         # Nginx decodes once; reject residual encoding before a second router decodes it.
         ~*^.*:/api/.*% 0;
+        ~^(GET|HEAD):/api/trpc/({status_reads})(,({status_reads}))*$ 1;
+        ~^(GET|HEAD):/api/system/(wifi-status|log-sources)$ 1;
         ~*^.*:/api/(mcp|raw|export|db-backup|system|databases)(/|$) 0;
         ~*^.*:/api/trpc/.*(system\\.|databases\\.|raw\\.|device\\.(execute|startPriming)|health\\.(restartService|maintenance)) 0;
         ~*^.*:/api/(device/(execute|prime)|v1/household/.*(arrangement|maintenance))(/|$) 0;
@@ -152,6 +157,8 @@ def write_bundle(output, host, pod, listen_port=18080, pod_port=3000):
         'authentication': 'Core credentials forwarded unchanged',
         'sensorStream': False, 'published': False, 'started': False,
         'remoteScope': 'Reading, personal sessions and explicit ordinary control/routine writes',
+        'coreHostRequirement': {'variable': 'SLEEPYPOD_ALLOWED_HOSTS', 'appendExactHost': host,
+                                'preserveExistingEntries': True, 'applied': False},
     }, indent=2) + '\n')
 
 

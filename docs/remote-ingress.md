@@ -35,6 +35,11 @@ ordinary native controls use HTTPS independently. Cloud model training, some
 advanced settings and any write absent from the list also require the local app.
 The ingress is therefore not a claim of complete remote feature parity.
 
+The native Status screen's six-read tRPC batch is supported, including Wi-Fi
+status and the four services' active/inactive labels. This exception does not
+admit log contents, shell commands or maintenance. A batch mixing an approved
+status read with a restricted procedure is rejected in full.
+
 ## Prepare without changing a live system
 
 On the intended home connector, use a verified Pod address and a hostname you
@@ -51,6 +56,16 @@ The output must be a new directory. The generator accepts only a DNS hostname,
 an explicit private IPv4 Pod address and unprivileged ports; it does not accept
 credentials. `deployment.json` records `published: false` and `started: false`.
 It does not alter Pod services, Homebridge, Home Assistant, Tailscale or routines.
+
+Core also checks the incoming Host header. Before deployment, append **only the
+exact selected hostname** to the Pod service's existing `SLEEPYPOD_ALLOWED_HOSTS`
+configuration, preserving existing entries. For example, an existing value of
+`pod.example.net` becomes `pod.example.net,sleep.example.com`. Do not use a wildcard
+or replace the header with a LAN address: the browser's Host and Origin must
+agree for login and cookie-authenticated actions. The generated metadata records
+this requirement as unapplied; the renderer does not edit the Pod environment or
+restart its controller. Apply it with the reviewed deployment and maintenance
+window. Until then Core correctly returns `403 Host not allowed` for that domain.
 
 With Nginx installed, validate the rendered file using its absolute paths:
 
@@ -82,12 +97,16 @@ Before publishing, verify the actual Core release refuses missing/incorrect
 credentials on every private-data and control API and is configured with its
 owner/personal authentication. Separately enumerate the intentionally public
 sign-in/bootstrap responses and confirm they contain no private data or controls.
-The local proxy tests use a synthetic origin; they prove
-transport behavior, not the deployed controller's authorization configuration.
+The transport suite uses a synthetic origin. A separate integration suite runs
+the production Core authentication, Host filter, owner connection handler and
+personal account handlers behind the actual proxy, with isolated fixture accounts
+and storage. Neither suite establishes the deployed controller's configuration.
 
 After publishing, verify the certificate, fresh owner and personal challenges,
 account switching and revocation, no-store responses and an ordinary read on
-cellular and the permitted work network. Then perform an attended ordinary
+cellular and the permitted work network. Check the native Status screen as well
+as temperatures; a successful initial connection does not verify its health batch.
+Then perform an attended ordinary
 control/readback. An uncertain command must be inspected by receipt rather than
 resent. Disconnect the connector separately and verify local Pod routines remain
 independent. These observations are still outstanding.
@@ -100,6 +119,7 @@ redirect itself. Core and tunnel/provider logs retain their own separate policie
 
 ```sh
 python3 scripts/remote_ingress/test_ingress.py -v
+pnpm exec vitest run --config scripts/remote_ingress/vitest.config.mts
 ```
 
 Nginx is required; its absence fails rather than silently skipping the checks.
@@ -107,7 +127,13 @@ The suite starts only a loopback synthetic origin and a task-owned Nginx process
 then shuts both down. It verifies individual bearer identities, browser cookies,
 connection challenges, host/origin validation, explicit writes, blocked maintenance,
 no caching, size limits and no replay after a lost command response. It never
-contacts a Pod or publishes a hostname. GitHub runs the same suite on Linux.
+contacts a Pod or publishes a hostname. The second suite verifies exact Core Host
+configuration, owner/personal separation, fresh identity challenges, browser
+account switching and stale-editor rejection, sign-out, revoked devices and the
+personal privacy boundary. Only SQLite storage is redirected into the fixture;
+it does not start instrumentation, a controller or hardware services. This is
+local HTTP connector traffic, not certificate, TLS or cellular acceptance.
+GitHub runs both suites on Linux.
 
 Primary references:
 - [Nginx proxy configuration](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
