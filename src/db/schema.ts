@@ -981,6 +981,29 @@ export const householdArrangementApprovals = sqliteTable('household_arrangement_
   createdAt: integer('created_at').notNull(),
 }, table => [uniqueIndex('idx_household_arrangement_approval').on(table.reviewId, table.accountId)])
 
+// Guest/swap proposals stay separate from the initial solo-to-two-person change.
+// These rows contain private plans and approvals, never permission to move hardware.
+export const householdTemporaryReviews = sqliteTable('household_temporary_reviews', {
+  id: text('id').primaryKey(),
+  householdId: text('household_id').notNull().references(() => households.id),
+  creatorAccountId: text('creator_account_id').notNull().references(() => householdAccounts.id),
+  requestHash: text('request_hash').notNull(),
+  payload: text('payload').notNull(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  state: text('state', { enum: ['open', 'cancelled', 'consumed'] }).notNull().default('open'),
+}, table => [index('idx_household_temporary_reviews').on(table.householdId, table.createdAt)])
+
+export const householdTemporaryApprovals = sqliteTable('household_temporary_approvals', {
+  requestId: text('request_id').primaryKey(),
+  reviewId: text('review_id').notNull().references(() => householdTemporaryReviews.id),
+  accountId: text('account_id').notNull().references(() => householdAccounts.id),
+  deviceId: text('device_id').notNull().references(() => householdDevices.id),
+  requestHash: text('request_hash').notNull(),
+  sourceDigest: text('source_digest').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, table => [uniqueIndex('idx_household_temporary_approval').on(table.reviewId, table.accountId)])
+
 // Private transition receipt and recovery archive commit with the hardware hold.
 // A committed arrangement stays held until a separate runtime recovery verifies it.
 export const householdArrangementTransitions = sqliteTable('household_arrangement_transitions', {
