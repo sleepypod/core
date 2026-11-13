@@ -106,7 +106,7 @@ export function prepareTemporaryArrangement(sourceInput: unknown, ownerAccountId
 export type TemporaryArrangementPlan = ReturnType<typeof prepareTemporaryArrangement>
 
 /** Rebuild a persisted plan rather than trusting mutable projections or a copied source digest. */
-function verifiedPlan(plan: TemporaryArrangementPlan) {
+export function verifiedTemporaryPlan(plan: TemporaryArrangementPlan) {
   const rebuilt = prepareTemporaryArrangement(plan.source, plan.ownerAccountId, plan.request, plan.createdAt)
   if (hash(rebuilt) !== hash(plan)) throw unavailable()
   return rebuilt
@@ -114,7 +114,7 @@ function verifiedPlan(plan: TemporaryArrangementPlan) {
 
 export function temporaryPlanCurrent(plan: TemporaryArrangementPlan, sourceInput: unknown, now: number) {
   try {
-    const saved = verifiedPlan(plan)
+    const saved = verifiedTemporaryPlan(plan)
     return instant.safeParse(now).success && now >= saved.createdAt && now < saved.expiresAt
       && saved.sourceDigest === hash(sourceSnapshot(sourceInput))
   }
@@ -123,7 +123,7 @@ export function temporaryPlanCurrent(plan: TemporaryArrangementPlan, sourceInput
 
 /** Only the caller's routine/preferences leave this boundary. A prepared invitation is not a sleeper. */
 export function projectTemporaryArrangement(plan: TemporaryArrangementPlan, accountId: string, sourceInput: unknown, now: number) {
-  const saved = verifiedPlan(plan)
+  const saved = verifiedTemporaryPlan(plan)
   const self = saved.participants.find(value => value.accountId === accountId)
   if (!self) throw new HouseholdError('forbidden', 403, 'This account is not a participant in the temporary arrangement.')
   // Check the current account too; a historical participant loses access after revocation/removal.
