@@ -1,9 +1,9 @@
 # Temporary guest and side-swap preparation
 
-This is a **private review API**, disabled by default. It does not activate a guest,
+This is a **private review API and browser workspace**, disabled by default. It does not activate a guest,
 change sides, replace a routine, alter personal records, or send hardware commands.
-The activation/return coordinator and app screens remain separate implementation
-work. Do not present a saved approval as a changed bed arrangement.
+The activation/return coordinator and native app integration remain separate
+implementation work. Do not present a saved approval as a changed bed arrangement.
 
 ## Behavior
 
@@ -48,6 +48,20 @@ the review transaction. It does not accept a client-supplied source snapshot.
 Unreadable current sources withdraw approval while preserving cancellation of an
 existing inert review. No historical record is reassigned during preparation.
 
+## Browser review
+
+The personal household workspace offers an explicit check before showing a plan.
+Owners can prepare a guest interval or, in an assigned household, a temporary side
+swap. Each participant sees their own operating week, required acknowledgments and
+the other participant's approval state. Partner schedules stay private.
+
+After 30 seconds, or when a read fails, the dated plan remains available for
+reference but approval and preparation require a fresh check. Draft choices remain
+visible. A lost write reply shows a read-only recovery action; it never repeats the
+write automatically. Changing accounts or hiding the page clears private content.
+Nothing is saved in browser storage. An expired or changed plan can be cancelled
+before preparing a replacement, but it can never activate the bed.
+
 ## Remaining activation requirements
 
 An implementation must preserve the existing transition coordinator's producer
@@ -71,3 +85,9 @@ Run `pnpm exec vitest run src/household/temporary/tests --project unit` for migr
 SQLite, private source, independent approval, replay, cancellation, revocation,
 expiry, rollback and authenticated HTTP cases. Tests use isolated synthetic
 households and recordings, never a connected Pod or real Health data.
+
+`src/household/web/tests/temporary.test.ts` covers transport scope, privacy, freshness,
+uncertain writes and read recovery. `tests/browser/personal-temporary.e2e.ts` covers
+the visible review and recovery flows on phone, tablet and desktop sizes with
+keyboard, large text and light/dark appearances. The UI uses synthetic fixtures;
+these checks are not physical or two-device activation evidence.

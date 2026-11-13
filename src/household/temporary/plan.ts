@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { normalizeBedtimeDraft, routineDaySchema, validateBedtimeWeek } from '@/src/lib/bedtimeRoutines'
-import { householdContextSchema, householdIdSchema, householdSideSchema, personalWeekSchema, personPreferencesSchema, revisionSchema } from '../contract'
+import { householdIdSchema, householdSideSchema, personalWeekSchema, personPreferencesSchema, revisionSchema } from '../contract'
 import { HouseholdError } from '../store'
+import { temporaryProposalSchema } from './contract'
+export { temporaryProposalSchema, type TemporaryProposal } from './contract'
 
 const instant = z.number().int().nonnegative().max(8_640_000_000_000_000)
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
@@ -52,13 +54,6 @@ export const temporarySourceSchema = z.object({
 })
 export type TemporarySource = z.infer<typeof temporarySourceSchema>
 
-const proposalContext = householdContextSchema.extend({ version: z.literal(1), endsAt: instant })
-export const temporaryProposalSchema = z.discriminatedUnion('kind', [
-  proposalContext.extend({ kind: z.literal('side_swap') }).strict(),
-  proposalContext.extend({ kind: z.literal('guest'), residentSide: householdSideSchema,
-    acknowledgeGuestRecordingWithheld: z.literal(true) }).strict(),
-])
-export type TemporaryProposal = z.infer<typeof temporaryProposalSchema>
 const unavailable = () => new HouseholdError('not_ready', 409, 'Prepare a fresh temporary-arrangement review. The bed has not changed.')
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 

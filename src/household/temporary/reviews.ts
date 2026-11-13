@@ -1,21 +1,12 @@
 import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import { z } from 'zod'
-import { MAX_CONTROL_LIFETIME_MS } from '@/src/controls/contract'
-import { householdContextSchema, householdIdSchema, type HouseholdSession } from '../contract'
+import { householdIdSchema, type HouseholdSession } from '../contract'
 import { HouseholdError, type HouseholdCredential, type HouseholdStore } from '../store'
 import { prepareTemporaryArrangement, projectTemporaryArrangement, temporaryPlanCurrent,
   temporaryProposalSchema, type TemporaryArrangementPlan } from './plan'
-import { temporaryReviewSchema } from './contract'
+import { approveTemporaryReviewSchema, cancelTemporaryReviewSchema, temporaryReviewSchema } from './contract'
+export { approveTemporaryReviewSchema, cancelTemporaryReviewSchema } from './contract'
 
-const instant = z.number().int().nonnegative().max(8_640_000_000_000_000)
-export const approveTemporaryReviewSchema = householdContextSchema.extend({
-  version: z.literal(1), reviewId: householdIdSchema, issuedAt: instant, expiresAt: instant,
-  confirmMySide: z.literal(true), confirmMyRoutine: z.literal(true), acknowledgeRecordingPolicy: z.literal(true),
-  acknowledgeSeparateActivation: z.literal(true),
-}).strict().refine(value => value.expiresAt > value.issuedAt && value.expiresAt - value.issuedAt <= MAX_CONTROL_LIFETIME_MS,
-  'Use a positive approval lifetime no longer than one minute.')
-export const cancelTemporaryReviewSchema = householdContextSchema.extend({ version: z.literal(1), reviewId: householdIdSchema }).strict()
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const unavailable = () => new HouseholdError('not_ready', 409, 'This temporary review needs to be prepared again. The bed has not changed.')
 const conflict = () => new HouseholdError('conflict', 409, 'The account, request or arrangement changed. Reload the current review.')
