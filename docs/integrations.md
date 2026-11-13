@@ -2,6 +2,11 @@
 
 Setup steps live in the user guide: **[HomeKit and MQTT](https://sleepypod.github.io/core/integrations/)**. This page keeps the protocol-level reference that changes with the code: accessory mappings, identity, topics, and environment variables.
 
+House Control's separate, read-only presence contract is documented in
+[House Control presence bridge](house-routine-observations.md). It preserves
+measurement freshness and requires matching attended checks; it does not enable
+house automations or bypass the personal-account privacy boundary.
+
 ---
 
 ## HomeKit bridge
