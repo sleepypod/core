@@ -52,6 +52,15 @@ export function createComfortOwner(deps: ComfortOwnerDeps) {
   function matchingQualifications(side: Side, current: OwnerIdentity) {
     return qualifications(side).filter(record => record.at <= now() && same(record.evidence.identity, current))
   }
+
+  /** Fresh presence plus the latest attended checks, without scanning nights or activating control. */
+  function presenceEvidence(side: Side) {
+    const at = now(), state = store.read(side)
+    const context = deps.context(side, state, at)
+    return { at, identity: identity(side, state), qualifications: qualifications(side),
+      presence: context.presence,
+      mechanicallyQuiet: context.device.priming === false && context.device.vibrating === false && context.device.baseMoving === false }
+  }
   function revoke(side: Side, reason: string) {
     deps.revokeLease(side)
     durableTransaction(database, () => {
@@ -252,5 +261,5 @@ export function createComfortOwner(deps: ComfortOwnerDeps) {
       return { saved: true as const }
     })
   }
-  return { status, prepare, confirm, retest, admission, revoke, experimentEvidence, assertExperimentEvidence, suspendForExperiment }
+  return { status, prepare, confirm, retest, admission, revoke, presenceEvidence, experimentEvidence, assertExperimentEvidence, suspendForExperiment }
 }
