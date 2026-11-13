@@ -514,6 +514,7 @@ describe('db schema definitions', () => {
       'households', 'householdAccounts', 'householdBrowserScopes', 'householdDevices', 'householdInvitations', 'householdPersonalSettings', 'householdMutationReceipts', 'householdArrangementReviews', 'householdArrangementApprovals',
       'householdHistoryState', 'householdHistorySources', 'householdAttributionEpochs', 'householdPersonRecords', 'householdControlReceipts', 'householdArrangementTransitions', 'householdArrangementRestarts',
       'householdLearningArchives', 'householdLearningRecords', 'householdJournalEntries', 'householdQuietRequests',
+      'householdTemporaryReviews', 'householdTemporaryApprovals',
     ].sort())
   })
 })

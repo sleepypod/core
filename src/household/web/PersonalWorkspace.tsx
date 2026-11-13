@@ -17,7 +17,9 @@ import { ReportLibrary } from '@/src/components/Reports/ReportLibrary'
 import type { MorningReportBrowserWorkspace } from '@/src/reports/browserWorkspace'
 import { QuietPanel } from './QuietPanel'
 import type { PersonalQuietWorkspace } from './quiet'
-export function PersonalWorkspace({ workspace, history, learning, journal, reports, experiments, quiet, maintenance, preferredTemperatureF, displayUnit }: {
+import { TemporaryArrangementPanel } from './TemporaryArrangementPanel'
+import type { TemporaryArrangementWorkspace } from './temporary'
+export function PersonalWorkspace({ workspace, history, learning, journal, reports, experiments, quiet, temporary, maintenance, preferredTemperatureF, displayUnit }: {
   workspace: PersonalWebWorkspace
   history: PersonalHistoryWorkspace
   learning?: PersonalLearningWorkspace
@@ -25,6 +27,7 @@ export function PersonalWorkspace({ workspace, history, learning, journal, repor
   experiments?: ComfortExperimentBrowserWorkspace
   reports?: MorningReportBrowserWorkspace
   quiet?: PersonalQuietWorkspace
+  temporary?: TemporaryArrangementWorkspace
   maintenance?: HouseholdMaintenanceWorkspace
   preferredTemperatureF: number
   displayUnit: 'F' | 'C'
@@ -177,6 +180,7 @@ export function PersonalWorkspace({ workspace, history, learning, journal, repor
       {journal && <JournalPanel journal={journal} />}
       {learning && <LearningPanel learning={learning} />}
       {state.drafts && <RoutineEditor key={`${state.drafts.revision}:${state.draftLoad}`} workspace={workspace} state={state} preferredTemperatureF={preferredTemperatureF} />}
+      {temporary && <TemporaryArrangementPanel workspace={temporary} />}
       <ArrangementReviewPanel workspace={workspace} state={state} />
       {maintenance && <ArrangementMaintenancePanel workspace={maintenance} review={state.arrangementLoaded ? state.arrangement : null} />}
     </div>

@@ -8,6 +8,7 @@ import { learningReadPath, learningRemovalPath } from './learningPaths'
 import { learningArchiveLimits } from '../learningArchiveContract'
 import { personalJournalPath } from './journalPaths'
 import { personalQuietPath } from './quietPaths'
+import { personalTemporaryPath } from './temporaryPaths'
 import { personalExperimentPath } from './experiments'
 import { personalReportPath } from './reportPaths'
 export interface PersonalWebTransport {
@@ -43,7 +44,7 @@ export class PersonalBrowserClient implements PersonalWebTransport {
     const allowedMethod = method === 'GET'
       ? !['me/controls', 'me/routines/publish', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
       : method === 'PUT' ? path === 'me/routines' : ['me/controls', 'me/routines/publish', 'household/arrangement', 'household/arrangement/approve', 'household/arrangement/cancel'].includes(path)
-    if (this.disposed || (!personalExperimentPath(path, method, body) && !reportAllowed && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !personalQuietPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
+    if (this.disposed || (!personalTemporaryPath(path, method, body) && !personalExperimentPath(path, method, body) && !reportAllowed && !learningRead && !learningRemovalPath(path, method, body) && !historyRead && !personalJournalPath(path, method, body) && !personalQuietPath(path, method, body) && !maintenancePathAllowed(path, method, body) && (!allowed.test(path) || !allowedMethod)))
       throw new PersonalWebError('account_changed', 'Reconnect the personal workspace before continuing.')
     const controller = new AbortController()
     this.requests.add(controller)

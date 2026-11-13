@@ -12,6 +12,7 @@ import { HouseholdMaintenanceWorkspace } from './maintenance'
 import { ArrangementMaintenancePanel } from './ArrangementMaintenancePanel'
 import { personalReportWorkspace } from './reports'
 import { PersonalQuietWorkspace } from './quiet'
+import { TemporaryArrangementWorkspace } from './temporary'
 export { BrowserRecoveryJournal } from './recovery'
 export { contextKey } from './protocol'
 /** Mounted outside the owner application: no owner provider, transport or stream. */
@@ -35,6 +36,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     experimentClient.dispose()
     reports.dispose()
     quiet.dispose()
+    temporary.dispose()
     reportClient.dispose()
     maintenance.dispose()
     invalidated()
@@ -44,6 +46,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
   const learning = new PersonalLearningWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const journal = new PersonalJournalWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const quiet = new PersonalQuietWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
+  const temporary = new TemporaryArrangementWorkspace({ session, client: new PersonalBrowserClient(session), invalidated: invalidate })
   const experimentClient = new PersonalBrowserClient(session)
   const experiments = personalExperimentWorkspace(session, experimentClient)
   const reportClient = new PersonalBrowserClient(session)
@@ -56,6 +59,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       learning.dispose()
       journal.dispose()
       quiet.dispose()
+      temporary.dispose()
       experiments.dispose()
       experimentClient.dispose()
       reports.dispose()
@@ -69,7 +73,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     if (disposed) return
     currentPreferences = value
     root.render(mode === 'ordinary'
-      ? <PersonalWorkspace workspace={workspace} history={history} learning={learning} journal={journal} reports={reports} experiments={session.capabilities.comfortExperiments ? experiments : undefined} quiet={quiet} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
+      ? <PersonalWorkspace workspace={workspace} history={history} learning={learning} journal={journal} reports={reports} experiments={session.capabilities.comfortExperiments ? experiments : undefined} quiet={quiet} temporary={temporary} maintenance={supportsMaintenance ? maintenance : undefined} {...value} />
       : <div className="personal-runtime"><ArrangementMaintenancePanel workspace={maintenance} standalone /></div>)
   }
   const unsubscribe = maintenance.subscribe(() => {
@@ -100,6 +104,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     if (mode === 'ordinary') {
       workspace.tick()
       quiet.tick()
+      temporary.tick()
     }
   }, 1000)
   // Never restore a private recording page from a backgrounded account view.
@@ -109,6 +114,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       learning.clear()
       journal.clear()
       quiet.clear()
+      temporary.clear()
       experiments.clear()
       reports.clear()
       maintenance.clear()
@@ -120,6 +126,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
       void history.checkAccess()
       void learning.checkAccess()
       void journal.checkAccess()
+      void temporary.checkAccess()
     }
   }, 15000)
   return { updatePreferences: render, dispose() {
@@ -134,6 +141,7 @@ export function mountPersonalWorkspace(element: HTMLElement, input: HouseholdSes
     learning.dispose()
     journal.dispose()
     quiet.dispose()
+    temporary.dispose()
     experiments.dispose()
     experimentClient.dispose()
     reports.dispose()

@@ -23,6 +23,8 @@ import { arrangementActivationEnabled } from './arrangementAvailability'
 import { assertControlCurrent } from '@/src/controls/context'
 import { getTemperatureControllerIfRunning } from '@/src/temperature/instance'
 import { withSideLock } from '@/src/hardware/sideLock'
+import { TemporaryArrangementReviews } from './temporary/reviews'
+import { TemporaryArrangementSource } from './temporary/source'
 const shared = globalThis as typeof globalThis & {
   __sleepypodHousehold?: {
     store: HouseholdStore
@@ -36,6 +38,7 @@ const shared = globalThis as typeof globalThis & {
     householdQuiet?: HouseholdQuietApi
     personalExperiments?: PersonalExperimentApi
     arrangementCoordinator?: ArrangementCoordinator
+    temporaryArrangementReviews?: TemporaryArrangementReviews
     runId?: string
     publicAttempts: number
     windowStarted: number
@@ -101,6 +104,9 @@ export async function handleHouseholdRequest(request: Request) {
       return { host: getExperimentExecution(), principal: () => getExperimentExecutionIdentity().personalPrincipal(credential) }
     })
   const historySource = new PersonHistorySource(sqlite, biometricsDb.$client)
+  runtime.temporaryArrangementReviews ??= new TemporaryArrangementReviews({ database: sqlite, identities: runtime.store,
+    readSource: householdId => new TemporaryArrangementSource(sqlite, historySource).read(householdId),
+    enabled: () => process.env.SLEEPYPOD_TEMPORARY_ARRANGEMENT_REVIEW === '1' })
   runtime.arrangementCoordinator ??= new ArrangementCoordinator({ database: sqlite, biometrics: biometricsDb.$client,
     identities: runtime.store, reviews: runtime.arrangementReviews, historySource,
     history: new PersonHistoryStore(sqlite, runtime.store, historySource), runId: runtime.runId,
@@ -117,6 +123,7 @@ export async function handleHouseholdRequest(request: Request) {
     householdQuiet: runtime.householdQuiet,
     personalExperiments: runtime.personalExperiments,
     arrangementCoordinator: runtime.arrangementCoordinator,
+    temporaryArrangementReviews: runtime.temporaryArrangementReviews,
     verifySoloConfiguration: (side) => {
       const row = sqlite.prepare('SELECT bed_mode, unused_zone_mode FROM device_settings LIMIT 1').get() as {
         bed_mode: string

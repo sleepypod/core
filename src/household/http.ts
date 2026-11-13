@@ -17,6 +17,7 @@ import type { ArrangementCoordinator } from './arrangementCoordinator'
 import type { PersonalReportsApi } from './personalReportsApi'
 import type { HouseholdQuietApi } from './quietApi'
 import type { PersonalExperimentApi } from './experimentApi'
+import type { TemporaryArrangementReviews } from './temporary/reviews'
 import { experimentErrorResponse, readExperimentBody } from '@/src/comfort/experiments/http'
 import { ExperimentError } from '@/src/comfort/experiments/service'
 import { readReportBody, reportErrorResponse } from '@/src/reports/http'
@@ -63,6 +64,7 @@ export interface HouseholdHttpDependencies {
   householdQuiet?: HouseholdQuietApi
   personalExperiments?: PersonalExperimentApi
   arrangementCoordinator?: ArrangementCoordinator
+  temporaryArrangementReviews?: TemporaryArrangementReviews
 }
 /** This namespace authorizes every route itself; personal credentials never enter legacy APIs. */
 export async function householdHttp(request: Request, dependencies: HouseholdHttpDependencies): Promise<Response> {
@@ -81,7 +83,8 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
     const quiet = dependencies.householdQuiet?.present(reports) ?? reports
     const experiments = dependencies.personalExperiments?.present(quiet) ?? quiet
     const maintenance = dependencies.arrangementCoordinator?.present(experiments) ?? experiments
-    return { ...maintenance, capabilities: { ...maintenance.capabilities, healthImport: true, personalDeviceReports: true } }
+    const temporary = dependencies.temporaryArrangementReviews?.present(maintenance) ?? maintenance
+    return { ...temporary, capabilities: { ...temporary.capabilities, healthImport: true, personalDeviceReports: true } }
   }
   const url = new URL(request.url)
   const path = url.pathname.replace(/\/$/, '')
@@ -217,6 +220,20 @@ export async function householdHttp(request: Request, dependencies: HouseholdHtt
         return reply(coordinator.cancellationPreview(credential, url.searchParams.get('operationId') ?? '', assertRequestCurrent))
       if (path === '/api/v1/household/transition/cancel' && method === 'POST')
         return reply(await coordinator.cancel(credential, mutationBody, assertRequestCurrent))
+    }
+    if (dependencies.temporaryArrangementReviews) {
+      const reviews = dependencies.temporaryArrangementReviews
+      if (path === '/api/v1/household/temporary-arrangement' && method === 'GET')
+        return reply({ version: 1, review: reviews.latest(credential) })
+      if (path === '/api/v1/household/temporary-arrangement' && method === 'POST')
+        return reply(reviews.propose(credential, mutationBody))
+      if (path === '/api/v1/household/temporary-arrangement/approve' && method === 'POST')
+        return reply(reviews.approve(credential, mutationBody))
+      if (path === '/api/v1/household/temporary-arrangement/cancel' && method === 'POST')
+        return reply(reviews.cancel(credential, mutationBody))
+      const temporaryPath = path.match(/^\/api\/v1\/household\/temporary-arrangement\/([^/]+)$/)
+      if (temporaryPath && method === 'GET')
+        return reply(reviews.get(credential, temporaryPath[1]))
     }
     if (dependencies.arrangementReviews) {
       const presentReview = (review: ReturnType<ArrangementReviewService['latest']>) =>
