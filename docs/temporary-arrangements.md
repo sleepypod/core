@@ -64,6 +64,22 @@ before preparing a replacement, but it can never activate the bed.
 
 ## Remaining activation requirements
 
+The internal `returnPlan.ts` planner defines the return review independently of
+activation. Given a verified committed interval and a server-read current source,
+it maps each resident's **current** operating week back to their original side. An
+absent partner retains their preserved original week; guest-zone settings are not
+substituted for that person's routine. Current personal preferences are retained.
+Every participant reviews their own result without seeing the other person's
+routine, and changes to the source invalidate the review.
+
+The intended end is a reminder to review, not authority to switch back. The return
+planner works before or after that date, keeps learning paused for separate
+qualification and preserves each person's quiet request. It requires a new
+recording epoch after the eventual return. This planner is not registered on HTTP
+and cannot establish that a physical transition happened. Durable interval storage,
+the current-source adapter, return approvals and the coordinator below are still
+required before exposing a return action.
+
 An implementation must preserve the existing transition coordinator's producer
 drain, hardware admission hold, attended empty-bed evidence, immutable archives,
 atomic routine/identity/history change and restart recovery. It must also add:
