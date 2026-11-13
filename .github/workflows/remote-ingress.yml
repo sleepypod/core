@@ -1,0 +1,31 @@
+name: Remote ingress
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/remote_ingress/**'
+      - 'docs/remote-ingress.md'
+      - '.github/workflows/remote-ingress.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-ingress-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  transport:
+    name: Core ingress transport
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install local test proxy
+        run: sudo apt-get update && sudo apt-get install --yes nginx
+      - name: Verify actual proxy behavior
+        run: NGINX_BIN=/usr/sbin/nginx python3 scripts/remote_ingress/test_ingress.py -v

@@ -165,3 +165,11 @@ invoke priming or base movement through MQTT.
 See [MQTT command delivery](MQTT_COMMANDS.md) for the full envelope, Home
 Assistant discovery behavior, receipt lookup, migration and validation limits.
 The original [ADR 0019](adr/0019-mqtt-bridge.md) describes the earlier design.
+
+## Remote app access
+
+The [Core remote ingress](remote-ingress.md) prepares an inactive, loopback-only
+proxy for a separately reviewed HTTPS connector. It preserves each account's
+Core credentials and limits remote writes to ordinary controls and routines.
+The component has local transport tests; publishing and live web/iOS acceptance
+are separate deployment steps. Keep raw data, maintenance and sensor streams local.
