@@ -143,7 +143,8 @@ day, wake window and snooze as attributes, and an **Alarm ringing** binary
 sensor. Use them to, say, open the blinds at the alarm or turn the lights on
 when it rings. The next alarm is the set time; with a wake window it can go
 off earlier, from `wakeWindowStart`. State refreshes every 30 s, so an alarm
-change shows up in Home Assistant within half a minute.
+change shows up in Home Assistant within half a minute. **Alarm ringing**
+updates as soon as the alarm starts or stops.
 
 Commands route through the same tRPC procedures the iOS app calls, so Zod
 input schemas validate every payload — the bridge cannot accidentally
