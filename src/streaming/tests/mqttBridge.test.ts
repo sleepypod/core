@@ -2143,6 +2143,33 @@ describe('mqttBridge — publishState payload contents (mutation coverage)', () 
     await shutdownMqttBridge()
   })
 
+  it('publishes the alarm topic as soon as a side starts or stops ringing', async () => {
+    const { fake } = await capture()
+    const alarmPublishes = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+      const out = (fake.publish.mock.calls as [string, string][])
+        .filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`)
+        .map(([, payload]) => JSON.parse(payload).ringing)
+      fake.publish.mockClear()
+      return out
+    }
+    const frame = (left: boolean) => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: left }, rightSide: { isAlarmVibrating: true } })
+    fake.publish.mockClear()
+
+    // Starts ringing: published at once, before the stored state catches up.
+    frame(true)
+    expect(await alarmPublishes()).toEqual([true])
+    // Unchanged status frames don't republish it.
+    frame(true)
+    frame(true)
+    expect(await alarmPublishes()).toEqual([])
+    // Stopped (a dismissal) before the next periodic refresh.
+    frame(false)
+    expect(await alarmPublishes()).toEqual([false])
+    await shutdownMqttBridge()
+  })
+
   it('water-level carries the DAC waterLevel', async () => {
     const { map } = await capture()
     const payload = JSON.parse(map[`sleepypod/${ID}/state/water-level`])
