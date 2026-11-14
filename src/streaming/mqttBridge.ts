@@ -20,6 +20,8 @@
  *   <prefix>/<device-id>/state/water-level           — low | ok | unknown
  *   <prefix>/<device-id>/state/biometrics/<side>     — latest HR/HRV/BR summary
  *   <prefix>/<device-id>/state/environment/ambient   — ambient temp (°C) + humidity (%)
+ *   <prefix>/<device-id>/state/<side>/alarm          — next alarm (ISO time, set time, day,
+ *                                                      wake window), snooze and ringing state
  *   <prefix>/<device-id>/cmd/set-temperature         — JSON {side, temperature, duration?}
  *   <prefix>/<device-id>/cmd/set-power               — JSON {side, powered, temperature?}
  *   <prefix>/<device-id>/cmd/set-alarm               — JSON {side, vibrationIntensity, vibrationPattern, duration}
@@ -38,12 +40,14 @@ import os from 'node:os'
 import mqtt, { type IClientOptions, type IClientPublishOptions, type MqttClient } from 'mqtt'
 import { eq, desc } from 'drizzle-orm'
 import { db, biometricsDb } from '@/src/db'
-import { deviceSettings, deviceState } from '@/src/db/schema'
+import { alarmSchedules, deviceSettings, deviceState, sideSettings } from '@/src/db/schema'
 import { bedTemp, flowReadings, vitals } from '@/src/db/biometrics-schema'
 import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { onServerFrame } from './piezoStream'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
+import { getSnoozeStatus } from '@/src/hardware/snoozeManager'
+import { nextAlarm } from '@/src/scheduler/nextAlarm'
 
 // ---------------------------------------------------------------------------
 // Configuration resolution
@@ -169,6 +173,8 @@ interface BridgeState {
   resolved: ResolvedMqttConfig | null
   messagesPublished: number
   lastPublishAt: Date | null
+  /** Ringing last published on each side's alarm topic. */
+  lastRinging: Record<'left' | 'right', boolean | null>
 }
 
 const state: BridgeState = {
@@ -180,6 +186,7 @@ const state: BridgeState = {
   resolved: null,
   messagesPublished: 0,
   lastPublishAt: null,
+  lastRinging: { left: null, right: null },
 }
 
 export interface BridgeStatus {
@@ -436,6 +443,49 @@ function publishHaDiscovery(): void {
       RETAINED_QOS_0,
     )
   }
+
+  // Alarms: when each side's alarm next goes off (a timestamp sensor, with
+  // the set time, day, wake window and snooze as attributes) and whether it
+  // is ringing now.
+  for (const side of ['left', 'right'] as const) {
+    const label = side === 'left' ? 'Left' : 'Right'
+    const alarmTopic = topic('state', side, 'alarm')
+    safePublish(
+      `${haPrefix}/sensor/${id}/${side}_next_alarm/config`,
+      JSON.stringify({
+        name: `${label} next alarm`,
+        unique_id: `${id}_${side}_next_alarm`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        // "None" leaves the sensor unknown when no alarm is set.
+        value_template: '{{ value_json.nextAlarm if value_json.nextAlarm else \'None\' }}',
+        json_attributes_topic: alarmTopic,
+        device_class: 'timestamp',
+        icon: 'mdi:alarm',
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+    safePublish(
+      `${haPrefix}/binary_sensor/${id}/${side}_alarm_ringing/config`,
+      JSON.stringify({
+        name: `${label} alarm ringing`,
+        unique_id: `${id}_${side}_alarm_ringing`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        value_template: '{{ \'on\' if value_json.ringing else \'off\' }}',
+        payload_on: 'on',
+        payload_off: 'off',
+        icon: 'mdi:alarm-light',
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +531,13 @@ async function publishState(): Promise<void> {
   }
   catch (err) {
     console.warn('[mqtt] device_state publish failed:', err instanceof Error ? err.message : err)
+  }
+
+  try {
+    await publishAlarms()
+  }
+  catch (err) {
+    console.warn('[mqtt] alarm publish failed:', err instanceof Error ? err.message : err)
   }
 
   for (const side of ['left', 'right'] as const) {
@@ -566,6 +623,52 @@ async function publishState(): Promise<void> {
       RETAINED_QOS_0,
     )
     safePublish(topic('pump', side, 'clog_detected'), 'off', RETAINED_QOS_0)
+  }
+}
+
+/**
+ * Each side's next alarm, snooze and ringing state. Alarms of a side that is
+ * away, or the unused side of a solo bed, don't run, so it has none.
+ * `ringingNow` is the ringing a status frame just reported, which wins over
+ * the stored state.
+ */
+async function publishAlarms(now = Date.now(), ringingNow: Partial<Record<'left' | 'right', boolean>> = {}): Promise<void> {
+  const [settings] = await db.select({
+    timezone: deviceSettings.timezone,
+    bedMode: deviceSettings.bedMode,
+    unusedZoneMode: deviceSettings.unusedZoneMode,
+  }).from(deviceSettings).limit(1)
+  const sides = await db.select({ side: sideSettings.side, awayMode: sideSettings.awayMode }).from(sideSettings)
+  const ringing = await db.select({ side: deviceState.side, isAlarmVibrating: deviceState.isAlarmVibrating }).from(deviceState)
+  const rows = await db.select({
+    id: alarmSchedules.id,
+    side: alarmSchedules.side,
+    dayOfWeek: alarmSchedules.dayOfWeek,
+    time: alarmSchedules.time,
+    wakeWindow: alarmSchedules.wakeWindow,
+    enabled: alarmSchedules.enabled,
+  }).from(alarmSchedules)
+  const modes = {
+    bedMode: settings?.bedMode,
+    unusedZoneMode: settings?.unusedZoneMode,
+    ...Object.fromEntries(sides.map(r => [r.side, { awayMode: r.awayMode }])),
+  }
+  const timezone = settings?.timezone ?? 'America/Los_Angeles'
+  for (const side of ['left', 'right'] as const) {
+    const next = nextAlarm(rows, side, now, timezone, modes)
+    const snooze = getSnoozeStatus(side)
+    const isRinging = ringingNow[side] ?? ringing.find(r => r.side === side)?.isAlarmVibrating ?? false
+    state.lastRinging[side] = isRinging
+    safePublish(topic('state', side, 'alarm'), JSON.stringify({
+      ts: now,
+      nextAlarm: next ? new Date(next.at).toISOString() : null,
+      time: next?.time ?? null,
+      day: next?.dayOfWeek ?? null,
+      wakeWindowMinutes: next?.wakeWindow ?? 0,
+      wakeWindowStart: next && next.wakeWindow > 0 ? new Date(next.at - next.wakeWindow * 60_000).toISOString() : null,
+      ringing: isRinging,
+      snoozedUntil: snooze.snoozeUntil != null ? new Date(snooze.snoozeUntil * 1000).toISOString() : null,
+    }), RETAINED_QOS_0)
   }
 }
 
@@ -705,6 +808,7 @@ export async function startMqttBridge(): Promise<void> {
   if (state.runState !== 'stopped') return
 
   state.runState = 'starting'
+  state.lastRinging = { left: null, right: null }
   state.lastError = null
 
   const { config } = await resolveConfig()
@@ -792,6 +896,25 @@ export async function startMqttBridge(): Promise<void> {
     if (frame.type !== 'deviceStatus') return
     if (!state.client?.connected) return
     safePublish(topic('state', 'device-status'), JSON.stringify(frame), RETAINED_QOS_0)
+    publishRingingChange(frame)
+  })
+}
+
+/**
+ * Republish the alarm topics as soon as a side starts or stops ringing. The
+ * periodic refresh alone could miss an alarm stopped between two refreshes.
+ */
+function publishRingingChange(frame: { leftSide?: { isAlarmVibrating?: unknown }, rightSide?: { isAlarmVibrating?: unknown } }): void {
+  const ringingNow: Partial<Record<'left' | 'right', boolean>> = {}
+  for (const side of ['left', 'right'] as const) {
+    const vibrating = frame[`${side}Side`]?.isAlarmVibrating
+    if (typeof vibrating === 'boolean' && vibrating !== state.lastRinging[side]) ringingNow[side] = vibrating
+  }
+  if (Object.keys(ringingNow).length === 0) return
+  // Claimed now, so the frames that follow don't publish it again.
+  Object.assign(state.lastRinging, ringingNow)
+  void publishAlarms(Date.now(), ringingNow).catch((err) => {
+    console.warn('[mqtt] alarm publish failed:', err instanceof Error ? err.message : err)
   })
 }
 
@@ -843,6 +966,7 @@ export async function shutdownMqttBridge(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const __test__ = {
+  publishAlarms,
   resolveConfig,
   deviceId,
   slugify,

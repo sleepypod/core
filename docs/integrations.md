@@ -129,11 +129,22 @@ both are on.
 | `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
 | `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
 | `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts": <epoch_ms>, "temperature": <number\|null>, "humidity": <number\|null>}` (°C, %) |
+| `<prefix>/<device-id>/state/<side>/alarm` | pod → broker | `{"ts", "nextAlarm": <ISO\|null>, "time": "HH:mm", "day", "wakeWindowMinutes", "wakeWindowStart": <ISO\|null>, "ringing", "snoozedUntil": <ISO\|null>}` |
 | `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
 | `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
 | `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
 | `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` |
 | `<prefix>/<device-id>/cmd/start-priming` | broker → pod | `{}` |
+
+With Home Assistant discovery on, each side also gets a **Next alarm**
+sensor (a timestamp: when that side's alarm next goes off, in the pod's
+timezone, unknown when none is set or the side is away) with the set time,
+day, wake window and snooze as attributes, and an **Alarm ringing** binary
+sensor. Use them to, say, open the blinds at the alarm or turn the lights on
+when it rings. The next alarm is the set time; with a wake window it can go
+off earlier, from `wakeWindowStart`. State refreshes every 30 s, so an alarm
+change shows up in Home Assistant within half a minute. **Alarm ringing**
+updates as soon as the alarm starts or stops.
 
 Commands route through the same tRPC procedures the iOS app calls, so Zod
 input schemas validate every payload — the bridge cannot accidentally

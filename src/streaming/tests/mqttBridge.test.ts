@@ -2042,6 +2042,33 @@ describe('mqttBridge — HA discovery payload contents (mutation coverage)', () 
         value_template: '{{ value_json.hrv }}',
         unit: 'ms',
       })
+      const alarmTopic = `sleepypod/${ID}/state/${side}/alarm`
+      expected[`homeassistant/sensor/${ID}/${side}_next_alarm/config`] = {
+        name: `${Side} next alarm`,
+        unique_id: `${ID}_${side}_next_alarm`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        value_template: '{{ value_json.nextAlarm if value_json.nextAlarm else \'None\' }}',
+        json_attributes_topic: alarmTopic,
+        device_class: 'timestamp',
+        icon: 'mdi:alarm',
+        device: DEVICE,
+      }
+      expected[`homeassistant/binary_sensor/${ID}/${side}_alarm_ringing/config`] = {
+        name: `${Side} alarm ringing`,
+        unique_id: `${ID}_${side}_alarm_ringing`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        value_template: '{{ \'on\' if value_json.ringing else \'off\' }}',
+        payload_on: 'on',
+        payload_off: 'off',
+        icon: 'mdi:alarm-light',
+        device: DEVICE,
+      }
     }
 
     expect(got).toEqual(expected)
@@ -2096,6 +2123,50 @@ describe('mqttBridge — publishState payload contents (mutation coverage)', () 
       podVersion: '1.2.3',
     })
     expect(typeof payload.ts).toBe('number')
+    await shutdownMqttBridge()
+  })
+
+  it('per-side alarm payload carries the ringing state, and no alarm when none is set', async () => {
+    const { map } = await capture()
+    for (const [side, ringing] of [['left', false], ['right', true]] as const) {
+      expect(JSON.parse(map[`sleepypod/${ID}/state/${side}/alarm`])).toEqual({
+        ts: expect.any(Number),
+        nextAlarm: null,
+        time: null,
+        day: null,
+        wakeWindowMinutes: 0,
+        wakeWindowStart: null,
+        ringing,
+        snoozedUntil: null,
+      })
+    }
+    await shutdownMqttBridge()
+  })
+
+  it('publishes the alarm topic as soon as a side starts or stops ringing', async () => {
+    const { fake } = await capture()
+    const alarmPublishes = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+      const out = (fake.publish.mock.calls as [string, string][])
+        .filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`)
+        .map(([, payload]) => JSON.parse(payload).ringing)
+      fake.publish.mockClear()
+      return out
+    }
+    const frame = (left: boolean) => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: left }, rightSide: { isAlarmVibrating: true } })
+    fake.publish.mockClear()
+
+    // Starts ringing: published at once, before the stored state catches up.
+    frame(true)
+    expect(await alarmPublishes()).toEqual([true])
+    // Unchanged status frames don't republish it.
+    frame(true)
+    frame(true)
+    expect(await alarmPublishes()).toEqual([])
+    // Stopped (a dismissal) before the next periodic refresh.
+    frame(false)
+    expect(await alarmPublishes()).toEqual([false])
     await shutdownMqttBridge()
   })
 
