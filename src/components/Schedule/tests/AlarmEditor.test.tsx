@@ -124,7 +124,7 @@ describe('AlarmEditor', () => {
     expect(s.getByText('86°')).toBeTruthy()
   })
 
-  it('edits an existing group: replaces its rows, keeps paused state and writes both sides', async () => {
+  it('edits an existing group: replaces its rows, turns a paused alarm back on and writes both sides', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
     expect(s.getByText('Edit alarm')).toBeTruthy()
     expect(s.getByRole('button', { name: 'Weekends' }).getAttribute('aria-pressed')).toBe('true')
@@ -156,7 +156,8 @@ describe('AlarmEditor', () => {
       wakeWindow: 20,
       snoozeDuration: 120,
       snoozeTaper: 30,
-      enabled: false,
+      // The group was paused; changing it means it should ring.
+      enabled: true,
     })
   })
 
@@ -252,6 +253,127 @@ describe('AlarmEditor', () => {
     done(s)
     await waitFor(() => expect(s.getByText('db locked')).toBeTruthy())
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('a paused alarm opened and closed unchanged stays paused', async () => {
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByRole('tab', { name: 'Rise' }))
+    fireEvent.click(s.getByRole('tab', { name: 'Double' }))
+    done(s)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(m.batch.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('a refetch still showing an earlier save\'s rows does not reset the edit', async () => {
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    const warmer = () => fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    warmer()
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1))
+    m.batch.mutateAsync.mockResolvedValue({ success: true, created: { temperature: [], power: [], alarm: [201, 202] } })
+    warmer()
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(s.getByText('Saved')).toBeTruthy())
+    // A slow refetch lands after the second save, with the first save's rows.
+    s.rerender(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, ids: [101, 102], alarmTemperature: 85 }} />)
+    expect(s.getByText('86°')).toBeTruthy()
+    warmer()
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(3))
+    expect(m.batch.mutateAsync.mock.calls[2][0].deletes).toEqual({ alarm: [201, 202] })
+  })
+
+  it('keeps a saved alarm open, asking for a day, when Done is pressed with none', async () => {
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByRole('button', { name: 'Sat' }))
+    fireEvent.click(s.getByRole('button', { name: 'Sun' }))
+    done(s)
+    await waitFor(() => expect(s.getByText('Pick at least one day, or delete the alarm.')).toBeTruthy())
+    expect(onClose).not.toHaveBeenCalled()
+    expect(m.batch.mutateAsync).not.toHaveBeenCalled()
+
+    fireEvent.click(s.getByRole('button', { name: 'Mon' }))
+    expect(s.queryByText('Pick at least one day, or delete the alarm.')).toBeNull()
+    done(s)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm.map((a: { dayOfWeek: string }) => a.dayOfWeek)).toEqual(['monday'])
+  })
+
+  it('a new alarm with no day closes without saving', async () => {
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" />)
+    done(s)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(m.batch.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('a save still running for the previous alarm leaves the next alarm\'s rows alone', async () => {
+    let finish!: (v: unknown) => void
+    m.batch.mutateAsync.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1))
+
+    const other = { ...group, ids: [21], alarmTemperature: 70 }
+    s.rerender(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={other} />)
+    finish({ success: true, created: { temperature: [], power: [], alarm: [101, 102] } })
+    await waitFor(() => expect(m.invalidate).toHaveBeenCalled())
+    expect(s.getByText('70°')).toBeTruthy()
+
+    fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(2))
+    expect(m.batch.mutateAsync.mock.calls[1][0].deletes).toEqual({ alarm: [21] })
+  })
+
+  it('saves the form as it is on Done, after a revert to an earlier value', async () => {
+    let finish!: (v: unknown) => void
+    m.batch.mutateAsync.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1))
+    // Back to the opened value while 85° is still saving.
+    fireEvent.click(s.getByRole('button', { name: 'Decrease bed temperature at wake' }))
+    done(s)
+    finish({ success: true, created: { temperature: [], power: [], alarm: [101, 102] } })
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(m.batch.mutateAsync).toHaveBeenCalledTimes(2)
+    expect(m.batch.mutateAsync.mock.calls[1][0].creates.alarm[0].alarmTemperature).toBe(84)
+  })
+
+  it('keeps a change made while Done is saving', async () => {
+    let finish!: (v: unknown) => void
+    m.batch.mutateAsync.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    done(s)
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1))
+    fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    finish({ success: true, created: { temperature: [], power: [], alarm: [101, 102] } })
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(m.batch.mutateAsync).toHaveBeenCalledTimes(2)
+    expect(m.batch.mutateAsync.mock.calls[1][0]).toMatchObject({ deletes: { alarm: [101, 102] } })
+    expect(m.batch.mutateAsync.mock.calls[1][0].creates.alarm[0].alarmTemperature).toBe(86)
+  })
+
+  it('closes after a failed save once the form is back to what is saved', async () => {
+    m.batch.mutateAsync.mockRejectedValueOnce(new Error('db locked'))
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    await waitFor(() => expect(s.getByText('db locked')).toBeTruthy())
+    fireEvent.click(s.getByRole('button', { name: 'Decrease bed temperature at wake' }))
+    done(s)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(s.queryByText('db locked')).toBeNull()
+    expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1)
   })
 
   it('routes Delete to the parent confirmation instead of deleting directly', async () => {

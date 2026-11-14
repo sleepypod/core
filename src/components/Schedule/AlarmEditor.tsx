@@ -94,12 +94,31 @@ function shiftTime(time: string, minutes: number): string {
  *   close), delete-then-create — the previous save's rows are replaced by new
  *   ones. Saves run one at a time, each replacing the rows the last created,
  *   so an edit the user never confirms can't be lost. A new alarm is first
- *   saved once it has a day.
+ *   saved once it has a day. Saving an edit turns a paused alarm back on.
  */
 /** Quiet time after the last change before it is saved. */
 export const SAVE_DELAY_MS = 600
 
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
+
+/** One opened alarm's saves. Each load starts a new one, so a save still
+ * running for the previous alarm can't touch the rows of the next. */
+interface SaveSession {
+  /** Rows the alarm has now: the group's when opened, then whatever the
+   * last save created. Every save replaces exactly these. */
+  rowIds: number[]
+  /** Every set of rows this session created, so a refetch still showing an
+   * earlier save's rows isn't taken for a different alarm. */
+  ownKeys: Set<string>
+  /** The draft last saved (JSON), so an unchanged form isn't saved again. */
+  saved: string | null
+  /** The draft last queued (JSON), so a change isn't queued twice. */
+  queued: string | null
+  failed: boolean
+}
+
+const rowKey = (ids: number[]) => `edit:${[...ids].sort((a, b) => a - b).join(',')}`
+const newSession = (rowIds: number[]): SaveSession => ({ rowIds, ownKeys: new Set(), saved: null, queued: null, failed: false })
 
 export function AlarmEditor({
   open,
@@ -134,22 +153,17 @@ export function AlarmEditor({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [testing, setTesting] = useState(false)
+  // Done was pressed on a saved alarm with every day cleared.
+  const [needsDay, setNeedsDay] = useState(false)
 
-  // Rows this alarm currently has: the group's when opened, then whatever
-  // the last save created. Every save replaces exactly these.
-  const rowIds = useRef<number[]>([])
-  // Paused state is kept through edits; new alarms start enabled.
-  const enabledRef = useRef(true)
+  const session = useRef<SaveSession>(newSession([]))
   // Saves run one at a time, in order.
   const queue = useRef<Promise<void>>(Promise.resolve())
-  // The draft last saved (JSON), so an unchanged form isn't saved again.
-  const savedDraft = useRef<string | null>(null)
   // Bumped each time the form loads; the render showing that load is the
   // saved state, not an edit.
   const [loadGeneration, setLoadGeneration] = useState(0)
   const baselineGeneration = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const saveFailed = useRef(false)
 
   // Load the form when it opens, or when a different alarm is passed in. Not
   // on every new `existingGroup` object: callers rebuild it on each render
@@ -158,19 +172,15 @@ export function AlarmEditor({
   // reset an edit in progress.
   const loadedFrom = useRef<string | null>(null)
   useEffect(() => {
-    const key = (ids: number[]) => `edit:${[...ids].sort((a, b) => a - b).join(',')}`
-    const source = !open ? null : existingGroup ? key(existingGroup.ids) : 'new'
+    const source = !open ? null : existingGroup ? rowKey(existingGroup.ids) : 'new'
     if (source === loadedFrom.current) return
-    if (source !== null && loadedFrom.current !== null && source === key(rowIds.current)) {
+    if (source !== null && loadedFrom.current !== null && session.current.ownKeys.has(source)) {
       loadedFrom.current = source
       return
     }
     loadedFrom.current = source
     if (source === null) return
-    rowIds.current = existingGroup?.ids ?? []
-    enabledRef.current = existingGroup?.enabled ?? true
-    savedDraft.current = null
-    saveFailed.current = false
+    session.current = newSession(existingGroup?.ids ?? [])
     /* eslint-disable react-hooks/set-state-in-effect */
     setLoadGeneration(g => g + 1)
     if (existingGroup) {
@@ -200,6 +210,7 @@ export function AlarmEditor({
     setSaveError(null)
     setSaveState('idle')
     setTesting(false)
+    setNeedsDay(false)
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, existingGroup, side, defaultSide, unit, defaultDisplayTemp])
 
@@ -249,28 +260,47 @@ export function AlarmEditor({
   const { mutateAsync } = batchUpdate
 
   const save = useCallback((rows: NonNullable<typeof draft>) => {
+    const saving = session.current
+    const isCurrent = () => saving === session.current
     const snapshot = JSON.stringify(rows)
+    saving.queued = snapshot
     queue.current = queue.current.then(async () => {
-      if (snapshot === savedDraft.current) return
-      setSaveState('saving')
+      // Compared when its turn comes, after the saves queued before it.
+      if (snapshot === saving.saved) {
+        // Back to what is saved: nothing is left unsaved, even if a save in
+        // between failed.
+        saving.failed = false
+        if (isCurrent()) {
+          setSaveError(null)
+          setSaveState(state => (state === 'idle' ? state : 'saved'))
+        }
+        return
+      }
+      if (isCurrent()) setSaveState('saving')
       try {
         const result = await mutateAsync({
-          deletes: { alarm: rowIds.current },
-          creates: { alarm: rows.map(r => ({ ...r, enabled: enabledRef.current })) },
+          deletes: { alarm: saving.rowIds },
+          // Changing a paused alarm means it should ring again.
+          creates: { alarm: rows.map(r => ({ ...r, enabled: true })) },
         })
-        rowIds.current = result?.created?.alarm ?? []
-        savedDraft.current = snapshot
-        saveFailed.current = false
-        setSaveError(null)
-        setSaveState('saved')
+        saving.rowIds = result?.created?.alarm ?? []
+        saving.ownKeys.add(rowKey(saving.rowIds))
+        saving.saved = snapshot
+        saving.failed = false
+        if (isCurrent()) {
+          setSaveError(null)
+          setSaveState('saved')
+        }
         void utils.schedules.getAll.invalidate()
         void utils.schedules.getByDay.invalidate()
         onSaved?.()
       }
       catch (err) {
-        saveFailed.current = true
-        setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
-        setSaveState('error')
+        saving.failed = true
+        if (isCurrent()) {
+          setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
+          setSaveState('error')
+        }
       }
     })
     return queue.current
@@ -282,10 +312,12 @@ export function AlarmEditor({
     if (!open) return
     if (baselineGeneration.current !== loadGeneration) {
       baselineGeneration.current = loadGeneration
-      savedDraft.current = existingGroup && draft ? JSON.stringify(draft) : null
+      const baseline = existingGroup && draft ? JSON.stringify(draft) : null
+      session.current.saved = baseline
+      session.current.queued = baseline
       return
     }
-    if (!draft || JSON.stringify(draft) === savedDraft.current) return
+    if (!draft || JSON.stringify(draft) === session.current.queued) return
 
     setSaveState('pending')
     clearTimeout(timer.current)
@@ -295,24 +327,39 @@ export function AlarmEditor({
     return () => clearTimeout(timer.current)
   }, [open, draft, save, existingGroup, loadGeneration])
 
-  /** Save a waiting change now (Done, close, delete). */
-  const flush = useCallback(() => {
-    clearTimeout(timer.current)
-    if (draft && JSON.stringify(draft) !== savedDraft.current) return save(draft)
-    return queue.current
-  }, [draft, save])
+  // The latest draft, for saves that wait on earlier ones.
+  const latestDraft = useRef(draft)
+  useEffect(() => {
+    latestDraft.current = draft
+  }, [draft])
 
-  // Closing saves a waiting change first; a failed save keeps the editor open
-  // with its error rather than dropping the change.
+  /** Save the form now (Done, close, delete), including changes made while it saves. */
+  const flush = useCallback(async () => {
+    let rows: typeof draft
+    do {
+      rows = latestDraft.current
+      clearTimeout(timer.current)
+      await (rows ? save(rows) : queue.current)
+    } while (JSON.stringify(rows) !== JSON.stringify(latestDraft.current))
+  }, [save])
+
+  // Closing saves the form first. A failed save keeps the editor open with
+  // its error rather than dropping the change, and a saved alarm can't be
+  // left with no day (it would keep its old days without saying so).
   const handleClose = useCallback(async () => {
     await flush()
-    if (!saveFailed.current) onClose()
+    if (session.current.failed) return
+    if (!latestDraft.current && session.current.rowIds.length > 0) {
+      setNeedsDay(true)
+      return
+    }
+    onClose()
   }, [flush, onClose])
 
   const handleDelete = useCallback(async () => {
     if (!existingGroup || !onRequestDelete) return
     await flush()
-    onRequestDelete({ ...existingGroup, ids: rowIds.current })
+    onRequestDelete({ ...existingGroup, ids: session.current.rowIds })
   }, [existingGroup, onRequestDelete, flush])
 
   const clock = formatTime(time)
@@ -498,6 +545,7 @@ export function AlarmEditor({
 
       {testAlarm.error && <InlineError>{testAlarm.error.message}</InlineError>}
       {saveError && <InlineError>{saveError}</InlineError>}
+      {needsDay && days.size === 0 && <InlineError>Pick at least one day, or delete the alarm.</InlineError>}
     </Modal>
   )
 }
