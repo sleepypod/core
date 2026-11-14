@@ -90,8 +90,36 @@ function shiftTime(time: string, minutes: number): string {
  * Alarm editor (Dialog on desktop, Sheet on phones).
  * - Each saved alarm produces one row per selected day × side (same time/pattern/intensity/duration/temp).
  * - "Test" fires `device.setAlarm` immediately so the user can feel it; "Stop" clears it.
- * - On save, delete-then-create: removes existing rows for this group then writes new ones.
+ * - Saves as you go: SAVE_DELAY_MS after the last change (at once on Done or
+ *   close), delete-then-create — the previous save's rows are replaced by new
+ *   ones. Saves run one at a time, each replacing the rows the last created,
+ *   so an edit the user never confirms can't be lost. A new alarm is first
+ *   saved once it has a day. Saving an edit turns a paused alarm back on.
  */
+/** Quiet time after the last change before it is saved. */
+export const SAVE_DELAY_MS = 600
+
+type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
+
+/** One opened alarm's saves. Each load starts a new one, so a save still
+ * running for the previous alarm can't touch the rows of the next. */
+interface SaveSession {
+  /** Rows the alarm has now: the group's when opened, then whatever the
+   * last save created. Every save replaces exactly these. */
+  rowIds: number[]
+  /** Every set of rows this session created, so a refetch still showing an
+   * earlier save's rows isn't taken for a different alarm. */
+  ownKeys: Set<string>
+  /** The draft last saved (JSON), so an unchanged form isn't saved again. */
+  saved: string | null
+  /** The draft last queued (JSON), so a change isn't queued twice. */
+  queued: string | null
+  failed: boolean
+}
+
+const rowKey = (ids: number[]) => `edit:${[...ids].sort((a, b) => a - b).join(',')}`
+const newSession = (rowIds: number[]): SaveSession => ({ rowIds, ownKeys: new Set(), saved: null, queued: null, failed: false })
+
 export function AlarmEditor({
   open,
   onClose,
@@ -123,19 +151,38 @@ export function AlarmEditor({
   const snoozeMinutes = snoozeDuration / 60
   const [snoozeTaper, setSnoozeTaper] = useState(0)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveState, setSaveState] = useState<SaveState>('idle')
   const [testing, setTesting] = useState(false)
+  // Done was pressed on a saved alarm with every day cleared.
+  const [needsDay, setNeedsDay] = useState(false)
+
+  const session = useRef<SaveSession>(newSession([]))
+  // Saves run one at a time, in order.
+  const queue = useRef<Promise<void>>(Promise.resolve())
+  // Bumped each time the form loads; the render showing that load is the
+  // saved state, not an edit.
+  const [loadGeneration, setLoadGeneration] = useState(0)
+  const baselineGeneration = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // Load the form when it opens, or when a different alarm is passed in. Not
   // on every new `existingGroup` object: callers rebuild it on each render
-  // (the home screen re-renders with every status update), which reset any
-  // edit in progress back to the saved values.
+  // (the home screen re-renders with every status update), and after each
+  // save the group comes back with the rows that save created — neither may
+  // reset an edit in progress.
   const loadedFrom = useRef<string | null>(null)
   useEffect(() => {
-    const source = !open ? null : existingGroup ? `edit:${existingGroup.ids.join(',')}` : 'new'
+    const source = !open ? null : existingGroup ? rowKey(existingGroup.ids) : 'new'
     if (source === loadedFrom.current) return
+    if (source !== null && loadedFrom.current !== null && session.current.ownKeys.has(source)) {
+      loadedFrom.current = source
+      return
+    }
     loadedFrom.current = source
     if (source === null) return
+    session.current = newSession(existingGroup?.ids ?? [])
     /* eslint-disable react-hooks/set-state-in-effect */
+    setLoadGeneration(g => g + 1)
     if (existingGroup) {
       setDays(new Set(existingGroup.days))
       setTime(existingGroup.time)
@@ -161,7 +208,9 @@ export function AlarmEditor({
       setSnoozeTaper(0)
     }
     setSaveError(null)
+    setSaveState('idle')
     setTesting(false)
+    setNeedsDay(false)
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, existingGroup, side, defaultSide, unit, defaultDisplayTemp])
 
@@ -170,7 +219,6 @@ export function AlarmEditor({
   const clearAlarm = trpc.device.clearAlarm.useMutation()
   const utils = trpc.useUtils()
 
-  const isMutating = batchUpdate.isPending
   const sides = useMemo<Side[]>(
     () => (singleSleeperSide ? [singleSleeperSide] : targetSide === 'both' ? ['left', 'right'] : [targetSide]),
     [singleSleeperSide, targetSide],
@@ -191,18 +239,11 @@ export function AlarmEditor({
     setTesting(false)
   }, [clearAlarm, sides])
 
-  const handleSave = useCallback(async () => {
-    if (days.size === 0) {
-      setSaveError('Pick at least one day')
-      return
-    }
-    setSaveError(null)
-
-    const targetDays = Array.from(days)
+  // What the form would save now, or null while it has no day to save.
+  const draft = useMemo(() => {
+    if (days.size === 0) return null
     const temperatureF = Math.round(displayToSetpointF(displayTemperature, unit) ?? DEFAULT_TEMP)
-    // Preserve enabled state when editing a paused alarm; new alarms default to enabled.
-    const enabled = existingGroup?.enabled ?? true
-    const creates = sides.flatMap(s => targetDays.map(dayOfWeek => ({
+    return sides.flatMap(s => Array.from(days).map(dayOfWeek => ({
       side: s,
       dayOfWeek,
       time,
@@ -213,23 +254,113 @@ export function AlarmEditor({
       wakeWindow,
       snoozeDuration,
       snoozeTaper,
-      enabled,
     })))
+  }, [days, sides, time, intensity, pattern, duration, displayTemperature, wakeWindow, snoozeDuration, snoozeTaper, unit])
 
-    try {
-      await batchUpdate.mutateAsync({
-        deletes: { alarm: existingGroup?.ids ?? [] },
-        creates: { alarm: creates },
-      })
-      void utils.schedules.getAll.invalidate()
-      void utils.schedules.getByDay.invalidate()
-      onSaved?.()
-      onClose()
+  const { mutateAsync } = batchUpdate
+
+  const save = useCallback((rows: NonNullable<typeof draft>) => {
+    const saving = session.current
+    const isCurrent = () => saving === session.current
+    const snapshot = JSON.stringify(rows)
+    saving.queued = snapshot
+    queue.current = queue.current.then(async () => {
+      // Compared when its turn comes, after the saves queued before it.
+      if (snapshot === saving.saved) {
+        // Back to what is saved: nothing is left unsaved, even if a save in
+        // between failed.
+        saving.failed = false
+        if (isCurrent()) {
+          setSaveError(null)
+          setSaveState(state => (state === 'idle' ? state : 'saved'))
+        }
+        return
+      }
+      if (isCurrent()) setSaveState('saving')
+      try {
+        const result = await mutateAsync({
+          deletes: { alarm: saving.rowIds },
+          // Changing a paused alarm means it should ring again.
+          creates: { alarm: rows.map(r => ({ ...r, enabled: true })) },
+        })
+        saving.rowIds = result?.created?.alarm ?? []
+        saving.ownKeys.add(rowKey(saving.rowIds))
+        saving.saved = snapshot
+        saving.failed = false
+        if (isCurrent()) {
+          setSaveError(null)
+          setSaveState('saved')
+        }
+        void utils.schedules.getAll.invalidate()
+        void utils.schedules.getByDay.invalidate()
+        onSaved?.()
+      }
+      catch (err) {
+        saving.failed = true
+        if (isCurrent()) {
+          setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
+          setSaveState('error')
+        }
+      }
+    })
+    return queue.current
+  }, [mutateAsync, utils, onSaved])
+
+  // Save each change once the user pauses. The first draft after the form
+  // loads is what an existing alarm already has saved.
+  useEffect(() => {
+    if (!open) return
+    if (baselineGeneration.current !== loadGeneration) {
+      baselineGeneration.current = loadGeneration
+      const baseline = existingGroup && draft ? JSON.stringify(draft) : null
+      session.current.saved = baseline
+      session.current.queued = baseline
+      return
     }
-    catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save alarm')
+    if (!draft || JSON.stringify(draft) === session.current.queued) return
+
+    setSaveState('pending')
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      void save(draft)
+    }, SAVE_DELAY_MS)
+    return () => clearTimeout(timer.current)
+  }, [open, draft, save, existingGroup, loadGeneration])
+
+  // The latest draft, for saves that wait on earlier ones.
+  const latestDraft = useRef(draft)
+  useEffect(() => {
+    latestDraft.current = draft
+  }, [draft])
+
+  /** Save the form now (Done, close, delete), including changes made while it saves. */
+  const flush = useCallback(async () => {
+    let rows: typeof draft
+    do {
+      rows = latestDraft.current
+      clearTimeout(timer.current)
+      await (rows ? save(rows) : queue.current)
+    } while (JSON.stringify(rows) !== JSON.stringify(latestDraft.current))
+  }, [save])
+
+  // Closing saves the form first. A failed save keeps the editor open with
+  // its error rather than dropping the change, and a saved alarm can't be
+  // left with no day (it would keep its old days without saying so).
+  const handleClose = useCallback(async () => {
+    await flush()
+    if (session.current.failed) return
+    if (!latestDraft.current && session.current.rowIds.length > 0) {
+      setNeedsDay(true)
+      return
     }
-  }, [days, sides, time, intensity, pattern, duration, displayTemperature, wakeWindow, snoozeDuration, snoozeTaper, unit, existingGroup, batchUpdate, utils, onSaved, onClose])
+    onClose()
+  }, [flush, onClose])
+
+  const handleDelete = useCallback(async () => {
+    if (!existingGroup || !onRequestDelete) return
+    await flush()
+    onRequestDelete({ ...existingGroup, ids: session.current.rowIds })
+  }, [existingGroup, onRequestDelete, flush])
 
   const clock = formatTime(time)
   const [clockDigits, clockPeriod] = clock.split(' ')
@@ -237,7 +368,7 @@ export function AlarmEditor({
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={() => void handleClose()}
       title={isEdit ? 'Edit alarm' : 'New alarm'}
       icon={Bell}
       iconClassName="text-warn"
@@ -252,23 +383,29 @@ export function AlarmEditor({
                 <Button icon={Play} onClick={() => void handleTest()} disabled={testAlarm.isPending}>Test</Button>
               )}
           {isEdit && existingGroup && onRequestDelete && (
-            <Button variant="danger" icon={Trash2} onClick={() => onRequestDelete(existingGroup)} disabled={isMutating}>
+            <Button variant="danger" icon={Trash2} onClick={() => void handleDelete()}>
               Delete
             </Button>
           )}
-          <div className="ml-auto flex gap-2.5">
-            <Button onClick={onClose} disabled={isMutating}>Cancel</Button>
-            <Button variant="primary" onClick={() => void handleSave()} disabled={isMutating || days.size === 0}>
-              {isMutating && <Loader2 size={14} className="animate-spin" />}
-              Save alarm
-            </Button>
+          <div className="ml-auto flex items-center gap-2.5">
+            <span className="text-xs text-fg-3" aria-live="polite">
+              {saveState === 'saving' || saveState === 'pending'
+                ? (
+                    <>
+                      <Loader2 size={12} className="mr-1 inline animate-spin" />
+                      Saving…
+                    </>
+                  )
+                : saveState === 'saved' ? 'Saved' : days.size === 0 ? 'Pick a day to save' : ''}
+            </span>
+            <Button variant="primary" onClick={() => void handleClose()}>Done</Button>
           </div>
         </>
       )}
     >
       <div className="flex flex-wrap items-end gap-3.5">
         {timeFormat === '24h'
-          ? <TimeInput label="Wake at" value={time} onChange={setTime} disabled={isMutating} />
+          ? <TimeInput label="Wake at" value={time} onChange={setTime} />
           : (
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs text-fg-2">Wake at</span>
@@ -283,7 +420,7 @@ export function AlarmEditor({
                     aria-label="Wake at"
                     value={time}
                     onChange={e => e.target.value && setTime(e.target.value)}
-                    disabled={isMutating}
+
                     className="absolute inset-0 m-0 w-full min-w-0 cursor-pointer appearance-none opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:m-0 [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:p-0"
                   />
                 </span>
@@ -408,6 +545,7 @@ export function AlarmEditor({
 
       {testAlarm.error && <InlineError>{testAlarm.error.message}</InlineError>}
       {saveError && <InlineError>{saveError}</InlineError>}
+      {needsDay && days.size === 0 && <InlineError>Pick at least one day, or delete the alarm.</InlineError>}
     </Modal>
   )
 }
