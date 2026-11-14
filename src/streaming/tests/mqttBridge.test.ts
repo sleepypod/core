@@ -2042,6 +2042,33 @@ describe('mqttBridge — HA discovery payload contents (mutation coverage)', () 
         value_template: '{{ value_json.hrv }}',
         unit: 'ms',
       })
+      const alarmTopic = `sleepypod/${ID}/state/${side}/alarm`
+      expected[`homeassistant/sensor/${ID}/${side}_next_alarm/config`] = {
+        name: `${Side} next alarm`,
+        unique_id: `${ID}_${side}_next_alarm`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        value_template: '{{ value_json.nextAlarm if value_json.nextAlarm else \'None\' }}',
+        json_attributes_topic: alarmTopic,
+        device_class: 'timestamp',
+        icon: 'mdi:alarm',
+        device: DEVICE,
+      }
+      expected[`homeassistant/binary_sensor/${ID}/${side}_alarm_ringing/config`] = {
+        name: `${Side} alarm ringing`,
+        unique_id: `${ID}_${side}_alarm_ringing`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        value_template: '{{ \'on\' if value_json.ringing else \'off\' }}',
+        payload_on: 'on',
+        payload_off: 'off',
+        icon: 'mdi:alarm-light',
+        device: DEVICE,
+      }
     }
 
     expect(got).toEqual(expected)
@@ -2096,6 +2123,23 @@ describe('mqttBridge — publishState payload contents (mutation coverage)', () 
       podVersion: '1.2.3',
     })
     expect(typeof payload.ts).toBe('number')
+    await shutdownMqttBridge()
+  })
+
+  it('per-side alarm payload carries the ringing state, and no alarm when none is set', async () => {
+    const { map } = await capture()
+    for (const [side, ringing] of [['left', false], ['right', true]] as const) {
+      expect(JSON.parse(map[`sleepypod/${ID}/state/${side}/alarm`])).toEqual({
+        ts: expect.any(Number),
+        nextAlarm: null,
+        time: null,
+        day: null,
+        wakeWindowMinutes: 0,
+        wakeWindowStart: null,
+        ringing,
+        snoozedUntil: null,
+      })
+    }
     await shutdownMqttBridge()
   })
 
