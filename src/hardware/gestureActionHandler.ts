@@ -103,8 +103,8 @@ export class GestureActionHandler {
       if (ringing?.alarmBehavior) await this.handleRingingAction(event, ringing, config)
       else {
         // The firmware already stopped the alarm on this tap.
-        await this.stopLinked(event.side, config)
         await this.deps.alarm.ended(event.side)
+        await this.stopLinked(event.side, config)
       }
       return
     }
@@ -146,23 +146,35 @@ export class GestureActionHandler {
     })
   }
 
-  /** Stop the other side of a linked alarm (single sleeper) along with `side`. */
+  /**
+   * Stop the other side of a linked alarm (single sleeper) along with `side`,
+   * which must already be marked ended: under the other side's lock, so a
+   * scheduled partner start still waiting for it sees the stop and skips.
+   */
   private stopLinked = async (side: GestureEvent['side'], config: AlarmConfig | null): Promise<void> => {
     const linked = config?.linkedSide
     if (!linked || linked === side) return
-    const client = this.deps.newHardwareClient(this.socketPath)
-    try {
-      await client.connect()
-      await client.clearAlarm(linked)
-    }
-    catch (error) {
-      console.error(`[gestureActionHandler] clearAlarm failed for linked ${linked}:`, error)
-    }
-    finally {
-      client.disconnect()
-    }
-    this.deps.alarm.cancelSnooze(linked)
-    await this.deps.alarm.ended(linked)
+    await withSideLock(linked, async () => {
+      // A different alarm started on that side since: leave it ringing.
+      const current = this.deps.alarm.activeConfig(linked)
+      if (current && current.linkedSide !== side) return
+      const client = this.deps.newHardwareClient(this.socketPath)
+      try {
+        await client.connect()
+        await client.clearAlarm(linked)
+      }
+      catch (error) {
+        // The tap only stopped the tapped side's motor. Leave this one marked
+        // ringing so another tap or Stop can retry.
+        console.error(`[gestureActionHandler] clearAlarm failed for linked ${linked}:`, error)
+        return
+      }
+      finally {
+        client.disconnect()
+      }
+      this.deps.alarm.cancelSnooze(linked)
+      await this.deps.alarm.ended(linked)
+    })
   }
 
   /** A tap while an alarm is ringing: snooze or stop it (on both sides when linked). */
@@ -189,16 +201,16 @@ export class GestureActionHandler {
         // Read before ended() forgets it: the snoozed alarm comes back as it was.
         const config = active ?? DEFAULT_SNOOZE_ALARM
         await clear()
-        await this.stopLinked(event.side, active)
         await this.deps.alarm.ended(event.side)
+        await this.stopLinked(event.side, active)
         // The alarm sets the snooze length (and how it tapers), not the tap.
         this.deps.alarm.snooze(event.side, nextSnoozeSeconds(config), config)
       }
       else {
         await clear()
-        await this.stopLinked(event.side, active)
         this.deps.alarm.cancelSnooze(event.side)
         await this.deps.alarm.ended(event.side)
+        await this.stopLinked(event.side, active)
       }
     }
     finally {

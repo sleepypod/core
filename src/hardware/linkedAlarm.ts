@@ -5,11 +5,15 @@
  * stops both, and a snoozed alarm comes back on both.
  */
 import type { HardwareClient } from './client'
-import { markAlarmEnded, markAlarmStarted } from './alarmState'
+import { getActiveAlarmConfig, markAlarmEnded, markAlarmStarted } from './alarmState'
+import { withSideLock } from './sideLock'
 import type { AlarmConfig } from './alarmPersistence'
 import type { Side } from './types'
 
-/** Ring the side linked to an alarm that just started on `side`. */
+/**
+ * Ring the side linked to an alarm that just started on `side`. Callers hold
+ * the linked side's lock.
+ */
 export async function ringLinked(client: Pick<HardwareClient, 'setAlarm'>, side: Side, config: AlarmConfig): Promise<void> {
   const linked = config.linkedSide
   if (!linked || linked === side) return
@@ -23,15 +27,26 @@ export async function ringLinked(client: Pick<HardwareClient, 'setAlarm'>, side:
   }
 }
 
-/** Stop the side linked to the alarm on `side`, which was just stopped or snoozed. */
+/**
+ * Stop the side linked to the alarm on `side`, which was just stopped or
+ * snoozed and already marked ended. Runs under the linked side's lock, so a
+ * partner start waiting for it sees the stop and skips. A different alarm
+ * now ringing there is left alone, and a failed clear leaves the side marked
+ * ringing so another Stop can retry.
+ */
 export async function stopLinked(client: Pick<HardwareClient, 'clearAlarm'>, side: Side, config: AlarmConfig | null | undefined): Promise<void> {
   const linked = config?.linkedSide
   if (!linked || linked === side) return
-  try {
-    await client.clearAlarm(linked)
-  }
-  catch (error) {
-    console.error(`[linkedAlarm] failed to stop ${linked} with ${side}:`, error)
-  }
-  await markAlarmEnded(linked)
+  await withSideLock(linked, async () => {
+    const current = getActiveAlarmConfig(linked)
+    if (current && current.linkedSide !== side) return
+    try {
+      await client.clearAlarm(linked)
+    }
+    catch (error) {
+      console.error(`[linkedAlarm] failed to stop ${linked} with ${side}:`, error)
+      return
+    }
+    await markAlarmEnded(linked)
+  })
 }

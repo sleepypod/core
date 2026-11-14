@@ -342,9 +342,20 @@ describe('GestureActionHandler', () => {
       vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, snoozeDuration: 120, snoozeTaper: 50, ownerSide, linkedSide,
     })
 
+    // Both sides ringing one alarm owned by left; ended() forgets a side.
+    const pairHooks = (right: AlarmConfig | null = linked('left', 'left')) => {
+      const configs: Record<string, AlarmConfig | null> = { left: linked('left', 'right'), right }
+      const alarm = makeAlarmHooks()
+      alarm.activeConfig.mockImplementation(side => configs[side])
+      alarm.ended.mockImplementation(async (side) => {
+        configs[side] = null
+      })
+      return alarm
+    }
+
     test('a tap on the other side uses the sleeper\'s gestures and snoozes both sides', async () => {
       // Tapped the unused right side; its own gesture would just stop the alarm.
-      const alarm = makeAlarmHooks(linked('left', 'left'))
+      const alarm = pairHooks()
       const { deps, client } = makeDeps(null, { isAlarmVibrating: true }, makeMockClient(), alarm)
       ;(deps.findGestureConfig as ReturnType<typeof vi.fn>).mockImplementation(async (side: string) =>
         side === 'left' ? { actionType: 'alarm', alarmBehavior: 'snooze' } : { actionType: 'temperature', alarmBehavior: null })
@@ -361,7 +372,7 @@ describe('GestureActionHandler', () => {
     })
 
     test('stopping it on the sleeper\'s side stops the other side too', async () => {
-      const alarm = makeAlarmHooks(linked('left', 'right'))
+      const alarm = pairHooks()
       const { deps, client } = makeDeps({ actionType: 'alarm', alarmBehavior: 'dismiss' }, { isAlarmVibrating: true }, makeMockClient(), alarm)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
@@ -374,7 +385,7 @@ describe('GestureActionHandler', () => {
     })
 
     test('a tap with no ringing action stops both sides', async () => {
-      const alarm = makeAlarmHooks(linked('left', 'right'))
+      const alarm = pairHooks()
       const { deps, client } = makeDeps({ actionType: 'temperature', alarmBehavior: null }, { isAlarmVibrating: true }, makeMockClient(), alarm)
 
       await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'quadTap'))
@@ -382,6 +393,51 @@ describe('GestureActionHandler', () => {
       expect(client.clearAlarm).toHaveBeenCalledWith('right')
       expect(alarm.ended).toHaveBeenCalledWith('left')
       expect(alarm.ended).toHaveBeenCalledWith('right')
+    })
+
+    test('marks the tapped side stopped before stopping the other, so a waiting partner start skips', async () => {
+      const order: string[] = []
+      const alarm = pairHooks()
+      const ended = alarm.ended.getMockImplementation()
+      alarm.ended.mockImplementation(async (side) => {
+        order.push(`ended ${side}`)
+        await ended?.(side)
+      })
+      const client = makeMockClient({ clearAlarm: vi.fn(async (side: string) => {
+        order.push(`clear ${side}`)
+      }) as never })
+      const { deps } = makeDeps({ actionType: 'alarm', alarmBehavior: 'snooze' }, { isAlarmVibrating: true }, client, alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'doubleTap'))
+
+      expect(order).toEqual(['clear left', 'ended left', 'clear right', 'ended right'])
+    })
+
+    test('leaves a different alarm ringing on the other side alone', async () => {
+      // Since the linked alarm rang, the right side started its own alarm.
+      const alarm = pairHooks({ vibrationIntensity: 50, vibrationPattern: 'rise', duration: 60 })
+      const { deps, client } = makeDeps({ actionType: 'alarm', alarmBehavior: 'dismiss' }, { isAlarmVibrating: true }, makeMockClient(), alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+
+      expect((client.clearAlarm as ReturnType<typeof vi.fn>).mock.calls).toEqual([['left']])
+      expect(alarm.ended).not.toHaveBeenCalledWith('right')
+    })
+
+    test('keeps the other side marked ringing when stopping it fails, so it can be stopped again', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const alarm = pairHooks()
+      const client = makeMockClient({ clearAlarm: vi.fn(async (side: string) => {
+        if (side === 'right') throw new Error('DAC write failed')
+      }) as never })
+      const { deps } = makeDeps({ actionType: 'alarm', alarmBehavior: 'dismiss' }, { isAlarmVibrating: true }, client, alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+
+      expect(alarm.ended).toHaveBeenCalledWith('left')
+      expect(alarm.ended).not.toHaveBeenCalledWith('right')
+      expect(error).toHaveBeenCalledWith('[gestureActionHandler] clearAlarm failed for linked right:', expect.any(Error))
+      error.mockRestore()
     })
   })
 
