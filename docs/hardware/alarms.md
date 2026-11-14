@@ -73,6 +73,22 @@ from a tap, 9 from HomeKit). `device.snoozeAlarm` still takes an explicit
 duration. Tap gestures used to carry their own snooze length; migration
 `0034_alarm_snooze_from_gestures` copied each side's onto its alarms.
 
+## Single sleeper: one alarm on both sides
+
+With one sleeper (a solo bed setup, or the partner away) their alarm also
+vibrates the other side, since they may have rolled onto it
+(`alarmPartnerSide`, `src/lib/singleSleeper.ts`). Each side's `AlarmConfig`
+names the other as `linkedSide` and the sleeper as `ownerSide`
+(`src/hardware/linkedAlarm.ts`):
+
+- A tap on either side uses the owner's gestures, and stopping or snoozing
+  it stops both motors and clears both sides' vibrating state.
+- A snooze is recorded once, on the tapped side, and comes back on both.
+- The app's Stop and Snooze and the HomeKit snooze switch do the same.
+
+The other side's temperature follows its unused-zone policy as before:
+with *follow* it warms with the sleeper's alarm; with *off* it stays off.
+
 ## Alarm temperature warm-up
 
 An alarm's temperature used to be a set point at the alarm time: the bed only

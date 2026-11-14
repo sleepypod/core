@@ -24,6 +24,10 @@ export interface AlarmConfig {
   snoozeTaper?: number
   /** Snoozes already taken for this alarm occurrence. */
   snoozeCount?: number
+  /** The other side ringing with this alarm (single sleeper), stopped and snoozed with it. */
+  linkedSide?: Side
+  /** Whose alarm it is: a tap on either linked side uses this side's gestures. */
+  ownerSide?: Side
 }
 
 export interface TimedAlarm {
