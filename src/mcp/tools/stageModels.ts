@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { getCaller, jsonResult, runTool } from '@/src/mcp/caller'
 import { side } from '@/src/mcp/schemas'
 import { stageModelSchema } from '@/src/lib/personal-stage-model'
+import { modelSetSchema } from '@/src/lib/stage-model-set'
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 
@@ -28,6 +29,11 @@ const model = stageModelSchema.describe(
   + `version, kind, classes, featureContract, trees or logistic weights, and testVectors. At most ${MAX_INLINE_MODEL_BYTES / 1024} KB as JSON.`,
 )
 
+const modelSet = modelSetSchema.describe(
+  'Optional modelset-v1 manifest from the same training run (RUN/model/set.json). nodes.stage.sha256 must be the model\'s '
+  + 'canonical SHA-256; nodes.vitals records the vitals engine and profile it was trained on. Sets that pin a movement model are refused.',
+)
+
 function checkSize(value: unknown) {
   const bytes = Buffer.byteLength(JSON.stringify(value))
   if (bytes > MAX_INLINE_MODEL_BYTES) {
@@ -44,7 +50,7 @@ export function registerStageModelTools(server: McpServer) {
     title: 'List personal sleep-stage models',
     description:
       'List the side\'s personal stage model library, newest first: id, version, kind, upload time, training metrics, '
-      + 'whether it is selected, and whether the selected model is active (staging that side\'s nights instead of the rules). '
+      + 'the modelset-v1 manifest it was uploaded with (or null), whether it is selected, and whether the selected model is active (staging that side\'s nights instead of the rules). '
       + 'Use the id with select_stage_model. Note the currently selected id before changing anything so the user can switch back.',
     inputSchema: { side },
     annotations: READ_ONLY,
@@ -97,13 +103,13 @@ export function registerStageModelTools(server: McpServer) {
     description:
       'Store a model in the side\'s library. It is not selected and does not stage any night until select_stage_model. '
       + 'The pod refuses models whose feature contract it does not know or that do not reproduce their own test vectors. '
-      + 'Adding the same model twice returns the existing id. Run preview_stage_model on it first. '
+      + 'Adding the same model twice returns the existing id (a modelSet given then replaces the stored one). Run preview_stage_model on it first. '
       + `Tool calls carry at most ${MAX_INLINE_MODEL_BYTES / 1024} KB; forests from sleepypod/training are larger. ${REST_UPLOAD_HINT}`,
-    inputSchema: { side, model },
+    inputSchema: { side, model, modelSet: modelSet.optional() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, async ({ side: s, model: candidate }) => runTool(async () => {
+  }, async ({ side: s, model: candidate, modelSet: set }) => runTool(async () => {
     checkSize(candidate)
-    const stored = await getCaller().sleepStages.uploadModel({ side: s, model: candidate })
+    const stored = await getCaller().sleepStages.uploadModel({ side: s, model: candidate, ...(set ? { modelSet: set } : {}) })
     return jsonResult({ side: s, ...stored, selected: false, next: 'Preview it, then select_stage_model with this id once the user approves.' })
   }))
 

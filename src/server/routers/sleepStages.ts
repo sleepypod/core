@@ -17,6 +17,8 @@ import {
   stageModelSchema,
   type StageModel,
 } from '@/src/lib/personal-stage-model'
+import { inputMismatch, inputMismatchSchema, modelSetProblem, modelSetSchema, type ModelSet } from '@/src/lib/stage-model-set'
+import { currentVitalsIdentity } from '@/src/biometrics/profiles/vitals-identity'
 import { and, asc, desc, eq, gt, gte, lte } from 'drizzle-orm'
 import { sideSchema } from '@/src/server/validation-schemas'
 import {
@@ -47,12 +49,33 @@ function validateModel(model: StageModel) {
   if (failingTestVectors(model).length) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Model fails its test vectors' })
 }
 
-/** Called inside the same transaction as any selection change. Identical uploads are idempotent. */
-function saveLibraryModel(tx: Pick<typeof db, 'select' | 'insert'>, side: Side, model: unknown, version: string, uploadedAt: Date) {
+function validateModelSet(model: StageModel, set: ModelSet) {
+  const problem = modelSetProblem(set, model, stageModelContract(model))
+  if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem })
+}
+
+/**
+ * Called inside the same transaction as any selection change. Identical uploads are idempotent; a
+ * set uploaded with an already stored model replaces that entry's set, and no set keeps the stored one.
+ */
+function saveLibraryModel(tx: Pick<typeof db, 'select' | 'insert' | 'update'>, side: Side, model: unknown, version: string, uploadedAt: Date, modelSet?: ModelSet) {
   const existing = tx.select({ id: stageModelLibrary.id }).from(stageModelLibrary)
     .where(and(eq(stageModelLibrary.side, side), eq(stageModelLibrary.model, model))).get()
-  if (existing) return existing.id
-  return tx.insert(stageModelLibrary).values({ side, model, version, uploadedAt }).returning({ id: stageModelLibrary.id }).get().id
+  if (existing) {
+    if (modelSet) tx.update(stageModelLibrary).set({ modelSet }).where(eq(stageModelLibrary.id, existing.id)).run()
+    return existing.id
+  }
+  return tx.insert(stageModelLibrary).values({ side, model, version, uploadedAt, modelSet: modelSet ?? null }).returning({ id: stageModelLibrary.id }).get().id
+}
+
+/** The stored set of the side's selected model, when its library entry has one. */
+function selectedModelSet(side: Side, activeOnly: boolean): ModelSet | null {
+  const row = db.select({ modelSet: stageModelLibrary.modelSet }).from(sideStageModels)
+    .innerJoin(stageModelLibrary, and(eq(stageModelLibrary.side, sideStageModels.side), eq(stageModelLibrary.model, sideStageModels.model)))
+    .where(activeOnly ? and(eq(sideStageModels.side, side), eq(sideStageModels.active, true)) : eq(sideStageModels.side, side))
+    .get()
+  const parsed = modelSetSchema.safeParse(row?.modelSet)
+  return parsed.success ? parsed.data : null
 }
 
 /** The side's stored model when it is marked active and still validates; null means the rules stage the side. */
@@ -61,6 +84,11 @@ export function loadActiveStageModel(side: Side): StageModel | null {
   if (!row) return null
   const parsed = stageModelSchema.safeParse(row.model)
   return parsed.success ? parsed.data : null
+}
+
+/** The model set stored with the side's active model, for comparing a night's inputs with what it expects. */
+export function loadActiveStageModelSet(side: Side): ModelSet | null {
+  return selectedModelSet(side, true)
 }
 
 /** Rules delivered to the stage consumer, with the actual bundle identity. */
@@ -408,7 +436,9 @@ export const sleepStagesRouter = router({
     .meta({ openapi: { method: 'GET', path: '/sleep-stages/models', protect: false, tags: ['Sleep stages'] } })
     .input(z.object({ side: sideSchema }).strict())
     .output(z.array(z.object({ id: z.number(), version: z.string(), kind: z.string(), uploadedAt: z.number(),
-      metrics: z.record(z.string(), z.unknown()).optional(), selected: z.boolean(), active: z.boolean() })))
+      metrics: z.record(z.string(), z.unknown()).optional(), selected: z.boolean(), active: z.boolean(),
+      /** The modelset-v1 manifest uploaded with the model, or null for a bare model. */
+      modelSet: modelSetSchema.nullable() })))
     .query(({ input }) => {
       const selected = db.select().from(sideStageModels).where(eq(sideStageModels.side, input.side)).get()
       return db.select().from(stageModelLibrary).where(eq(stageModelLibrary.side, input.side))
@@ -416,18 +446,27 @@ export const sleepStagesRouter = router({
           const parsed = stageModelSchema.safeParse(row.model)
           if (!parsed.success) return []
           const isSelected = JSON.stringify(row.model) === JSON.stringify(selected?.model)
+          const set = modelSetSchema.safeParse(row.modelSet)
           return [{ id: row.id, version: row.version, kind: parsed.data.kind, uploadedAt: row.uploadedAt.getTime(),
-            metrics: parsed.data.metrics, selected: isSelected, active: isSelected && !!selected?.active }]
+            metrics: parsed.data.metrics, selected: isSelected, active: isSelected && !!selected?.active,
+            modelSet: set.success ? set.data : null }]
         })
     }),
 
+  /**
+   * Save a candidate without selecting it. `modelSet` (modelset-v1) is optional: its stage node must
+   * pin this model by `nodes.stage.sha256`, the SHA-256 of the model in core's canonical JSON (see
+   * docs/research/sleep-stage-calibration/README.md, "Model sets"); `nodes.vitals` records the
+   * engine and profile the model was trained on, and a set pinning a movement model is refused.
+   */
   uploadModel: publicProcedure
     .meta({ openapi: { method: 'POST', path: '/sleep-stages/models', protect: false, tags: ['Sleep stages'] } })
-    .input(z.object({ side: sideSchema, model: stageModelSchema }).strict())
+    .input(z.object({ side: sideSchema, model: stageModelSchema, modelSet: modelSetSchema.optional() }).strict())
     .output(z.object({ id: z.number(), version: z.string() }))
     .mutation(({ input }) => {
       validateModel(input.model)
-      const id = db.transaction(tx => saveLibraryModel(tx, input.side, input.model, input.model.version, new Date()))
+      if (input.modelSet) validateModelSet(input.model, input.modelSet)
+      const id = db.transaction(tx => saveLibraryModel(tx, input.side, input.model, input.model.version, new Date(), input.modelSet))
       return { id, version: input.model.version }
     }),
 
@@ -445,16 +484,23 @@ export const sleepStagesRouter = router({
       return { version: model.version, active: input.active }
     })),
 
-  /** The side's uploaded personal stage model, if any, and whether it stages the side's nights. */
+  /**
+   * The side's uploaded personal stage model, if any, and whether it stages the side's nights.
+   * `inputMismatch` compares the vitals its model set expects with what the pod produces them with
+   * now (the latest live processing run); null without a set, a vitals node, or a difference.
+   */
   getModel: publicProcedure
     .meta({ openapi: { method: 'GET', path: '/sleep-stages/model', protect: false, tags: ['Sleep stages'] } })
     .input(z.object({ side: sideSchema }).strict())
-    .output(z.object({ model: stageModelSchema.nullable(), uploadedAt: z.number().nullable(), active: z.boolean() }))
+    .output(z.object({ model: stageModelSchema.nullable(), uploadedAt: z.number().nullable(), active: z.boolean(),
+      inputMismatch: inputMismatchSchema.nullable() }))
     .query(async ({ input }) => {
       const row = db.select().from(sideStageModels).where(eq(sideStageModels.side, input.side)).get()
-      if (!row) return { model: null, uploadedAt: null, active: false }
+      if (!row) return { model: null, uploadedAt: null, active: false, inputMismatch: null }
       const parsed = stageModelSchema.safeParse(row.model)
-      return { model: parsed.success ? parsed.data : null, uploadedAt: row.uploadedAt.getTime(), active: parsed.success && row.active }
+      const set = parsed.success ? selectedModelSet(input.side, false) : null
+      return { model: parsed.success ? parsed.data : null, uploadedAt: row.uploadedAt.getTime(), active: parsed.success && row.active,
+        inputMismatch: set?.nodes.vitals ? inputMismatch(set, currentVitalsIdentity(biometricsDb, input.side)) : null }
     }),
 
   /**

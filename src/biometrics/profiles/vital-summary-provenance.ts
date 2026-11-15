@@ -46,3 +46,5 @@ export function summarizeVitalProvenance(row: {
     hrvAggregation: row.hrvRows === 0 ? 'no_readings' : incompatible ? 'incompatible_definitions' : row.hrvDefinitionCount === 0 ? 'legacy_unverified' : 'single_definition',
   })
 }
+/** `<manifestHash>:<configHash>` of the live same-side run that produced a vitals row, or NULL when unrecorded. */
+export const vitalsConfiguration = configuration

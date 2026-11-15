@@ -145,6 +145,8 @@ export const stageModelLibrary = sqliteTable('stage_model_library', {
   model: text('model', { mode: 'json' }).notNull(),
   version: text('version').notNull(),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
+  // The modelset-v1 manifest uploaded with the model (src/lib/stage-model-set.ts); null for a bare model.
+  modelSet: text('model_set', { mode: 'json' }),
 }, table => [index('stage_model_library_side_idx').on(table.side)])
 
 export const stageClassifierChanges = sqliteTable('stage_classifier_changes', {

@@ -282,7 +282,10 @@ another save landed first: re-read with `get_sleep_stage_rules` and retry.
 returns pooled agreement with the Watch next to the rules' agreement plus per-night epochs,
 accuracy and kappa. Nights the model trained on are in-sample. `add_stage_model` stores a model
 in the library without selecting it; the router refuses unknown feature contracts and models
-that fail their own test vectors, and identical uploads return the existing id.
+that fail their own test vectors, and identical uploads return the existing id. It also takes
+the run's optional `modelSet` (modelset-v1, see
+[Model sets](../../docs/research/sleep-stage-calibration/README.md#model-sets)), which
+`get_stage_models` returns with each entry.
 `select_stage_model` makes a library entry the side's model (`active` decides whether it stages
 nights) and returns the previously selected entry so it can be restored;
 `set_stage_model_active` with `active: false` returns the side to the rules. Both change what

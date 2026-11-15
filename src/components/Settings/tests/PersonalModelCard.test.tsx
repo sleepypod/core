@@ -1,17 +1,18 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { stageModelSchema, type StageModel } from '@/src/lib/personal-stage-model'
+import type { InputMismatch } from '@/src/lib/stage-model-set'
 import { PersonalModelCard } from '../PersonalModelCard'
 
 const mock = vi.hoisted(() => ({
   upload: vi.fn(), select: vi.fn(), active: vi.fn(), invalidate: vi.fn(),
-  stored: null as StageModel | null, isActive: false,
+  stored: null as StageModel | null, isActive: false, inputMismatch: null as InputMismatch | null,
   models: [] as { id: number, version: string, kind: string, selected: boolean, active: boolean, metrics?: Record<string, unknown> }[],
 }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ sleepStages: { getModel: { invalidate: mock.invalidate }, listModels: { invalidate: mock.invalidate } }, biometrics: { getSleepStages: { invalidate: mock.invalidate } } }),
   sleepStages: {
-    getModel: { useQuery: () => ({ data: { model: mock.stored, active: mock.isActive } }) },
+    getModel: { useQuery: () => ({ data: { model: mock.stored, active: mock.isActive, inputMismatch: mock.inputMismatch } }) },
     listModels: { useQuery: () => ({ data: mock.models }) },
     uploadModel: { useMutation: (options: { onSuccess: (result: { id: number }) => void }) => ({ mutateAsync: async (input: unknown) => {
       const result = await mock.upload(input)
@@ -44,6 +45,7 @@ beforeEach(() => {
   mock.models = []
   mock.stored = null
   mock.isActive = false
+  mock.inputMismatch = null
   mock.upload.mockResolvedValue({ id: 1, version: 'example' })
 })
 afterEach(cleanup)
@@ -136,4 +138,20 @@ it.each([new Error('Upload unavailable'), 'unknown failure'])('reports upload fa
   choose(JSON.stringify(model))
   expect(await screen.findByText(error instanceof Error ? error.message : 'Could not upload this model.')).toBeTruthy()
   expect((screen.getByRole('button', { name: 'Upload model' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+it('notes a model trained on other vitals without blocking it', () => {
+  mock.stored = stageModelSchema.parse(model)
+  mock.isActive = true
+  const expected = { engine: 'a'.repeat(64), profile: 'b'.repeat(64) }
+  mock.inputMismatch = { expected, actual: { ...expected, profile: 'c'.repeat(64) } }
+  const { rerender } = render(<PersonalModelCard side="left" />)
+  expect(screen.getByRole('note').textContent).toBe('This model was trained on a different vitals tuning profile than this side runs now. Nights still stage with it, and each one is flagged.')
+  expect((screen.getByRole('switch', { name: 'Stage nights with this model' }) as HTMLButtonElement).disabled).toBe(false)
+  mock.inputMismatch = { expected, actual: 'unknown' }
+  rerender(<PersonalModelCard side="left" />)
+  expect(screen.getByRole('note').textContent).toMatch(/no recorded vitals settings/)
+  mock.inputMismatch = null
+  rerender(<PersonalModelCard side="left" />)
+  expect(screen.queryByRole('note')).toBeNull()
 })

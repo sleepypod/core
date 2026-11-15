@@ -291,8 +291,8 @@ database and included with its normal backups.
 
 | Method / path | Request | Behavior |
 | --- | --- | --- |
-| `GET /api/sleep-stages/models` | `?side=left` | List summaries, IDs, selected/active state, and recorded metrics |
-| `POST /api/sleep-stages/models` | `{side, model}` | Validate and save a candidate; return its ID without activation |
+| `GET /api/sleep-stages/models` | `?side=left` | List summaries, IDs, selected/active state, recorded metrics, and the stored `modelSet` (or `null`) |
+| `POST /api/sleep-stages/models` | `{side, model, modelSet?}` | Validate and save a candidate, with its optional model set; return its ID without activation |
 | `PUT /api/sleep-stages/models/selected` | `{side, id, active}` | Select a saved model and explicitly set activation |
 
 The original singular `/api/sleep-stages/model` routes remain compatible with
@@ -303,3 +303,83 @@ saved candidates. Use the plural POST route when an upload must not affect
 staging. Models are validated against known feature contracts and their test
 vectors before upload or selection. These retrospective models do not establish
 prospective or clinical validity.
+
+### Model sets
+
+A training run can upload the `modelset-v1` manifest it writes beside the model
+(`RUN/model/set.json` in sleepypod/training) as `modelSet` next to `model`. The
+pod stores it with the library entry and returns it from `GET /api/sleep-stages/models`.
+Models uploaded without one work exactly as before.
+
+```json
+{
+  "formatVersion": "modelset-v1",
+  "id": "left-podContext-20261115T0300",
+  "nodes": {
+    "stage": { "version": "<model version>", "sha256": "<canonical model sha256>", "contract": "podContext", "binding": "pinned" },
+    "vitals": { "engine": "<biometrics manifest hash>", "profile": "<resolved config hash>", "binding": "expected" }
+  },
+  "training": { "...": "stored as given" },
+  "evaluation": { "...": "stored as given" }
+}
+```
+
+- `nodes.stage` is required and `pinned`. Its `version` must equal the model's
+  `version`, `contract` (optional) must name the model's feature contract
+  (`challenger`, `podNative` or `podContext`), and `sha256` must equal the
+  model's canonical hash below.
+- `nodes.vitals` is optional and `expected`: `engine` is the biometrics manifest
+  hash (`configHash` of `modules/common/biometrics/manifest.v1.json`) and
+  `profile` the resolved configuration hash the training nights were produced with.
+- `nodes.movementModel` is refused with "Movement models are not supported on
+  this pod yet" until movement models run on the pod.
+- `training` and `evaluation` are opaque objects the pod stores but does not read.
+  The whole manifest is at most 64 KB of JSON.
+
+Uploading a model that is already in the library with a new set replaces that
+entry's set; uploading it without one keeps the stored set.
+
+**Stage hash.** `nodes.stage.sha256` is the SHA-256 (lowercase hex) of the
+UTF-8 bytes of the model's canonical JSON, `finite-binary64-json-v1`
+(`src/biometrics/algorithms/canonical-json.ts`). The model is hashed as the pod
+stores it: if the document has no `epochSeconds`, add `"epochSeconds": 300` first.
+The encoding:
+
+- object keys sorted by UTF-16 code units, at every level; array order kept;
+- no whitespace: `,` and `:` separators only;
+- strings as `JSON.stringify` / Python `json.dumps(s, ensure_ascii=False)` write them
+  (non-ASCII characters are not escaped);
+- `true`, `false`, `null` as usual;
+- every number is parsed as an IEEE-754 double and written as its exact decimal
+  expansion: no exponent, no trailing zeros, no trailing `.`, `-0` written `0`.
+  So `0.1` is `0.1000000000000000055511151231257827021181583404541015625`,
+  `300` and `300.0` are both `300`, and `-0.5` is `-0.5`. NaN and infinities are invalid.
+
+`canonical_json` in `modules/common/biometrics/config.py` is the Python
+implementation; it stops at 20,000 values (meant for configurations), so a forest
+needs the same function without that cap. Core uses `dataHash`, which allows up
+to 2,000,000 values, depth 32 and 32 MB. `src/lib/tests/stage-model-set.test.ts`
+pins one hash computed by both.
+
+**Vitals mismatch (decision Q6).** When a model whose set has `nodes.vitals`
+stages a night, the pod compares the expected engine and profile with those of
+the live processing runs that produced the night's vitals (`vitals.processing_run_id`
+to `biometric_processing_runs`: `bundle.manifestHash` and `config_hash`). A
+difference never stops the model. The night stages normally and `stagedBy` gains
+
+```json
+"inputMismatch": {
+  "expected": { "engine": "<sha256>", "profile": "<sha256>" },
+  "actual": { "engine": "<sha256>", "profile": "<sha256>" }
+}
+```
+
+where `actual` is `"mixed"` when the night's vitals came from more than one
+engine/profile pair (a profile change or update mid-night, or a night only partly
+recorded), and `"unknown"` when none of its vitals rows have a recorded live run.
+A daemon restart under the same configuration is a new run but not a change. A
+night that matches, a set without `nodes.vitals`, a model without a set and a
+night staged by the rules carry no `inputMismatch`. `GET /api/sleep-stages/model`
+returns the same comparison for the selected model against the side's latest live
+run as `inputMismatch` (or `null`), and Settings → Sleep stages shows it as a note
+on the staging model card.
