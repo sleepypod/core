@@ -27,7 +27,8 @@ export const bindingSchema = z.object({ side: z.enum(['left', 'right']), generat
   desiredRevisionId: z.string().uuid().nullable(), previousRevisionId: z.string().uuid().nullable(), updatedAtMs: z.number() })
 export const profileOverviewSchema = z.object({
   stageView: stageViewSchema,
-  desired: z.object({ binding: bindingSchema, resolved: biometricConfigSchema, hash: z.string(), isDefault: z.boolean(), warning: z.string().nullable() }),
+  desired: z.object({ binding: bindingSchema, resolved: biometricConfigSchema, hash: z.string(), isDefault: z.boolean(), warning: z.string().nullable(),
+    rebase: z.object({ sourceRevisionId: z.string().uuid(), droppedPaths: z.array(z.string()) }).nullable() }),
   legacyStageView: z.object({ classifier: stageClassifierSchema, personalized: z.boolean(), migrationPending: z.boolean() }),
   runtimeHealth: runtimeHealthSchema,
   runtimeStatus: z.enum(['unreported', 'receipts_available']),

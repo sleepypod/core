@@ -115,6 +115,35 @@ export function resolveOverrides(overrides: Override[]) {
   return { resolved: deepFreeze(resolved), overrides: structuredClone(overrides), provenance: Object.fromEntries(overrides.map(o => [o.path, 'override' as const])) }
 }
 
+/** Keep the overrides this manifest still accepts, in their original order.
+ * Repeats until stable so a min/max pair that is only valid together survives. */
+export function rebaseOverrides(overrides: Override[]) {
+  const kept = new Set<Override>()
+  const reasons = new Map<Override, string>()
+  let pending = overrides
+  for (let progress = true; progress && pending.length > 0;) {
+    progress = false
+    const next: Override[] = []
+    for (const override of pending) {
+      try {
+        resolveOverrides([...kept, override])
+        kept.add(override)
+        progress = true
+      }
+      catch (error) {
+        // The first failure explains it; later passes only see the duplicate.
+        if (!reasons.has(override)) reasons.set(override, error instanceof Error ? error.message : 'Invalid override')
+        next.push(override)
+      }
+    }
+    pending = next
+  }
+  return {
+    kept: overrides.filter(override => kept.has(override)),
+    dropped: pending.map(override => ({ path: override.path, reason: reasons.get(override) ?? 'Invalid override' })),
+  }
+}
+
 /** Removing a path restores inheritance; null is never a removal sentinel. */
 export function removeOverride(overrides: Override[], path: string): Override[] {
   return overrides.filter(override => override.path !== path)

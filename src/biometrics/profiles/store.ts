@@ -5,7 +5,7 @@ import { z } from 'zod'
 import * as schema from '@/src/db/schema'
 import { biometricActivationEvents as events, biometricConfigOutbox as outbox, biometricProfileBindings as bindings, biometricProfileRevisions as revisions } from '@/src/db/schema'
 import { stageClassifierSchema } from '@/src/lib/sleep-stage-rules'
-import { biometricManifest, defaultConfig, legacyStageOverrides, manifestHash, resolveConfig, validateConfig, type Override } from '../algorithms/registry'
+import { biometricManifest, defaultConfig, legacyStageOverrides, manifestHash, rebaseOverrides, resolveConfig, validateConfig, type Override } from '../algorithms/registry'
 import { configHash } from '../algorithms/canonical'
 
 const sideSchema = z.enum(['left', 'right'])
@@ -23,6 +23,9 @@ export const revisionInput = z.object({
 type Side = z.infer<typeof sideSchema>
 type ConfigDB = BetterSQLite3Database<typeof schema>
 type Revision = typeof revisions.$inferSelect
+
+/** Marks revisions this build derived from a profile pinned to another engine. */
+export const REBASE_REQUESTER = 'engine-rebase'
 
 /**
  * Configuration-only repository. No biometrics DB, numerical work or hardware
@@ -105,17 +108,58 @@ export class ProfileStore {
       ?? { side, generation: 0, desiredRevisionId: null, previousRevisionId: null, updatedAtMs: 0 }
   }
 
+  /** Rebases always start from the authored revision, so an override a later
+   * engine accepts again comes back instead of staying dropped. */
+  private rebaseSource(revision: Revision) {
+    return revision.origin === 'migration' && revision.requester === REBASE_REQUESTER && revision.parentRevisionId
+      ? this.getRevision(revision.parentRevisionId)
+      : revision
+  }
+
+  /** Paths of the authored revision that a rebased revision left out. */
+  private rebaseOf(revision: Revision) {
+    const source = this.rebaseSource(revision)
+    if (source.id === revision.id) return null
+    const kept = new Set((revision.overrides as Override[]).map(override => override.path))
+    return { sourceRevisionId: source.id, droppedPaths: (source.overrides as Override[]).map(override => override.path).filter(path => !kept.has(path)) }
+  }
+
+  /**
+   * Carry a revision pinned to another engine onto this build, keeping every
+   * override the shipped manifest still accepts. Returns the authored revision
+   * itself when it is valid here again, and null when the pinned revision is
+   * current, belongs to the other side or is corrupt.
+   */
+  rebaseRevision(id: string, side: Side) {
+    const pinned = this.getRevision(id)
+    if (pinned.side !== side || pinned.baseManifestHash === manifestHash) return null
+    const source = this.rebaseSource(pinned)
+    if (source.side !== side) return null
+    if (source.baseManifestHash === manifestHash) {
+      try {
+        return { revision: this.validateRevision(source.id, side).revision, sourceRevisionId: source.id, dropped: [] }
+      }
+      catch {
+        return null
+      }
+    }
+    const { kept, dropped } = rebaseOverrides(source.overrides as Override[])
+    const revision = this.createRevision({ side, parentRevisionId: source.id, overrides: kept, origin: 'migration',
+      requester: REBASE_REQUESTER, idempotencyKey: `engine-rebase:${source.id}:${manifestHash}` })
+    return { revision, sourceRevisionId: source.id, dropped }
+  }
+
   /** Desired state only. Actual runtime state must come from component receipts. */
   effective(side: Side) {
     const binding = this.binding(side)
-    if (!binding.desiredRevisionId) return { binding, resolved: defaultConfig, hash: configHash(defaultConfig), isDefault: true, warning: null }
+    if (!binding.desiredRevisionId) return { binding, resolved: defaultConfig, hash: configHash(defaultConfig), isDefault: true, warning: null, rebase: null }
     try {
       const selected = this.validateRevision(binding.desiredRevisionId, side)
-      return { binding, resolved: selected.resolved, hash: selected.hash, isDefault: false, warning: null }
+      return { binding, resolved: selected.resolved, hash: selected.hash, isDefault: false, warning: null, rebase: this.rebaseOf(selected.revision) }
     }
     catch (error) {
       return { binding, resolved: defaultConfig, hash: configHash(defaultConfig), isDefault: true,
-        warning: error instanceof Error ? error.message : 'PROFILE_INCOMPATIBLE' }
+        warning: error instanceof Error ? error.message : 'PROFILE_INCOMPATIBLE', rebase: null }
     }
   }
 
