@@ -5,12 +5,12 @@ import { z } from 'zod'
 import { extractBundle, verifyBundle } from './bundle'
 import { candidateFileSchema, defaultPythonLocation, fitCandidates, LOCAL_SPLITS, type Candidate, type LocalSplit } from './fit'
 import { DEFAULT_GRID, expandGrid } from './grid'
-import { compareWithPod, parseLocalReport, rankCandidates, rankingMarkdown } from './report'
+import { compareWithPod, parseLocalReport, RANK_KEYS, rankCandidates, rankingMarkdown, type RankKey } from './report'
 import { nightSchema, profileFileSchema, replayArchive } from './replay'
 
 const usage = `Usage:
   verify BUNDLE
-  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--include-holdout] [--save-readings] [--min-coverage 0.75] [--protocol FILE] [--python PATH]
+  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--include-holdout] [--save-readings] [--min-coverage 0.75] [--rank hr|breathing] [--protocol FILE] [--python PATH]
   sweep BUNDLE GRID.json|default OUTPUT_DIR [same options as fit]
   parity OUTPUT_DIR POD_RESULT.json [POD_RESULT.json ...]
   replay --archive DEST/POD_ID --nights YYYY-MM-DD,...|all --side left|right --config PROFILE.json|defaults OUTPUT_DIR [--jobs N] [--export NIGHT=PATH.tar.gz ...] [--timezone IANA] [--compare-stored] [--python PATH]
@@ -108,6 +108,8 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
   if (minimumCoverage !== undefined && !(Number.isFinite(minimumCoverage) && minimumCoverage >= 0 && minimumCoverage <= 1)) {
     throw new Error('--min-coverage is a fraction from 0 to 1, for example 0.75')
   }
+  const rank = (flags.rank ?? 'hr') as RankKey
+  if (!RANK_KEYS.includes(rank)) throw new Error('--rank is hr or breathing')
   await mkdir(outputDirectory, { recursive: true })
   const bundle = await openBundle(bundlePath, outputDirectory)
   const includeHoldout = flags['include-holdout'] === 'true'
@@ -123,7 +125,7 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
     await mkdir(join(outputDirectory, report.candidate.id), { recursive: true })
     await writeFile(join(outputDirectory, report.candidate.id, `${report.split}.json`), `${JSON.stringify(report)}\n`)
   }
-  const ranking = rankCandidates(result.reports, minimumCoverage)
+  const ranking = rankCandidates(result.reports, minimumCoverage, rank)
   await writeFile(join(outputDirectory, 'ranking.json'), `${JSON.stringify(ranking, null, 2)}\n`)
   await writeFile(join(outputDirectory, 'ranking.md'), rankingMarkdown(ranking))
   const totalWallMs = performance.now() - started

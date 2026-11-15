@@ -7,10 +7,12 @@ import { configHash, dataHash } from '@/src/biometrics/algorithms/canonical'
 import { defaultConfig, manifestHash, resolveConfig } from '@/src/biometrics/algorithms/registry'
 import { evaluateBacktest } from '@/src/biometrics/backtest/evaluator'
 import { exportableWaveformDataset, exportNights } from '@/src/biometrics/backtest/tests/fixtures/export'
+import { previewReferenceImport } from '@/src/biometrics/references/normalize'
 import { candidateFileSchema, DEFAULT_PROTOCOL, fitCandidates } from './fit'
 import { runLocalFitCli } from './cli'
 import { DEFAULT_GRID, expandGrid } from './grid'
 import { compareWithPod, parseLocalReport, rankCandidates, rankingMarkdown, summarizeLocalReport } from './report'
+import { remLightSeparation } from './stages'
 
 const pythonBuildHash = 'b'.repeat(64)
 let directory: string
@@ -24,8 +26,17 @@ afterAll(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
-/** Score a candidate with fixed synthetic readings (references are 62 bpm). */
-function localReport(id: string, overrides: Array<{ path: string, value: unknown }>, split: 'tuning' | 'validation' | 'holdout', heartRates: { default: number | Array<number | null>, candidate: number | Array<number | null> }) {
+interface Rates { default: number | Array<number | null>, candidate: number | Array<number | null> }
+/** The fixture plus Watch breathing references of 15/min on readings 0, 2, 4, 6 and 8 of every night. */
+function breathingDataset() {
+  const measurements = previewReferenceImport({ side: 'left', subjectId: 'A', source: 'watch', rows: exportNights.flatMap(night =>
+    Array.from({ length: 5 }, (_, index) => ({ recordKey: `${night.cohortId}-br-${index}`, metric: 'breathing_rate' as const, value: 15, unit: 'breaths/min', timestampMs: night.startMs + index * 120000 }))) }).measurements
+  const snapshot = { ...fixture.snapshot, references: [...fixture.snapshot.references, { importId: 'watch-br', revision: 1, contentHash: 'watch-br', source: 'watch', timePolicy: {}, measurements }] }
+  return { manifest: fixture.manifest, snapshot, contentHash: dataHash({ manifest: fixture.manifest, snapshot }) }
+}
+
+/** Score a candidate with fixed synthetic readings (references are 62 bpm; breathing 15/min when breathing rates are given). */
+function localReport(id: string, overrides: Array<{ path: string, value: unknown }>, split: 'tuning' | 'validation' | 'holdout', heartRates: Rates, breathingRates?: Rates) {
   const defaults = { manifestHash, resolvedHash: configHash(defaultConfig), resolved: defaultConfig }
   const candidate = resolveConfig(overrides as never)
   const configs = [{ label: 'default' as const, revisionId: null, ...defaults },
@@ -35,19 +46,22 @@ function localReport(id: string, overrides: Array<{ path: string, value: unknown
   const outputs = [...new Map(configs.map(config => [config.resolvedHash, config])).values()].map((config) => {
     const chosen = config.label === 'default' ? heartRates.default : heartRates.candidate
     const rate = (index: number) => Array.isArray(chosen) ? chosen[index] : chosen
+    const breathing = breathingRates ? (config.label === 'default' ? breathingRates.default : breathingRates.candidate) : 14
+    const breath = (index: number) => Array.isArray(breathing) ? breathing[index] : breathing
     const readings = Array.from({ length: 10 }, (_, index) => ({ side: 'left' as const, timestampMs: night.startMs + index * 60000, heartRate: rate(index), hrvIndex: 30,
-      hrvMetric: 'window_ibi_variability_v1' as const, breathingRate: 14, qualityScore: 1, flags: null, hrRaw: rate(index), sourceSide: 'left' as const,
+      hrvMetric: 'window_ibi_variability_v1' as const, breathingRate: breath(index), qualityScore: 1, flags: null, hrRaw: rate(index), sourceSide: 'left' as const,
       configHash: config.resolvedHash, limitations: [] }))
     return { cohortId: night.cohortId, configHash: config.resolvedHash, readings, run: { version: 'retained-waveform-run-v1' as const, build_hash: pythonBuildHash,
       decoded_records: 10, raw_records: 10, counts: { records: 10, accepted_frames: 10, empty_channel_frames: 0, pump_gated_frames: 0, preroll_outputs: 0, scored_outputs: readings.length },
       limitations: [], config_hashes: { left: config.resolvedHash, right: defaults.resolvedHash }, artifact_hashes: [artifact] } }
   })
   const protocol = { ...DEFAULT_PROTOCOL }
+  const dataset = breathingRates ? breathingDataset() : { manifest: fixture.manifest, snapshot: fixture.snapshot, contentHash: fixture.contentHash }
   const job = { version: 'backtest-job-v1' as const, experimentId: '00000000-0000-4000-8000-000000000000', idempotencyKey: `local:${id}:${split}`, evaluatorBuildHash: 'e'.repeat(64),
-    split, configs, waveform: { pythonBuildHash, otherSide: defaults }, datasetId: fixture.id, datasetHash: fixture.contentHash,
+    split, configs, waveform: { pythonBuildHash, otherSide: defaults }, datasetId: fixture.id, datasetHash: dataset.contentHash,
     protocol, protocolHash: configHash(protocol), holdoutUse: 0, evidence: 'descriptive_only' as const }
-  const report = evaluateBacktest({ job, dataset: { manifest: fixture.manifest, snapshot: fixture.snapshot }, waveform: { hash: dataHash(outputs), outputs } })
-  return summarizeLocalReport({ candidate: { id, overrides, resolvedHash: candidate.hash }, split, report, dataset: { id: fixture.id, contentHash: fixture.contentHash },
+  const report = evaluateBacktest({ job, dataset: { manifest: dataset.manifest, snapshot: dataset.snapshot }, waveform: { hash: dataHash(outputs), outputs } })
+  return summarizeLocalReport({ candidate: { id, overrides, resolvedHash: candidate.hash }, split, report, dataset: { id: fixture.id, contentHash: dataset.contentHash },
     build: { pythonBuildHash, pythonSourcesHash: 'c'.repeat(64), evaluatorBuildHash: 'e'.repeat(64) }, protocol })
 }
 
@@ -126,6 +140,49 @@ describe('local fit reports', () => {
     expect(rankingMarkdown(ranking)).toContain('| 1 | tol10 | 1.000 | -1.000 | 100% | n/a | n/a | n/a | 0.000 | -2.000 | 100% |')
   })
 
+  it('ranks by tuning breathing error with the breathing coverage floor, leaving HR ranking unchanged', () => {
+    const lower = (value: number) => [{ path: 'breathing_rate.intervalLowerRatio', value }]
+    // Watch breathing is 15/min on readings 0, 2, 4, 6 and 8; defaults read 14 throughout.
+    const sparse = [15, 14, null, 14, null, 14, null, 14, null, 14]
+    const reports = [
+      localReport('defaults', [], 'tuning', { default: 60, candidate: 60 }, { default: 14, candidate: 14 }),
+      localReport('closer', lower(0.4), 'tuning', { default: 60, candidate: 61 }, { default: 14, candidate: 15.5 }),
+      localReport('abstains', lower(0.45), 'tuning', { default: 60, candidate: 61.5 }, { default: 14, candidate: sparse }),
+    ]
+    const ranking = rankCandidates(reports, 0.75, 'breathing')
+    expect(ranking.rankedBy).toBe('tuning.breathing_rate.ownSupport_equalNightMeanMae_with_reference_coverage_floor')
+    const rows = Object.fromEntries(ranking.rows.map(row => [row.id, row]))
+    expect(rows.closer.breathingRate.tuning).toMatchObject({ ownMae: 0.5, coverage: 1 })
+    expect(rows.abstains.breathingRate.tuning).toMatchObject({ ownMae: 0, coverage: 0.2 })
+    expect(ranking.rows.map(row => row.id)).toEqual(['closer', 'defaults', 'abstains'])
+    expect(rows.closer).toHaveProperty('breathingStages', { tuning: null, validation: null })
+    const markdown = rankingMarkdown(ranking)
+    expect(markdown).toContain('Ranked by tuning breathing-rate error')
+    expect(markdown).toContain('| 1 | closer | 0.500 | -0.500 | 100% | n/a | n/a | n/a | no_paired_reference | no_paired_reference | -1.000 |')
+    // The default key still ranks by HR, and its rows carry no breathing-stage field.
+    const byHeartRate = rankCandidates(reports)
+    expect(byHeartRate.rankedBy).toBe('tuning.heart_rate.ownSupport_equalNightMeanMae_with_reference_coverage_floor')
+    expect(byHeartRate.rows.map(row => row.id)).toEqual(['abstains', 'closer', 'defaults'])
+    expect(byHeartRate.rows[0]).not.toHaveProperty('breathingStages')
+    expect(rankCandidates(reports, 0.1, 'breathing').rows[0].id).toBe('abstains')
+  })
+
+  it('shows the REM-light separation next to breathing error when Watch stages are available', () => {
+    const report = localReport('closer', [{ path: 'breathing_rate.intervalLowerRatio', value: 0.4 }], 'tuning', { default: 60, candidate: 60 }, { default: 14, candidate: 15 })
+    const stages = [{ startMs: 0, endMs: 5, stage: 'rem' }, { startMs: 5, endMs: 10, stage: 'light' }]
+    const at = (rates: number[]) => rates.map((value, timestampMs) => ({ timestampMs, value }))
+    const breathingStages = { pod: remLightSeparation([{ stages, values: at([16, 14, 16, 14, 15, 14, 12, 14, 12, 13]) }]),
+      watch: remLightSeparation([{ stages, values: at([17, 15, 17, 15, 16, 12, 10, 12, 10, 11]) }]) }
+    const ranking = rankCandidates([{ ...report, breathingStages }], 0.75, 'breathing')
+    expect(ranking.rows[0]).toMatchObject({ breathingStages: { tuning: { pod: { status: 'scored', standardized: 2 }, watch: { status: 'scored', standardized: 5 } }, validation: null } })
+    expect(rankingMarkdown(ranking)).toContain('| 2.00 | 5.00 |')
+  })
+
+  it('rejects an unknown --rank before replaying anything', async () => {
+    writeFileSync(join(directory, 'one.json'), JSON.stringify([{ id: 'x', overrides: [] }]))
+    await expect(runLocalFitCli(['fit', directory, join(directory, 'one.json'), join(directory, 'rank-out'), '--rank', 'hrv'])).rejects.toThrow('--rank is hr or breathing')
+  })
+
   it('compares local default HR error with pod results within 0.1 bpm', () => {
     const defaults = [localReport('defaults', [], 'tuning', { default: 60, candidate: 60 }), localReport('defaults', [], 'validation', { default: 60, candidate: 60 })]
     const pod = (split: string, mae: number) => ({ report: { split, datasetHash: fixture.contentHash, numericNightSummary: [{ metric: 'heart_rate', baseline: 'default', candidate: 'current',
@@ -137,6 +194,55 @@ describe('local fit reports', () => {
     expect(compareWithPod(defaults, [pod('tuning', 2.2)]).allWithinTolerance).toBe(false)
     expect(() => compareWithPod(defaults, [pod('holdout', 2)])).toThrow('holdout results are not compared')
     expect(() => compareWithPod(defaults, [{ report: { ...pod('tuning', 2).report, datasetHash: 'f'.repeat(64) } }])).toThrow('different dataset')
+  })
+})
+
+describe('local fit breathing stages', () => {
+  it('scores REM-light separation on each candidate\'s readings and on the Watch\'s, by Watch stage', async () => {
+    const night = exportNights[0]
+    const minute = (index: number) => night.startMs + index * 60000
+    // Watch: REM 15 ± 1, light 13 ± 1 (2 pooled SD apart). Defaults replay the same; the candidate exaggerates it.
+    const watch = [16, 14, 16, 14, 15, 14, 12, 14, 12, 13]
+    const measurements = previewReferenceImport({ side: 'left', subjectId: 'A', source: 'watch', rows: [
+      { recordKey: 'rem', metric: 'sleep_stages', value: 'rem', unit: 'stage', startMs: minute(0), endMs: minute(5) },
+      { recordKey: 'light', metric: 'sleep_stages', value: 'light', unit: 'stage', startMs: minute(5), endMs: minute(10) },
+      ...watch.map((value, index) => ({ recordKey: `br-${index}`, metric: 'breathing_rate' as const, value, unit: 'breaths/min', timestampMs: minute(index) })),
+    ] }).measurements
+    const snapshot = { ...fixture.snapshot, references: [...fixture.snapshot.references, { importId: 'watch', revision: 1, contentHash: 'watch', source: 'watch', timePolicy: {}, measurements }] }
+    const contentHash = dataHash({ manifest: fixture.manifest, snapshot })
+    const candidate = resolveConfig([{ path: 'breathing_rate.intervalLowerRatio', value: 0.4 }])
+    const identity = { version: 'waveform-python-build-v1', sources: { 'common/biometrics/replay_worker.py': 'a'.repeat(64) },
+      dependencies: { numpy: { version: '1', record_sha256: 'a'.repeat(64), wheel_sha256: 'a'.repeat(64) }, scipy: { version: '1', record_sha256: 'a'.repeat(64), wheel_sha256: 'a'.repeat(64) } },
+      runtime: { implementation: 'cpython', version: '3.10', cache_tag: null, soabi: null, machine: 'test', system: 'test', byteorder: 'little' } }
+    const build = { hash: configHash(identity), identity }
+    // A stand-in worker: the real one needs RAW waveforms; this pins only the readings' shape and hashes.
+    const worker = join(directory, 'stand-in-python')
+    writeFileSync(worker, `#!${process.execPath}
+if (process.argv.includes('--describe-build')) { process.stdout.write(${JSON.stringify(JSON.stringify(build))} + '\\n'); process.exit(0) }
+let text = ''
+process.stdin.on('data', chunk => text += chunk).on('end', () => {
+  const work = JSON.parse(text), input = work.input
+  const exaggerated = work.configs.left.breathing_rate.intervalLowerRatio === 0.4
+  const hash = exaggerated ? ${JSON.stringify(candidate.hash)} : ${JSON.stringify(configHash(defaultConfig))}
+  const rates = exaggerated ? [17, 15, 17, 15, 16, 12, 10, 12, 10, 11] : ${JSON.stringify(watch)}
+  const readings = rates.map((breathingRate, index) => ({ side: 'left', timestampMs: input.score_start_ms + index * 60000, heartRate: 60, hrvIndex: 30,
+    hrvMetric: 'window_ibi_variability_v1', breathingRate, qualityScore: 1, flags: null, hrRaw: 60, sourceSide: 'left', configHash: hash, limitations: [] }))
+  for (const reading of readings) process.stdout.write(JSON.stringify({ type: 'reading', reading }) + '\\n')
+  process.stdout.write(JSON.stringify({ type: 'result', result: { version: 'retained-waveform-run-v1', build_hash: ${JSON.stringify(build.hash)}, decoded_records: 1, raw_records: 1,
+    counts: { records: 1, accepted_frames: 1, empty_channel_frames: 0, pump_gated_frames: 0, preroll_outputs: 0, scored_outputs: readings.length }, limitations: [],
+    config_hashes: { left: hash, right: ${JSON.stringify(configHash(defaultConfig))} }, artifact_hashes: input.artifacts.map(row => row.artifact.sha256) } }) + '\\n')
+})
+`, { mode: 0o700 })
+    const bundle = { index: { dataset: { id: fixture.id, contentHash } }, manifest: fixture.manifest, snapshot, rawDirectory: fixture.rawDirectory }
+    const result = await fitCandidates({ bundle: bundle as never, candidates: [{ id: 'brlo0.4', overrides: [{ path: 'breathing_rate.intervalLowerRatio', value: 0.4 }] }],
+      outputDirectory: join(directory, 'stages-out'), splits: ['tuning'], jobs: 1, python: { pythonPath: worker, modulesPath: directory, script: worker } })
+    const stages = Object.fromEntries(result.reports.map(report => [report.candidate.id, report.breathingStages]))
+    expect(stages.defaults).toMatchObject({ pod: { status: 'scored', nights: 1, standardized: 2 }, watch: { status: 'scored', standardized: 2 } })
+    expect(stages['brlo0.4']).toMatchObject({ pod: { status: 'scored', standardized: 5 }, watch: { status: 'scored', standardized: 2 } })
+    const ranking = rankCandidates(result.reports, 0.75, 'breathing')
+    expect(ranking.rows.map(row => row.id)).toEqual(['defaults', 'brlo0.4'])
+    expect(rankingMarkdown(ranking)).toContain('| 2 | brlo0.4 |')
+    expect(rankingMarkdown(ranking)).toContain('| 5.00 | 2.00 |')
   })
 })
 
