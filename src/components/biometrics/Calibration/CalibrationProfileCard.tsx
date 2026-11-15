@@ -165,11 +165,13 @@ export function ProfileCard({ saved, previous, previousIsDefaults, draft, onDraf
           ? (
               <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-fg-2">
                 <ActorBadge kind={actor.kind} />
-                {actor.kind === 'agent' ? `${actor.name} · ${savedAgo}` : savedAgo}
+                {savedAgo}
               </span>
             )
           : <span className="whitespace-nowrap text-xs text-fg-2">{t`System defaults`}</span>}
       />
+      {/* An agent's name is its request note, which can be long: give it its own wrapping line so it never squeezes the title. */}
+      {actor?.kind === 'agent' && savedAgo && <p className="text-xs leading-[1.5] text-fg-2 text-pretty break-words">{actor.name}</p>}
 
       <Eyebrow>{t`HEART RATE`}</Eyebrow>
       {row(
