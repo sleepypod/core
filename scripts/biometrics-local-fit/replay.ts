@@ -10,7 +10,7 @@ import { runRawInspectionChild } from '@/src/biometrics/backtest/raw-inspection-
 import { runWaveformChild } from '@/src/biometrics/backtest/waveform-child'
 import { retainedWaveformInputSchema } from '@/src/biometrics/backtest/waveform-contracts'
 import { archivedInspection, archiveNights, archiveRawFiles, nightGenerations, nightWindow, openArchiveDatabase, rawCandidates,
-  selectArtifacts, storedParity, storedVitals, type RawInspection, type RetainedInput, type Side } from './archive'
+  selectArtifacts, storedParity, storedVitals, warmRawSpans, type RawInspection, type RetainedInput, type Side } from './archive'
 import { extractExportRaw } from './export-tar'
 import { candidateSchema, defaultPythonLocation, describeLocalBuild, runPool, type PythonLocation } from './fit'
 
@@ -24,10 +24,18 @@ const overridesSchema = candidateSchema.shape.overrides
 export const profileFileSchema = z.union([overridesSchema, candidateSchema.transform(row => row.overrides),
   z.array(candidateSchema).length(1).transform(rows => rows[0].overrides)])
 
-/** Only a night that ran one unchanged runtime-config generation can be held to stored-row parity. */
-export function parityGate(share: number | null, generations: number): ParityGate {
+/** Only a night whose stored rows all came from the replayed config can be held
+ * to stored-row parity. The config hash each row's processing run recorded
+ * decides: a receipt can say a generation applied while the processor ran
+ * defaults. Rows without provenance fall back to one receipted generation. */
+export function parityGate(share: number | null, provenance: { storedConfigHashes: Array<{ configHash: string | null }>, generations: number, configHash: string }): ParityGate {
   if (share === null) return 'no_heart_rate_to_compare'
-  if (generations !== 1) return 'not_gated_mixed_generations'
+  const hashes = provenance.storedConfigHashes.map(row => row.configHash)
+  if (hashes.some(hash => hash !== null)) {
+    if (hashes.length > 1) return 'not_gated_mixed_configs'
+    if (hashes[0] !== provenance.configHash) return 'not_gated_different_config'
+  }
+  else if (provenance.generations !== 1) return 'not_gated_mixed_generations'
   return share >= PARITY_MINIMUM_SHARE ? 'pass' : 'fail'
 }
 
@@ -75,12 +83,12 @@ export interface ReplayOptions {
   onProgress?: (line: string) => void
 }
 
-type ParityGate = 'pass' | 'fail' | 'not_gated_mixed_generations' | 'no_heart_rate_to_compare'
+type ParityGate = 'pass' | 'fail' | 'not_gated_mixed_configs' | 'not_gated_different_config' | 'not_gated_mixed_generations' | 'no_heart_rate_to_compare'
 interface NightResult {
   readings: number
   wallMs: number
   run: { counts: Record<string, number>, limitations: string[] }
-  parity?: ReturnType<typeof storedParity> & { gate: ParityGate }
+  parity?: ReturnType<typeof storedParity> & { comparedSpans: Array<{ startMs: number, endMs: number }>, gate: ParityGate }
 }
 
 interface PlannedNight {
@@ -199,9 +207,11 @@ export async function replayArchive(options: ReplayOptions) {
         run: { counts: output.run.counts, limitations: output.run.limitations } }
       if (options.compareStored) {
         const stored = storedVitals(db, options.side, night.input.score_start_ms, night.input.score_end_ms)
+        const spans = warmRawSpans(night.input)
         const parity = storedParity(stored.vitals, output.readings.filter(row => row.side === options.side)
-          .map(row => ({ timestampMs: row.timestampMs, heartRate: row.heartRate })), PARITY_TOLERANCE_BPM)
-        result.parity = { ...parity, gate: parityGate(parity.share, nightGenerations(db, options.side, night.input.score_start_ms, night.input.score_end_ms).length) }
+          .map(row => ({ timestampMs: row.timestampMs, heartRate: row.heartRate })), PARITY_TOLERANCE_BPM, spans)
+        result.parity = { ...parity, comparedSpans: spans, gate: parityGate(parity.share, { storedConfigHashes: stored.configHashes, configHash,
+          generations: nightGenerations(db, options.side, night.input.score_start_ms, night.input.score_end_ms).length }) }
       }
       results.set(night.night, result)
       progress(`[${++done}/${nights.length}] ${night.night} ${(result.wallMs / 1000).toFixed(1)}s`)

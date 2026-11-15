@@ -147,8 +147,11 @@ Outputs:
   reading count, worker counts and limitations, and wall time.
 
 `--compare-stored` adds per-night parity against the archive's stored `vitals`.
-Each stored minute is matched to the nearest replayed reading within 30 s. It
-reports:
+It compares only `comparedSpans`: stretches where replay had RAW (gaps of at
+most 60 s) and had warmed up for the 5-minute pre-roll. Rows elsewhere are
+counted in `outsideRawRows`. An export that covers only one of the night's
+sessions is the usual cause. Each stored minute is matched to the nearest
+replayed reading within 30 s. It reports:
 
 - `share`: minutes where both have a heart rate within 0.1 bpm. A minute where
   only one side has a heart rate counts against it.
@@ -157,15 +160,23 @@ reports:
 - `medianAbsDifference`, `meanAbsDifference` and `maxAbsDifference`.
 - `heartRateCoverage`: replayed heart-rate minutes per stored heart-rate minute.
 
-A night is gated only when one runtime-config generation was in effect all night.
-The run exits 2 when a gated night's `share` is below 95%.
+A night is gated only when every stored row's processing run recorded the
+replayed config hash (`storedConfigHashes`). Receipts can say a generation
+applied while the processor ran defaults. Rows without provenance fall back to
+one receipted generation. The run exits 2 when a gated night's `share` is
+below 95%.
 
 Per-minute agreement with live rows is not pod-identical replay. Live writes
 every 60–63 s on the arrival clock, and replay writes every 60 s on event time,
-so a matched minute averages a window shifted by up to 30 s. Live also keeps warm
-state and sees pump context that replay doesn't. On a real night replayed with
-defaults (its stored profile unconfirmed), bias was 0.00 bpm, but only 12% of minutes agreed within
-0.1 bpm. Of the minutes whose windows ended within 3 s of each other, 46% did.
-Exact parity is what `parity` checks: local replay against the pod's own replay
-backtest. Use `meanDifference`, `shareWithinOneBpm` and `heartRateCoverage` to
-judge whether a replay reproduces what the pod stored.
+so a matched minute averages a window shifted by up to 30 s. On a real night
+whose rows all ran defaults, replayed with defaults:
+
+| Replay and live window ends | Median \|Δ\| | Within 0.1 bpm | Within 1 bpm |
+| --- | ---: | ---: | ---: |
+| within 3 s of each other | 0.00 bpm | 54% | 97% |
+| 15–30 s apart | 0.55 bpm | 5% | 71% |
+| all minutes | 0.33 bpm | 13% | 75% |
+
+Bias was −0.11 bpm. Exact parity is what `parity` checks: local replay against
+the pod's own replay backtest. Use `meanDifference`, `shareWithinOneBpm` and
+`heartRateCoverage` to judge whether a replay reproduces what the pod stored.

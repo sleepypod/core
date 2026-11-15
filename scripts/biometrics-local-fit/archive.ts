@@ -185,14 +185,30 @@ export function storedVitals(db: Database.Database, side: Side, startMs: number,
     configHashes: [...configs].map(([configHash, rows]) => ({ configHash, rows })).sort((a, b) => b.rows - a.rows) }
 }
 
-/** Per stored minute: the nearest replayed reading within MATCH_TOLERANCE_MS.
+/** Where replay had frames and had warmed up: RAW runs with gaps of at most
+ * gapMs, each from PREROLL_MS after its first frame (or after the retained
+ * start). Stored rows elsewhere have nothing to be compared with. */
+export function warmRawSpans(input: RetainedInput, gapMs = 60000) {
+  const runs: Array<{ startMs: number, endMs: number }> = []
+  for (const source of input.artifacts) {
+    const first = Math.max(source.first_event_ms, input.retained_start_ms), last = source.last_event_ms + 1
+    const previous = runs.at(-1)
+    if (previous && first - previous.endMs <= gapMs) previous.endMs = Math.max(previous.endMs, last)
+    else runs.push({ startMs: first, endMs: last })
+  }
+  return runs.map(run => ({ startMs: run.startMs + PREROLL_MS, endMs: run.endMs })).filter(run => run.endMs > run.startMs)
+}
+
+/** Per stored minute inside spans: the nearest replayed reading within MATCH_TOLERANCE_MS.
  * A minute counts when either side has a heart rate, and matches only when both
  * do and differ by at most toleranceBpm, so abstaining is never agreement.
  * Live writes land every 60-63 s on the arrival clock and replay every 60 s on
  * event time, so matched minutes average different samples; bias, the median
  * and the 1 bpm share separate that scatter from a real shift. */
-export function storedParity(stored: StoredVital[], replayed: StoredVital[], toleranceBpm = 0.1) {
-  const readings = [...replayed].sort((a, b) => a.timestampMs - b.timestampMs)
+export function storedParity(allStored: StoredVital[], replayed: StoredVital[], toleranceBpm = 0.1, spans?: Array<{ startMs: number, endMs: number }>) {
+  const inside = (row: StoredVital) => !spans || spans.some(span => row.timestampMs >= span.startMs && row.timestampMs < span.endMs)
+  const stored = allStored.filter(inside)
+  const readings = replayed.filter(inside).sort((a, b) => a.timestampMs - b.timestampMs)
   let cursor = 0, compared = 0, within = 0, withinOne = 0, unmatched = 0
   const differences: number[] = []
   const used = new Set<number>()
@@ -213,7 +229,7 @@ export function storedParity(stored: StoredVital[], replayed: StoredVital[], tol
   }
   const absolute = differences.map(Math.abs).sort((a, b) => a - b)
   const storedRated = stored.filter(row => row.heartRate !== null).length
-  return { toleranceBpm, storedRows: stored.length, comparedMinutes: compared, withinMinutes: within, bothHeartRateMinutes: differences.length,
+  return { toleranceBpm, storedRows: stored.length, outsideRawRows: allStored.length - stored.length, comparedMinutes: compared, withinMinutes: within, bothHeartRateMinutes: differences.length,
     storedWithoutReplay: unmatched, replayedWithoutStored: readings.filter((row, index) => !used.has(index) && row.heartRate !== null).length,
     share: compared ? within / compared : null, shareWithinOneBpm: compared ? withinOne / compared : null,
     // Replayed heart-rate minutes per stored heart-rate minute: low when replay lacks context the live side had.

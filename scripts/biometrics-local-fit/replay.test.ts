@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { configHash } from '@/src/biometrics/algorithms/canonical'
 import { defaultConfig, manifestHash, resolveConfig } from '@/src/biometrics/algorithms/registry'
 import { openArchiveDatabase as createArchiveDatabase } from '../biometrics-archive/merge'
-import { archiveNights, nightGenerations, nightWindow, PREROLL_MS, rawCandidates, selectArtifacts, storedParity, type RawInspection } from './archive'
+import { archiveNights, nightGenerations, nightWindow, PREROLL_MS, rawCandidates, selectArtifacts, storedParity, warmRawSpans, type RawInspection } from './archive'
 import { runLocalFitCli } from './cli'
 import { extractExportRaw } from './export-tar'
 import { parityGate, profileFileSchema, readingsFileName } from './replay'
@@ -203,11 +203,33 @@ describe('stored-row parity', () => {
     expect(storedParity(rows([60, 60, 60, 60]), rows([60]))).toMatchObject({ heartRateCoverage: 0.25, storedWithoutReplay: 3 })
   })
 
-  it('gates only nights that ran one runtime-config generation', () => {
-    expect(parityGate(0.96, 1)).toBe('pass')
-    expect(parityGate(0.94, 1)).toBe('fail')
-    expect(parityGate(0.5, 2)).toBe('not_gated_mixed_generations')
-    expect(parityGate(null, 1)).toBe('no_heart_rate_to_compare')
+  it('gates only nights whose stored rows all came from the replayed config', () => {
+    const hash = 'a'.repeat(64), other = 'b'.repeat(64)
+    const gate = (share: number | null, configHashes: Array<string | null>, generations = 1) =>
+      parityGate(share, { storedConfigHashes: configHashes.map(configHash => ({ configHash })), generations, configHash: hash })
+    expect(gate(0.96, [hash])).toBe('pass')
+    expect(gate(0.94, [hash])).toBe('fail')
+    // Row provenance outranks receipts: two receipted generations but every row ran this config.
+    expect(gate(0.96, [hash], 2)).toBe('pass')
+    expect(gate(0.96, [other])).toBe('not_gated_different_config')
+    expect(gate(0.96, [hash, other])).toBe('not_gated_mixed_configs')
+    expect(gate(0.96, [hash, null])).toBe('not_gated_mixed_configs')
+    // Legacy rows without provenance fall back to the receipts.
+    expect(gate(0.96, [null])).toBe('pass')
+    expect(gate(0.5, [null], 2)).toBe('not_gated_mixed_generations')
+    expect(gate(null, [hash])).toBe('no_heart_rate_to_compare')
+  })
+
+  it('compares only where replay had RAW and had warmed up', () => {
+    const artifact = (first: number, last: number) => ({ artifact: { name: `${'a'.repeat(64)}.RAW.gz`, sha256: 'a'.repeat(64), compressed_bytes: 1, expanded_bytes: 1 },
+      first_event_ms: T0 + first * MINUTE, last_event_ms: T0 + last * MINUTE - 1000 })
+    const input = { version: 'retained-waveform-input-v1' as const, retained_start_ms: T0 - 5 * MINUTE, score_start_ms: T0, score_end_ms: T0 + 120 * MINUTE,
+      artifacts: [artifact(-20, 15), artifact(15, 30), artifact(60, 90)], contexts: [] }
+    // The first run starts at the retained start, so it is warm at score start; the second starts cold at 60 min.
+    expect(warmRawSpans(input)).toEqual([{ startMs: T0, endMs: T0 + 30 * MINUTE - 999 }, { startMs: T0 + 65 * MINUTE, endMs: T0 + 90 * MINUTE - 999 }])
+    const stored = Array.from({ length: 120 }, (_, index) => ({ timestampMs: T0 + index * MINUTE, heartRate: 60 }))
+    const parity = storedParity(stored, stored, 0.1, warmRawSpans(input))
+    expect(parity).toMatchObject({ storedRows: 30 + 25, outsideRawRows: 65, share: 1, heartRateCoverage: 1 })
   })
 })
 
@@ -243,7 +265,8 @@ async function replay(args: string[]) {
 const python = resolve('modules/piezo-processor/.venv/bin/python')
 // Needs the locked piezo-processor venv, which Stryker's sandbox doesn't carry.
 describe.skipIf(process.env.STRYKER_MUTATOR_WORKER !== undefined || !existsSync(python))('replay through the shipped worker', () => {
-  /** Two synthetic RAW files of a 1.2 Hz waveform, in the cbor framing the pod writes. */
+  /** Two synthetic RAW files of a 1.2 Hz waveform, in the cbor framing the pod writes: ten minutes, so the
+   * in-bed window from minute 6 to 9 has a full pre-roll of frames. */
   function synthesizeRaw(root: string, startMs: number) {
     mkdirSync(root, { recursive: true })
     execFileSync(python, ['-B', '-c', `
@@ -253,16 +276,16 @@ import cbor2
 import numpy as np
 root=Path(sys.argv[1]); start=int(sys.argv[2])
 records=[{'type':'frzHealth','ts':start/1000,'left':{'pumpRpm':0},'right':{'pumpRpm':0}}]
-for second in range(240):
+for second in range(600):
     samples=(np.sin((np.arange(500)+second*500)/500*2*np.pi*1.2)*1000000).astype('<i4').tobytes()
     records.append({'type':'piezo-dual','ts':start/1000+second,'left1':samples,'right1':bytes(2000)})
-for index, group in enumerate([records[:121],records[121:]]):
+for index, group in enumerate([records[:301],records[301:]]):
     payload=b''.join(cbor2.dumps({'seq':number,'data':cbor2.dumps(record)}) for number,record in enumerate(group))
     (root/(str(index)+'.RAW.gz')).write_bytes(gzip.compress(payload,mtime=0))
 `, root, String(startMs)], { env: { PYTHONPATH: resolve('modules'), LANG: 'C.UTF-8', TZ: 'UTC', NODE_ENV: 'test' }, timeout: 20000 })
     return ['0.RAW.gz', '1.RAW.gz'].map((name, index) => {
       const bytes = readFileSync(join(root, name))
-      return { name: `05D0${index}.RAW.gz`, bytes, sha256: createHash('sha256').update(bytes).digest('hex'), mtimeMs: startMs + (index + 1) * 120000 }
+      return { name: `05D0${index}.RAW.gz`, bytes, sha256: createHash('sha256').update(bytes).digest('hex'), mtimeMs: startMs + (index + 1) * 300000 }
     })
   }
 
@@ -296,7 +319,7 @@ for index, group in enumerate([records[:121],records[121:]]):
       Buffer.alloc((512 - (file.bytes.length % 512)) % 512)]), Buffer.alloc(1024)])))
     for (const [id, start] of [[1, night], [2, exportNight]]) {
       archiveDb.prepare(`INSERT INTO sleep_records (id, side, entered_bed_at, left_bed_at, sleep_duration_seconds, times_exited_bed, present_intervals, created_at)
-        VALUES (?, 'left', ?, ?, 180, 0, ?, 0)`).run(id, (start + 60000) / 1000, (start + 240000) / 1000, JSON.stringify([[(start + 60000) / 1000, (start + 240000) / 1000]]))
+        VALUES (?, 'left', ?, ?, 180, 0, ?, 0)`).run(id, (start + 360000) / 1000, (start + 540000) / 1000, JSON.stringify([[(start + 360000) / 1000, (start + 540000) / 1000]]))
     }
     archiveDb.close()
     const output = join(directory, 'out')
@@ -313,7 +336,7 @@ for index, group in enumerate([records[:121],records[121:]]):
       pythonBuild: { hash: expect.stringMatching(/^[a-f0-9]{64}$/) }, skipped: [] })
     expect(manifest.nights.map(row => [row.night, row.source, row.raw.length])).toEqual([['2026-10-19', 'archive', 2], ['2026-10-20', 'export', 2]])
     expect(manifest.nights[1].raw.map(row => [row.name, row.sha256])).toEqual(exported.map(file => [file.name, file.sha256]))
-    expect(manifest.nights[0]).toMatchObject({ sessionIds: [1], scoreStartMs: night + 60000, scoreEndMs: night + 240000, retainedStartMs: night + 60000 - PREROLL_MS,
+    expect(manifest.nights[0]).toMatchObject({ sessionIds: [1], scoreStartMs: night + 360000, scoreEndMs: night + 540000, retainedStartMs: night + 360000 - PREROLL_MS,
       contexts: 1, generations: [{ generation: null, matchesReplayedConfig: false }], readingsFile: `readings/2026-10-19-${hash.slice(0, 12)}.json` })
     expect(manifest).not.toHaveProperty('parity')
     const saved = JSON.parse(readFileSync(join(output, manifest.nights[0].readingsFile), 'utf8'))
@@ -331,7 +354,8 @@ for index, group in enumerate([records[:121],records[121:]]):
     for (const row of rated) insert.run(Math.round(row.timestampMs / 1000), row.heartRate)
     store.close()
     const checked = await replay([...args.slice(0, 4), '2026-10-19', ...args.slice(5, 11), '--compare-stored', output])
-    expect(checked.nights[0].parity).toMatchObject({ gate: 'pass', share: 1, comparedMinutes: rated.length })
+    expect(checked.nights[0].parity).toMatchObject({ gate: 'pass', share: 1, comparedMinutes: rated.length, outsideRawRows: 0,
+      comparedSpans: [{ startMs: night + 360000, endMs: night + 599001 }] })
     expect(checked.parity).toEqual({ toleranceBpm: 0.1, minimumShare: 0.95, gatedNights: 1, failedNights: [], passed: true })
     const changed = createArchiveDatabase(join(archive, 'biometrics.db'))
     changed.prepare('UPDATE vitals SET heart_rate = heart_rate + 1').run()
