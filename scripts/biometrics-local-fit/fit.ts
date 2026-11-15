@@ -70,7 +70,7 @@ export async function prepareWorkerSlots(rawDirectory: string, workDirectory: st
 }
 
 /** Run items across slots; the first failure aborts every replay still running. */
-async function runPool<T>(items: T[], slots: string[], work: (item: T, slot: string, signal: AbortSignal) => Promise<void>) {
+export async function runPool<T>(items: T[], slots: string[], work: (item: T, slot: string, signal: AbortSignal) => Promise<void>) {
   let next = 0
   const controller = new AbortController()
   await Promise.all(slots.map(async (slot) => {

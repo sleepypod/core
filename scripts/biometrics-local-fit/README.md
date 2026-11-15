@@ -94,3 +94,65 @@ matches the local report. Then run `backtest_biometrics` on tuning and
 validation. Run holdout once, for the final candidate only. Only the pod's
 report can back activation, and applying a profile still needs the user's
 explicit authorization.
+
+## 5. Replay archived nights
+
+```sh
+pnpm biometrics:local-fit replay --archive DEST/POD_ID --nights 2026-11-01,2026-11-02 --side left --config defaults out/
+pnpm biometrics:local-fit replay --archive DEST/POD_ID --nights all --side left --config profile.json --compare-stored out/
+pnpm biometrics:local-fit replay --archive DEST/POD_ID --nights 2026-10-18 --side left --config defaults \
+  --export 2026-10-18=session-1184.tar.gz out/
+```
+
+`replay` runs whole nights from an off-pod archive (`pnpm biometrics:archive pull`,
+[layout](../biometrics-archive/README.md#layout)) through the same unchanged
+`replay_worker.run()` as `fit`, with one engine and one profile for every night.
+No dataset export is needed; the archive database supplies each night's context.
+
+- **Nights.** A night is the local noon-to-noon night (`--timezone`, default the
+  machine's zone; use the pod's) in which a `sleep_records` row for `--side` was
+  entered, the same key as the training repo. A night's sessions are replayed as
+  one window, `[first entered_bed_at, last left_bed_at)`, with the pod's 5-minute
+  pre-roll. Occupancy context comes from the sessions' recorded present and
+  not-present intervals, built by the pod's own `recordedWaveformContexts`.
+  `all` replays every such night that has RAW and lists the rest under `skipped`;
+  a named night that can't be replayed is an error.
+- **RAW.** Files written during the window, plus the next two (a file's mtime is
+  at or after its last frame), are inspected with the shipped
+  `inspection_worker`, or taken from the pod's own `biometric_raw_sources` row for
+  the same bytes. Files with frames in the window are replayed in event order;
+  the others are listed under `rawExcluded` with the reason. Overlapping files or
+  more than 64 files in one night are refused. Inspections are cached in
+  `out/inspections/`.
+- **`--export NIGHT=PATH`** replays a night the archive has no RAW for from a
+  `GET /api/export/archive` tarball (`./raw/<NAME>.RAW.gz`). Only the RAW comes
+  from the tarball; the night's window and context still come from the archive
+  database. The tarball is read, never changed.
+- **`--config`** is `defaults`, an overrides array, one candidate
+  (`{ "id", "overrides" }`) or a candidates file with exactly one entry. The
+  other side always replays with defaults, as in `fit`; with no recorded sleeper
+  mode the two channels are processed independently.
+
+Outputs:
+
+- `out/readings/<night>-<configHash[0:12]>.json`: `{ cohortId: night, configHash, side, readings }`,
+  the `--save-readings` format.
+- `out/replay.json` (`biometrics-local-fit-replay-v1`, labelled `exploratory-local`):
+  side, timezone, archive directory, pod id, database SHA-256 and pull cursor,
+  engine `manifestHash`, the config source, overrides and `configHash`, the
+  Python build identity, and per night the session ids, windows, the RAW files
+  replayed (SHA-256, pod name, bytes, event bounds) and left out, the
+  runtime-config generations in effect (`biometric_runtime_receipts`), the
+  config hashes recorded with the stored rows (`biometric_processing_runs`),
+  reading count, worker counts and limitations, and wall time.
+
+`--compare-stored` adds per-night parity against the archive's stored `vitals`:
+each stored minute is matched to the nearest replayed reading within 30 s, and
+the share of minutes where both have a heart rate within 0.1 bpm is reported
+(a minute where only one side has a heart rate counts against it). The night is
+gated only when one runtime-config generation was in effect all night; the run
+exits 2 when a gated night is below 95%. Live processing keeps warm state, stamps
+rows on arrival and sees pump and sleeper-mode context that replay doesn't, so
+a night replayed with the profile it ran can still differ by a few tenths of a
+bpm in many minutes. Read the gate as a check on that gap, not only on the
+profile.
