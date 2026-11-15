@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  axisTicks, BREAK_PX, baselineBand, clampTo, fmtDuration, fmtGap, formatRangeLabel, layoutAxis, metricStats, nearestIndex,
-  nightWindow, percentile, rangeWindow, readingsInSessions, rollingMean, segmentTicks, sessionHeader, splitSessions, STALL_PX,
+  axisTicks, BREAK_PX, baselineBand, BREATHING_FLOOR, breathingFloor, clampTo, fmtDuration, fmtGap, formatRangeLabel, layoutAxis, metricStats, nearestIndex,
+  nightWindow, percentile, rangeWindow, readingsInSessions, rollingMean, rollingQuantile, segmentTicks, sessionHeader, splitSessions, STALL_PX,
   type VitalPoint,
 } from '../biometricsLogic'
 
@@ -42,6 +42,56 @@ describe('sessions', () => {
     expect(m[0]).toBe((0 + 10 + 20 + 30 + 40) / 5)
     // Minute 6 averages 2–10 except the null at 5.
     expect(m[6]).toBeCloseTo((20 + 30 + 40 + 60 + 70 + 80 + 90 + 100) / 8)
+  })
+
+  it('takes a centred rolling quantile and leaves null readings null', () => {
+    const pts = Array.from({ length: 11 }, (_, i) => pt(at(28, 1, i), 60, 40, i === 5 ? null : i))
+    const q = rollingQuantile(pts, 'br', 0.5, 5)
+    expect(q[5]).toBeNull()
+    // Minute 0 sees minutes 0–2; minute 4 sees 2–6 without the null at 5.
+    expect(q[0]).toBe(1)
+    expect(q[4]).toBe(3.5)
+    expect(rollingQuantile([pt(0, 60, 40, null), pt(MIN, 60, 40, null)], 'br', 0.15, 15)).toEqual([null, null])
+    expect(rollingQuantile([], 'br', 0.15, 15)).toEqual([])
+  })
+
+  describe('breathing floor', () => {
+    const steady = (minutes: number, rate: (i: number) => number | null) =>
+      Array.from({ length: minutes }, (_, i) => pt(at(28, 1, 0) + i * MIN, 60, 40, rate(i)))
+
+    it('uses a 15-minute window at the 15th percentile', () => {
+      expect(BREATHING_FLOOR).toEqual({ quantile: 0.15, windowMin: 15 })
+    })
+
+    it('ignores intermittent upward spikes that lift the mean', () => {
+      const pts = steady(90, i => (i % 4 === 0 ? 24 : 15))
+      const floor = breathingFloor(pts)
+      const mean = rollingMean(pts, 'br')
+      for (let i = 10; i < 80; i++) {
+        expect(floor[i]).toBe(15)
+        expect(mean[i] ?? 0).toBeGreaterThan(16.5)
+      }
+    })
+
+    it('holds the steady level through a burst of unstable minutes', () => {
+      // Ten unstable minutes (40–49) jittering high; every 15-minute window still has steady minutes.
+      const pts = steady(90, i => (i >= 40 && i < 50 ? 18 + (i % 3) * 3 : 14))
+      expect(Math.max(...breathingFloor(pts).map(v => v ?? 0))).toBe(14)
+    })
+
+    it('follows a genuine change in breathing rate', () => {
+      const pts = steady(60, i => (i < 30 ? 13 : 17))
+      const floor = breathingFloor(pts)
+      expect(floor[5]).toBe(13)
+      expect(floor[55]).toBe(17)
+    })
+
+    it('keeps missing minutes missing, never zero', () => {
+      const pts = steady(30, i => (i % 7 === 3 ? null : 16))
+      const floor = breathingFloor(pts)
+      pts.forEach((p, i) => expect(floor[i]).toBe(p.br == null ? null : 16))
+      expect(floor).not.toContain(0)
+    })
   })
 
   it('computes the p25–p75 band and per-session stats', () => {
