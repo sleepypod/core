@@ -146,13 +146,26 @@ Outputs:
   config hashes recorded with the stored rows (`biometric_processing_runs`),
   reading count, worker counts and limitations, and wall time.
 
-`--compare-stored` adds per-night parity against the archive's stored `vitals`:
-each stored minute is matched to the nearest replayed reading within 30 s, and
-the share of minutes where both have a heart rate within 0.1 bpm is reported
-(a minute where only one side has a heart rate counts against it). The night is
-gated only when one runtime-config generation was in effect all night; the run
-exits 2 when a gated night is below 95%. Live processing keeps warm state, stamps
-rows on arrival and sees pump and sleeper-mode context that replay doesn't, so
-a night replayed with the profile it ran can still differ by a few tenths of a
-bpm in many minutes. Read the gate as a check on that gap, not only on the
-profile.
+`--compare-stored` adds per-night parity against the archive's stored `vitals`.
+Each stored minute is matched to the nearest replayed reading within 30 s. It
+reports:
+
+- `share`: minutes where both have a heart rate within 0.1 bpm. A minute where
+  only one side has a heart rate counts against it.
+- `shareWithinOneBpm`: the same with 1 bpm.
+- `meanDifference`: signed bias, replay minus stored.
+- `medianAbsDifference`, `meanAbsDifference` and `maxAbsDifference`.
+- `heartRateCoverage`: replayed heart-rate minutes per stored heart-rate minute.
+
+A night is gated only when one runtime-config generation was in effect all night.
+The run exits 2 when a gated night's `share` is below 95%.
+
+Per-minute agreement with live rows is not pod-identical replay. Live writes
+every 60–63 s on the arrival clock, and replay writes every 60 s on event time,
+so a matched minute averages a window shifted by up to 30 s. Live also keeps warm
+state and sees pump context that replay doesn't. On a real night replayed with
+defaults (its stored profile unconfirmed), bias was 0.00 bpm, but only 12% of minutes agreed within
+0.1 bpm. Of the minutes whose windows ended within 3 s of each other, 46% did.
+Exact parity is what `parity` checks: local replay against the pod's own replay
+backtest. Use `meanDifference`, `shareWithinOneBpm` and `heartRateCoverage` to
+judge whether a replay reproduces what the pod stored.

@@ -185,14 +185,22 @@ describe('stored-row parity', () => {
     // Minute 5 has no heart rate on either side and is not compared.
     expect(parity).toMatchObject({ storedRows: 6, comparedMinutes: 5, withinMinutes: 2, bothHeartRateMinutes: 3, storedWithoutReplay: 0, replayedWithoutStored: 0 })
     expect(parity.share).toBeCloseTo(0.4)
+    expect(parity.shareWithinOneBpm).toBeCloseTo(0.6)
+    expect(parity.heartRateCoverage).toBeCloseTo(4 / 4)
+    expect(parity.meanDifference).toBeCloseTo(0.25 / 3)
+    expect(parity.medianAbsDifference).toBeCloseTo(0.05)
     expect(parity.meanAbsDifference).toBeCloseTo(0.25 / 3)
     expect(parity.maxAbsDifference).toBeCloseTo(0.2)
+    // A shift is bias; scatter around the same level is not.
+    expect(storedParity(rows([60, 60, 60, 60]), rows([61, 61, 61, 61]))).toMatchObject({ meanDifference: 1, medianAbsDifference: 1, shareWithinOneBpm: 1, share: 0 })
+    expect(storedParity(rows([60, 60, 60, 60]), rows([60.5, 59.5, 60.5, 59.5]))).toMatchObject({ meanDifference: 0, medianAbsDifference: 0.5, shareWithinOneBpm: 1, share: 0 })
   })
 
   it('counts a stored minute with no reading nearby as a miss and reports readings without rows', () => {
     const parity = storedParity(rows([60, 60]), [{ timestampMs: T0, heartRate: 60 }, { timestampMs: T0 + MINUTE + 31000, heartRate: 60 }, { timestampMs: T0 + 9 * MINUTE, heartRate: 70 }])
     expect(parity).toMatchObject({ comparedMinutes: 2, withinMinutes: 1, storedWithoutReplay: 1, replayedWithoutStored: 2, share: 0.5 })
-    expect(storedParity([], rows([60]))).toMatchObject({ comparedMinutes: 0, share: null, meanAbsDifference: null })
+    expect(storedParity([], rows([60]))).toMatchObject({ comparedMinutes: 0, share: null, meanAbsDifference: null, medianAbsDifference: null, heartRateCoverage: null })
+    expect(storedParity(rows([60, 60, 60, 60]), rows([60]))).toMatchObject({ heartRateCoverage: 0.25, storedWithoutReplay: 3 })
   })
 
   it('gates only nights that ran one runtime-config generation', () => {

@@ -187,10 +187,14 @@ export function storedVitals(db: Database.Database, side: Side, startMs: number,
 
 /** Per stored minute: the nearest replayed reading within MATCH_TOLERANCE_MS.
  * A minute counts when either side has a heart rate, and matches only when both
- * do and differ by at most toleranceBpm, so abstaining is never agreement. */
+ * do and differ by at most toleranceBpm, so abstaining is never agreement.
+ * Live writes land every 60-63 s on the arrival clock and replay every 60 s on
+ * event time, so matched minutes average different samples; bias, the median
+ * and the 1 bpm share separate that scatter from a real shift. */
 export function storedParity(stored: StoredVital[], replayed: StoredVital[], toleranceBpm = 0.1) {
   const readings = [...replayed].sort((a, b) => a.timestampMs - b.timestampMs)
-  let cursor = 0, compared = 0, within = 0, unmatched = 0, bothCount = 0, absolute = 0, maximum: number | null = null
+  let cursor = 0, compared = 0, within = 0, withinOne = 0, unmatched = 0
+  const differences: number[] = []
   const used = new Set<number>()
   for (const row of [...stored].sort((a, b) => a.timestampMs - b.timestampMs)) {
     while (cursor + 1 < readings.length && Math.abs(readings[cursor + 1].timestampMs - row.timestampMs) <= Math.abs(readings[cursor].timestampMs - row.timestampMs)) cursor++
@@ -202,13 +206,19 @@ export function storedParity(stored: StoredVital[], replayed: StoredVital[], tol
     if (row.heartRate === null && replayedRate === null) continue
     compared++
     if (row.heartRate === null || replayedRate === null) continue
-    const difference = Math.abs(replayedRate - row.heartRate)
-    bothCount++
-    absolute += difference
-    maximum = Math.max(maximum ?? 0, difference)
-    if (difference <= toleranceBpm) within++
+    const difference = replayedRate - row.heartRate
+    differences.push(difference)
+    if (Math.abs(difference) <= toleranceBpm) within++
+    if (Math.abs(difference) <= 1) withinOne++
   }
-  return { toleranceBpm, storedRows: stored.length, comparedMinutes: compared, withinMinutes: within, bothHeartRateMinutes: bothCount,
+  const absolute = differences.map(Math.abs).sort((a, b) => a - b)
+  const storedRated = stored.filter(row => row.heartRate !== null).length
+  return { toleranceBpm, storedRows: stored.length, comparedMinutes: compared, withinMinutes: within, bothHeartRateMinutes: differences.length,
     storedWithoutReplay: unmatched, replayedWithoutStored: readings.filter((row, index) => !used.has(index) && row.heartRate !== null).length,
-    share: compared ? within / compared : null, meanAbsDifference: bothCount ? absolute / bothCount : null, maxAbsDifference: maximum }
+    share: compared ? within / compared : null, shareWithinOneBpm: compared ? withinOne / compared : null,
+    // Replayed heart-rate minutes per stored heart-rate minute: low when replay lacks context the live side had.
+    heartRateCoverage: storedRated ? readings.filter(row => row.heartRate !== null).length / storedRated : null,
+    meanDifference: differences.length ? differences.reduce((sum, value) => sum + value, 0) / differences.length : null,
+    medianAbsDifference: absolute.length ? (absolute[(absolute.length - 1) >> 1] + absolute[absolute.length >> 1]) / 2 : null,
+    meanAbsDifference: absolute.length ? absolute.reduce((sum, value) => sum + value, 0) / absolute.length : null, maxAbsDifference: absolute.at(-1) ?? null }
 }
