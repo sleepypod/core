@@ -199,7 +199,7 @@ hold (`trainingChecks` gives each value):
 | --- | --- | --- |
 | `comparedMinutes` | ≥ 60 | 140–483 |
 | `heartRateCoverage` | 0.90 to 1.20 | 0.94–1.12 |
-| \|`trimmedMeanDifference`\|: bias over minutes within 5 bpm | ≤ 0.25 bpm | ≤ 0.11 |
+| \|`trimmedMeanDifference`\|: bias over minutes within 5 bpm | ≤ 0.25 bpm | ≤ 0.12 |
 | `medianAbsDifference` | ≤ 0.6 bpm | 0.31–0.52 |
 | `matchedShareWithinOneBpm`: of minutes where both have a heart rate | ≥ 0.70 | 0.74–0.84 |
 | `jumpShare`: matched minutes more than 5 bpm apart | ≤ 0.10 | 0.009–0.071 |
@@ -212,8 +212,9 @@ them. It fails:
 - 2026-11-13 replayed without recorded occupancy: coverage 0.75, because the
   pump guard held replay silent for the first 95 minutes.
 
-The ten nights that ran 04f7a165 replay identical HR with either profile and
-fall in the same ranges.
+Five nights whose rows ran 04f7a165 were replayed with that profile, and their
+HR was identical to a defaults replay. All ten 04f7a165 nights fall in the same
+ranges.
 
 Bias uses the trimmed mean because a few jumps dominate the plain
 `meanDifference`. On 2026-11-08, 10 jumps out of 181 matched minutes make it
