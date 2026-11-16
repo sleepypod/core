@@ -133,7 +133,8 @@ both are on.
 | `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
 | `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
 | `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
-| `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` |
+| `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` (stops the alarm and any snooze) |
+| `<prefix>/<device-id>/cmd/snooze-alarm` | broker → pod | `{"side","duration?"}` (seconds, 60–1800) |
 | `<prefix>/<device-id>/cmd/start-priming` | broker → pod | `{}` |
 
 With Home Assistant discovery on, each side also gets a **Next alarm**
@@ -145,6 +146,12 @@ when it rings. The next alarm is the set time; with a wake window it can go
 off earlier, from `wakeWindowStart`. State refreshes every 30 s, so an alarm
 change shows up in Home Assistant within half a minute. **Alarm ringing**
 updates as soon as the alarm starts or stops.
+
+Each side also gets **Snooze alarm** and **Stop alarm** buttons, which
+publish `cmd/snooze-alarm` and `cmd/clear-alarm`. A snooze works like tapping
+the bed: it lasts the ringing alarm's own snooze length (shortened by its
+snooze taper, kept within 1–30 min) and the alarm comes back with the same
+vibration. Put `duration` in the payload to snooze for a set time instead.
 
 Commands route through the same tRPC procedures the iOS app calls, so Zod
 input schemas validate every payload — the bridge cannot accidentally

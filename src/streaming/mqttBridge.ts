@@ -25,7 +25,8 @@
  *   <prefix>/<device-id>/cmd/set-temperature         — JSON {side, temperature, duration?}
  *   <prefix>/<device-id>/cmd/set-power               — JSON {side, powered, temperature?}
  *   <prefix>/<device-id>/cmd/set-alarm               — JSON {side, vibrationIntensity, vibrationPattern, duration}
- *   <prefix>/<device-id>/cmd/clear-alarm             — JSON {side}
+ *   <prefix>/<device-id>/cmd/clear-alarm             — JSON {side} (stops a ringing alarm)
+ *   <prefix>/<device-id>/cmd/snooze-alarm            — JSON {side, duration?}
  *   <prefix>/<device-id>/cmd/start-priming           — JSON {} (or empty payload)
  *
  * Commands route through the existing tRPC procedures via createCaller, so the
@@ -47,6 +48,8 @@ import { centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
 import { onServerFrame } from './piezoStream'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import { getSnoozeStatus } from '@/src/hardware/snoozeManager'
+import { nextSnoozeSeconds } from '@/src/hardware/snoozeLength'
+import { getActiveAlarmConfig } from '@/src/hardware/alarmState'
 import { nextAlarm } from '@/src/scheduler/nextAlarm'
 
 // ---------------------------------------------------------------------------
@@ -449,8 +452,8 @@ function publishHaDiscovery(): void {
   }
 
   // Alarms: when each side's alarm next goes off (a timestamp sensor, with
-  // the set time, day, wake window and snooze as attributes) and whether it
-  // is ringing now.
+  // the set time, day, wake window and snooze as attributes), whether it
+  // is ringing now, and buttons to snooze or stop it.
   for (const side of ['left', 'right'] as const) {
     const label = side === 'left' ? 'Left' : 'Right'
     const alarmTopic = topic('state', side, 'alarm')
@@ -489,6 +492,23 @@ function publishHaDiscovery(): void {
       }),
       RETAINED_QOS_0,
     )
+    const button = (key: string, name: string, verb: string, icon: string) => safePublish(
+      `${haPrefix}/button/${id}/${side}_${key}/config`,
+      JSON.stringify({
+        name: `${label} ${name}`,
+        unique_id: `${id}_${side}_${key}`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        command_topic: topic('cmd', verb),
+        payload_press: JSON.stringify({ side }),
+        icon,
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+    button('snooze_alarm', 'snooze alarm', 'snooze-alarm', 'mdi:alarm-snooze')
+    button('stop_alarm', 'stop alarm', 'clear-alarm', 'mdi:alarm-off')
   }
 }
 
@@ -720,6 +740,33 @@ function parsePayload(buf: Buffer): CommandPayload {
   }
 }
 
+/** Snooze length for an alarm without one of its own (the procedure's default). */
+const DEFAULT_SNOOZE_SECONDS = 300
+/** The snooze procedure's accepted range, in seconds. */
+const MIN_SNOOZE_SECONDS = 60
+const MAX_SNOOZE_SECONDS = 1800
+
+/**
+ * Input for a snooze sent over MQTT. Like a tap or the HomeKit switch, it
+ * lasts the ringing alarm's own snooze length (shortened by its taper, within
+ * the procedure's 1-30 min) and the alarm comes back with the same vibration.
+ * A `duration` in the payload (seconds) sets the length instead. With no
+ * alarm of ours ringing, the procedure's defaults apply.
+ */
+function snoozeInput(payload: CommandPayload): Record<string, unknown> {
+  const { side, duration } = payload
+  const active = side === 'left' || side === 'right' ? getActiveAlarmConfig(side) : null
+  if (!active) return { side, duration }
+  const length = nextSnoozeSeconds(active, DEFAULT_SNOOZE_SECONDS)
+  return {
+    side,
+    duration: duration ?? Math.min(Math.max(length, MIN_SNOOZE_SECONDS), MAX_SNOOZE_SECONDS),
+    vibrationIntensity: active.vibrationIntensity,
+    vibrationPattern: active.vibrationPattern,
+    alarmDuration: active.duration,
+  }
+}
+
 async function handleCommand(verb: string, payload: CommandPayload): Promise<void> {
   // Each branch hands the payload straight to the tRPC procedure — its Zod
   // schema rejects malformed input. No client-side validation duplicated here.
@@ -736,6 +783,9 @@ async function handleCommand(verb: string, payload: CommandPayload): Promise<voi
       return
     case 'clear-alarm':
       await caller.device.clearAlarm(payload as never)
+      return
+    case 'snooze-alarm':
+      await caller.device.snoozeAlarm(snoozeInput(payload) as never)
       return
     case 'start-priming':
       await caller.device.startPriming({})
