@@ -56,6 +56,10 @@ export const deviceSettings = sqliteTable('device_settings', {
   // reports it. NULL falls back to MQTT_PRESENCE_HOLD_SECONDS, then 0 (report
   // the sensor's reading at once).
   mqttPresenceHoldSeconds: integer('mqtt_presence_hold_seconds'),
+  // The MQTT in-bed sensor reads out of bed below this percent (25-90) of the
+  // presence threshold. NULL falls back to MQTT_PRESENCE_EXIT_PERCENT, then 50
+  // (the sleep-detector's exit line).
+  mqttPresenceExitPercent: integer('mqtt_presence_exit_percent'),
   // HomeKit bridge is opt-in. When true, instrumentation publishes the
   // hap-nodejs bridge with HeaterCooler/OccupancySensor/Switch accessories.
   homekitEnabled: integer('homekit_enabled', { mode: 'boolean' })

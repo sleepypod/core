@@ -21,9 +21,18 @@ const STATE_VERSION = 1
 /** The detector rewrites its state file at least once a minute; an older file
  *  means it has stopped and its baseline can't be trusted. */
 export const BASELINE_STALE_MS = 300_000
-/** Presence leaves below this fraction of the threshold (the detector's
- *  PRESENCE_EXIT_FRACTION). */
+/** Presence leaves below this fraction of the threshold by default (the
+ *  detector's PRESENCE_EXIT_FRACTION). */
 export const EXIT_FRACTION = 0.5
+/**
+ * The exit line can be set from 25% to 90% of the threshold. A just-vacated
+ * mattress reads well above its empty level for a minute or more (warmth,
+ * compressed foam), so a low line can report an exit long after it happened;
+ * a high one reports it sooner but risks reading a sleeper whose load dips as
+ * out. Below 100% so some hysteresis always remains.
+ */
+export const MIN_EXIT_PERCENT = 25
+export const MAX_EXIT_PERCENT = 90
 /** Nominal capSense2 reference level, when the baseline has none. */
 const CAPSENSE2_REF_NOMINAL = 1.16
 const CAPSENSE2_SENTINEL = -1
@@ -97,9 +106,9 @@ export function bedLoad(frameType: string, values: number | number[], baseline: 
   return pair(0) - baseline.means.A + pair(2) - baseline.means.B + pair(4) - baseline.means.C
 }
 
-/** Instant presence for a load, with hysteresis around `threshold`. */
-export function instantPresence(load: number, threshold: number, wasPresent: boolean): boolean {
-  return load > (wasPresent ? threshold * EXIT_FRACTION : threshold)
+/** Instant presence for a load: enters above `threshold`, leaves below `exitFraction` of it. */
+export function instantPresence(load: number, threshold: number, wasPresent: boolean, exitFraction = EXIT_FRACTION): boolean {
+  return load > (wasPresent ? threshold * exitFraction : threshold)
 }
 
 export interface PresenceState {

@@ -11,6 +11,7 @@ const settings: Settings = {
   haDiscovery: true,
   tlsEnabled: false,
   presenceHoldSeconds: 0,
+  presenceExitPercent: 50,
   sources: {
     enabled: 'db',
     url: 'db',
@@ -20,6 +21,7 @@ const settings: Settings = {
     haDiscovery: 'db',
     tlsEnabled: 'default',
     presenceHoldSeconds: 'default',
+    presenceExitPercent: 'default',
   },
 }
 
@@ -39,6 +41,10 @@ export const mqtt: DemoHandlers<'mqtt'> = {
     if ('presenceHoldSeconds' in input) {
       settings.presenceHoldSeconds = input.presenceHoldSeconds ?? 0
       settings.sources.presenceHoldSeconds = input.presenceHoldSeconds == null ? 'default' : 'db'
+    }
+    if ('presenceExitPercent' in input) {
+      settings.presenceExitPercent = input.presenceExitPercent ?? 50
+      settings.sources.presenceExitPercent = input.presenceExitPercent == null ? 'default' : 'db'
     }
     return { success: true }
   },

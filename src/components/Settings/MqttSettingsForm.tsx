@@ -17,12 +17,18 @@ interface MqttSettings {
   haDiscovery: boolean
   tlsEnabled: boolean
   presenceHoldSeconds: number
-  sources: Record<'enabled' | 'url' | 'username' | 'password' | 'topicPrefix' | 'haDiscovery' | 'tlsEnabled' | 'presenceHoldSeconds', Source>
+  presenceExitPercent: number
+  sources: Record<'enabled' | 'url' | 'username' | 'password' | 'topicPrefix' | 'haDiscovery' | 'tlsEnabled' | 'presenceHoldSeconds' | 'presenceExitPercent', Source>
 }
 
 /** Presence hold steps, in seconds. */
 const PRESENCE_HOLD_STEP = 5
 const PRESENCE_HOLD_MAX = 600
+/** Out-of-bed line, as a percent of the in-bed threshold. 50 matches sleep tracking. */
+const EXIT_PERCENT_STEP = 5
+const EXIT_PERCENT_MIN = 25
+const EXIT_PERCENT_MAX = 90
+const EXIT_PERCENT_DEFAULT = 50
 
 function sourceLabel(s: Source): string | null {
   if (s === 'env') return '.env'
@@ -115,6 +121,7 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
   const [topicPrefix, setTopicPrefix] = useState(data.topicPrefix)
   const [password, setPassword] = useState('')
   const [presenceHold, setPresenceHold] = useState(data.presenceHoldSeconds)
+  const [exitPercent, setExitPercent] = useState(data.presenceExitPercent)
 
   // Resync local state when the server snapshot changes (e.g. after save
   // invalidation). Uses the "store prev props in state" pattern so we do not
@@ -129,6 +136,7 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
     setUsername(data.sources.username === 'db' ? data.username ?? '' : '')
     setTopicPrefix(data.topicPrefix)
     setPresenceHold(data.presenceHoldSeconds)
+    setExitPercent(data.presenceExitPercent)
   }
 
   const updateMutation = trpc.mqtt.updateSettings.useMutation({
@@ -152,6 +160,7 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
       haDiscovery: boolean
       tlsEnabled: boolean
       presenceHoldSeconds: number
+      presenceExitPercent: number
     }> = {
       enabled,
       haDiscovery,
@@ -159,6 +168,7 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
     }
     // Saved only once changed, so an env-provided hold isn't pinned to the DB.
     if (presenceHold !== data.presenceHoldSeconds) payload.presenceHoldSeconds = presenceHold
+    if (exitPercent !== data.presenceExitPercent) payload.presenceExitPercent = exitPercent
     if (url.trim()) payload.url = url.trim()
     if (username.trim()) payload.username = username.trim()
     if (topicPrefix.trim()) payload.topicPrefix = topicPrefix.trim()
@@ -250,6 +260,23 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
           max={PRESENCE_HOLD_MAX}
           format={v => (v === 0 ? 'Off' : `${v} s`)}
           label="presence hold"
+          disabled={isPending}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Out-of-bed line"
+        sub={exitPercent === EXIT_PERCENT_DEFAULT
+          ? 'Out of bed once the load falls to half the in-bed level, as sleep tracking does. A mattress can take a while to settle after you get up, so raise this if getting up shows late.'
+          : `Out of bed once the load falls under ${exitPercent}% of the in-bed level. Higher shows getting up sooner, but too high can read a sleeper who shifts as out.`}
+      >
+        <Stepper
+          value={exitPercent}
+          onChange={setExitPercent}
+          step={EXIT_PERCENT_STEP}
+          min={EXIT_PERCENT_MIN}
+          max={EXIT_PERCENT_MAX}
+          format={v => `${v}%`}
+          label="out-of-bed line"
           disabled={isPending}
         />
       </SettingRow>

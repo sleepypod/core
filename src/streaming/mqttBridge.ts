@@ -49,7 +49,9 @@ import {
   bedLoad,
   EXIT_FRACTION,
   instantPresence,
+  MAX_EXIT_PERCENT,
   MAX_PRESENCE_HOLD_SECONDS,
+  MIN_EXIT_PERCENT,
   PresenceHold,
   readPresenceBaselines,
   type PresenceBaseline,
@@ -83,6 +85,8 @@ export interface ResolvedMqttConfig {
   tlsInsecure: boolean
   /** Seconds a bed presence change must last before it is reported. */
   presenceHoldSeconds: number
+  /** Presence leaves below this percent of the threshold. */
+  presenceExitPercent: number
 }
 
 export interface ResolvedMqttSources {
@@ -95,6 +99,7 @@ export interface ResolvedMqttSources {
   tlsEnabled: ConfigSource
   tlsInsecure: ConfigSource
   presenceHoldSeconds: ConfigSource
+  presenceExitPercent: ConfigSource
 }
 
 function envBool(value: string | undefined): boolean | null {
@@ -119,6 +124,7 @@ export async function resolveConfig(): Promise<{
   const envTls = envBool(process.env.MQTT_TLS)
   const envTlsInsecure = envBool(process.env.MQTT_TLS_INSECURE)
   const envHold = Number.parseInt(process.env.MQTT_PRESENCE_HOLD_SECONDS ?? '', 10)
+  const envExit = Number.parseInt(process.env.MQTT_PRESENCE_EXIT_PERCENT ?? '', 10)
 
   const pick = <T>(dbVal: T | null | undefined, envVal: T | null, fallback: T): { value: T, source: ConfigSource } => {
     if (dbVal !== null && dbVal !== undefined) return { value: dbVal, source: 'db' }
@@ -136,6 +142,8 @@ export async function resolveConfig(): Promise<{
   const tlsInsecure = pick<boolean>(row?.mqttTlsInsecure ?? null, envTlsInsecure, false)
   const presenceHold = pick<number>(row?.mqttPresenceHoldSeconds ?? null, Number.isFinite(envHold) ? envHold : null, 0)
   const presenceHoldSeconds = Math.min(MAX_PRESENCE_HOLD_SECONDS, Math.max(0, presenceHold.value))
+  const presenceExit = pick<number>(row?.mqttPresenceExitPercent ?? null, Number.isFinite(envExit) ? envExit : null, EXIT_FRACTION * 100)
+  const presenceExitPercent = Math.min(MAX_EXIT_PERCENT, Math.max(MIN_EXIT_PERCENT, presenceExit.value))
 
   return {
     config: {
@@ -148,6 +156,7 @@ export async function resolveConfig(): Promise<{
       tlsEnabled: tlsEnabled.value,
       tlsInsecure: tlsInsecure.value,
       presenceHoldSeconds,
+      presenceExitPercent,
     },
     sources: {
       enabled: enabled.source,
@@ -159,6 +168,7 @@ export async function resolveConfig(): Promise<{
       tlsEnabled: tlsEnabled.source,
       tlsInsecure: tlsInsecure.source,
       presenceHoldSeconds: presenceHold.source,
+      presenceExitPercent: presenceExit.source,
     },
   }
 }
@@ -696,11 +706,12 @@ function samplePresence(now = Date.now()): void {
   p.lastFrameAt = fresh ? snap.receivedAtMs : null
   const at = fresh ? Math.round(snap.ts * 1000) : now
 
+  const exitFraction = exitPercent() / 100
   for (const side of ['left', 'right'] as const) {
     const baseline = p.baselines[side]
     const load = fresh && baseline ? bedLoad(snap.type, snap[side], baseline) : null
     p.load[side] = load
-    p.raw[side] = load === null || !baseline ? null : instantPresence(load, baseline.threshold, p.raw[side] === true)
+    p.raw[side] = load === null || !baseline ? null : instantPresence(load, baseline.threshold, p.raw[side] === true, exitFraction)
   }
 
   const active = activeSleeperSides(p.modes)
@@ -715,6 +726,10 @@ function samplePresence(now = Date.now()): void {
     p.holds[side].update(reading, at)
     publishPresence(side)
   }
+}
+
+function exitPercent(): number {
+  return state.resolved?.presenceExitPercent ?? EXIT_FRACTION * 100
 }
 
 /** Publish one side's presence; `force` republishes an unchanged state (periodic refresh). */
@@ -734,7 +749,7 @@ function publishPresence(side: PresenceSide, force = false): void {
     raw: p.raw[side],
     load: load !== null ? Math.round(load * 10) / 10 : null,
     threshold: baseline?.threshold ?? null,
-    exitThreshold: baseline ? baseline.threshold * EXIT_FRACTION : null,
+    exitThreshold: baseline ? Math.round(baseline.threshold * exitPercent()) / 100 : null,
     holdSeconds: state.resolved?.presenceHoldSeconds ?? 0,
   }), RETAINED_QOS_0)
 }

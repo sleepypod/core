@@ -26,7 +26,8 @@ beforeEach(() => {
     haDiscovery: true,
     tlsEnabled: false,
     presenceHoldSeconds: 0,
-    sources: { enabled: 'db', url: 'db', username: 'default', password: 'default', topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', presenceHoldSeconds: 'default' },
+    presenceExitPercent: 50,
+    sources: { enabled: 'db', url: 'db', username: 'default', password: 'default', topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', presenceHoldSeconds: 'default', presenceExitPercent: 'default' },
   }
 })
 afterEach(cleanup)
@@ -49,4 +50,17 @@ it('leaves an unchanged hold out of the save, so an env value isn\'t pinned', ()
   expect(screen.getByText('20 s')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   expect(m.update.mock.calls[0][0]).not.toHaveProperty('presenceHoldSeconds')
+})
+
+it('sets the out-of-bed line in 5% steps and saves only a change', () => {
+  render(<MqttSettingsForm />)
+  expect(screen.getByText('50%')).toBeTruthy()
+  expect(screen.getByText(/falls to half the in-bed level, as sleep tracking does/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(m.update.mock.calls[0][0]).not.toHaveProperty('presenceExitPercent')
+  for (let i = 0; i < 6; i++) fireEvent.click(screen.getByRole('button', { name: 'Increase out-of-bed line' }))
+  expect(screen.getByText('80%')).toBeTruthy()
+  expect(screen.getByText(/falls under 80% of the in-bed level/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(m.update.mock.calls[1][0]).toMatchObject({ presenceExitPercent: 80 })
 })

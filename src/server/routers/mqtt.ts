@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { deviceSettings } from '@/src/db/schema'
-import { MAX_PRESENCE_HOLD_SECONDS } from '@/src/lib/bedPresence'
+import { MAX_EXIT_PERCENT, MAX_PRESENCE_HOLD_SECONDS, MIN_EXIT_PERCENT } from '@/src/lib/bedPresence'
 import {
   getBridgeStatus,
   resolveConfig,
@@ -27,6 +27,8 @@ const settingsSchema = z.object({
   tlsEnabled: z.boolean(),
   /** Seconds a bed presence change must last before the in-bed sensor reports it. */
   presenceHoldSeconds: z.number().int(),
+  /** The in-bed sensor reads out of bed below this percent of the presence threshold. */
+  presenceExitPercent: z.number().int(),
   sources: z.object({
     enabled: sourceSchema,
     url: sourceSchema,
@@ -36,6 +38,7 @@ const settingsSchema = z.object({
     haDiscovery: sourceSchema,
     tlsEnabled: sourceSchema,
     presenceHoldSeconds: sourceSchema,
+    presenceExitPercent: sourceSchema,
   }),
 })
 
@@ -50,6 +53,7 @@ const updateInputSchema = z
     haDiscovery: z.boolean().nullable().optional(),
     tlsEnabled: z.boolean().nullable().optional(),
     presenceHoldSeconds: z.number().int().min(0).max(MAX_PRESENCE_HOLD_SECONDS).nullable().optional(),
+    presenceExitPercent: z.number().int().min(MIN_EXIT_PERCENT).max(MAX_EXIT_PERCENT).nullable().optional(),
   })
   .strict()
 
@@ -88,6 +92,7 @@ export const mqttRouter = router({
         haDiscovery: config.haDiscovery,
         tlsEnabled: config.tlsEnabled,
         presenceHoldSeconds: config.presenceHoldSeconds,
+        presenceExitPercent: config.presenceExitPercent,
         sources: {
           enabled: sources.enabled,
           url: sources.url,
@@ -97,6 +102,7 @@ export const mqttRouter = router({
           haDiscovery: sources.haDiscovery,
           tlsEnabled: sources.tlsEnabled,
           presenceHoldSeconds: sources.presenceHoldSeconds,
+          presenceExitPercent: sources.presenceExitPercent,
         },
       }
     }),
@@ -120,6 +126,7 @@ export const mqttRouter = router({
         if ('haDiscovery' in input) updates.mqttHaDiscovery = input.haDiscovery ?? null
         if ('tlsEnabled' in input) updates.mqttTlsEnabled = input.tlsEnabled ?? null
         if ('presenceHoldSeconds' in input) updates.mqttPresenceHoldSeconds = input.presenceHoldSeconds ?? null
+        if ('presenceExitPercent' in input) updates.mqttPresenceExitPercent = input.presenceExitPercent ?? null
 
         await db.update(deviceSettings).set(updates).where(eq(deviceSettings.id, 1))
       }

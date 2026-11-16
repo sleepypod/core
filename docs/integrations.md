@@ -111,6 +111,7 @@ the bridge resolves config in this order: `device_settings` row > env var > buil
 | TLS | `MQTT_TLS` | `false` |
 | TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
 | Presence hold (s) | `MQTT_PRESENCE_HOLD_SECONDS` | `0` |
+| Out-of-bed line (%) | `MQTT_PRESENCE_EXIT_PERCENT` | `50` |
 
 The URL scheme decides whether the connection is encrypted: `mqtts://` uses
 TLS, `mqtt://` is plain TCP. The TLS toggle does not upgrade an `mqtt://` URL;
@@ -146,8 +147,13 @@ changes within a few seconds of getting in or out of bed, without the
 sleep-detector's 30 s wait.
 
 - `load` is the side's summed rise over its empty-bed level. Presence starts
-  above `threshold` and ends below `exitThreshold` (half of it), so a reading
-  near the line doesn't flap.
+  above `threshold` and ends below `exitThreshold`, so a reading near the line
+  doesn't flap. `exitThreshold` is the **Out-of-bed line** (Settings → MQTT,
+  25–90% of `threshold`, default 50% as the sleep-detector uses). A mattress
+  just vacated can read well above its empty level for a minute or more
+  (warmth, compressed foam), so with the default line the exit can show 10–20 s
+  late. Raising the line reports it sooner; keep it under the lowest `load` you
+  see while asleep, or a sleeper who shifts can read as out.
 - `raw` is the sensor's reading right now. `inBed` is the same reading after
   the **Presence hold** (Settings → MQTT, default off): a change counts once it
   has lasted that long, so rolling onto the edge for a moment doesn't read as

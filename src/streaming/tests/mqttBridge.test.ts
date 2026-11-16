@@ -234,6 +234,7 @@ const MQTT_ENV_KEYS = [
   'MQTT_TLS',
   'MQTT_TLS_INSECURE',
   'MQTT_PRESENCE_HOLD_SECONDS',
+  'MQTT_PRESENCE_EXIT_PERCENT',
   'MQTT_DEVICE_ID',
 ] as const
 
@@ -273,7 +274,7 @@ afterEach(() => {
 // Drive the bridge through startMqttBridge() with a controllable fake client.
 // Returns the fake so the test can emit() events / inspect spies.
 async function startBridgeWithFake(opts: {
-  config?: Partial<{ enabled: boolean, url: string | null, topicPrefix: string, haDiscovery: boolean, tlsEnabled: boolean, tlsInsecure: boolean, username: string | null, password: string | null, presenceHoldSeconds: number }>
+  config?: Partial<{ enabled: boolean, url: string | null, topicPrefix: string, haDiscovery: boolean, tlsEnabled: boolean, tlsInsecure: boolean, username: string | null, password: string | null, presenceHoldSeconds: number, presenceExitPercent: number }>
 } = {}): Promise<FakeClient> {
   // Reset bridge module state between tests since startMqttBridge() short-
   // circuits when runState !== 'stopped'.
@@ -297,6 +298,7 @@ async function startBridgeWithFake(opts: {
     mqttTlsEnabled: opts.config?.tlsEnabled ?? false,
     mqttTlsInsecure: opts.config?.tlsInsecure ?? false,
     mqttPresenceHoldSeconds: opts.config?.presenceHoldSeconds ?? null,
+    mqttPresenceExitPercent: opts.config?.presenceExitPercent ?? null,
   }
 
   const fake = createFakeClient()
@@ -319,6 +321,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       tlsEnabled: 'default',
       tlsInsecure: 'default',
       presenceHoldSeconds: 'default',
+      presenceExitPercent: 'default',
     })
     expect(config).toEqual({
       enabled: false,
@@ -330,6 +333,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       tlsEnabled: false,
       tlsInsecure: false,
       presenceHoldSeconds: 0,
+      presenceExitPercent: 50,
     })
   })
 
@@ -356,6 +360,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       tlsEnabled: 'env',
       tlsInsecure: 'env',
       presenceHoldSeconds: 'env',
+      presenceExitPercent: 'default',
     })
     expect(config).toEqual({
       enabled: true,
@@ -367,6 +372,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       tlsEnabled: true,
       tlsInsecure: true,
       presenceHoldSeconds: 20,
+      presenceExitPercent: 50,
     })
   })
 
@@ -395,6 +401,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       tlsEnabled: 'db',
       tlsInsecure: 'db',
       presenceHoldSeconds: 'db',
+      presenceExitPercent: 'default',
     })
     expect(config).toEqual({
       enabled: true,
@@ -406,6 +413,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       tlsEnabled: true,
       tlsInsecure: true,
       presenceHoldSeconds: 45,
+      presenceExitPercent: 50,
     })
   })
 
@@ -418,6 +426,21 @@ describe('mqttBridge — resolveConfig source attribution', () => {
     process.env.MQTT_PRESENCE_HOLD_SECONDS = 'soon'
     expect((await resolveConfig()).config).toMatchObject({ presenceHoldSeconds: 0 })
     expect((await resolveConfig()).sources.presenceHoldSeconds).toBe('default')
+  })
+
+  it('resolves the out-of-bed line from db, then env, then 50%, kept within 25–90%', async () => {
+    expect(await resolveConfig()).toMatchObject({ config: { presenceExitPercent: 50 }, sources: { presenceExitPercent: 'default' } })
+    process.env.MQTT_PRESENCE_EXIT_PERCENT = '70'
+    expect(await resolveConfig()).toMatchObject({ config: { presenceExitPercent: 70 }, sources: { presenceExitPercent: 'env' } })
+    dbMock.state.row = { mqttPresenceExitPercent: 80 }
+    expect(await resolveConfig()).toMatchObject({ config: { presenceExitPercent: 80 }, sources: { presenceExitPercent: 'db' } })
+    dbMock.state.row = { mqttPresenceExitPercent: 100 }
+    expect((await resolveConfig()).config.presenceExitPercent).toBe(90)
+    dbMock.state.row = undefined
+    process.env.MQTT_PRESENCE_EXIT_PERCENT = '5'
+    expect((await resolveConfig()).config.presenceExitPercent).toBe(25)
+    process.env.MQTT_PRESENCE_EXIT_PERCENT = 'high'
+    expect((await resolveConfig()).sources.presenceExitPercent).toBe('default')
   })
 })
 
@@ -657,6 +680,7 @@ describe('mqttBridge — getBridgeStatus', () => {
       tlsEnabled: false,
       tlsInsecure: false,
       presenceHoldSeconds: 0,
+      presenceExitPercent: 50,
     }
     const ts = new Date('2026-01-02T03:04:05Z')
     bridgeState.messagesPublished = 7
@@ -1181,10 +1205,10 @@ describe('mqttBridge — bed presence', () => {
     piezoMock.state.snapshot = { type: 'capSense', ts, receivedAtMs: Date.now() + frameAt, left, right }
   }
 
-  async function start(hold = 0) {
+  async function start(hold = 0, exitPercent?: number) {
     process.env.MQTT_DEVICE_ID = ID
     presenceMock.baselines = { left: baseline, right: baseline }
-    const fake = await startBridgeWithFake({ config: { presenceHoldSeconds: hold } })
+    const fake = await startBridgeWithFake({ config: { presenceHoldSeconds: hold, presenceExitPercent: exitPercent } })
     fake.connected = true
     fake.emit('connect')
     await new Promise(r => setTimeout(r, 0))
@@ -1207,6 +1231,17 @@ describe('mqttBridge — bed presence', () => {
     piezoMock.state.snapshot = null
     presenceMock.baselines = { left: null, right: null }
     await shutdownMqttBridge()
+  })
+
+  it('with a higher out-of-bed line, reads out of bed while the vacated mattress still settles', async () => {
+    const fake = await start(0, 80)
+    frame(1000, reading(1700))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, exitThreshold: 240 }])
+    // Off the bed, but the mattress still reads 215 over empty: under 80%, over 50%.
+    frame(1001, reading(215))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: false, raw: false, load: 215, exitThreshold: 240, since: new Date(1_001_000).toISOString() }])
   })
 
   it('reports getting in and out of bed at the first reading that shows it', async () => {

@@ -46,6 +46,14 @@ describe('instantPresence', () => {
     expect(instantPresence(200, 300, true)).toBe(true)
     expect(instantPresence(150, 300, true)).toBe(false)
   })
+
+  it('leaves below a set fraction of the threshold', () => {
+    // A just-vacated mattress can read well above empty; a higher exit line catches it.
+    expect(instantPresence(241, 300, true, 0.8)).toBe(true)
+    expect(instantPresence(240, 300, true, 0.8)).toBe(false)
+    // Entry is unchanged.
+    expect(instantPresence(290, 300, false, 0.8)).toBe(false)
+  })
 })
 
 describe('PresenceHold', () => {
