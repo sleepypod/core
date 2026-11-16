@@ -39,6 +39,29 @@ export function parityGate(share: number | null, provenance: { storedConfigHashe
   return share >= PARITY_MINIMUM_SHARE ? 'pass' : 'fail'
 }
 
+/** Whether a replayed night reproduces what the pod stored closely enough to
+ * train on. Per-minute 0.1 bpm is out of reach against live rows (window phase:
+ * live writes every 60-63 s on the arrival clock, replay every 60 s on event
+ * time), so this checks level, scatter and coverage instead. Thresholds come
+ * from two real nights; see the README. It never changes the exit code. */
+export const TRAINING_GATE = { minimumComparedMinutes: 60, minimumCoverage: 0.9, maximumCoverage: 1.15,
+  maximumAbsMeanDifference: 0.25, maximumMedianAbsDifference: 0.5, minimumShareWithinOneBpm: 0.7 } as const
+export type TrainingGate = 'pass' | 'fail' | Exclude<ParityGate, 'pass' | 'fail'>
+
+export function trainingGate(parity: ReturnType<typeof storedParity>, gate: ParityGate) {
+  const limits = TRAINING_GATE
+  const check = (value: number | null, ok: (value: number) => boolean) => ({ value, pass: value !== null && ok(value) })
+  const checks = {
+    comparedMinutes: check(parity.comparedMinutes, value => value >= limits.minimumComparedMinutes),
+    heartRateCoverage: check(parity.heartRateCoverage, value => value >= limits.minimumCoverage && value <= limits.maximumCoverage),
+    meanDifference: check(parity.meanDifference, value => Math.abs(value) <= limits.maximumAbsMeanDifference),
+    medianAbsDifference: check(parity.medianAbsDifference, value => value <= limits.maximumMedianAbsDifference),
+    shareWithinOneBpm: check(parity.shareWithinOneBpm, value => value >= limits.minimumShareWithinOneBpm),
+  }
+  const result: TrainingGate = gate !== 'pass' && gate !== 'fail' ? gate : Object.values(checks).every(row => row.pass) ? 'pass' : 'fail'
+  return { trainingGate: result, trainingChecks: checks }
+}
+
 export function readingsFileName(night: string, configHash: string) {
   return `${night}-${configHash.slice(0, 12)}.json`
 }
@@ -88,7 +111,7 @@ interface NightResult {
   readings: number
   wallMs: number
   run: { counts: Record<string, number>, limitations: string[] }
-  parity?: ReturnType<typeof storedParity> & { comparedSpans: Array<{ startMs: number, endMs: number }>, gate: ParityGate }
+  parity?: ReturnType<typeof storedParity> & { comparedSpans: Array<{ startMs: number, endMs: number }>, gate: ParityGate } & ReturnType<typeof trainingGate>
 }
 
 interface PlannedNight {
@@ -210,8 +233,9 @@ export async function replayArchive(options: ReplayOptions) {
         const spans = warmRawSpans(night.input)
         const parity = storedParity(stored.vitals, output.readings.filter(row => row.side === options.side)
           .map(row => ({ timestampMs: row.timestampMs, heartRate: row.heartRate })), PARITY_TOLERANCE_BPM, spans)
-        result.parity = { ...parity, comparedSpans: spans, gate: parityGate(parity.share, { storedConfigHashes: stored.configHashes, configHash,
-          generations: nightGenerations(db, options.side, night.input.score_start_ms, night.input.score_end_ms).length }) }
+        const gate = parityGate(parity.share, { storedConfigHashes: stored.configHashes, configHash,
+          generations: nightGenerations(db, options.side, night.input.score_start_ms, night.input.score_end_ms).length })
+        result.parity = { ...parity, comparedSpans: spans, gate, ...trainingGate(parity, gate) }
       }
       results.set(night.night, result)
       progress(`[${++done}/${nights.length}] ${night.night} ${(result.wallMs / 1000).toFixed(1)}s`)
@@ -244,7 +268,9 @@ export async function replayArchive(options: ReplayOptions) {
       nights: rows, skipped,
       ...(options.compareStored
         ? { parity: { toleranceBpm: PARITY_TOLERANCE_BPM, minimumShare: PARITY_MINIMUM_SHARE,
-            gatedNights: rows.filter(row => row.parity?.gate === 'pass' || row.parity?.gate === 'fail').length, failedNights: failed, passed: failed.length === 0 } }
+            gatedNights: rows.filter(row => row.parity?.gate === 'pass' || row.parity?.gate === 'fail').length, failedNights: failed, passed: failed.length === 0,
+            training: { ...TRAINING_GATE, passedNights: rows.filter(row => row.parity?.trainingGate === 'pass').map(row => row.night),
+              failedNights: rows.filter(row => row.parity?.trainingGate === 'fail').map(row => row.night) } } }
         : {}),
       jobs, replayWallMs, totalWallMs: performance.now() - started }
     await writeFile(join(options.outputDirectory, 'replay.json'), `${JSON.stringify(manifest, null, 2)}\n`)

@@ -178,5 +178,26 @@ whose rows all ran defaults, replayed with defaults:
 | all minutes | 0.33 bpm | 13% | 75% |
 
 Bias was −0.11 bpm. Exact parity is what `parity` checks: local replay against
-the pod's own replay backtest. Use `meanDifference`, `shareWithinOneBpm` and
-`heartRateCoverage` to judge whether a replay reproduces what the pod stored.
+the pod's own replay backtest.
+
+Each parity row also has `trainingGate`, which decides whether the night
+reproduces what the pod stored closely enough to train on. It never changes the
+exit code. On a night held to the replayed config, it passes when all of these
+hold (`trainingChecks` gives each value):
+
+| Check | Threshold | 2026-10-19 | 2026-11-13 |
+| --- | --- | ---: | ---: |
+| `comparedMinutes` | ≥ 60 | 318 | 282 |
+| `heartRateCoverage` | 0.90 to 1.15 | 1.09 | 0.75 ✗ |
+| \|`meanDifference`\| | ≤ 0.25 bpm | 0.11 | 0.01 |
+| `medianAbsDifference` | ≤ 0.5 bpm | 0.33 | 0.37 |
+| `shareWithinOneBpm` | ≥ 0.70 | 0.75 | 0.46 ✗ |
+
+- **2026-10-19:** full pod context, and every row ran defaults. It passes.
+- **2026-11-13:** replayed without recorded occupancy, so the pump guard held
+  replay silent for the first 95 minutes. It fails on coverage, as it should.
+
+Other nights read the parity gate's `not_gated_*` or `no_heart_rate_to_compare`.
+The thresholds rest on these two nights; confirm them on more archived nights
+before relying on them. The 1 bpm share counts minutes where only one side has a
+heart rate as misses, so it also catches lost coverage.

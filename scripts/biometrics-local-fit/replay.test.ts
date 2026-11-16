@@ -13,7 +13,7 @@ import { openArchiveDatabase as createArchiveDatabase } from '../biometrics-arch
 import { archiveNights, nightGenerations, nightWindow, PREROLL_MS, rawCandidates, selectArtifacts, storedParity, warmRawSpans, type RawInspection } from './archive'
 import { runLocalFitCli } from './cli'
 import { extractExportRaw } from './export-tar'
-import { parityGate, profileFileSchema, readingsFileName } from './replay'
+import { parityGate, profileFileSchema, readingsFileName, trainingGate } from './replay'
 
 const MINUTE = 60000
 const HOUR = 60 * MINUTE
@@ -220,6 +220,23 @@ describe('stored-row parity', () => {
     expect(gate(null, [hash])).toBe('no_heart_rate_to_compare')
   })
 
+  it('passes a night for training on level, scatter and coverage, not per-minute 0.1 bpm', () => {
+    // Window-phase scatter: alternate minutes 0.4 bpm either side, no bias, full coverage.
+    const stored = rows(Array.from({ length: 120 }, () => 60))
+    const scattered = rows(Array.from({ length: 120 }, (_, index) => index % 2 ? 60.4 : 59.6))
+    const parity = storedParity(stored, scattered)
+    expect(parityGate(parity.share, { storedConfigHashes: [{ configHash: null }], generations: 1, configHash: 'a' })).toBe('fail')
+    expect(trainingGate(parity, 'fail')).toMatchObject({ trainingGate: 'pass', trainingChecks: { comparedMinutes: { value: 120, pass: true },
+      heartRateCoverage: { value: 1, pass: true }, meanDifference: { pass: true }, medianAbsDifference: { pass: true }, shareWithinOneBpm: { value: 1, pass: true } } })
+    // A level shift, lost coverage or too few minutes each fail it.
+    expect(trainingGate(storedParity(stored, rows(Array.from({ length: 120 }, () => 60.3))), 'fail').trainingGate).toBe('fail')
+    const sparse = storedParity(stored, rows(Array.from({ length: 120 }, (_, index) => index % 4 ? 60 : null)))
+    expect(trainingGate(sparse, 'fail')).toMatchObject({ trainingGate: 'fail', trainingChecks: { heartRateCoverage: { value: 0.75, pass: false } } })
+    expect(trainingGate(storedParity(rows([60, 60]), rows([60, 60])), 'pass')).toMatchObject({ trainingGate: 'fail', trainingChecks: { comparedMinutes: { value: 2, pass: false } } })
+    // Nights the parity gate doesn't hold to the replayed config aren't judged either.
+    expect(trainingGate(parity, 'not_gated_different_config').trainingGate).toBe('not_gated_different_config')
+  })
+
   it('compares only where replay had RAW and had warmed up', () => {
     const artifact = (first: number, last: number) => ({ artifact: { name: `${'a'.repeat(64)}.RAW.gz`, sha256: 'a'.repeat(64), compressed_bytes: 1, expanded_bytes: 1 },
       first_event_ms: T0 + first * MINUTE, last_event_ms: T0 + last * MINUTE - 1000 })
@@ -356,7 +373,10 @@ for index, group in enumerate([records[:301],records[301:]]):
     const checked = await replay([...args.slice(0, 4), '2026-10-19', ...args.slice(5, 11), '--compare-stored', output])
     expect(checked.nights[0].parity).toMatchObject({ gate: 'pass', share: 1, comparedMinutes: rated.length, outsideRawRows: 0,
       comparedSpans: [{ startMs: night + 360000, endMs: night + 599001 }] })
-    expect(checked.parity).toEqual({ toleranceBpm: 0.1, minimumShare: 0.95, gatedNights: 1, failedNights: [], passed: true })
+    expect(checked.parity).toMatchObject({ toleranceBpm: 0.1, minimumShare: 0.95, gatedNights: 1, failedNights: [], passed: true,
+      // Three synthetic minutes are too few to train on, whatever their agreement.
+      training: { minimumComparedMinutes: 60, passedNights: [], failedNights: ['2026-10-19'] } })
+    expect(checked.nights[0].parity).toMatchObject({ trainingGate: 'fail', trainingChecks: { comparedMinutes: { pass: false }, meanDifference: { value: 0, pass: true } } })
     const changed = createArchiveDatabase(join(archive, 'biometrics.db'))
     changed.prepare('UPDATE vitals SET heart_rate = heart_rate + 1').run()
     changed.close()
