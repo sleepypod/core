@@ -157,6 +157,36 @@ export function percentile(sorted: number[], p: number): number | null {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
 }
 
+/**
+ * Centred rolling p-quantile over ±(window/2) minutes by timestamp, ignoring
+ * nulls. A point whose own value is null stays null, as in `rollingMean`.
+ */
+export function rollingQuantile(points: VitalPoint[], key: MetricKey, p: number, windowMin: number): Array<number | null> {
+  const half = (windowMin / 2) * MINUTE
+  let lo = 0
+  let hi = 0
+  return points.map((point) => {
+    while (hi < points.length && points[hi].t <= point.t + half) hi++
+    while (points[lo].t < point.t - half) lo++
+    if (point[key] == null) return null
+    const vals = points.slice(lo, hi).map(q => q[key]).filter((v): v is number => v != null).sort((a, b) => a - b)
+    return percentile(vals, p)
+  })
+}
+
+/**
+ * Display-only breathing line. The pod's per-minute rate reads above Apple
+ * Watch respiratory rate and spikes upward in unstable minutes, so a mean
+ * follows the spikes; a 15-minute rolling 15th percentile follows the lower
+ * envelope instead. Parameters were picked against Watch respiratory rate on
+ * 23 reference nights. Stored per-minute values and stage features are unchanged.
+ */
+export const BREATHING_FLOOR = { quantile: 0.15, windowMin: 15 } as const
+
+export function breathingFloor(points: VitalPoint[]): Array<number | null> {
+  return rollingQuantile(points, 'br', BREATHING_FLOOR.quantile, BREATHING_FLOOR.windowMin)
+}
+
 function comparablePoints(points: VitalPoint[], key: MetricKey): boolean {
   const relevant = points.filter(point => point[key] !== null)
   return new Set(relevant.map(point => point.provenanceKey)).size <= 1
