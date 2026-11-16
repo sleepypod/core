@@ -7,7 +7,7 @@
 import type { HardwareClient } from './client'
 import { getActiveAlarmConfig, markAlarmEnded, markAlarmStarted } from './alarmState'
 import { withSideLock } from './sideLock'
-import type { AlarmConfig } from './alarmPersistence'
+import { isSameLinkedAlarm, type AlarmConfig } from './alarmPersistence'
 import type { Side } from './types'
 
 /**
@@ -31,22 +31,24 @@ export async function ringLinked(client: Pick<HardwareClient, 'setAlarm'>, side:
  * Stop the side linked to the alarm on `side`, which was just stopped or
  * snoozed and already marked ended. Runs under the linked side's lock, so a
  * partner start waiting for it sees the stop and skips. A different alarm
- * now ringing there is left alone, and a failed clear leaves the side marked
- * ringing so another Stop can retry.
+ * now ringing there is left alone. A failed clear leaves the side marked
+ * ringing so another Stop can retry, and returns false so the caller can
+ * report it.
  */
-export async function stopLinked(client: Pick<HardwareClient, 'clearAlarm'>, side: Side, config: AlarmConfig | null | undefined): Promise<void> {
+export async function stopLinked(client: Pick<HardwareClient, 'clearAlarm'>, side: Side, config: AlarmConfig | null | undefined): Promise<boolean> {
   const linked = config?.linkedSide
-  if (!linked || linked === side) return
-  await withSideLock(linked, async () => {
+  if (!config || !linked || linked === side) return true
+  return withSideLock(linked, async () => {
     const current = getActiveAlarmConfig(linked)
-    if (current && current.linkedSide !== side) return
+    if (current && !isSameLinkedAlarm(current, side, config)) return true
     try {
       await client.clearAlarm(linked)
     }
     catch (error) {
       console.error(`[linkedAlarm] failed to stop ${linked} with ${side}:`, error)
-      return
+      return false
     }
     await markAlarmEnded(linked)
+    return true
   })
 }

@@ -1,7 +1,7 @@
 import type { HardwareClient } from './client'
 import { MAX_TEMP, MIN_TEMP, type Side } from './types'
 import type { GestureEvent } from './dacMonitor'
-import type { AlarmConfig } from './alarmPersistence'
+import { isSameLinkedAlarm, type AlarmConfig } from './alarmPersistence'
 import { nextSnoozeSeconds } from './snoozeLength'
 import { getTemperatureController } from '@/src/temperature/instance'
 import { shouldBlock as pumpStallShouldBlock } from './pumpStallGuard'
@@ -153,11 +153,11 @@ export class GestureActionHandler {
    */
   private stopLinked = async (side: GestureEvent['side'], config: AlarmConfig | null): Promise<void> => {
     const linked = config?.linkedSide
-    if (!linked || linked === side) return
+    if (!config || !linked || linked === side) return
     await withSideLock(linked, async () => {
       // A different alarm started on that side since: leave it ringing.
       const current = this.deps.alarm.activeConfig(linked)
-      if (current && current.linkedSide !== side) return
+      if (current && !isSameLinkedAlarm(current, side, config)) return
       const client = this.deps.newHardwareClient(this.socketPath)
       try {
         await client.connect()

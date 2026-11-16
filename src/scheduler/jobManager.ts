@@ -15,6 +15,7 @@ import {
   deviceState,
 } from '@/src/db/schema'
 import { and, eq, gt } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { encode as cborEncode } from 'cbor-x'
 import { HardwareCommand } from '@/src/hardware/types'
@@ -727,7 +728,7 @@ export class JobManager {
         duration: sched.duration,
         snoozeDuration: sched.snoozeDuration,
         snoozeTaper: sched.snoozeTaper,
-        ...(partner ? { linkedSide: partner, ownerSide: sched.side } : {}),
+        ...(partner ? { linkedSide: partner, ownerSide: sched.side, linkId: randomUUID() } : {}),
       }
       await client.setAlarm(sched.side, alarm)
       // Recorded, not just broadcast: a tap gesture reads it to decide

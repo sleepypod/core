@@ -114,19 +114,45 @@ describe('snoozeManager', () => {
 
   it('brings a linked alarm (single sleeper) back on both sides', async () => {
     const solo = { ...config, linkedSide: 'right' as const, ownerSide: 'left' as const }
-    snoozeAlarm('left', 60, solo)
+    snoozeAlarm('left', 60, { ...solo, linkId: 'first' })
     await vi.advanceTimersByTimeAsync(60_000)
+    // It comes back as a new occurrence, one id on both sides.
+    const linkId = (mockSetAlarm.mock.calls[0][1] as { linkId: string }).linkId
+    expect(linkId).toEqual(expect.any(String))
+    expect(linkId).not.toBe('first')
     expect(mockSetAlarm.mock.calls).toEqual([
-      ['left', { ...solo, snoozeCount: 1 }],
-      ['right', { ...solo, snoozeCount: 1, linkedSide: 'left' }],
+      ['left', { ...solo, snoozeCount: 1, linkId }],
+      ['right', { ...solo, snoozeCount: 1, linkedSide: 'left', linkId }],
     ])
-    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('right', { ...solo, snoozeCount: 1, linkedSide: 'left' })
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('right', { ...solo, snoozeCount: 1, linkedSide: 'left', linkId })
+  })
+
+  it('gives an unlinked alarm no occurrence id', async () => {
+    snoozeAlarm('left', 60, config)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockSetAlarm).toHaveBeenCalledWith('left', { ...config, snoozeCount: 1 })
+  })
+
+  it('replaces a linked snooze taken on the other side when this side snoozes', async () => {
+    // Tapped on the unused right side, then snoozed from HomeKit on left.
+    snoozeAlarm('right', 60, { ...config, linkedSide: 'left', ownerSide: 'left' })
+    snoozeAlarm('left', 120, config)
+    expect(getSnoozeStatus('right').active).toBe(false)
+    expect(loadAlarmState().snoozes.right).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(120_000)
+    // Only the new snooze restarts the alarm, once.
+    expect(mockSetAlarm.mock.calls).toEqual([['left', { ...config, snoozeCount: 1 }]])
+  })
+
+  it('leaves the other side\'s unlinked snooze running when this side snoozes', () => {
+    snoozeAlarm('right', 60, config)
+    snoozeAlarm('left', 60, config)
+    expect(getSnoozeStatus('right').active).toBe(true)
   })
 
   it('cancels a linked snooze taken on the other side when either side is stopped', async () => {
     // Tapped on the unused right side: the snooze is recorded there only.
     snoozeAlarm('right', 60, { ...config, linkedSide: 'left', ownerSide: 'left' })
-    snoozeAlarm('left', 60, config)
     cancelSnooze('left')
     expect(getSnoozeStatus('right').active).toBe(false)
     expect(loadAlarmState().snoozes.right).toBeUndefined()

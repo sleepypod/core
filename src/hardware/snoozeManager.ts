@@ -11,6 +11,7 @@
  * startup by restoreSnoozes, so a restart during a snooze doesn't swallow
  * the alarm.
  */
+import { randomUUID } from 'node:crypto'
 import { getSharedHardwareClient } from './dacMonitor.instance'
 import { loadAlarmState, updateAlarmState, type AlarmConfig } from './alarmPersistence'
 import { getActiveAlarmConfig, markAlarmStarted } from './alarmState'
@@ -80,14 +81,21 @@ export function snoozeAlarm(
   durationSeconds: number,
   config: AlarmConfig,
 ): Date {
-  // Cancel any existing snooze for this side
-  cancel(side)
+  // Cancel any existing snooze for this side, and a linked snooze recorded on
+  // the other side for the alarm this one replaces: both would restart it.
+  cancelSnooze(side)
 
   durationSeconds = Math.min(durationSeconds, Math.floor(MAX_DELAY_MS / 1000))
   const now = Date.now()
   const snoozeUntil = new Date(now + durationSeconds * 1000)
   // The alarm comes back counting this snooze, so a tapered next one is shorter.
-  const restart = { ...config, snoozeCount: (config.snoozeCount ?? 0) + 1 }
+  // A linked alarm comes back as a new occurrence, so a stop of this one
+  // still waiting for a lock can't stop the restart.
+  const restart = {
+    ...config,
+    snoozeCount: (config.snoozeCount ?? 0) + 1,
+    ...(config.linkedSide ? { linkId: randomUUID() } : {}),
+  }
   schedule(side, snoozeUntil, restart, now)
   updateAlarmState((s) => {
     s.snoozes[side] = { until: snoozeUntil.getTime(), config: restart }

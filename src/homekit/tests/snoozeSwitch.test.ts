@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   clearAlarm: vi.fn().mockResolvedValue(undefined),
   snoozeAlarmFn: vi.fn(),
   cancelSnoozeFn: vi.fn(),
-  activeConfig: vi.fn((): { vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number } | null => null),
+  activeConfig: vi.fn<(side: string) => { vibrationIntensity: number, vibrationPattern: 'double' | 'rise', duration: number, linkedSide?: 'left' | 'right' } | null>(() => null),
   markAlarmEnded: vi.fn().mockResolvedValue(undefined),
   state: { active: false },
 }))
@@ -105,6 +105,35 @@ describe('snoozeSwitch accessory', () => {
       'plain failure',
     )
     stop()
+  })
+
+  describe('a single sleeper\'s alarm ringing on both sides', () => {
+    const owner = { vibrationIntensity: 100, vibrationPattern: 'rise' as const, duration: 120, linkedSide: 'right' as const }
+    beforeEach(() => {
+      mocks.activeConfig.mockImplementation(side => side === 'left' ? owner : { ...owner, linkedSide: 'left' })
+    })
+
+    it('on → snoozes and stops the other side too', async () => {
+      const { service, stop } = buildSnoozeSwitch('left')
+      await service.getCharacteristic(Characteristic.On).handleSetRequest(true)
+      expect(clearAlarm.mock.calls).toEqual([['left'], ['right']])
+      expect(mocks.markAlarmEnded).toHaveBeenCalledWith('right')
+      stop()
+    })
+
+    it('on → fails the request when the other side can\'t be stopped', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      clearAlarm.mockImplementation(async (side: string) => {
+        if (side === 'right') throw new Error('DAC write failed')
+      })
+      const { service, stop } = buildSnoozeSwitch('left')
+      await expect(service.getCharacteristic(Characteristic.On).handleSetRequest(true)).rejects.toBeDefined()
+      expect(snoozeAlarm).toHaveBeenCalled()
+      expect(mocks.markAlarmEnded).not.toHaveBeenCalledWith('right')
+      clearAlarm.mockReset().mockResolvedValue(undefined)
+      error.mockRestore()
+      stop()
+    })
   })
 
   it('reports active per snoozeManager state', async () => {

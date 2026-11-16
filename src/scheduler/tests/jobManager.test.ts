@@ -2247,7 +2247,10 @@ describe('JobManager residual mutation contracts', () => {
         ...row, id: 45, side: 'left', dayOfWeek: 'monday', time: '06:50', alarmTemperature: 80,
         wakeWindow: 0, snoozeDuration: 120, snoozeTaper: 50, vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120,
       })
-      const vibration = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, snoozeDuration: 120, snoozeTaper: 50, ownerSide: 'left' }
+      // Both sides carry one occurrence id, so stopping it stops only this alarm.
+      const linkId = (hardwareClient.setAlarm.mock.calls as unknown as [string, { linkId?: string }][])[0][1].linkId
+      expect(linkId).toEqual(expect.any(String))
+      const vibration = { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, snoozeDuration: 120, snoozeTaper: 50, ownerSide: 'left', linkId }
       expect(hardwareClient.setAlarm.mock.calls).toEqual([
         ['left', { ...vibration, linkedSide: 'right' }],
         ['right', { ...vibration, linkedSide: 'left' }],

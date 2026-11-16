@@ -28,6 +28,17 @@ export interface AlarmConfig {
   linkedSide?: Side
   /** Whose alarm it is: a tap on either linked side uses this side's gestures. */
   ownerSide?: Side
+  /** Identifies one occurrence of a linked alarm, so stopping it never stops a later one. */
+  linkId?: string
+}
+
+/**
+ * Whether `current`, the alarm ringing on the side linked to `side`, is the
+ * same occurrence as `config`: not an alarm started there since, nor a later
+ * linked alarm.
+ */
+export function isSameLinkedAlarm(current: AlarmConfig, side: Side, config: AlarmConfig): boolean {
+  return current.linkedSide === side && current.linkId === config.linkId
 }
 
 export interface TimedAlarm {

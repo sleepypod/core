@@ -7,7 +7,7 @@ import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/help
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
-import { getActiveAlarmConfig, markAlarmEnded, markAlarmStarted } from '@/src/hardware/alarmState'
+import { getActiveAlarmConfig, markAlarmEnded, markAlarmStarted, type AlarmConfig } from '@/src/hardware/alarmState'
 import { stopLinked } from '@/src/hardware/linkedAlarm'
 import { HardwareCommand } from '@/src/hardware/types'
 import type { Side } from '@/src/hardware/types'
@@ -103,6 +103,18 @@ interface PendingTemp {
 }
 
 const pendingTemps = new Map<string, PendingTemp>()
+
+/**
+ * The other side of a linked alarm (single sleeper) is still vibrating: its
+ * clear failed. A TRPCError, so withHardwareClient doesn't rerun the stop
+ * (which would find this side already ended and report success).
+ */
+function linkedStopFailed(active: AlarmConfig | null): TRPCError {
+  return new TRPCError({
+    code: 'INTERNAL_SERVER_ERROR',
+    message: `Stopped this side, but the alarm is still vibrating on the ${active?.linkedSide} side`,
+  })
+}
 
 /**
  * Device control router - direct hardware control for immediate operations.
@@ -543,8 +555,8 @@ export const deviceRouter = router({
         await client.clearAlarm(input.side)
         cancelSnooze(input.side)
         await markAlarmEnded(input.side)
-        await stopLinked(client, input.side, active)
         if (active?.linkedSide) cancelSnooze(active.linkedSide)
+        if (!await stopLinked(client, input.side, active)) throw linkedStopFailed(active)
         return { success: true }
       }, 'Failed to clear alarm')
     }),
@@ -577,7 +589,7 @@ export const deviceRouter = router({
           ...(active?.linkedSide ? { linkedSide: active.linkedSide, ownerSide: active.ownerSide } : {}),
         })
         await markAlarmEnded(input.side)
-        await stopLinked(client, input.side, active)
+        if (!await stopLinked(client, input.side, active)) throw linkedStopFailed(active)
         return { success: true, snoozeUntil: Math.floor(snoozeUntil.getTime() / 1000) }
       }, 'Failed to snooze alarm')
     }),

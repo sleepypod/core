@@ -424,6 +424,20 @@ describe('GestureActionHandler', () => {
       expect(alarm.ended).not.toHaveBeenCalledWith('right')
     })
 
+    test('leaves a later linked alarm ringing on the other side alone', async () => {
+      // The tapped alarm is the earlier occurrence; the other side now rings the next one.
+      const alarm = pairHooks({ ...linked('left', 'left'), linkId: 'second' })
+      const configs = { left: { ...linked('left', 'right'), linkId: 'first' } }
+      const active = alarm.activeConfig.getMockImplementation()
+      alarm.activeConfig.mockImplementation(side => side === 'left' ? configs.left : active?.(side) ?? null)
+      const { deps, client } = makeDeps({ actionType: 'alarm', alarmBehavior: 'dismiss' }, { isAlarmVibrating: true }, makeMockClient(), alarm)
+
+      await new GestureActionHandler(SOCKET_PATH, deps).handle(makeEvent('left', 'tripleTap'))
+
+      expect((client.clearAlarm as ReturnType<typeof vi.fn>).mock.calls).toEqual([['left']])
+      expect(alarm.ended).not.toHaveBeenCalledWith('right')
+    })
+
     test('keeps the other side marked ringing when stopping it fails, so it can be stopped again', async () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
       const alarm = pairHooks()
