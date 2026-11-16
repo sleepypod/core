@@ -46,6 +46,7 @@ interpreter and wheel hashes differ by platform by design.
 pnpm biometrics:local-fit verify dataset.tar
 pnpm biometrics:local-fit fit dataset.tar candidates.json out/
 pnpm biometrics:local-fit sweep dataset.tar default out/        # or a GRID.json
+pnpm biometrics:local-fit sweep dataset.tar breathing-grid.json out/ --rank breathing
 ```
 
 `candidates.json` is `[{ "id": "tol12", "overrides": [{ "path": "heart_rate.trackingToleranceBpm", "value": 12 }] }]`.
@@ -74,6 +75,16 @@ Outputs:
   alongside. Each split also shows the common-support difference against
   defaults. That difference reads 0 for a change that only withholds readings
   (such as `heart_rate.minimumPeakScore`), which is why it is not the ranking key.
+- `--rank breathing` ranks by tuning breathing-rate error against the Watch's
+  respiratory rate instead, among candidates that keep at least
+  `--min-coverage` of the defaults' Watch breathing coverage. The default,
+  `--rank hr`, is the HR ranking above. Next to the breathing error, each row
+  shows the REM−light breathing difference in pooled SD: on the candidate's own
+  readings and on the Watch's breathing, both labelled by the Watch's stages. Each
+  night's difference of REM and light means is averaged with equal weight, and
+  the SD pools each stage's spread around its own night mean. A night needs 5
+  values in each stage. Without Watch stages it reads `no_paired_reference`. The
+  numbers are in every report's `breathingStages` and in `ranking.json`.
 - `--save-readings` also writes every replay's derived readings to
   `out/readings/<night>-<config>.json` for error analysis.
 - `out/run.json`: timing, worker count and the Python build identity.
