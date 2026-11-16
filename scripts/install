@@ -766,8 +766,8 @@ chmod 0644 /etc/sleepypod/data-dir
 # Ensure ReadWritePaths directories exist — systemd's ProtectSystem=strict
 # requires all listed paths to exist or the namespace setup fails.
 # /run/dac is handled by RuntimeDirectory=dac in the service unit.
-mkdir -p /persistent/deviceinfo
-# dac.sock lives in /persistent/deviceinfo. next-server (User=sleepypod,
+mkdir -p /persistent/deviceinfo /deviceinfo
+# dac.sock can live in either supported directory. next-server (User=sleepypod,
 # SupplementaryGroups=dac) recreates the socket on startup via unlink+listen.
 # On Linux, unlink is gated by the *parent directory's* permissions, not the
 # socket file's — so the dir must be group-writable by `dac`, not just owned
@@ -777,10 +777,11 @@ mkdir -p /persistent/deviceinfo
 # consumer is either root or in the `dac` group, so world r-x adds nothing
 # but surface area.
 if getent group dac &>/dev/null; then
-  chown root:dac /persistent/deviceinfo
-  chmod 2770 /persistent/deviceinfo
+  for DEVICEINFO_DIR in /persistent/deviceinfo /deviceinfo; do
+    chown root:dac "$DEVICEINFO_DIR"
+    chmod 2770 "$DEVICEINFO_DIR"
+  done
 fi
-mkdir -p /deviceinfo
 groupadd --force sleepypod
 if id dac &>/dev/null; then
   usermod -aG sleepypod dac
