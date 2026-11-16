@@ -1,6 +1,6 @@
 import { configHash } from './canonical'
 import { biometricManifest, resolveOverrides, type Override } from './registry-core'
-export { biometricManifest, defaultConfig, validateConfig, removeOverride, legacyStageOverrides } from './registry-core'
+export { biometricManifest, defaultConfig, validateConfig, removeOverride, legacyStageOverrides, rebaseOverrides } from './registry-core'
 export type { BiometricConfig, Override } from './registry-core'
 
 export const manifestHash = configHash(biometricManifest)
