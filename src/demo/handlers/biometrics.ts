@@ -328,7 +328,7 @@ export const biometrics: DemoHandlers<'biometrics'> = {
       const b = buckets.get(key) ?? { total: 0, events: 0, samples: 0, nonStill: 0 }
       b.total += m.score
       b.samples++
-      if (m.score >= POSITION_CHANGE_SCORE_MIN) b.events++
+      if (m.score >= (input.eventScoreMin ?? POSITION_CHANGE_SCORE_MIN)) b.events++
       if (m.score >= RESTLESS_SCORE_MIN) b.nonStill++
       buckets.set(key, b)
     }
