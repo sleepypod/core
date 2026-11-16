@@ -2319,6 +2319,107 @@ describe('mqttBridge — publishState payload contents (mutation coverage)', () 
     await shutdownMqttBridge()
   })
 
+  it('publishes a ringing reversal reported while the previous publish is in flight', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const original = fake.publish.getMockImplementation() as ((...args: unknown[]) => unknown) | undefined
+    if (!original) throw new Error('fake client has no publish implementation')
+    // Hold the left alarm topic's acks until released.
+    const held: Array<() => void> = []
+    fake.publish.mockImplementation((t: string, payload: any, opts: any, cb?: (err?: Error | null) => void) => {
+      if (t.endsWith('/state/left/alarm')) {
+        held.push(() => cb?.(null))
+        return fake
+      }
+      return original(t, payload, opts, cb)
+    })
+    const settle = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+    }
+    const leftRinging = () => (fake.publish.mock.calls as [string, string][])
+      .filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`)
+      .map(([, payload]) => JSON.parse(payload).ringing)
+    const frame = (left: boolean) => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: left } })
+
+    frame(true)
+    await settle()
+    // Stopped before the start was sent.
+    frame(false)
+    await settle()
+    expect(leftRinging()).toEqual([true])
+    held.shift()?.()
+    await settle()
+    // The start's ack publishes the stop, so the retained topic ends not ringing.
+    expect(leftRinging()).toEqual([true, false])
+    held.shift()?.()
+    await settle()
+    // Sent and unchanged: no further publish.
+    frame(false)
+    await settle()
+    expect(leftRinging()).toEqual([true, false])
+    await shutdownMqttBridge()
+  })
+
+  it('does not republish a ringing change reverted before its publish was sent', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const original = fake.publish.getMockImplementation() as ((...args: unknown[]) => unknown) | undefined
+    if (!original) throw new Error('fake client has no publish implementation')
+    const held: Array<() => void> = []
+    fake.publish.mockImplementation((t: string, payload: any, opts: any, cb?: (err?: Error | null) => void) => {
+      if (t.endsWith('/state/left/alarm')) {
+        held.push(() => cb?.(null))
+        return fake
+      }
+      return original(t, payload, opts, cb)
+    })
+    const settle = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+    }
+    const leftAlarms = () => (fake.publish.mock.calls as [string][]).filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`).length
+    const frame = (left: boolean) => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: left } })
+
+    frame(true)
+    await settle()
+    // Stopped and started again before the first was sent: nothing new to publish.
+    frame(false)
+    frame(true)
+    held.shift()?.()
+    await settle()
+    expect(leftAlarms()).toBe(1)
+    await shutdownMqttBridge()
+  })
+
+  it('retries a ringing change on the next frame when reading the alarm state fails', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const settle = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+    }
+    const leftAlarms = () => (fake.publish.mock.calls as [string][]).filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`).length
+    const frame = () => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: true } })
+    try {
+      dbMock.state.throwOnSelect = true
+      frame()
+      await settle()
+      expect(warn).toHaveBeenCalledWith('[mqtt] alarm publish failed:', 'boom')
+      expect(leftAlarms()).toBe(0)
+      dbMock.state.throwOnSelect = false
+      frame()
+      await settle()
+      expect(leftAlarms()).toBe(1)
+    }
+    finally {
+      dbMock.state.throwOnSelect = false
+      warn.mockRestore()
+      await shutdownMqttBridge()
+    }
+  })
+
   it('water-level carries the DAC waterLevel', async () => {
     const { map } = await capture()
     const payload = JSON.parse(map[`sleepypod/${ID}/state/water-level`])

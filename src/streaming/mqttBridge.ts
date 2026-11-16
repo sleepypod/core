@@ -180,6 +180,8 @@ interface BridgeState {
   lastRinging: Record<'left' | 'right', boolean | null>
   /** Ringing being published from a status frame right now. */
   ringingInFlight: Record<'left' | 'right', boolean | null>
+  /** Ringing the latest status frame reported, published once nothing is in flight. */
+  ringingWanted: Record<'left' | 'right', boolean | null>
 }
 
 const state: BridgeState = {
@@ -193,6 +195,7 @@ const state: BridgeState = {
   lastPublishAt: null,
   lastRinging: { left: null, right: null },
   ringingInFlight: { left: null, right: null },
+  ringingWanted: { left: null, right: null },
 }
 
 export interface BridgeStatus {
@@ -229,22 +232,27 @@ function topic(...parts: string[]): string {
   return [prefix, deviceId(), ...parts].join('/')
 }
 
-function safePublish(t: string, payload: string | Buffer, opts: IClientPublishOptions, onSent?: () => void): void {
+function safePublish(t: string, payload: string | Buffer, opts: IClientPublishOptions, onDone?: (sent: boolean) => void): void {
   const c = state.client
-  if (!c || !c.connected) return
+  if (!c || !c.connected) {
+    onDone?.(false)
+    return
+  }
   try {
     c.publish(t, payload, opts, (err?: Error | null) => {
       if (err) {
         console.warn(`[mqtt] publish ${t} failed:`, err.message)
+        onDone?.(false)
         return
       }
       state.messagesPublished += 1
       state.lastPublishAt = new Date()
-      onSent?.()
+      onDone?.(true)
     })
   }
   catch (err) {
     console.warn(`[mqtt] publish ${t} threw:`, err instanceof Error ? err.message : err)
+    onDone?.(false)
   }
 }
 
@@ -691,8 +699,13 @@ async function publishAlarms(now = Date.now(), ringingNow: Partial<Record<'left'
       wakeWindowStart: next && next.wakeWindow > 0 ? new Date(next.at - next.wakeWindow * 60_000).toISOString() : null,
       ringing: isRinging,
       snoozedUntil: snooze.snoozeUntil != null ? new Date(snooze.snoozeUntil * 1000).toISOString() : null,
-    }), RETAINED_QOS_0, () => {
-      state.lastRinging[side] = isRinging
+    }), RETAINED_QOS_0, (sent) => {
+      if (sent) state.lastRinging[side] = isRinging
+      if (!(side in ringingNow)) return
+      state.ringingInFlight[side] = null
+      // A change reported while this was in flight (say, stopped right after
+      // it started) publishes now. After a failure the next frame retries.
+      if (sent) publishRingingWanted()
     })
   }
 }
@@ -865,6 +878,7 @@ export async function startMqttBridge(): Promise<void> {
   state.runState = 'starting'
   state.lastRinging = { left: null, right: null }
   state.ringingInFlight = { left: null, right: null }
+  state.ringingWanted = { left: null, right: null }
   state.lastError = null
 
   const { config } = await resolveConfig()
@@ -961,27 +975,32 @@ export async function startMqttBridge(): Promise<void> {
  * periodic refresh alone could miss an alarm stopped between two refreshes.
  */
 function publishRingingChange(frame: { leftSide?: { isAlarmVibrating?: unknown }, rightSide?: { isAlarmVibrating?: unknown } }): void {
-  const ringingNow: Partial<Record<'left' | 'right', boolean>> = {}
   for (const side of ['left', 'right'] as const) {
     const vibrating = frame[`${side}Side`]?.isAlarmVibrating
-    if (typeof vibrating !== 'boolean') continue
-    if (vibrating === state.lastRinging[side] || vibrating === state.ringingInFlight[side]) continue
-    ringingNow[side] = vibrating
+    if (typeof vibrating === 'boolean') state.ringingWanted[side] = vibrating
+  }
+  publishRingingWanted()
+}
+
+/**
+ * Publish each side whose latest reported ringing isn't the one published.
+ * One publish per side at a time: a side with one in flight waits for it to
+ * be sent, then publishes the latest value if it changed meanwhile. Only a
+ * sent publish updates lastRinging, so after a failure the next frame retries.
+ */
+function publishRingingWanted(): void {
+  const ringingNow: Partial<Record<'left' | 'right', boolean>> = {}
+  for (const side of ['left', 'right'] as const) {
+    const wanted = state.ringingWanted[side]
+    if (wanted === null || state.ringingInFlight[side] !== null || wanted === state.lastRinging[side]) continue
+    ringingNow[side] = wanted
   }
   if (Object.keys(ringingNow).length === 0) return
-  // Held while it publishes, so the frames that follow don't publish it
-  // again. Only a sent publish updates lastRinging: after a failure the next
-  // frame retries.
   Object.assign(state.ringingInFlight, ringingNow)
-  void publishAlarms(Date.now(), ringingNow)
-    .catch((err) => {
-      console.warn('[mqtt] alarm publish failed:', err instanceof Error ? err.message : err)
-    })
-    .finally(() => {
-      for (const side of Object.keys(ringingNow) as Array<'left' | 'right'>) {
-        if (state.ringingInFlight[side] === ringingNow[side]) state.ringingInFlight[side] = null
-      }
-    })
+  void publishAlarms(Date.now(), ringingNow).catch((err) => {
+    console.warn('[mqtt] alarm publish failed:', err instanceof Error ? err.message : err)
+    for (const side of Object.keys(ringingNow) as Array<'left' | 'right'>) state.ringingInFlight[side] = null
+  })
 }
 
 export async function shutdownMqttBridge(): Promise<void> {
