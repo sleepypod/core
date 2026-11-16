@@ -8,6 +8,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import os from 'node:os'
+import { alarmSchedules, sideSettings } from '@/src/db/schema'
+import type * as AlarmStateModule from '@/src/hardware/alarmState'
 
 // Hoisted state shared with the @/src/db mock factory — lets each test stub
 // the device_settings row that resolveConfig will read.
@@ -17,6 +19,8 @@ const dbMock = vi.hoisted(() => {
     throwOnSelect: boolean
     biometricsRow: any | null
     deviceStateRows: any[]
+    /** Rows by table, for awaited `.from(table)` reads other than device_state. */
+    tableRows: Map<unknown, any[]>
     bedTempRow: any | null
     throwOnBedTemp: false | true | string
     throwOnDeviceState: false | true | string
@@ -26,6 +30,7 @@ const dbMock = vi.hoisted(() => {
     throwOnSelect: false,
     biometricsRow: null,
     deviceStateRows: [],
+    tableRows: new Map(),
     bedTempRow: null,
     throwOnBedTemp: false,
     throwOnDeviceState: false,
@@ -39,7 +44,7 @@ const dbMock = vi.hoisted(() => {
   // The mock returns a thenable from .from() so case 2 (await of the from()
   // result) iterates state.deviceStateRows; cases 1/3/4 chain through.
   const select = vi.fn(() => ({
-    from: vi.fn(() => {
+    from: vi.fn((table?: unknown) => {
       const fromObj: any = {
         limit: vi.fn(async () => {
           if (state.throwOnSelect) throw new Error('boom')
@@ -77,7 +82,7 @@ const dbMock = vi.hoisted(() => {
             if (reject) return reject(err)
             throw err as Error
           }
-          return resolve(state.deviceStateRows)
+          return resolve(state.tableRows.get(table) ?? state.deviceStateRows)
         },
       }
       return fromObj
@@ -173,7 +178,18 @@ const deviceMock = vi.hoisted(() => ({
   setPower: vi.fn(async () => undefined),
   setAlarm: vi.fn(async () => undefined),
   clearAlarm: vi.fn(async () => undefined),
+  snoozeAlarm: vi.fn(async () => undefined),
   startPriming: vi.fn(async () => undefined),
+}))
+
+// The alarm ringing on each side, as alarmState tracks it (snooze reads it).
+const alarmStateMock = vi.hoisted(() => ({
+  getActiveAlarmConfig: vi.fn<(side: string) => any>(() => null),
+}))
+
+vi.mock('@/src/hardware/alarmState', async importOriginal => ({
+  ...await importOriginal<typeof AlarmStateModule>(),
+  getActiveAlarmConfig: alarmStateMock.getActiveAlarmConfig,
 }))
 
 // Stub the heavy app-router import — mqttBridge only needs createCaller({}) to
@@ -234,6 +250,7 @@ beforeEach(() => {
   dbMock.state.throwOnSelect = false
   dbMock.state.biometricsRow = null
   dbMock.state.deviceStateRows = []
+  dbMock.state.tableRows = new Map<unknown, any[]>([[alarmSchedules, []], [sideSettings, []]])
   dbMock.state.bedTempRow = null
   dbMock.state.throwOnBedTemp = false
   dbMock.state.throwOnDeviceState = false
@@ -250,7 +267,9 @@ beforeEach(() => {
   deviceMock.setPower.mockClear()
   deviceMock.setAlarm.mockClear()
   deviceMock.clearAlarm.mockClear()
+  deviceMock.snoozeAlarm.mockClear()
   deviceMock.startPriming.mockClear()
+  alarmStateMock.getActiveAlarmConfig.mockReset().mockReturnValue(null)
 })
 
 afterEach(() => {
@@ -1030,6 +1049,52 @@ describe('mqttBridge — message dispatch', () => {
 
     fake.emit('message', `sleepypod/${id}/cmd/start-priming`, Buffer.from(''))
     await vi.waitFor(() => expect(deviceMock.startPriming).toHaveBeenCalledWith({}))
+
+    await shutdownMqttBridge()
+  })
+
+  it('snoozes for the ringing alarm\'s own snooze length, bringing it back as it was', async () => {
+    alarmStateMock.getActiveAlarmConfig.mockImplementation(side => side === 'left'
+      ? { vibrationIntensity: 80, vibrationPattern: 'double', duration: 90, snoozeDuration: 540, snoozeTaper: 30, snoozeCount: 1 }
+      : null)
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    const cmd = `sleepypod/${deviceId()}/cmd/snooze-alarm`
+
+    // Second snooze of a 9 min alarm tapering 30%: 6.3 min.
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'left' })))
+    await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith({
+      side: 'left', duration: 378, vibrationIntensity: 80, vibrationPattern: 'double', alarmDuration: 90,
+    }))
+
+    // A duration in the payload sets the length.
+    deviceMock.snoozeAlarm.mockClear()
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'left', duration: 600 })))
+    await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', duration: 600 })))
+
+    // No alarm of ours ringing: the procedure's defaults.
+    deviceMock.snoozeAlarm.mockClear()
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'right' })))
+    await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith({ side: 'right', duration: undefined }))
+
+    await shutdownMqttBridge()
+  })
+
+  it('keeps a tapered snooze within the procedure\'s 1-30 min', async () => {
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    const cmd = `sleepypod/${deviceId()}/cmd/snooze-alarm`
+
+    alarmStateMock.getActiveAlarmConfig.mockReturnValue({ vibrationIntensity: 50, vibrationPattern: 'rise', duration: 60, snoozeDuration: 120, snoozeTaper: 60, snoozeCount: 3 })
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'left' })))
+    await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith(expect.objectContaining({ duration: 60 })))
+
+    deviceMock.snoozeAlarm.mockClear()
+    alarmStateMock.getActiveAlarmConfig.mockReturnValue({ vibrationIntensity: 50, vibrationPattern: 'rise', duration: 60, snoozeDuration: 3600 })
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'left' })))
+    await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith(expect.objectContaining({ duration: 1800 })))
 
     await shutdownMqttBridge()
   })
@@ -2042,6 +2107,55 @@ describe('mqttBridge — HA discovery payload contents (mutation coverage)', () 
         value_template: '{{ value_json.hrv }}',
         unit: 'ms',
       })
+      const alarmTopic = `sleepypod/${ID}/state/${side}/alarm`
+      expected[`homeassistant/sensor/${ID}/${side}_next_alarm/config`] = {
+        name: `${Side} next alarm`,
+        unique_id: `${ID}_${side}_next_alarm`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        value_template: '{{ value_json.nextAlarm if value_json.nextAlarm else \'None\' }}',
+        json_attributes_topic: alarmTopic,
+        device_class: 'timestamp',
+        icon: 'mdi:alarm',
+        device: DEVICE,
+      }
+      expected[`homeassistant/binary_sensor/${ID}/${side}_alarm_ringing/config`] = {
+        name: `${Side} alarm ringing`,
+        unique_id: `${ID}_${side}_alarm_ringing`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: alarmTopic,
+        value_template: '{{ \'on\' if value_json.ringing else \'off\' }}',
+        payload_on: 'on',
+        payload_off: 'off',
+        icon: 'mdi:alarm-light',
+        device: DEVICE,
+      }
+      expected[`homeassistant/button/${ID}/${side}_snooze_alarm/config`] = {
+        name: `${Side} snooze alarm`,
+        unique_id: `${ID}_${side}_snooze_alarm`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        command_topic: `sleepypod/${ID}/cmd/snooze-alarm`,
+        payload_press: JSON.stringify({ side }),
+        icon: 'mdi:alarm-snooze',
+        device: DEVICE,
+      }
+      expected[`homeassistant/button/${ID}/${side}_stop_alarm/config`] = {
+        name: `${Side} stop alarm`,
+        unique_id: `${ID}_${side}_stop_alarm`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        command_topic: `sleepypod/${ID}/cmd/clear-alarm`,
+        payload_press: JSON.stringify({ side }),
+        icon: 'mdi:alarm-off',
+        device: DEVICE,
+      }
     }
 
     expect(got).toEqual(expected)
@@ -2097,6 +2211,213 @@ describe('mqttBridge — publishState payload contents (mutation coverage)', () 
     })
     expect(typeof payload.ts).toBe('number')
     await shutdownMqttBridge()
+  })
+
+  it('per-side alarm payload carries the ringing state, and no alarm when none is set', async () => {
+    const { map } = await capture()
+    for (const [side, ringing] of [['left', false], ['right', true]] as const) {
+      expect(JSON.parse(map[`sleepypod/${ID}/state/${side}/alarm`])).toEqual({
+        ts: expect.any(Number),
+        nextAlarm: null,
+        time: null,
+        day: null,
+        wakeWindowMinutes: 0,
+        wakeWindowStart: null,
+        ringing,
+        snoozedUntil: null,
+      })
+    }
+    await shutdownMqttBridge()
+  })
+
+  it('per-side alarm payload carries the next enabled alarm and its wake window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // Friday 2026-01-02 12:00 UTC; the device timezone falls back to Los Angeles (UTC-8).
+    vi.setSystemTime(new Date('2026-01-02T12:00:00Z'))
+    try {
+      dbMock.state.tableRows.set(alarmSchedules, [
+        { id: 1, side: 'left', dayOfWeek: 'saturday', time: '07:30', wakeWindow: 20, enabled: true },
+        { id: 2, side: 'left', dayOfWeek: 'friday', time: '06:00', wakeWindow: 0, enabled: false },
+        { id: 3, side: 'right', dayOfWeek: 'saturday', time: '06:00', wakeWindow: 0, enabled: false },
+      ])
+      const { map } = await capture()
+      expect(JSON.parse(map[`sleepypod/${ID}/state/left/alarm`])).toEqual({
+        ts: new Date('2026-01-02T12:00:00Z').getTime(),
+        nextAlarm: '2026-01-03T15:30:00.000Z',
+        time: '07:30',
+        day: 'saturday',
+        wakeWindowMinutes: 20,
+        wakeWindowStart: '2026-01-03T15:10:00.000Z',
+        ringing: false,
+        snoozedUntil: null,
+      })
+      expect(JSON.parse(map[`sleepypod/${ID}/state/right/alarm`]).nextAlarm).toBeNull()
+    }
+    finally {
+      vi.useRealTimers()
+      await shutdownMqttBridge()
+    }
+  })
+
+  it('retries a ringing change whose publish failed on the next status frame', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const original = fake.publish.getMockImplementation() as ((...args: unknown[]) => unknown) | undefined
+    if (!original) throw new Error('fake client has no publish implementation')
+    fake.publish.mockImplementation((t: string, payload: any, opts: any, cb?: (err?: Error | null) => void) => {
+      if (t.endsWith('/state/left/alarm')) {
+        cb?.(new Error('broker hiccup'))
+        return fake
+      }
+      return original(t, payload, opts, cb)
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frame = () => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: true }, rightSide: { isAlarmVibrating: true } })
+    const leftAlarms = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+      return (fake.publish.mock.calls as [string][]).filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`).length
+    }
+
+    frame()
+    expect(await leftAlarms()).toBe(1)
+    // The failed publish is retried by the next frame, not dropped.
+    fake.publish.mockImplementation(original)
+    frame()
+    expect(await leftAlarms()).toBe(2)
+    // Sent now: further frames don't republish.
+    frame()
+    expect(await leftAlarms()).toBe(2)
+    warn.mockRestore()
+    await shutdownMqttBridge()
+  })
+
+  it('publishes the alarm topic as soon as a side starts or stops ringing', async () => {
+    const { fake } = await capture()
+    const alarmPublishes = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+      const out = (fake.publish.mock.calls as [string, string][])
+        .filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`)
+        .map(([, payload]) => JSON.parse(payload).ringing)
+      fake.publish.mockClear()
+      return out
+    }
+    const frame = (left: boolean) => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: left }, rightSide: { isAlarmVibrating: true } })
+    fake.publish.mockClear()
+
+    // Starts ringing: published at once, before the stored state catches up.
+    frame(true)
+    expect(await alarmPublishes()).toEqual([true])
+    // Unchanged status frames don't republish it.
+    frame(true)
+    frame(true)
+    expect(await alarmPublishes()).toEqual([])
+    // Stopped (a dismissal) before the next periodic refresh.
+    frame(false)
+    expect(await alarmPublishes()).toEqual([false])
+    await shutdownMqttBridge()
+  })
+
+  it('publishes a ringing reversal reported while the previous publish is in flight', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const original = fake.publish.getMockImplementation() as ((...args: unknown[]) => unknown) | undefined
+    if (!original) throw new Error('fake client has no publish implementation')
+    // Hold the left alarm topic's acks until released.
+    const held: Array<() => void> = []
+    fake.publish.mockImplementation((t: string, payload: any, opts: any, cb?: (err?: Error | null) => void) => {
+      if (t.endsWith('/state/left/alarm')) {
+        held.push(() => cb?.(null))
+        return fake
+      }
+      return original(t, payload, opts, cb)
+    })
+    const settle = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+    }
+    const leftRinging = () => (fake.publish.mock.calls as [string, string][])
+      .filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`)
+      .map(([, payload]) => JSON.parse(payload).ringing)
+    const frame = (left: boolean) => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: left } })
+
+    frame(true)
+    await settle()
+    // Stopped before the start was sent.
+    frame(false)
+    await settle()
+    expect(leftRinging()).toEqual([true])
+    held.shift()?.()
+    await settle()
+    // The start's ack publishes the stop, so the retained topic ends not ringing.
+    expect(leftRinging()).toEqual([true, false])
+    held.shift()?.()
+    await settle()
+    // Sent and unchanged: no further publish.
+    frame(false)
+    await settle()
+    expect(leftRinging()).toEqual([true, false])
+    await shutdownMqttBridge()
+  })
+
+  it('does not republish a ringing change reverted before its publish was sent', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const original = fake.publish.getMockImplementation() as ((...args: unknown[]) => unknown) | undefined
+    if (!original) throw new Error('fake client has no publish implementation')
+    const held: Array<() => void> = []
+    fake.publish.mockImplementation((t: string, payload: any, opts: any, cb?: (err?: Error | null) => void) => {
+      if (t.endsWith('/state/left/alarm')) {
+        held.push(() => cb?.(null))
+        return fake
+      }
+      return original(t, payload, opts, cb)
+    })
+    const settle = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+    }
+    const leftAlarms = () => (fake.publish.mock.calls as [string][]).filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`).length
+    const frame = (left: boolean) => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: left } })
+
+    frame(true)
+    await settle()
+    // Stopped and started again before the first was sent: nothing new to publish.
+    frame(false)
+    frame(true)
+    held.shift()?.()
+    await settle()
+    expect(leftAlarms()).toBe(1)
+    await shutdownMqttBridge()
+  })
+
+  it('retries a ringing change on the next frame when reading the alarm state fails', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const settle = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+    }
+    const leftAlarms = () => (fake.publish.mock.calls as [string][]).filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`).length
+    const frame = () => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: true } })
+    try {
+      dbMock.state.throwOnSelect = true
+      frame()
+      await settle()
+      expect(warn).toHaveBeenCalledWith('[mqtt] alarm publish failed:', 'boom')
+      expect(leftAlarms()).toBe(0)
+      dbMock.state.throwOnSelect = false
+      frame()
+      await settle()
+      expect(leftAlarms()).toBe(1)
+    }
+    finally {
+      dbMock.state.throwOnSelect = false
+      warn.mockRestore()
+      await shutdownMqttBridge()
+    }
   })
 
   it('water-level carries the DAC waterLevel', async () => {
