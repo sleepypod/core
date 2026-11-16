@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import os from 'node:os'
+import { alarmSchedules, sideSettings } from '@/src/db/schema'
 
 // Hoisted state shared with the @/src/db mock factory — lets each test stub
 // the device_settings row that resolveConfig will read.
@@ -17,6 +18,8 @@ const dbMock = vi.hoisted(() => {
     throwOnSelect: boolean
     biometricsRow: any | null
     deviceStateRows: any[]
+    /** Rows by table, for awaited `.from(table)` reads other than device_state. */
+    tableRows: Map<unknown, any[]>
     bedTempRow: any | null
     throwOnBedTemp: false | true | string
     throwOnDeviceState: false | true | string
@@ -26,6 +29,7 @@ const dbMock = vi.hoisted(() => {
     throwOnSelect: false,
     biometricsRow: null,
     deviceStateRows: [],
+    tableRows: new Map(),
     bedTempRow: null,
     throwOnBedTemp: false,
     throwOnDeviceState: false,
@@ -39,7 +43,7 @@ const dbMock = vi.hoisted(() => {
   // The mock returns a thenable from .from() so case 2 (await of the from()
   // result) iterates state.deviceStateRows; cases 1/3/4 chain through.
   const select = vi.fn(() => ({
-    from: vi.fn(() => {
+    from: vi.fn((table?: unknown) => {
       const fromObj: any = {
         limit: vi.fn(async () => {
           if (state.throwOnSelect) throw new Error('boom')
@@ -77,7 +81,7 @@ const dbMock = vi.hoisted(() => {
             if (reject) return reject(err)
             throw err as Error
           }
-          return resolve(state.deviceStateRows)
+          return resolve(state.tableRows.get(table) ?? state.deviceStateRows)
         },
       }
       return fromObj
@@ -234,6 +238,7 @@ beforeEach(() => {
   dbMock.state.throwOnSelect = false
   dbMock.state.biometricsRow = null
   dbMock.state.deviceStateRows = []
+  dbMock.state.tableRows = new Map([[alarmSchedules, []], [sideSettings, []]])
   dbMock.state.bedTempRow = null
   dbMock.state.throwOnBedTemp = false
   dbMock.state.throwOnDeviceState = false
@@ -2140,6 +2145,68 @@ describe('mqttBridge — publishState payload contents (mutation coverage)', () 
         snoozedUntil: null,
       })
     }
+    await shutdownMqttBridge()
+  })
+
+  it('per-side alarm payload carries the next enabled alarm and its wake window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // Friday 2026-01-02 12:00 UTC; the device timezone falls back to Los Angeles (UTC-8).
+    vi.setSystemTime(new Date('2026-01-02T12:00:00Z'))
+    try {
+      dbMock.state.tableRows.set(alarmSchedules, [
+        { id: 1, side: 'left', dayOfWeek: 'saturday', time: '07:30', wakeWindow: 20, enabled: true },
+        { id: 2, side: 'left', dayOfWeek: 'friday', time: '06:00', wakeWindow: 0, enabled: false },
+        { id: 3, side: 'right', dayOfWeek: 'saturday', time: '06:00', wakeWindow: 0, enabled: false },
+      ])
+      const { map } = await capture()
+      expect(JSON.parse(map[`sleepypod/${ID}/state/left/alarm`])).toEqual({
+        ts: new Date('2026-01-02T12:00:00Z').getTime(),
+        nextAlarm: '2026-01-03T15:30:00.000Z',
+        time: '07:30',
+        day: 'saturday',
+        wakeWindowMinutes: 20,
+        wakeWindowStart: '2026-01-03T15:10:00.000Z',
+        ringing: false,
+        snoozedUntil: null,
+      })
+      expect(JSON.parse(map[`sleepypod/${ID}/state/right/alarm`]).nextAlarm).toBeNull()
+    }
+    finally {
+      vi.useRealTimers()
+      await shutdownMqttBridge()
+    }
+  })
+
+  it('retries a ringing change whose publish failed on the next status frame', async () => {
+    const { fake } = await capture()
+    fake.publish.mockClear()
+    const original = fake.publish.getMockImplementation()
+    if (!original) throw new Error('fake client has no publish implementation')
+    fake.publish.mockImplementation((t: string, payload: any, opts: any, cb?: (err?: Error | null) => void) => {
+      if (t.endsWith('/state/left/alarm')) {
+        cb?.(new Error('broker hiccup'))
+        return fake
+      }
+      return original(t, payload, opts, cb)
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frame = () => piezoMock.state.listener?.({ type: 'deviceStatus', leftSide: { isAlarmVibrating: true }, rightSide: { isAlarmVibrating: true } })
+    const leftAlarms = async () => {
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 0))
+      return (fake.publish.mock.calls as [string][]).filter(([t]) => t === `sleepypod/${ID}/state/left/alarm`).length
+    }
+
+    frame()
+    expect(await leftAlarms()).toBe(1)
+    // The failed publish is retried by the next frame, not dropped.
+    fake.publish.mockImplementation(original)
+    frame()
+    expect(await leftAlarms()).toBe(2)
+    // Sent now: further frames don't republish.
+    frame()
+    expect(await leftAlarms()).toBe(2)
+    warn.mockRestore()
     await shutdownMqttBridge()
   })
 
