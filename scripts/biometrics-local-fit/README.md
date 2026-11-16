@@ -121,9 +121,18 @@ No dataset export is needed; the archive database supplies each night's context.
   at or after its last frame), are inspected with the shipped
   `inspection_worker`, or taken from the pod's own `biometric_raw_sources` row for
   the same bytes. Files with frames in the window are replayed in event order;
-  the others are listed under `rawExcluded` with the reason. Overlapping files or
-  more than 64 files in one night are refused. Inspections are cached in
-  `out/inspections/`.
+  the others are listed under `rawExcluded` with the reason. Inspections are
+  cached in `out/inspections/`.
+- **Long nights and overlaps.** The worker takes at most 64 files per run and
+  refuses files whose frames overlap, as the pod's retained datasets do. A
+  night is split into worker inputs (`inputs` in `replay.json`) whose score
+  windows tile it, so the readings concatenate without duplicates:
+  - Past 64 files, the next input starts where the first file it leaves out
+    starts. It re-reads the files covering the 5-minute pre-roll before that.
+  - A few Pod 5 archives start a second before the previous one ends. Such an
+    overlap starts a cold segment at the later file, scored from 5 minutes in,
+    and is listed under `coldRestarts`. Those 5 minutes have no readings.
+  - Each input cold-starts its processor, as every pod replay does.
 - **`--export NIGHT=PATH`** replays a night the archive has no RAW for from a
   `GET /api/export/archive` tarball (`./raw/<NAME>.RAW.gz`). Only the RAW comes
   from the tarball; the night's window and context still come from the archive
@@ -147,10 +156,11 @@ Outputs:
   reading count, worker counts and limitations, and wall time.
 
 `--compare-stored` adds per-night parity against the archive's stored `vitals`.
-It compares only `comparedSpans`: stretches where replay had RAW (gaps of at
-most 60 s) and had warmed up for the 5-minute pre-roll. Rows elsewhere are
-counted in `outsideRawRows`. An export that covers only one of the night's
-sessions is the usual cause. Each stored minute is matched to the nearest
+It compares only `comparedSpans`: stretches inside the night's sleep sessions
+where replay had RAW (gaps of at most 60 s, no overlap) and had warmed up for the
+5-minute pre-roll. Rows elsewhere are counted in `outsideRawRows`. Typical
+causes are an export that covers only one of the night's sessions, or live
+writing vitals between sessions, where replay has no occupancy context. Each stored minute is matched to the nearest
 replayed reading within 30 s. It reports:
 
 - `share`: minutes where both have a heart rate within 0.1 bpm. A minute where
@@ -185,19 +195,27 @@ reproduces what the pod stored closely enough to train on. It never changes the
 exit code. On a night held to the replayed config, it passes when all of these
 hold (`trainingChecks` gives each value):
 
-| Check | Threshold | 2026-10-19 | 2026-11-13 |
-| --- | --- | ---: | ---: |
-| `comparedMinutes` | ≥ 60 | 318 | 282 |
-| `heartRateCoverage` | 0.90 to 1.15 | 1.09 | 0.75 ✗ |
-| \|`meanDifference`\| | ≤ 0.25 bpm | 0.11 | 0.01 |
-| `medianAbsDifference` | ≤ 0.5 bpm | 0.33 | 0.37 |
-| `shareWithinOneBpm` | ≥ 0.70 | 0.75 | 0.46 ✗ |
+| Check | Threshold | Range on 16 clean nights |
+| --- | --- | --- |
+| `comparedMinutes` | ≥ 60 | 140–483 |
+| `heartRateCoverage` | 0.90 to 1.20 | 0.94–1.12 |
+| \|`trimmedMeanDifference`\|: bias over minutes within 5 bpm | ≤ 0.25 bpm | ≤ 0.11 |
+| `medianAbsDifference` | ≤ 0.6 bpm | 0.31–0.52 |
+| `matchedShareWithinOneBpm`: of minutes where both have a heart rate | ≥ 0.70 | 0.74–0.84 |
+| `jumpShare`: matched minutes more than 5 bpm apart | ≤ 0.10 | 0.009–0.071 |
 
-- **2026-10-19:** full pod context, and every row ran defaults. It passes.
-- **2026-11-13:** replayed without recorded occupancy, so the pump guard held
-  replay silent for the first 95 minutes. It fails on coverage, as it should.
+The ranges come from 17 archived left-side nights (2026-10-19 to 11-14) replayed
+with defaults, each with stored rows all from defaults. The gate passes 16 of
+them. It fails:
 
-Other nights read the parity gate's `not_gated_*` or `no_heart_rate_to_compare`.
-The thresholds rest on these two nights; confirm them on more archived nights
-before relying on them. The 1 bpm share counts minutes where only one side has a
-heart rate as misses, so it also catches lost coverage.
+- 2026-11-14, a 13-minute fragment: minutes, coverage and jumps.
+- 2026-11-13 replayed without recorded occupancy: coverage 0.75, because the
+  pump guard held replay silent for the first 95 minutes.
+
+The ten nights that ran 04f7a165 replay identical HR with either profile and
+fall in the same ranges.
+
+Bias uses the trimmed mean because a few jumps dominate the plain
+`meanDifference`. On 2026-11-08, 10 jumps out of 181 matched minutes make it
+−0.67 bpm, against 0.02 without them. `shareWithinOneBpm`, `oneSidedShare` and
+`meanDifference` are still reported.

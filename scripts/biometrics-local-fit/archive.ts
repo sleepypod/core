@@ -14,6 +14,10 @@ export type RetainedInput = z.infer<typeof retainedWaveformInputSchema>
 export const PREROLL_MS = 300000
 /** The retained input format accepts at most this many RAW files. */
 export const MAX_ARTIFACTS = 64
+/** Files written up to this long after the night can still hold its last frames. */
+export const TAIL_MS = 2 * 3600000
+/** A matched minute differing by more than this is a jump (a tracker on another beat), not scatter. */
+export const JUMP_BPM = 5
 /** A pod HR row and a replayed reading count as the same minute within this. */
 export const MATCH_TOLERANCE_MS = 30000
 
@@ -92,7 +96,8 @@ export interface RawFile { sha256: string, name: string, mtimeMs: number, path: 
 export function rawCandidates<T extends { mtimeMs: number, sha256: string }>(files: T[], window: { retainedStartMs: number, endMs: number }, tail = 2) {
   const sorted = files.filter(file => file.mtimeMs >= window.retainedStartMs - 60000).sort((a, b) => a.mtimeMs - b.mtimeMs || a.sha256.localeCompare(b.sha256))
   const inside = sorted.filter(file => file.mtimeMs < window.endMs)
-  return [...inside, ...sorted.slice(inside.length, inside.length + tail)]
+  // A pod archive spans about 15 minutes, so a file written hours later holds none of the night.
+  return [...inside, ...sorted.slice(inside.length, inside.length + tail).filter(file => file.mtimeMs < window.endMs + TAIL_MS)]
 }
 
 export function archiveRawFiles(db: Database.Database, archiveDirectory: string): RawFile[] {
@@ -116,7 +121,7 @@ export interface SelectedArtifacts {
 }
 
 /** Keep the inspected files with frames in [retainedStart, end), in event order.
- * Overlapping files are refused rather than guessing which frames to drop. */
+ * Overlapping files are kept; planReplayInputs splits the night at each overlap. */
 export function selectArtifacts(inspections: Array<{ sha256: string, inspection: RawInspection | null }>, window: { retainedStartMs: number, endMs: number }): SelectedArtifacts {
   const excluded: SelectedArtifacts['excluded'] = []
   const artifacts: RetainedInput['artifacts'] = []
@@ -137,15 +142,60 @@ export function selectArtifacts(inspections: Array<{ sha256: string, inspection:
     artifacts.push({ artifact: inspection.artifact, first_event_ms: first, last_event_ms: last })
   }
   artifacts.sort((a, b) => a.first_event_ms - b.first_event_ms || a.artifact.sha256.localeCompare(b.artifact.sha256))
-  for (let index = 1; index < artifacts.length; index++) {
-    // Bounds may touch, as in the worker.
-    if (artifacts[index].first_event_ms < artifacts[index - 1].last_event_ms) {
-      throw new Error(`RAW files overlap in time: ${artifacts[index - 1].artifact.sha256} and ${artifacts[index].artifact.sha256}`)
-    }
-  }
   if (!artifacts.length) throw new Error('No RAW file has frames in the in-bed window')
-  if (artifacts.length > MAX_ARTIFACTS) throw new Error(`The night needs ${artifacts.length} RAW files; one replay takes at most ${MAX_ARTIFACTS}`)
   return { artifacts, excluded }
+}
+
+export interface ColdRestart { atMs: number, previousSha256: string, nextSha256: string, overlapMs: number }
+type Artifacts = RetainedInput['artifacts']
+
+/**
+ * Split a night into worker inputs the unchanged worker accepts: at most
+ * maxArtifacts files each, with ordered, non-overlapping files (bounds may
+ * touch). Score windows partition the night, so the readings concatenate
+ * without duplicates.
+ * - Past maxArtifacts files, the next input starts where the first file it
+ *   leaves out starts, and re-reads the files covering the 5-minute pre-roll
+ *   before it, as the pod's own pre-roll does.
+ * - The worker refuses overlapping files, as the pod's retained datasets do
+ *   (a few Pod 5 archives start a second before the previous one ends). An
+ *   overlap starts a new cold segment at the later file, scored from 5 minutes
+ *   in, so nothing is emitted before the pre-roll has run.
+ */
+export function planReplayInputs(window: { retainedStartMs: number, startMs: number, endMs: number, contexts: RetainedInput['contexts'] },
+  artifacts: Artifacts, maxArtifacts = MAX_ARTIFACTS) {
+  const segments: Artifacts[] = []
+  const coldRestarts: ColdRestart[] = []
+  for (const source of artifacts) {
+    const segment = segments.at(-1), previous = segment?.at(-1)
+    if (segment && previous && source.first_event_ms < previous.last_event_ms) {
+      coldRestarts.push({ atMs: source.first_event_ms, previousSha256: previous.artifact.sha256, nextSha256: source.artifact.sha256,
+        overlapMs: previous.last_event_ms - source.first_event_ms })
+      segments.push([source])
+    }
+    else if (segment) segment.push(source)
+    else segments.push([source])
+  }
+  const inputs: RetainedInput[] = []
+  segments.forEach((segment, index) => {
+    const end = Math.min(window.endMs, index + 1 < segments.length ? segments[index + 1][0].first_event_ms : window.endMs)
+    const floor = index === 0 ? window.retainedStartMs : segment[0].first_event_ms
+    let scoreStart = Math.max(window.startMs, index === 0 ? window.startMs : segment[0].first_event_ms + PREROLL_MS)
+    let retainedStart = floor
+    while (scoreStart < end) {
+      const usable = segment.filter(source => source.last_event_ms >= retainedStart && source.first_event_ms < end)
+      const scoreEnd = usable.length > maxArtifacts ? usable[maxArtifacts].first_event_ms : end
+      if (scoreEnd <= scoreStart) throw new Error(`The pre-roll alone needs more than ${maxArtifacts} RAW files`)
+      inputs.push({ version: 'retained-waveform-input-v1', retained_start_ms: retainedStart, score_start_ms: scoreStart, score_end_ms: scoreEnd,
+        artifacts: usable.filter(source => source.first_event_ms < scoreEnd),
+        contexts: window.contexts.filter(row => row.end_ms > retainedStart && row.start_ms < scoreEnd)
+          .map(row => ({ ...row, start_ms: Math.max(row.start_ms, retainedStart), end_ms: Math.min(row.end_ms, scoreEnd) })) })
+      scoreStart = scoreEnd
+      retainedStart = Math.max(floor, scoreEnd - PREROLL_MS)
+    }
+  })
+  if (!inputs.length) throw new Error('No RAW file has frames in the in-bed window')
+  return { inputs, coldRestarts }
 }
 
 export interface Generation {
@@ -187,16 +237,25 @@ export function storedVitals(db: Database.Database, side: Side, startMs: number,
 
 /** Where replay had frames and had warmed up: RAW runs with gaps of at most
  * gapMs, each from PREROLL_MS after its first frame (or after the retained
- * start). Stored rows elsewhere have nothing to be compared with. */
-export function warmRawSpans(input: RetainedInput, gapMs = 60000) {
+ * start). An overlap starts a new run, as planReplayInputs starts a cold
+ * segment there. Stored rows elsewhere have nothing to be compared with. */
+export function warmRawSpans(input: { retained_start_ms: number, artifacts: Artifacts }, gapMs = 60000) {
   const runs: Array<{ startMs: number, endMs: number }> = []
   for (const source of input.artifacts) {
     const first = Math.max(source.first_event_ms, input.retained_start_ms), last = source.last_event_ms + 1
     const previous = runs.at(-1)
-    if (previous && first - previous.endMs <= gapMs) previous.endMs = Math.max(previous.endMs, last)
+    // endMs is last + 1, so touching bounds (first === last) still continue the run.
+    if (previous && first >= previous.endMs - 1 && first - previous.endMs <= gapMs) previous.endMs = Math.max(previous.endMs, last)
     else runs.push({ startMs: first, endMs: last })
   }
   return runs.map(run => ({ startMs: run.startMs + PREROLL_MS, endMs: run.endMs })).filter(run => run.endMs > run.startMs)
+}
+
+/** The parts of spans inside the night's sleep sessions: live keeps writing
+ * vitals between sessions, where replay has no occupancy context. */
+export function inBedSpans(spans: Array<{ startMs: number, endMs: number }>, sessions: Array<{ startMs: number, endMs: number }>) {
+  return spans.flatMap(span => sessions.map(session => ({ startMs: Math.max(span.startMs, session.startMs), endMs: Math.min(span.endMs, session.endMs) })))
+    .filter(span => span.endMs > span.startMs).sort((a, b) => a.startMs - b.startMs)
 }
 
 /** Per stored minute inside spans: the nearest replayed reading within MATCH_TOLERANCE_MS.
@@ -228,13 +287,21 @@ export function storedParity(allStored: StoredVital[], replayed: StoredVital[], 
     if (Math.abs(difference) <= 1) withinOne++
   }
   const absolute = differences.map(Math.abs).sort((a, b) => a - b)
+  const steady = differences.filter(value => Math.abs(value) <= JUMP_BPM)
   const storedRated = stored.filter(row => row.heartRate !== null).length
   return { toleranceBpm, storedRows: stored.length, outsideRawRows: allStored.length - stored.length, comparedMinutes: compared, withinMinutes: within, bothHeartRateMinutes: differences.length,
     storedWithoutReplay: unmatched, replayedWithoutStored: readings.filter((row, index) => !used.has(index) && row.heartRate !== null).length,
     share: compared ? within / compared : null, shareWithinOneBpm: compared ? withinOne / compared : null,
+    // Of minutes where both have a heart rate: the scatter alone, without abstentions.
+    matchedShareWithinOneBpm: differences.length ? withinOne / differences.length : null,
+    // Minutes where only one side has a heart rate.
+    oneSidedShare: compared ? (compared - differences.length) / compared : null,
     // Replayed heart-rate minutes per stored heart-rate minute: low when replay lacks context the live side had.
     heartRateCoverage: storedRated ? readings.filter(row => row.heartRate !== null).length / storedRated : null,
     meanDifference: differences.length ? differences.reduce((sum, value) => sum + value, 0) / differences.length : null,
+    // Without jumps: a few minutes where one side locked onto another beat move the plain mean by tenths.
+    trimmedMeanDifference: steady.length ? steady.reduce((sum, value) => sum + value, 0) / steady.length : null,
+    jumpShare: differences.length ? (differences.length - steady.length) / differences.length : null,
     medianAbsDifference: absolute.length ? (absolute[(absolute.length - 1) >> 1] + absolute[absolute.length >> 1]) / 2 : null,
     meanAbsDifference: absolute.length ? absolute.reduce((sum, value) => sum + value, 0) / absolute.length : null, maxAbsDifference: absolute.at(-1) ?? null }
 }

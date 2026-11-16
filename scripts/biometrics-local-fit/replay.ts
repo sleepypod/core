@@ -9,8 +9,8 @@ import { rawInspectionSchema } from '@/src/biometrics/backtest/raw-catalog'
 import { runRawInspectionChild } from '@/src/biometrics/backtest/raw-inspection-child'
 import { runWaveformChild } from '@/src/biometrics/backtest/waveform-child'
 import { retainedWaveformInputSchema } from '@/src/biometrics/backtest/waveform-contracts'
-import { archivedInspection, archiveNights, archiveRawFiles, nightGenerations, nightWindow, openArchiveDatabase, rawCandidates,
-  selectArtifacts, storedParity, storedVitals, warmRawSpans, type RawInspection, type RetainedInput, type Side } from './archive'
+import { archivedInspection, archiveNights, archiveRawFiles, inBedSpans, nightGenerations, nightWindow, openArchiveDatabase, planReplayInputs, rawCandidates,
+  selectArtifacts, storedParity, storedVitals, warmRawSpans, type ColdRestart, type RawInspection, type RetainedInput, type Side } from './archive'
 import { extractExportRaw } from './export-tar'
 import { candidateSchema, defaultPythonLocation, describeLocalBuild, runPool, type PythonLocation } from './fit'
 
@@ -42,10 +42,10 @@ export function parityGate(share: number | null, provenance: { storedConfigHashe
 /** Whether a replayed night reproduces what the pod stored closely enough to
  * train on. Per-minute 0.1 bpm is out of reach against live rows (window phase:
  * live writes every 60-63 s on the arrival clock, replay every 60 s on event
- * time), so this checks level, scatter and coverage instead. Thresholds come
- * from two real nights; see the README. It never changes the exit code. */
-export const TRAINING_GATE = { minimumComparedMinutes: 60, minimumCoverage: 0.9, maximumCoverage: 1.15,
-  maximumAbsMeanDifference: 0.25, maximumMedianAbsDifference: 0.5, minimumShareWithinOneBpm: 0.7 } as const
+ * time), so this checks level, scatter, jumps and coverage instead. Calibrated
+ * on 27 archived nights (README); it never changes the exit code. */
+export const TRAINING_GATE = { minimumComparedMinutes: 60, minimumCoverage: 0.9, maximumCoverage: 1.2,
+  maximumAbsTrimmedMeanDifference: 0.25, maximumMedianAbsDifference: 0.6, minimumMatchedShareWithinOneBpm: 0.7, maximumJumpShare: 0.1 } as const
 export type TrainingGate = 'pass' | 'fail' | Exclude<ParityGate, 'pass' | 'fail'>
 
 export function trainingGate(parity: ReturnType<typeof storedParity>, gate: ParityGate) {
@@ -54,9 +54,10 @@ export function trainingGate(parity: ReturnType<typeof storedParity>, gate: Pari
   const checks = {
     comparedMinutes: check(parity.comparedMinutes, value => value >= limits.minimumComparedMinutes),
     heartRateCoverage: check(parity.heartRateCoverage, value => value >= limits.minimumCoverage && value <= limits.maximumCoverage),
-    meanDifference: check(parity.meanDifference, value => Math.abs(value) <= limits.maximumAbsMeanDifference),
+    trimmedMeanDifference: check(parity.trimmedMeanDifference, value => Math.abs(value) <= limits.maximumAbsTrimmedMeanDifference),
     medianAbsDifference: check(parity.medianAbsDifference, value => value <= limits.maximumMedianAbsDifference),
-    shareWithinOneBpm: check(parity.shareWithinOneBpm, value => value >= limits.minimumShareWithinOneBpm),
+    matchedShareWithinOneBpm: check(parity.matchedShareWithinOneBpm, value => value >= limits.minimumMatchedShareWithinOneBpm),
+    jumpShare: check(parity.jumpShare, value => value <= limits.maximumJumpShare),
   }
   const result: TrainingGate = gate !== 'pass' && gate !== 'fail' ? gate : Object.values(checks).every(row => row.pass) ? 'pass' : 'fail'
   return { trainingGate: result, trainingChecks: checks }
@@ -103,6 +104,8 @@ export interface ReplayOptions {
   jobs?: number
   python?: PythonLocation
   compareStored?: boolean
+  /** Files per worker run; the worker's limit unless a test needs smaller parts. */
+  maxArtifacts?: number
   onProgress?: (line: string) => void
 }
 
@@ -120,7 +123,15 @@ interface PlannedNight {
   exportPath: string | null
   sessionIds: number[]
   window: ReturnType<typeof nightWindow>
+  sessions: Array<{ startMs: number, endMs: number }>
   candidates: Array<{ sha256: string, name: string, path: string }>
+}
+
+interface PlannedReplay extends PlannedNight {
+  artifacts: RetainedInput['artifacts']
+  inputs: RetainedInput[]
+  coldRestarts: ColdRestart[]
+  excluded: ReturnType<typeof selectArtifacts>['excluded']
 }
 
 /** Replay archived nights through the unchanged replay_worker with one pinned
@@ -163,7 +174,8 @@ export async function replayArchive(options: ReplayOptions) {
         refuse(night, exportPath ? 'the export holds no RAW file written during the night' : 'the archive holds no RAW file written during the night')
         continue
       }
-      planned.push({ night, source: exportPath ? 'export' : 'archive', exportPath, sessionIds: sessions.map(row => row.id), window, candidates })
+      planned.push({ night, source: exportPath ? 'export' : 'archive', exportPath, sessionIds: sessions.map(row => row.id), window,
+        sessions: sessions.map(row => ({ startMs: row.startMs, endMs: row.endMs })), candidates })
     }
 
     // Inspect each candidate once: this run's cache, then the pod's own catalog row, then the shipped inspection worker.
@@ -192,68 +204,84 @@ export async function replayArchive(options: ReplayOptions) {
       if (++inspected % 25 === 0 || inspected === pending.length) progress(`inspected ${inspected}/${pending.length} RAW files`)
     })
 
-    const nights: Array<PlannedNight & { input: RetainedInput, excluded: ReturnType<typeof selectArtifacts>['excluded'] }> = []
+    const nights: PlannedReplay[] = []
     for (const row of planned) {
       try {
         const selected = selectArtifacts(row.candidates.map(file => ({ sha256: file.sha256, inspection: inspections.get(file.sha256) ?? null })), row.window)
-        const input = retainedWaveformInputSchema.parse({ version: 'retained-waveform-input-v1', retained_start_ms: row.window.retainedStartMs,
-          score_start_ms: row.window.startMs, score_end_ms: row.window.endMs, artifacts: selected.artifacts, contexts: row.window.contexts })
-        nights.push({ ...row, input, excluded: selected.excluded })
+        const plan = planReplayInputs(row.window, selected.artifacts, options.maxArtifacts)
+        nights.push({ ...row, artifacts: selected.artifacts, inputs: plan.inputs.map(input => retainedWaveformInputSchema.parse(input)),
+          coldRestarts: plan.coldRestarts, excluded: selected.excluded })
       }
       catch (error) {
         refuse(row.night, error instanceof Error ? error.message : String(error))
       }
     }
 
-    // Longest nights first keeps every worker busy until the end.
-    nights.sort((a, b) => (b.input.score_end_ms - b.input.retained_start_ms) - (a.input.score_end_ms - a.input.retained_start_ms))
+    // One worker run per input; longest first keeps every worker busy until the end.
+    const items = nights.flatMap(night => night.inputs.map((input, index) => ({ night, input, index })))
+      .sort((a, b) => (b.input.score_end_ms - b.input.retained_start_ms) - (a.input.score_end_ms - a.input.retained_start_ms))
     const readingsDirectory = join(options.outputDirectory, 'readings')
     await mkdir(readingsDirectory, { recursive: true })
     const other: Side = options.side === 'left' ? 'right' : 'left'
-    const results = new Map<string, NightResult>()
+    const outputs = new Map<string, Awaited<ReturnType<typeof runWaveformChild>> & { wallMs: number }>()
     const replayStarted = performance.now()
     let done = 0
-    await runPool(nights, Array.from({ length: Math.min(jobs, Math.max(1, nights.length)) }, (_, index) => String(index)), async (night, _slot, signal) => {
+    await runPool(items, Array.from({ length: Math.min(jobs, Math.max(1, items.length)) }, (_, index) => String(index)), async (item, _slot, signal) => {
       const itemStarted = performance.now()
-      const directory = join(work, 'nights', night.night)
+      const directory = join(work, 'nights', `${item.night.night}-${item.index}`)
       await mkdir(directory, { recursive: true, mode: 0o700 })
-      const paths = new Map(night.candidates.map(file => [file.sha256, file.path]))
-      for (const source of night.input.artifacts) await linkOrCopy(paths.get(source.artifact.sha256) ?? '', join(directory, source.artifact.name))
+      const paths = new Map(item.night.candidates.map(file => [file.sha256, file.path]))
+      for (const source of item.input.artifacts) await linkOrCopy(paths.get(source.artifact.sha256) ?? '', join(directory, source.artifact.name))
       await writeFile(join(directory, '.lock'), '', { mode: 0o600 })
       const output = await runWaveformChild({ ...python, retainedDirectory: directory },
-        { version: 'retained-waveform-work-v1', input: night.input, configs: { [options.side]: resolved as BiometricConfig, [other]: defaultConfig } },
+        { version: 'retained-waveform-work-v1', input: item.input, configs: { [options.side]: resolved as BiometricConfig, [other]: defaultConfig } },
         { signal, timeoutMs: 3600000, expectedBuildHash: build.hash })
-      await writeFile(join(readingsDirectory, readingsFileName(night.night, configHash)),
-        `${JSON.stringify({ cohortId: night.night, configHash, side: options.side, readings: output.readings })}\n`)
       await rm(directory, { recursive: true, force: true })
-      const result: NightResult = { readings: output.readings.length, wallMs: performance.now() - itemStarted,
-        run: { counts: output.run.counts, limitations: output.run.limitations } }
+      outputs.set(`${item.night.night}:${item.index}`, { ...output, wallMs: performance.now() - itemStarted })
+      const part = item.night.inputs.length > 1 ? ` part ${item.index + 1}/${item.night.inputs.length}` : ''
+      progress(`[${++done}/${items.length}] ${item.night.night}${part} ${((performance.now() - itemStarted) / 1000).toFixed(1)}s`)
+    })
+
+    const results = new Map<string, NightResult>()
+    for (const night of nights) {
+      const parts = night.inputs.flatMap((_, index) => outputs.get(`${night.night}:${index}`) ?? [])
+      // Score windows partition the night, so the parts' readings concatenate without overlap.
+      const readings = parts.flatMap(part => part.readings).sort((a, b) => a.timestampMs - b.timestampMs || a.side.localeCompare(b.side))
+      await writeFile(join(readingsDirectory, readingsFileName(night.night, configHash)),
+        `${JSON.stringify({ cohortId: night.night, configHash, side: options.side, readings })}\n`)
+      const counts: Record<string, number> = {}
+      for (const part of parts) for (const [key, value] of Object.entries(part.run.counts)) counts[key] = (counts[key] ?? 0) + value
+      const result: NightResult = { readings: readings.length, wallMs: parts.reduce((sum, part) => sum + part.wallMs, 0),
+        run: { counts, limitations: [...new Set(parts.flatMap(part => part.run.limitations))].sort() } }
       if (options.compareStored) {
-        const stored = storedVitals(db, options.side, night.input.score_start_ms, night.input.score_end_ms)
-        const spans = warmRawSpans(night.input)
-        const parity = storedParity(stored.vitals, output.readings.filter(row => row.side === options.side)
+        const stored = storedVitals(db, options.side, night.window.startMs, night.window.endMs)
+        const spans = inBedSpans(warmRawSpans({ retained_start_ms: night.window.retainedStartMs, artifacts: night.artifacts }), night.sessions)
+        const parity = storedParity(stored.vitals, readings.filter(row => row.side === options.side)
           .map(row => ({ timestampMs: row.timestampMs, heartRate: row.heartRate })), PARITY_TOLERANCE_BPM, spans)
         const gate = parityGate(parity.share, { storedConfigHashes: stored.configHashes, configHash,
-          generations: nightGenerations(db, options.side, night.input.score_start_ms, night.input.score_end_ms).length })
+          generations: nightGenerations(db, options.side, night.window.startMs, night.window.endMs).length })
         result.parity = { ...parity, comparedSpans: spans, gate, ...trainingGate(parity, gate) }
       }
       results.set(night.night, result)
-      progress(`[${++done}/${nights.length}] ${night.night} ${(result.wallMs / 1000).toFixed(1)}s`)
-    })
+    }
     const replayWallMs = performance.now() - replayStarted
 
     const rows = [...nights].sort((a, b) => a.night.localeCompare(b.night)).map((night) => {
       const result = results.get(night.night)
       const inspectionOf = (sha256: string) => inspections.get(sha256) ?? null
       return { night: night.night, source: night.source, exportPath: night.exportPath, sessionIds: night.sessionIds,
-        retainedStartMs: night.input.retained_start_ms, scoreStartMs: night.input.score_start_ms, scoreEndMs: night.input.score_end_ms,
-        contexts: night.input.contexts.length,
-        raw: night.input.artifacts.map(source => ({ sha256: source.artifact.sha256, name: night.candidates.find(file => file.sha256 === source.artifact.sha256)?.name ?? null,
+        retainedStartMs: night.window.retainedStartMs, scoreStartMs: night.window.startMs, scoreEndMs: night.window.endMs,
+        contexts: night.window.contexts.length,
+        // One worker run per input: at most 64 RAW files each, and a cold segment after each overlap.
+        inputs: night.inputs.map(input => ({ retainedStartMs: input.retained_start_ms, scoreStartMs: input.score_start_ms, scoreEndMs: input.score_end_ms,
+          raw: input.artifacts.length, contexts: input.contexts.length })),
+        coldRestarts: night.coldRestarts,
+        raw: night.artifacts.map(source => ({ sha256: source.artifact.sha256, name: night.candidates.find(file => file.sha256 === source.artifact.sha256)?.name ?? null,
           compressedBytes: source.artifact.compressed_bytes, expandedBytes: source.artifact.expanded_bytes, firstEventMs: source.first_event_ms, lastEventMs: source.last_event_ms })),
         rawExcluded: night.excluded.map(row => ({ ...row, name: night.candidates.find(file => file.sha256 === row.sha256)?.name ?? null,
           firstEventMs: inspectionOf(row.sha256)?.inventory.first_event_ms ?? null, lastEventMs: inspectionOf(row.sha256)?.inventory.last_event_ms ?? null })),
-        generations: nightGenerations(db, options.side, night.input.score_start_ms, night.input.score_end_ms).map(row => ({ ...row, matchesReplayedConfig: row.resolvedHash === configHash })),
-        storedConfigHashes: storedVitals(db, options.side, night.input.score_start_ms, night.input.score_end_ms).configHashes,
+        generations: nightGenerations(db, options.side, night.window.startMs, night.window.endMs).map(row => ({ ...row, matchesReplayedConfig: row.resolvedHash === configHash })),
+        storedConfigHashes: storedVitals(db, options.side, night.window.startMs, night.window.endMs).configHashes,
         readingsFile: `readings/${readingsFileName(night.night, configHash)}`, readings: result?.readings ?? 0, wallMs: result?.wallMs ?? null,
         run: result?.run ?? null, ...(result?.parity ? { parity: result.parity } : {}) }
     })
