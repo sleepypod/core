@@ -110,6 +110,7 @@ the bridge resolves config in this order: `device_settings` row > env var > buil
 | HA discovery prefix | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` |
 | TLS | `MQTT_TLS` | `false` |
 | TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
+| Presence hold (s) | `MQTT_PRESENCE_HOLD_SECONDS` | `0` |
 
 The URL scheme decides whether the connection is encrypted: `mqtts://` uses
 TLS, `mqtt://` is plain TCP. The TLS toggle does not upgrade an `mqtt://` URL;
@@ -129,11 +130,35 @@ both are on.
 | `<prefix>/<device-id>/state/water-level` | pod → broker | `low` / `ok` / `unknown` |
 | `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
 | `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts": <epoch_ms>, "temperature": <number\|null>, "humidity": <number\|null>}` (°C, %) |
+| `<prefix>/<device-id>/state/<side>/presence` | pod → broker | `{"ts", "inBed": <bool\|null>, "since": <ISO\|null>, "raw": <bool\|null>, "load": <number\|null>, "threshold", "exitThreshold", "holdSeconds"}` |
 | `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
 | `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
 | `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
 | `<prefix>/<device-id>/cmd/clear-alarm` | broker → pod | `{"side"}` |
 | `<prefix>/<device-id>/cmd/start-priming` | broker → pod | `{}` |
+
+### Bed presence
+
+Each side gets an **In bed** binary sensor (occupancy) and a **Bed load**
+sensor. The bridge reads the live capacitance sensor about twice a second
+and compares it with the sleep-detector's empty-bed baseline, so the sensor
+changes within a few seconds of getting in or out of bed, without the
+sleep-detector's 30 s wait.
+
+- `load` is the side's summed rise over its empty-bed level. Presence starts
+  above `threshold` and ends below `exitThreshold` (half of it), so a reading
+  near the line doesn't flap.
+- `raw` is the sensor's reading right now. `inBed` is the same reading after
+  the **Presence hold** (Settings → MQTT, default off): a change counts once it
+  has lasted that long, so rolling onto the edge for a moment doesn't read as
+  leaving. `since` is when the current state began, not when it was reported.
+- With one sleeper (one side away, or a solo bed), the sleeper's side reads in
+  bed while either side carries a load, as their sleep is tracked.
+- The state is unknown (`null`) while the sleep-detector isn't running or the
+  sensor stops reporting.
+
+An automation that should ignore a short trip out of bed can also add `for:`
+to its trigger, which leaves the sensor itself instant.
 
 Commands route through the same tRPC procedures the iOS app calls, so Zod
 input schemas validate every payload — the bridge cannot accidentally

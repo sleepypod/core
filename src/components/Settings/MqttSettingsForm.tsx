@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Plug } from 'lucide-react'
 import { trpc } from '@/src/utils/trpc'
-import { Badge, Button, Card, CardHeader, InlineError, SectionLabel, SettingRow, Skeleton, StatusDot, Toggle } from '@/src/components/ds'
+import { Badge, Button, Card, CardHeader, InlineError, SectionLabel, SettingRow, Skeleton, StatusDot, Stepper, Toggle } from '@/src/components/ds'
 import { cn } from '@/lib/utils'
 
 type Source = 'db' | 'env' | 'default'
@@ -16,8 +16,13 @@ interface MqttSettings {
   topicPrefix: string
   haDiscovery: boolean
   tlsEnabled: boolean
-  sources: Record<'enabled' | 'url' | 'username' | 'password' | 'topicPrefix' | 'haDiscovery' | 'tlsEnabled', Source>
+  presenceHoldSeconds: number
+  sources: Record<'enabled' | 'url' | 'username' | 'password' | 'topicPrefix' | 'haDiscovery' | 'tlsEnabled' | 'presenceHoldSeconds', Source>
 }
+
+/** Presence hold steps, in seconds. */
+const PRESENCE_HOLD_STEP = 5
+const PRESENCE_HOLD_MAX = 600
 
 function sourceLabel(s: Source): string | null {
   if (s === 'env') return '.env'
@@ -109,6 +114,7 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
   // so the user sees what's in effect rather than an empty box with placeholder.
   const [topicPrefix, setTopicPrefix] = useState(data.topicPrefix)
   const [password, setPassword] = useState('')
+  const [presenceHold, setPresenceHold] = useState(data.presenceHoldSeconds)
 
   // Resync local state when the server snapshot changes (e.g. after save
   // invalidation). Uses the "store prev props in state" pattern so we do not
@@ -122,6 +128,7 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
     setUrl(data.sources.url === 'db' ? data.url ?? '' : '')
     setUsername(data.sources.username === 'db' ? data.username ?? '' : '')
     setTopicPrefix(data.topicPrefix)
+    setPresenceHold(data.presenceHoldSeconds)
   }
 
   const updateMutation = trpc.mqtt.updateSettings.useMutation({
@@ -144,11 +151,14 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
       topicPrefix: string
       haDiscovery: boolean
       tlsEnabled: boolean
+      presenceHoldSeconds: number
     }> = {
       enabled,
       haDiscovery,
       tlsEnabled,
     }
+    // Saved only once changed, so an env-provided hold isn't pinned to the DB.
+    if (presenceHold !== data.presenceHoldSeconds) payload.presenceHoldSeconds = presenceHold
     if (url.trim()) payload.url = url.trim()
     if (username.trim()) payload.username = username.trim()
     if (topicPrefix.trim()) payload.topicPrefix = topicPrefix.trim()
@@ -224,6 +234,25 @@ function SettingsFields({ data, onSaved }: { data: MqttSettings, onSaved: () => 
         onChange={setTopicPrefix}
         disabled={isPending}
       />
+
+      <SectionLabel className="mt-2">BED PRESENCE</SectionLabel>
+      <SettingRow
+        label="Presence hold"
+        sub={presenceHold === 0
+          ? 'In bed updates the moment the sensor sees you get in or out.'
+          : `In bed changes once you've been in or out for ${presenceHold} s, so a brief shift doesn't count.`}
+      >
+        <Stepper
+          value={presenceHold}
+          onChange={setPresenceHold}
+          step={PRESENCE_HOLD_STEP}
+          min={0}
+          max={PRESENCE_HOLD_MAX}
+          format={v => (v === 0 ? 'Off' : `${v} s`)}
+          label="presence hold"
+          disabled={isPending}
+        />
+      </SettingRow>
 
       {testMutation.data && (
         <p className={cn('text-xs', testMutation.data.ok ? 'text-ok' : 'text-danger')}>

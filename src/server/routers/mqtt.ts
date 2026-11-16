@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm'
 import { publicProcedure, router } from '@/src/server/trpc'
 import { db } from '@/src/db'
 import { deviceSettings } from '@/src/db/schema'
+import { MAX_PRESENCE_HOLD_SECONDS } from '@/src/lib/bedPresence'
 import {
   getBridgeStatus,
   resolveConfig,
@@ -24,6 +25,8 @@ const settingsSchema = z.object({
   topicPrefix: z.string(),
   haDiscovery: z.boolean(),
   tlsEnabled: z.boolean(),
+  /** Seconds a bed presence change must last before the in-bed sensor reports it. */
+  presenceHoldSeconds: z.number().int(),
   sources: z.object({
     enabled: sourceSchema,
     url: sourceSchema,
@@ -32,6 +35,7 @@ const settingsSchema = z.object({
     topicPrefix: sourceSchema,
     haDiscovery: sourceSchema,
     tlsEnabled: sourceSchema,
+    presenceHoldSeconds: sourceSchema,
   }),
 })
 
@@ -45,6 +49,7 @@ const updateInputSchema = z
     topicPrefix: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_/-]+$/).nullable().optional(),
     haDiscovery: z.boolean().nullable().optional(),
     tlsEnabled: z.boolean().nullable().optional(),
+    presenceHoldSeconds: z.number().int().min(0).max(MAX_PRESENCE_HOLD_SECONDS).nullable().optional(),
   })
   .strict()
 
@@ -82,6 +87,7 @@ export const mqttRouter = router({
         topicPrefix: config.topicPrefix,
         haDiscovery: config.haDiscovery,
         tlsEnabled: config.tlsEnabled,
+        presenceHoldSeconds: config.presenceHoldSeconds,
         sources: {
           enabled: sources.enabled,
           url: sources.url,
@@ -90,6 +96,7 @@ export const mqttRouter = router({
           topicPrefix: sources.topicPrefix,
           haDiscovery: sources.haDiscovery,
           tlsEnabled: sources.tlsEnabled,
+          presenceHoldSeconds: sources.presenceHoldSeconds,
         },
       }
     }),
@@ -112,6 +119,7 @@ export const mqttRouter = router({
         if ('topicPrefix' in input) updates.mqttTopicPrefix = input.topicPrefix ?? null
         if ('haDiscovery' in input) updates.mqttHaDiscovery = input.haDiscovery ?? null
         if ('tlsEnabled' in input) updates.mqttTlsEnabled = input.tlsEnabled ?? null
+        if ('presenceHoldSeconds' in input) updates.mqttPresenceHoldSeconds = input.presenceHoldSeconds ?? null
 
         await db.update(deviceSettings).set(updates).where(eq(deviceSettings.id, 1))
       }

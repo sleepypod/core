@@ -52,6 +52,10 @@ export const deviceSettings = sqliteTable('device_settings', {
   // Defaults to NULL (env fallback MQTT_TLS_INSECURE, then false). Off-by-default
   // per ADR 0019 — tlsEnabled alone keeps strict cert verification.
   mqttTlsInsecure: integer('mqtt_tls_insecure', { mode: 'boolean' }),
+  // Seconds a bed presence change must last before the MQTT in-bed sensor
+  // reports it. NULL falls back to MQTT_PRESENCE_HOLD_SECONDS, then 0 (report
+  // the sensor's reading at once).
+  mqttPresenceHoldSeconds: integer('mqtt_presence_hold_seconds'),
   // HomeKit bridge is opt-in. When true, instrumentation publishes the
   // hap-nodejs bridge with HeaterCooler/OccupancySensor/Switch accessories.
   homekitEnabled: integer('homekit_enabled', { mode: 'boolean' })

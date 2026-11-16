@@ -10,6 +10,7 @@ const settings: Settings = {
   topicPrefix: 'sleepypod',
   haDiscovery: true,
   tlsEnabled: false,
+  presenceHoldSeconds: 0,
   sources: {
     enabled: 'db',
     url: 'db',
@@ -18,6 +19,7 @@ const settings: Settings = {
     topicPrefix: 'db',
     haDiscovery: 'db',
     tlsEnabled: 'default',
+    presenceHoldSeconds: 'default',
   },
 }
 
@@ -34,6 +36,10 @@ export const mqtt: DemoHandlers<'mqtt'> = {
     if ('topicPrefix' in input) settings.topicPrefix = input.topicPrefix ?? 'sleepypod'
     if ('haDiscovery' in input) settings.haDiscovery = input.haDiscovery ?? true
     if ('tlsEnabled' in input) settings.tlsEnabled = input.tlsEnabled ?? false
+    if ('presenceHoldSeconds' in input) {
+      settings.presenceHoldSeconds = input.presenceHoldSeconds ?? 0
+      settings.sources.presenceHoldSeconds = input.presenceHoldSeconds == null ? 'default' : 'db'
+    }
     return { success: true }
   },
 

@@ -260,6 +260,13 @@
       "when": 1794784245929,
       "tag": "0036_stage_model_library_model_set",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1794806295939,
+      "tag": "0037_mqtt_presence_hold",
+      "breakpoints": true
     }
   ]
 }

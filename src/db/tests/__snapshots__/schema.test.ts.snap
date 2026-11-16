@@ -1100,6 +1100,7 @@ exports[`complete Drizzle schema contracts > pins every main-database table, col
       "mqtt_ha_discovery | sql:integer | logical:boolean/SQLiteBoolean | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "mqtt_tls_enabled | sql:integer | logical:boolean/SQLiteBoolean | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "mqtt_tls_insecure | sql:integer | logical:boolean/SQLiteBoolean | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
+      "mqtt_presence_hold_seconds | sql:integer | logical:number/SQLiteInteger | nullable | default:none | not-primary-key | not-unique | not-autoincrement | enum:none",
       "homekit_enabled | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:false | not-primary-key | not-unique | not-autoincrement | enum:none",
       "pump_stall_protection_enabled | sql:integer | logical:boolean/SQLiteBoolean | not-null | default:false | not-primary-key | not-unique | not-autoincrement | enum:none",
       "pump_stall_rpm_threshold | sql:integer | logical:number/SQLiteInteger | not-null | default:500 | not-primary-key | not-unique | not-autoincrement | enum:none",
