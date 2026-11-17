@@ -251,7 +251,9 @@ export function AlarmEditor({
   const draft = useMemo(() => {
     if (days.size === 0) return null
     const temperatureF = Math.round(displayToSetpointF(displayTemperature, unit) ?? DEFAULT_TEMP)
-    return sides.flatMap(s => Array.from(days).map(dayOfWeek => ({
+    // Week order, whatever order the days were picked in, so the same days
+    // always make the same draft.
+    return sides.flatMap(s => DAY_ORDER.filter(d => days.has(d)).map(dayOfWeek => ({
       side: s,
       dayOfWeek,
       time,
@@ -343,22 +345,40 @@ export function AlarmEditor({
     latestDraft.current = draft
   }, [draft])
 
-  /** Save the form now (Done, close, delete), including changes made while it saves. */
-  const flush = useCallback(async () => {
-    let rows: typeof draft
+  /** Wait for every queued save, including any queued while waiting. */
+  const settle = useCallback(async () => {
+    let pending: Promise<void>
     do {
-      rows = latestDraft.current
+      pending = queue.current
+      await pending
+    } while (pending !== queue.current)
+  }, [])
+
+  /**
+   * Save the form now (Done, close, delete): once the queue settles, save
+   * again while the form differs from what is saved, including changes made
+   * while it saves. Stops at a failed save, which keeps its error.
+   */
+  const flush = useCallback(async () => {
+    for (;;) {
       clearTimeout(timer.current)
-      await (rows ? save(rows) : queue.current)
-    } while (JSON.stringify(rows) !== JSON.stringify(latestDraft.current))
-  }, [save])
+      await settle()
+      const rows = latestDraft.current
+      if (!rows) return
+      if (JSON.stringify(rows) === session.current.saved && !session.current.failed) return
+      await save(rows)
+      if (session.current.failed) return
+    }
+  }, [save, settle])
 
   // Closing saves the form first. A failed save keeps the editor open with
   // its error rather than dropping the change, and a saved alarm can't be
   // left with no day (it would keep its old days without saying so).
   const handleClose = useCallback(async () => {
     await flush()
-    if (session.current.failed) return
+    // An alarm that never saved and now has no day has nothing to lose.
+    const abandoned = !latestDraft.current && session.current.rowIds.length === 0
+    if (session.current.failed && !abandoned) return
     if (!latestDraft.current && session.current.rowIds.length > 0) {
       setNeedsDay(true)
       return

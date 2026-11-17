@@ -376,6 +376,61 @@ describe('AlarmEditor', () => {
     expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1)
   })
 
+  it('a failed new alarm with its only day cleared closes without saving again', async () => {
+    m.batch.mutateAsync.mockRejectedValue(new Error('db locked'))
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" />)
+    fireEvent.click(s.getByRole('button', { name: 'Mon' }))
+    await waitFor(() => expect(s.getByText('db locked')).toBeTruthy())
+    fireEvent.click(s.getByRole('button', { name: 'Mon' }))
+    done(s)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it('picking the same days in another order is not a change, so a paused alarm stays paused', async () => {
+    const onClose = vi.fn()
+    // Grouped alarms list Sunday first; the form keeps days in week order.
+    const s = render(<AlarmEditor open onClose={onClose} side="left" existingGroup={{ ...group, days: ['sunday', 'monday'] }} />)
+    fireEvent.click(s.getByRole('button', { name: 'Sun' }))
+    fireEvent.click(s.getByRole('button', { name: 'Sun' }))
+    await new Promise(r => setTimeout(r, SAVE_DELAY_MS + 50))
+    done(s)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(m.batch.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('Delete waits for saves queued while it saves, and deletes the rows saved last', async () => {
+    let finish!: (v: unknown) => void
+    m.batch.mutateAsync
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        finish = resolve
+      }))
+      .mockResolvedValueOnce({ success: true, created: { temperature: [], power: [], alarm: [201, 202] } })
+      .mockResolvedValueOnce({ success: true, created: { temperature: [], power: [], alarm: [301, 302] } })
+    const onRequestDelete = vi.fn()
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} onRequestDelete={onRequestDelete} />)
+    const warmer = () => fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    // Delete starts saving 85°.
+    warmer()
+    fireEvent.click(s.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1))
+    // 86° is queued behind it, then the form goes back to 85°.
+    warmer()
+    await new Promise(r => setTimeout(r, SAVE_DELAY_MS + 50))
+    fireEvent.click(s.getByRole('button', { name: 'Decrease bed temperature at wake' }))
+    finish({ success: true, created: { temperature: [], power: [], alarm: [101, 102] } })
+
+    await waitFor(() => expect(onRequestDelete).toHaveBeenCalledTimes(1))
+    expect(m.batch.mutateAsync).toHaveBeenCalledTimes(3)
+    expect(m.batch.mutateAsync.mock.calls[1][0].creates.alarm[0].alarmTemperature).toBe(86)
+    expect(m.batch.mutateAsync.mock.calls[2][0]).toMatchObject({ deletes: { alarm: [201, 202] } })
+    expect(m.batch.mutateAsync.mock.calls[2][0].creates.alarm[0].alarmTemperature).toBe(85)
+    expect(onRequestDelete).toHaveBeenCalledWith(expect.objectContaining({ ids: [301, 302] }))
+    await new Promise(r => setTimeout(r, SAVE_DELAY_MS + 50))
+    expect(m.batch.mutateAsync).toHaveBeenCalledTimes(3)
+  })
+
   it('routes Delete to the parent confirmation instead of deleting directly', async () => {
     const onRequestDelete = vi.fn()
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} onRequestDelete={onRequestDelete} />)
