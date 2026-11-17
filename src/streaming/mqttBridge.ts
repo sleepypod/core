@@ -78,6 +78,8 @@ const TEST_CONNECT_TIMEOUT_MS = 5_000
 const PRESENCE_SAMPLE_MS = 500
 /** No capSense reading for this long: presence is unknown. */
 const PRESENCE_FRAME_STALE_MS = 30_000
+/** The largest epoch ms a Date can hold. */
+const MAX_DATE_MS = 8.64e15
 
 export type ConfigSource = 'db' | 'env' | 'default'
 
@@ -790,10 +792,16 @@ async function refreshPresenceInputs(): Promise<void> {
 function samplePresence(now = Date.now()): void {
   const p = state.presence
   const snap = getLatestCapSenseSnapshot()
-  const fresh = snap !== null && now - snap.receivedAtMs <= PRESENCE_FRAME_STALE_MS
+  // A frame replayed from a RAW backlog is received now but was read earlier,
+  // so only a live frame can show a change.
+  const live = snap !== null && snap.live
+  const fresh = live && now - snap.receivedAtMs <= PRESENCE_FRAME_STALE_MS
   if (fresh && snap.receivedAtMs === p.lastFrameAt) return
+  // Switching RAW files clears the reading, then replays the new file's
+  // backlog; keep the last state through that gap rather than flash unknown.
+  if (!live && p.lastFrameAt !== null && now - p.lastFrameAt <= PRESENCE_FRAME_STALE_MS) return
   p.lastFrameAt = fresh ? snap.receivedAtMs : null
-  const at = fresh ? Math.round(snap.ts * 1000) : now
+  const at = fresh ? frameTime(snap.ts, now) : now
 
   const exitFraction = exitPercent() / 100
   for (const side of ['left', 'right'] as const) {
@@ -815,6 +823,12 @@ function samplePresence(now = Date.now()): void {
     p.holds[side].update(reading, at)
     publishPresence(side)
   }
+}
+
+/** A frame's unix-seconds timestamp in ms, or `fallback` when it isn't a usable date. */
+function frameTime(ts: number, fallback: number): number {
+  const ms = Math.round(ts * 1000)
+  return Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS ? ms : fallback
 }
 
 function exitPercent(): number {

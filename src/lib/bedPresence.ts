@@ -89,21 +89,27 @@ function parseBaseline(raw: unknown): PresenceBaseline | null {
 
 /**
  * The load on one side: summed signed rise of its channels over the empty-bed
- * baseline, or null when the frame can't be read against it. `values` is the
+ * baseline, or null when the frame can't be read against it (wrong format,
+ * too few channels, a sentinel or a non-finite reading). `values` is the
  * live snapshot's flat channel array: capSense projects {out, cen, in} to
  * [out, out, cen, cen, in, in]; capSense2 sends [A1, A2, B1, B2, C1, C2, ref1, ref2].
  */
 export function bedLoad(frameType: string, values: number | number[], baseline: PresenceBaseline): number | null {
   if (frameType !== baseline.format || !Array.isArray(values) || values.length < 6) return null
+  let load: number
   if (baseline.format === 'capSense') {
     const [out, , cen, , inner] = values
-    return out - baseline.means.out + cen - baseline.means.cen + inner - baseline.means.in
+    load = out - baseline.means.out + cen - baseline.means.cen + inner - baseline.means.in
   }
-  const used = values.length >= 8 ? values.slice(0, 8) : values.slice(0, 6)
-  if (used.includes(CAPSENSE2_SENTINEL)) return null
-  const refDelta = values.length >= 8 ? (values[6] + values[7]) / 2 - (baseline.refMean ?? CAPSENSE2_REF_NOMINAL) : 0
-  const pair = (i: number) => (values[i] + values[i + 1]) / 2 - refDelta
-  return pair(0) - baseline.means.A + pair(2) - baseline.means.B + pair(4) - baseline.means.C
+  else {
+    const used = values.length >= 8 ? values.slice(0, 8) : values.slice(0, 6)
+    if (used.includes(CAPSENSE2_SENTINEL)) return null
+    const refDelta = values.length >= 8 ? (values[6] + values[7]) / 2 - (baseline.refMean ?? CAPSENSE2_REF_NOMINAL) : 0
+    const pair = (i: number) => (values[i] + values[i + 1]) / 2 - refDelta
+    load = pair(0) - baseline.means.A + pair(2) - baseline.means.B + pair(4) - baseline.means.C
+  }
+  // A NaN or infinite channel reads as no reading, not as an empty bed.
+  return Number.isFinite(load) ? load : null
 }
 
 /** Instant presence for a load: enters above `threshold`, leaves below `exitFraction` of it. */

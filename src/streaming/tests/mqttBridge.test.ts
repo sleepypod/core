@@ -1267,7 +1267,9 @@ describe('mqttBridge — bed presence', () => {
   /** A new live reading, `ts` seconds into the night. */
   function frame(ts: number, left: number[], right: number[] = empty) {
     frameAt += 1
-    piezoMock.state.snapshot = { type: 'capSense', ts, receivedAtMs: Date.now() + frameAt, left, right }
+    const receivedAtMs = Date.now() + frameAt
+    piezoMock.state.snapshot = { type: 'capSense', ts, receivedAtMs, live: true, left, right }
+    return receivedAtMs
   }
 
   async function start(hold = 0, exitPercent?: number) {
@@ -1280,15 +1282,20 @@ describe('mqttBridge — bed presence', () => {
     await new Promise(r => setTimeout(r, 0))
     bridgeTest.state.presence.modes = { bedMode: 'two' }
     fake.publish.mockClear()
+    seen = { left: 0, right: 0 }
     return fake
   }
 
-  /** Presence payloads published for `side` since the last call. */
+  /** How far into the publish calls each side has been read. */
+  let seen = { left: 0, right: 0 }
+
+  /** Presence payloads published for `side` since the last call for that side. */
   function published(fake: FakeClient, side: 'left' | 'right' = 'left') {
-    const out = (fake.publish.mock.calls as [string, string][])
+    const calls = fake.publish.mock.calls as [string, string][]
+    const out = calls.slice(seen[side])
       .filter(([t]) => t === `sleepypod/${ID}/state/${side}/presence`)
       .map(([, payload]) => JSON.parse(payload))
-    fake.publish.mockClear()
+    seen[side] = calls.length
     return out
   }
 
@@ -1385,15 +1392,58 @@ describe('mqttBridge — bed presence', () => {
     frame(0, reading(400), reading(400))
     bridgeTest.samplePresence()
     expect(published(fake, 'left')).toEqual([])
-    expect(published(fake, 'right')).toEqual([])
+    expect(published(fake, 'right')).toMatchObject([{ inBed: true, raw: true, load: 400 }])
     frame(1, reading(400), reading(400))
     bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toEqual([])
     expect(published(fake, 'right')).toEqual([])
 
     // Stopped receiving readings: unknown, so Home Assistant doesn't keep a stale state.
     piezoMock.state.snapshot = { ...piezoMock.state.snapshot, receivedAtMs: Date.now() - 31_000 }
     bridgeTest.samplePresence()
     expect(published(fake, 'right')).toMatchObject([{ inBed: null, raw: null, load: null, since: null }])
+  })
+
+  it('does not read a frame replayed from a RAW backlog as a change', async () => {
+    const fake = await start()
+    frame(1000, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: false }])
+    // An hours-old reading of someone in bed, replayed after a file switch.
+    piezoMock.state.snapshot = { type: 'capSense', ts: 1, receivedAtMs: Date.now() + 100, live: false, left: reading(1700), right: empty }
+    bridgeTest.samplePresence()
+    expect(published(fake)).toEqual([])
+    frame(1001, reading(1700))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, since: new Date(1_001_000).toISOString() }])
+  })
+
+  it('keeps the state through a short gap in live readings, then reads unknown', async () => {
+    const fake = await start()
+    const lastLive = frame(1000, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true }])
+    // Switching RAW files clears the reading, then refills it from backlog.
+    piezoMock.state.snapshot = null
+    bridgeTest.samplePresence(lastLive + 30_000)
+    piezoMock.state.snapshot = { type: 'capSense', ts: 1, receivedAtMs: lastLive + 1000, live: false, left: empty, right: empty }
+    bridgeTest.samplePresence(lastLive + 30_000)
+    expect(published(fake)).toEqual([])
+    bridgeTest.samplePresence(lastLive + 30_001)
+    expect(published(fake)).toMatchObject([{ inBed: null, raw: null, load: null, since: null }])
+  })
+
+  it('dates a change from the receive time when the frame timestamp is not a date', async () => {
+    const fake = await start()
+    const now = Date.now()
+    for (const ts of [Number.NaN, Infinity, 1e13]) {
+      frame(ts, reading(400))
+      bridgeTest.samplePresence(now)
+      expect(published(fake)).toMatchObject([{ inBed: true, since: new Date(now).toISOString() }])
+      frame(0, empty)
+      bridgeTest.samplePresence(now)
+      published(fake)
+    }
   })
 
   it('samples the live reading twice a second', async () => {

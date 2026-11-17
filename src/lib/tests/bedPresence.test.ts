@@ -36,6 +36,13 @@ describe('bedLoad', () => {
     expect(bedLoad('capSense', 1100, capSense)).toBeNull()
     expect(bedLoad('capSense2', [11, -1, 22, 24, 31, 35, 1.2, 1.2], capSense2)).toBeNull()
   })
+
+  it('cannot read a non-finite channel, which would otherwise read as an empty bed', () => {
+    expect(bedLoad('capSense', [Number.NaN, Number.NaN, 1500, 1500, 1700, 1700], capSense)).toBeNull()
+    expect(bedLoad('capSense', [1100, 1100, Infinity, Infinity, 1700, 1700], capSense)).toBeNull()
+    expect(bedLoad('capSense2', [11, 13, 22, 24, 31, Number.NaN], capSense2)).toBeNull()
+    expect(bedLoad('capSense2', [11, 13, 22, 24, 31, 35, -Infinity, 1.2], capSense2)).toBeNull()
+  })
 })
 
 describe('instantPresence', () => {
