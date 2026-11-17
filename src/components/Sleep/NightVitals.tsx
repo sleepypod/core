@@ -5,6 +5,7 @@ import { Card, InlineError, SectionLabel, Skeleton } from '@/src/components/ds'
 import { VitalsExplorer } from '@/src/components/biometrics/VitalsExplorer'
 import { VitalsLegend } from '@/src/components/biometrics/VitalsChart'
 import { baselineBand, readingsInSessions, splitSessions } from '@/src/components/biometrics/biometricsLogic'
+import { MOVEMENT_BUCKET_DAY_SECONDS, MOVEMENT_CHART_SCORE_MIN } from '@/src/lib/movement'
 import { WATCH_MOTION_MAX_SERIES_MS, watchInWindows } from '@/src/lib/watchMovement'
 
 /** Nights and Biometrics use the same recorded data, chart, colors and navigation. */
@@ -16,7 +17,7 @@ export function NightVitals({ side, start, end }: { side: 'left' | 'right', star
   const rmssd = trpc.biometrics.getReferenceSamples.useQuery({ ...range, metric: 'hrv_rmssd', limit: 20000 })
   const br = trpc.biometrics.getReferenceSamples.useQuery({ ...range, metric: 'breathing_rate', limit: 20000 })
   const oxygen = trpc.biometrics.getReferenceSamples.useQuery({ ...range, metric: 'blood_oxygen', limit: 20000 })
-  const movement = trpc.biometrics.getMovementBuckets.useQuery({ ...range, bucketSeconds: 300, limit: 10000 })
+  const movement = trpc.biometrics.getMovementBuckets.useQuery({ ...range, bucketSeconds: MOVEMENT_BUCKET_DAY_SECONDS, eventScoreMin: MOVEMENT_CHART_SCORE_MIN, limit: 10000 })
   const watch = trpc.biometrics.getWatchMotionSeries.useQuery(range, { enabled: end - start <= WATCH_MOTION_MAX_SERIES_MS })
   const points = (vitals.data ?? []).map(r => ({ t: new Date(r.timestamp).getTime(), hr: r.heartRate, hrv: r.hrv, br: r.breathingRate,
     provenanceKey: r.provenance?.processingRunId ?? r.processingRunId ?? 'legacy_unknown', hrvMetricId: r.provenance?.hrvMetricId ?? null }))

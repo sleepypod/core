@@ -68,9 +68,9 @@ it.each([1, 7])('normalizes movement buckets and summarizes %s days of sleep', (
 })
 it('overlays Watch movement inside the nights only, with a legend', () => {
   const M = 60_000
-  mock.buckets = [{ side: 'left', bucketStart: new Date(10 * M), eventCount: 2, totalMovement: 10, sampleCount: 1 }]
+  mock.buckets = [{ side: 'left', bucketStart: new Date(15 * M), eventCount: 2, totalMovement: 10, sampleCount: 1 }]
   mock.sleep = [{ sleepDurationSeconds: 3600, enteredBedAt: new Date(5 * M), leftBedAt: new Date(60 * M) }]
-  mock.watch = [{ timestamp: new Date(2 * M), movingSamples: 99 }, { timestamp: new Date(11 * M), movingSamples: 4 }]
+  mock.watch = [{ timestamp: new Date(2 * M), movingSamples: 99 }, { timestamp: new Date(16 * M), movingSamples: 4 }]
   render(<MovementChart />)
   expect(screen.getByTestId('movement-watch-legend').textContent).toContain('Apple Watch · scaled per night')
   expect(screen.getByTestId('watch-line')).toBeTruthy()
@@ -83,7 +83,7 @@ it('leaves the chart untouched without Watch data in a night', () => {
   render(<MovementChart />)
   expect(screen.queryByTestId('movement-watch-legend')).toBeNull()
   expect(screen.queryByTestId('watch-line')).toBeNull()
-  expect(mock.chart.mock.lastCall?.[0]).toEqual([{ time: new Date(0).toISOString(), timestamp: 0, movement: 24 }])
+  expect(mock.chart.mock.lastCall?.[0]).toEqual([{ time: new Date(0).toISOString(), timestamp: 0, movement: 8 }])
 })
 it('adds Watch-only buckets and breaks the line between non-adjacent buckets', () => {
   const B = 300_000

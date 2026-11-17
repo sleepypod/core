@@ -5,10 +5,15 @@ import { join } from 'node:path'
 
 const mockSetAlarm = vi.fn().mockResolvedValue(undefined)
 const mockBroadcastMutationStatus = vi.fn()
-const mockMarkAlarmStarted = vi.fn().mockResolvedValue(undefined)
+// The alarm each side was last marked ringing with (what getActiveAlarmConfig returns).
+const ringing = new Map<string, unknown>()
+const mockMarkAlarmStarted = vi.fn(async (side: string, config: unknown) => {
+  ringing.set(side, config)
+})
 
 vi.mock('../alarmState', () => ({
-  markAlarmStarted: (...args: unknown[]) => mockMarkAlarmStarted(...args),
+  markAlarmStarted: (...args: [string, unknown]) => mockMarkAlarmStarted(...args),
+  getActiveAlarmConfig: (side: string) => ringing.get(side) ?? null,
 }))
 
 vi.mock('../dacMonitor.instance', () => ({
@@ -33,6 +38,7 @@ describe('snoozeManager', () => {
     process.env.ALARM_STATE_PATH = join(dir, 'alarm-state.json')
     resetAlarmStateCache()
     mockMarkAlarmStarted.mockClear()
+    ringing.clear()
     mockSetAlarm.mockClear()
     mockSetAlarm.mockResolvedValue(undefined)
     mockBroadcastMutationStatus.mockClear()
@@ -104,6 +110,71 @@ describe('snoozeManager', () => {
 
     expect(mockSetAlarm).toHaveBeenCalledWith('left', { ...config2, snoozeCount: 1 })
     expect(mockSetAlarm).toHaveBeenCalledTimes(1)
+  })
+
+  it('brings a linked alarm (single sleeper) back on both sides', async () => {
+    const solo = { ...config, linkedSide: 'right' as const, ownerSide: 'left' as const }
+    snoozeAlarm('left', 60, { ...solo, linkId: 'first' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    // It comes back as a new occurrence, one id on both sides.
+    const linkId = (mockSetAlarm.mock.calls[0][1] as { linkId: string }).linkId
+    expect(linkId).toEqual(expect.any(String))
+    expect(linkId).not.toBe('first')
+    expect(mockSetAlarm.mock.calls).toEqual([
+      ['left', { ...solo, snoozeCount: 1, linkId }],
+      ['right', { ...solo, snoozeCount: 1, linkedSide: 'left', linkId }],
+    ])
+    expect(mockMarkAlarmStarted).toHaveBeenCalledWith('right', { ...solo, snoozeCount: 1, linkedSide: 'left', linkId })
+  })
+
+  it('gives an unlinked alarm no occurrence id', async () => {
+    snoozeAlarm('left', 60, config)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockSetAlarm).toHaveBeenCalledWith('left', { ...config, snoozeCount: 1 })
+  })
+
+  it('replaces a linked snooze taken on the other side when this side snoozes', async () => {
+    // Tapped on the unused right side, then snoozed from HomeKit on left.
+    snoozeAlarm('right', 60, { ...config, linkedSide: 'left', ownerSide: 'left' })
+    snoozeAlarm('left', 120, config)
+    expect(getSnoozeStatus('right').active).toBe(false)
+    expect(loadAlarmState().snoozes.right).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(120_000)
+    // Only the new snooze restarts the alarm, once.
+    expect(mockSetAlarm.mock.calls).toEqual([['left', { ...config, snoozeCount: 1 }]])
+  })
+
+  it('leaves the other side\'s unlinked snooze running when this side snoozes', () => {
+    snoozeAlarm('right', 60, config)
+    snoozeAlarm('left', 60, config)
+    expect(getSnoozeStatus('right').active).toBe(true)
+  })
+
+  it('cancels a linked snooze taken on the other side when either side is stopped', async () => {
+    // Tapped on the unused right side: the snooze is recorded there only.
+    snoozeAlarm('right', 60, { ...config, linkedSide: 'left', ownerSide: 'left' })
+    cancelSnooze('left')
+    expect(getSnoozeStatus('right').active).toBe(false)
+    expect(loadAlarmState().snoozes.right).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockSetAlarm).not.toHaveBeenCalled()
+  })
+
+  it('leaves the other side\'s unlinked snooze alone', () => {
+    snoozeAlarm('right', 60, config)
+    cancelSnooze('left')
+    expect(getSnoozeStatus('right').active).toBe(true)
+  })
+
+  it('skips the other side when the alarm was stopped before it rang there', async () => {
+    const solo = { ...config, linkedSide: 'right' as const, ownerSide: 'left' as const }
+    // Stopped right after it came back on the snoozed side.
+    mockMarkAlarmStarted.mockImplementationOnce(async () => {
+      ringing.delete('left')
+    })
+    snoozeAlarm('left', 60, solo)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockSetAlarm.mock.calls.map(([side]) => side)).toEqual(['left'])
   })
 
   it('counts each snooze of the same alarm', async () => {
