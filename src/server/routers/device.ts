@@ -6,7 +6,7 @@ import { deviceState } from '@/src/db/schema'
 import { assertPumpStallNotBlocked, withHardwareClient } from '@/src/server/helpers'
 import { getPrimeCompletedAt, dismissPrimeNotification } from '@/src/hardware/primeNotification'
 import { getAllPumpStallNotices } from '@/src/hardware/pumpStallNotification'
-import { snoozeAlarm, cancelSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
+import { snoozeAlarm, cancelSnooze, cancelSideSnooze, getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { getActiveAlarmConfig, markAlarmEnded, markAlarmStarted, type AlarmConfig } from '@/src/hardware/alarmState'
 import { stopLinked } from '@/src/hardware/linkedAlarm'
 import { HardwareCommand } from '@/src/hardware/types'
@@ -512,7 +512,9 @@ export const deviceRouter = router({
     .mutation(async ({ input }) => {
       markSideMutated(input.side)
       return withHardwareClient(async (client) => {
-        cancelSnooze(input.side)
+        // This side's snooze only: a single sleeper's linked snooze recorded
+        // on the other side is their alarm, not one this replaces.
+        cancelSideSnooze(input.side)
         const alarm = {
           vibrationIntensity: input.vibrationIntensity,
           vibrationPattern: input.vibrationPattern,
@@ -582,11 +584,13 @@ export const deviceRouter = router({
         const active = getActiveAlarmConfig(input.side)
         await client.clearAlarm(input.side)
 
+        // The alarm comes back with its own snooze length, taper and count,
+        // so the next snooze of it, from anywhere, is tapered.
         const snoozeUntil = snoozeAlarm(input.side, input.duration, {
+          ...active,
           vibrationIntensity: input.vibrationIntensity,
           vibrationPattern: input.vibrationPattern,
           duration: input.alarmDuration,
-          ...(active?.linkedSide ? { linkedSide: active.linkedSide, ownerSide: active.ownerSide } : {}),
         })
         await markAlarmEnded(input.side)
         if (!await stopLinked(client, input.side, active)) throw linkedStopFailed(active)
