@@ -78,6 +78,13 @@ export function groupAlarms(rows: AlarmRow[]): AlarmGroup[] {
   return groups
 }
 
+/** Body of the delete confirmation, here and on the home screen. */
+export function deleteAlarmMessage(dayCount: number, error: string | null): string {
+  return error
+    ? `Couldn't delete: ${error}. Try again, or cancel.`
+    : `This will remove the alarm for ${dayCount === 7 ? 'every day' : `${dayCount} day${dayCount === 1 ? '' : 's'}`}. The cover will no longer buzz at this time.`
+}
+
 interface AlarmSectionProps {
   side: Side
   /** Page-level side selection; seeds the editor's side control for new alarms. */
@@ -220,11 +227,7 @@ export function AlarmSection({ side, selectedSide = side }: AlarmSectionProps) {
       <ConfirmDialog
         open={pendingDelete !== null}
         title="Delete alarm?"
-        message={
-          deleteError
-            ? `Couldn't delete: ${deleteError}. Try again, or cancel.`
-            : `This will remove the alarm for ${dayCount === 7 ? 'every day' : `${dayCount} day${dayCount === 1 ? '' : 's'}`}. The cover will no longer buzz at this time.`
-        }
+        message={deleteAlarmMessage(dayCount, deleteError)}
         confirmLabel={deleteError ? 'Retry' : 'Delete'}
         variant="danger"
         busy={batchUpdate.isPending}

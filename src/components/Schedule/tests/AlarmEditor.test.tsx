@@ -392,6 +392,60 @@ describe('AlarmEditor', () => {
     await waitFor(() => expect(onRequestDelete).toHaveBeenCalledWith(expect.objectContaining({ ids: [101, 102] })))
   })
 
+  it('a "Both" save coming back as only this side\'s rows does not reset the edit', async () => {
+    m.batch.mutateAsync.mockResolvedValue({ success: true, created: { temperature: [], power: [], alarm: [101, 102, 103, 104] } })
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
+    fireEvent.click(s.getByRole('tab', { name: 'Both' }))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1))
+    fireEvent.click(s.getByRole('button', { name: 'Increase bed temperature at wake' }))
+    // The left side's refetch holds half the rows the save created.
+    s.rerender(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, ids: [101, 102], enabled: true }} />)
+    expect(s.getByText('85°')).toBeTruthy()
+    expect(s.getByRole('tab', { name: 'Both' }).getAttribute('aria-selected')).toBe('true')
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(2))
+    expect(m.batch.mutateAsync.mock.calls[1][0].deletes).toEqual({ alarm: [101, 102, 103, 104] })
+  })
+
+  it('offers Delete on a new alarm once it is saved, so clearing its day can\'t trap the editor', async () => {
+    const onRequestDelete = vi.fn()
+    const onClose = vi.fn()
+    const s = render(<AlarmEditor open onClose={onClose} side="left" onRequestDelete={onRequestDelete} />)
+    fireEvent.click(s.getByRole('button', { name: 'Mon' }))
+    await waitFor(() => expect(s.getByText('Saved')).toBeTruthy())
+    fireEvent.click(s.getByRole('button', { name: 'Mon' }))
+    done(s)
+    await waitFor(() => expect(s.getByText('Pick at least one day, or delete the alarm.')).toBeTruthy())
+    expect(onClose).not.toHaveBeenCalled()
+
+    fireEvent.click(s.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(onRequestDelete).toHaveBeenCalledWith({
+      ids: [101, 102],
+      days: ['monday'],
+      time: '07:00',
+      vibrationIntensity: 100,
+      vibrationPattern: 'rise',
+      duration: 30,
+      alarmTemperature: 75,
+      wakeWindow: 0,
+      snoozeDuration: 300,
+      snoozeTaper: 0,
+      enabled: true,
+    }))
+    expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes on the days the alarm is saved with, not the days it was opened with', async () => {
+    const onRequestDelete = vi.fn()
+    const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} onRequestDelete={onRequestDelete} />)
+    fireEvent.click(s.getByRole('button', { name: 'Every day' }))
+    await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalledTimes(1))
+    fireEvent.click(s.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(onRequestDelete).toHaveBeenCalledWith(expect.objectContaining({
+      ids: [101, 102],
+      days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+    })))
+  })
+
   it('hides Delete for new alarms', () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" onRequestDelete={vi.fn()} />)
     expect(s.queryByRole('button', { name: 'Delete' })).toBeNull()

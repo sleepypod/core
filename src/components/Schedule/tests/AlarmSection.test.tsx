@@ -152,6 +152,25 @@ describe('AlarmSection', () => {
     expect(s.queryByRole('dialog')).toBeNull()
   })
 
+  it('deletes a new alarm whose only day was cleared after it saved', async () => {
+    m.batch.mutateAsync.mockResolvedValueOnce({ success: true, created: { temperature: [], power: [], alarm: [31] } })
+    m.query = { data: { alarm: [] }, isLoading: false, error: null }
+    const s = render(<AlarmSection side="left" />)
+    fireEvent.click(s.getByRole('button', { name: 'Add alarm' }))
+    const dialog = s.getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mon' }))
+    await within(dialog).findByText('Saved')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mon' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await s.findByText('Delete alarm?')
+    const confirm = s.getByRole('dialog')
+    expect(within(confirm).getByText(/remove the alarm for 1 day\./)).toBeTruthy()
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(s.queryByRole('dialog')).toBeNull())
+    expect(m.batch.mutateAsync).toHaveBeenLastCalledWith({ deletes: { alarm: [31] } })
+  })
+
   it('opens a new alarm seeded with the page side selection', () => {
     m.query = { data: { alarm: [] }, isLoading: false, error: null }
     const s = render(<AlarmSection side="left" selectedSide="both" />)

@@ -107,9 +107,12 @@ interface SaveSession {
   /** Rows the alarm has now: the group's when opened, then whatever the
    * last save created. Every save replaces exactly these. */
   rowIds: number[]
-  /** Every set of rows this session created, so a refetch still showing an
-   * earlier save's rows isn't taken for a different alarm. */
-  ownKeys: Set<string>
+  /** Days those rows are on, for the delete confirmation. */
+  days: DayOfWeek[]
+  /** Every row this session created, so a refetch still showing an earlier
+   * save's rows, or only this side's rows of a "Both" save, isn't taken for a
+   * different alarm. */
+  ownIds: Set<number>
   /** The draft last saved (JSON), so an unchanged form isn't saved again. */
   saved: string | null
   /** The draft last queued (JSON), so a change isn't queued twice. */
@@ -118,7 +121,7 @@ interface SaveSession {
 }
 
 const rowKey = (ids: number[]) => `edit:${[...ids].sort((a, b) => a - b).join(',')}`
-const newSession = (rowIds: number[]): SaveSession => ({ rowIds, ownKeys: new Set(), saved: null, queued: null, failed: false })
+const newSession = (rowIds: number[], days: DayOfWeek[]): SaveSession => ({ rowIds, days, ownIds: new Set(), saved: null, queued: null, failed: false })
 
 export function AlarmEditor({
   open,
@@ -156,7 +159,10 @@ export function AlarmEditor({
   // Done was pressed on a saved alarm with every day cleared.
   const [needsDay, setNeedsDay] = useState(false)
 
-  const session = useRef<SaveSession>(newSession([]))
+  const session = useRef<SaveSession>(newSession([], []))
+  // The alarm has saved rows (opened on them, or a save created them), so it
+  // can be deleted.
+  const [hasRows, setHasRows] = useState(false)
   // Saves run one at a time, in order.
   const queue = useRef<Promise<void>>(Promise.resolve())
   // Bumped each time the form loads; the render showing that load is the
@@ -168,21 +174,23 @@ export function AlarmEditor({
   // Load the form when it opens, or when a different alarm is passed in. Not
   // on every new `existingGroup` object: callers rebuild it on each render
   // (the home screen re-renders with every status update), and after each
-  // save the group comes back with the rows that save created — neither may
-  // reset an edit in progress.
+  // save the group comes back with the rows that save created (only this
+  // side's, after a "Both" save) — neither may reset an edit in progress.
   const loadedFrom = useRef<string | null>(null)
   useEffect(() => {
     const source = !open ? null : existingGroup ? rowKey(existingGroup.ids) : 'new'
     if (source === loadedFrom.current) return
-    if (source !== null && loadedFrom.current !== null && session.current.ownKeys.has(source)) {
+    const own = session.current.ownIds
+    if (source !== null && existingGroup && loadedFrom.current !== null && existingGroup.ids.length > 0 && existingGroup.ids.every(id => own.has(id))) {
       loadedFrom.current = source
       return
     }
     loadedFrom.current = source
     if (source === null) return
-    session.current = newSession(existingGroup?.ids ?? [])
+    session.current = newSession(existingGroup?.ids ?? [], existingGroup?.days ?? [])
     /* eslint-disable react-hooks/set-state-in-effect */
     setLoadGeneration(g => g + 1)
+    setHasRows((existingGroup?.ids.length ?? 0) > 0)
     if (existingGroup) {
       setDays(new Set(existingGroup.days))
       setTime(existingGroup.time)
@@ -284,12 +292,14 @@ export function AlarmEditor({
           creates: { alarm: rows.map(r => ({ ...r, enabled: true })) },
         })
         saving.rowIds = result?.created?.alarm ?? []
-        saving.ownKeys.add(rowKey(saving.rowIds))
+        saving.days = DAY_ORDER.filter(d => rows.some(r => r.dayOfWeek === d))
+        for (const id of saving.rowIds) saving.ownIds.add(id)
         saving.saved = snapshot
         saving.failed = false
         if (isCurrent()) {
           setSaveError(null)
           setSaveState('saved')
+          setHasRows(saving.rowIds.length > 0)
         }
         void utils.schedules.getAll.invalidate()
         void utils.schedules.getByDay.invalidate()
@@ -356,11 +366,28 @@ export function AlarmEditor({
     onClose()
   }, [flush, onClose])
 
+  // Deletes the rows the alarm has now, on the days they're on (a new alarm
+  // has no group yet, so it is described by the form).
   const handleDelete = useCallback(async () => {
-    if (!existingGroup || !onRequestDelete) return
+    if (!onRequestDelete) return
     await flush()
-    onRequestDelete({ ...existingGroup, ids: session.current.rowIds })
-  }, [existingGroup, onRequestDelete, flush])
+    const { rowIds, days: savedDays } = session.current
+    onRequestDelete({
+      ...(existingGroup ?? {
+        time,
+        vibrationIntensity: intensity,
+        vibrationPattern: pattern,
+        duration,
+        alarmTemperature: Math.round(displayToSetpointF(displayTemperature, unit) ?? DEFAULT_TEMP),
+        wakeWindow,
+        snoozeDuration,
+        snoozeTaper,
+        enabled: true,
+      }),
+      ids: rowIds,
+      days: savedDays,
+    })
+  }, [existingGroup, onRequestDelete, flush, time, intensity, pattern, duration, displayTemperature, unit, wakeWindow, snoozeDuration, snoozeTaper])
 
   const clock = formatTime(time)
   const [clockDigits, clockPeriod] = clock.split(' ')
@@ -382,7 +409,7 @@ export function AlarmEditor({
             : (
                 <Button icon={Play} onClick={() => void handleTest()} disabled={testAlarm.isPending}>Test</Button>
               )}
-          {isEdit && existingGroup && onRequestDelete && (
+          {hasRows && onRequestDelete && (
             <Button variant="danger" icon={Trash2} onClick={() => void handleDelete()}>
               Delete
             </Button>
