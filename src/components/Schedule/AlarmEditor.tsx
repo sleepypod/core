@@ -334,7 +334,7 @@ export function AlarmEditor({
         </div>
         <span className="text-xs leading-[1.4] text-fg-3">
           {wakeWindow > 0
-            ? `Wakes you up to ${wakeWindow} min early, the first time you move after ${formatTime(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
+            ? `Wakes you up to ${wakeWindow} min early, once you've been moving for a few minutes after ${formatTime(shiftTime(time, -wakeWindow))}. Otherwise it goes off at ${clock}.`
             : 'Goes off at the set time.'}
         </span>
       </div>
