@@ -176,8 +176,17 @@ sleep-detector's 30 s wait.
   the **Presence hold** (Settings → MQTT, default off): a change counts once it
   has lasted that long, so rolling onto the edge for a moment doesn't read as
   leaving. `since` is when the current state began, not when it was reported.
-- With one sleeper (one side away, or a solo bed), the sleeper's side reads in
-  bed while either side carries a load, as their sleep is tracked.
+- With one sleeper (one side away, or a solo bed), the sleeper's side reads
+  the combined load of both sides, so lying across the middle still counts.
+  It also reads out of bed when that load collapses: under 30% of what it was
+  a minute earlier, by at least 2.5 thresholds, for 10 s. Getting up does
+  that; rolling over doesn't, since the load only moves. This catches an exit
+  that the line misses, such as pillows or bedding left on the bed or a
+  mattress slow to settle. The load left behind is then treated as empty
+  (`residual`), and getting back in counts from it. `residual` falls with the
+  load as the mattress settles or things are taken off, and is `null` on a
+  side without a single sleeper. The other side's sensor keeps its own
+  reading.
 - The state is unknown (`null`) while the sleep-detector isn't running or the
   sensor stops reporting.
 

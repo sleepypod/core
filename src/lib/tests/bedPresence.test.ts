@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   BASELINE_STALE_MS,
   bedLoad,
+  CollapsePresence,
   instantPresence,
   PresenceHold,
   readPresenceBaselines,
@@ -60,6 +61,134 @@ describe('instantPresence', () => {
     expect(instantPresence(240, 300, true, 0.8)).toBe(false)
     // Entry is unchanged.
     expect(instantPresence(290, 300, false, 0.8)).toBe(false)
+  })
+})
+
+describe('CollapsePresence', () => {
+  const threshold = 300
+
+  /** Feed `load` twice a second from `fromS` up to (not including) `toS`; returns the last result. */
+  function feed(cp: CollapsePresence, load: number, fromS: number, toS: number) {
+    let last = { load: Number.NaN, present: false }
+    for (let ms = fromS * 1000; ms < toS * 1000; ms += 500) last = cp.update(load, ms, threshold)
+    return last
+  }
+
+  /** In bed at `load` for the first 100 s. */
+  function asleep(load = 2000) {
+    const cp = new CollapsePresence()
+    expect(feed(cp, load, 0, 100)).toEqual({ load, present: true })
+    return cp
+  }
+
+  it('reads an exit once the load has stayed collapsed, though it is still over the line', () => {
+    const cp = asleep()
+    // 380 left on the bed: over the 150 exit line, a fifth of the load before.
+    expect(feed(cp, 380, 100, 109.5)).toEqual({ load: 380, present: true })
+    expect(cp.update(380, 109_500, threshold)).toEqual({ load: 0, present: false })
+    expect(cp.residual).toBe(380)
+  })
+
+  it('treats the load left behind as empty, following it down but not up', () => {
+    const cp = asleep()
+    feed(cp, 380, 100, 110)
+    // The mattress settles: the empty level follows.
+    expect(cp.update(250, 110_000, threshold)).toEqual({ load: 0, present: false })
+    expect(cp.residual).toBe(250)
+    expect(cp.update(500, 110_500, threshold)).toEqual({ load: 250, present: false })
+    expect(cp.residual).toBe(250)
+    // Back in bed: a threshold over what was left, for 5 s.
+    expect(cp.update(551, 111_000, threshold)).toEqual({ load: 301, present: false })
+    expect(cp.update(551, 115_500, threshold)).toEqual({ load: 301, present: false })
+    expect(cp.update(551, 116_000, threshold)).toEqual({ load: 301, present: true })
+    // And out again by the ordinary line, the residual still on the bed.
+    expect(cp.update(399, 116_500, threshold)).toEqual({ load: 149, present: false })
+  })
+
+  it('does not read pushing off the mattress after a collapse as getting back in', () => {
+    const cp = asleep()
+    feed(cp, 380, 100, 110)
+    expect(cp.update(1200, 110_000, threshold).present).toBe(false)
+    expect(cp.update(1100, 110_500, threshold).present).toBe(false)
+    expect(cp.update(380, 111_000, threshold).present).toBe(false)
+    // A new rise starts the 5 s over.
+    expect(cp.update(1200, 111_500, threshold).present).toBe(false)
+    expect(cp.update(1200, 116_000, threshold).present).toBe(false)
+    expect(cp.update(1200, 116_500, threshold).present).toBe(true)
+  })
+
+  it('enters at once when nothing was left behind', () => {
+    const cp = new CollapsePresence()
+    expect(cp.update(0, 0, threshold).present).toBe(false)
+    expect(cp.update(400, 500, threshold).present).toBe(true)
+  })
+
+  it('takes the highest reading of the collapse as the empty level', () => {
+    const cp = asleep()
+    feed(cp, 500, 100, 105)
+    feed(cp, 300, 105, 109.5)
+    expect(cp.update(300, 109_500, threshold)).toEqual({ load: -200, present: false })
+    expect(cp.residual).toBe(500)
+    cp.update(300, 110_000, threshold)
+    expect(cp.residual).toBe(300)
+  })
+
+  it('does not read a short dip or a reading a third of the load as an exit', () => {
+    const cp = asleep()
+    feed(cp, 380, 100, 105)
+    expect(feed(cp, 2000, 105, 200).present).toBe(true)
+    // Exactly 30% of the load before is not a collapse; under it is.
+    expect(feed(cp, 600, 200, 240)).toEqual({ load: 600, present: true })
+    const under = asleep()
+    expect(feed(under, 599, 100, 110)).toEqual({ load: 0, present: false })
+  })
+
+  it('needs the load to drop by at least 2.5 thresholds', () => {
+    const light = asleep(999)
+    expect(feed(light, 250, 100, 110)).toEqual({ load: 250, present: true })
+    const enough = asleep(1000)
+    expect(feed(enough, 250, 100, 110)).toEqual({ load: 0, present: false })
+  })
+
+  it('compares with the median load from 90 s to 30 s ago', () => {
+    const cp = new CollapsePresence()
+    // Low and high readings in the window; the median, not the peak, counts.
+    feed(cp, 600, 0, 20)
+    feed(cp, 4000, 20, 31)
+    feed(cp, 600, 31, 60)
+    // Median 600: a drop to 170 is not 2.5 thresholds.
+    expect(feed(cp, 170, 60, 70)).toEqual({ load: 170, present: true })
+    // Readings over 90 s old are gone, so the 4000s now set the median.
+    const high = new CollapsePresence()
+    feed(high, 600, 0, 30)
+    feed(high, 2000, 30, 120)
+    expect(feed(high, 170, 120, 130)).toEqual({ load: 0, present: false })
+  })
+
+  it('does not read a collapse without 10 s of readings before it, or after a reset', () => {
+    const cp = new CollapsePresence()
+    feed(cp, 2000, 0, 9.5)
+    expect(feed(cp, 380, 9.5, 40)).toEqual({ load: 380, present: true })
+    const reset = asleep()
+    reset.reset()
+    feed(reset, 2000, 100, 109.5)
+    expect(feed(reset, 380, 109.5, 140)).toEqual({ load: 380, present: true })
+    const kept = asleep()
+    feed(kept, 2000, 100, 109.5)
+    expect(feed(kept, 380, 109.5, 140)).toEqual({ load: 0, present: false })
+  })
+
+  it('needs 10 s of readings after the drop', () => {
+    const cp = asleep()
+    // Four readings 3 s apart: low, but too few to count.
+    for (const ms of [100_000, 103_000, 106_000, 109_000]) expect(cp.update(380, ms, threshold).present).toBe(true)
+  })
+
+  it('applies the exit line set for the bridge', () => {
+    const cp = new CollapsePresence()
+    expect(cp.update(400, 0, threshold, 0.8)).toEqual({ load: 400, present: true })
+    expect(cp.update(241, 500, threshold, 0.8).present).toBe(true)
+    expect(cp.update(239, 1000, threshold, 0.8).present).toBe(false)
   })
 })
 

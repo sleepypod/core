@@ -51,6 +51,7 @@ import { activeSleeperSides, type BedState } from '@/src/lib/singleSleeper'
 import {
   bedLoad,
   EXIT_FRACTION,
+  CollapsePresence,
   instantPresence,
   MAX_EXIT_PERCENT,
   MAX_PRESENCE_HOLD_SECONDS,
@@ -230,6 +231,8 @@ interface PresenceTracking {
   /** Each side's own instant reading (before merging and the hold). */
   raw: Record<PresenceSide, boolean | null>
   load: Record<PresenceSide, number | null>
+  /** A single sleeper's side, and its presence from both sides' combined load. */
+  solo: { side: PresenceSide, presence: CollapsePresence } | null
   /** receivedAtMs of the capSense reading last sampled. */
   lastFrameAt: number | null
   /** What each presence topic last carried, so unchanged samples aren't republished. */
@@ -243,6 +246,7 @@ function newPresenceTracking(holdSeconds = 0): PresenceTracking {
     holds: { left: new PresenceHold(holdSeconds * 1000), right: new PresenceHold(holdSeconds * 1000) },
     raw: { left: null, right: null },
     load: { left: null, right: null },
+    solo: null,
     lastFrameAt: null,
     published: { left: null, right: null },
   }
@@ -786,8 +790,9 @@ async function refreshPresenceInputs(): Promise<void> {
 /**
  * Evaluate the latest capacitance reading against each side's empty-bed
  * baseline, and publish a side's presence topic as soon as its state changes.
- * With a single sleeper (one active side) the sleeper is in bed while either
- * side carries a load, as the sleep-detector merges them.
+ * With a single sleeper (one active side) the sleeper's side reads the
+ * combined load of both sides, so rolling across the middle doesn't matter,
+ * and leaving shows as that load collapsing (see CollapsePresence).
  */
 function samplePresence(now = Date.now()): void {
   const p = state.presence
@@ -804,23 +809,39 @@ function samplePresence(now = Date.now()): void {
   const at = fresh ? frameTime(snap.ts, now) : now
 
   const exitFraction = exitPercent() / 100
+  const loads = { left: null as number | null, right: null as number | null }
   for (const side of ['left', 'right'] as const) {
     const baseline = p.baselines[side]
     const load = fresh && baseline ? bedLoad(snap.type, snap[side], baseline) : null
+    loads[side] = load
     p.load[side] = load
     p.raw[side] = load === null || !baseline ? null : instantPresence(load, baseline.threshold, p.raw[side] === true, exitFraction)
   }
 
   const active = activeSleeperSides(p.modes)
   const home = active.length === 1 ? active[0] : null
-  for (const side of ['left', 'right'] as const) {
-    let reading = p.raw[side]
-    if (side === home) {
-      const other = p.raw[side === 'left' ? 'right' : 'left']
-      if (reading === true || other === true) reading = true
-      else if (reading === null) reading = other
+  if (p.solo?.side !== home) p.solo = home ? { side: home, presence: new CollapsePresence() } : null
+  if (p.solo) {
+    const other = p.solo.side === 'left' ? 'right' : 'left'
+    const threshold = p.baselines[p.solo.side]?.threshold ?? p.baselines[other]?.threshold
+    const { left, right } = loads
+    if (left !== null && right !== null && threshold !== undefined) {
+      const combined = p.solo.presence.update(left + right, at, threshold, exitFraction)
+      p.load[p.solo.side] = combined.load
+      p.raw[p.solo.side] = combined.present
     }
-    p.holds[side].update(reading, at)
+    else {
+      // One side unreadable: the combined series breaks, so start it over and
+      // read the sleeper from whichever side remains.
+      p.solo.presence.reset()
+      const own = p.raw[p.solo.side]
+      p.raw[p.solo.side] = own === true || p.raw[other] === true ? true : own ?? p.raw[other]
+      p.load[p.solo.side] = p.load[p.solo.side] ?? p.load[other]
+    }
+  }
+
+  for (const side of ['left', 'right'] as const) {
+    p.holds[side].update(p.raw[side], at)
     publishPresence(side)
   }
 }
@@ -854,6 +875,7 @@ function publishPresence(side: PresenceSide, force = false): void {
     threshold: baseline?.threshold ?? null,
     exitThreshold: baseline ? Math.round(baseline.threshold * exitPercent()) / 100 : null,
     holdSeconds: state.resolved?.presenceHoldSeconds ?? 0,
+    residual: p.solo?.side === side ? Math.round(p.solo.presence.residual * 10) / 10 : null,
   }), RETAINED_QOS_0)
 }
 

@@ -1329,6 +1329,7 @@ describe('mqttBridge — bed presence', () => {
       threshold: 300,
       exitThreshold: 150,
       holdSeconds: 0,
+      residual: null,
     }])
 
     frame(1001, reading(400))
@@ -1374,15 +1375,65 @@ describe('mqttBridge — bed presence', () => {
     expect(published(fake)).toMatchObject([{ inBed: false, since: new Date(200_000).toISOString() }])
   })
 
-  it('a single sleeper is in bed while either side carries a load', async () => {
+  it('a single sleeper reads the combined load of both sides', async () => {
     const fake = await start()
     bridgeTest.state.presence.modes = { bedMode: 'solo-left' }
-    frame(0, empty, reading(400))
+    frame(0, empty, empty)
     bridgeTest.samplePresence()
-    expect(published(fake, 'left')).toMatchObject([{ inBed: true, raw: false, load: 0 }])
-    frame(1, empty, empty)
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, load: 0, residual: 0 }])
+    expect(published(fake, 'right')).toMatchObject([{ inBed: false, load: 0, residual: null }])
+    // Lying across the middle: neither side is over the line, both together are.
+    frame(1, reading(200), reading(200))
     bridgeTest.samplePresence()
-    expect(published(fake, 'left')).toMatchObject([{ inBed: false }])
+    expect(published(fake, 'left')).toMatchObject([{ inBed: true, raw: true, load: 400 }])
+    // Each side's own reading stays its own.
+    expect(published(fake, 'right')).toEqual([])
+    expect(bridgeTest.state.presence.load.right).toBe(200)
+    // 200 together is over the 150 exit line.
+    frame(2, reading(100), reading(100))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toEqual([])
+    frame(3, reading(40), reading(40))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, raw: false, load: 80 }])
+  })
+
+  it('a single sleeper reads out of bed when the load collapses, though something left on the bed holds it over the line', async () => {
+    const fake = await start()
+    bridgeTest.state.presence.modes = { bedMode: 'solo-left' }
+    const at = (s: number) => {
+      frame(s, s < 100 ? reading(500) : reading(320), s < 100 ? reading(1500) : reading(50))
+      bridgeTest.samplePresence()
+    }
+    for (let s = 0; s < 100; s += 0.5) at(s)
+    expect(published(fake, 'left')).toMatchObject([{ inBed: true, load: 2000 }])
+    for (let s = 100; s < 109.5; s += 0.5) at(s)
+    expect(published(fake, 'left')).toEqual([])
+    at(109.5)
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, raw: false, load: 0, residual: 370, since: new Date(109_500).toISOString() }])
+    // The sleep-detector's own reading of the left side alone still says occupied.
+    expect(bridgeTest.state.presence.load.right).toBe(50)
+  })
+
+  it('a single sleeper falls back to either side when one side cannot be read', async () => {
+    const fake = await start()
+    const solo = async (baselines: typeof presenceMock.baselines) => {
+      presenceMock.baselines = baselines
+      await bridgeTest.refreshPresenceInputs()
+      bridgeTest.state.presence.modes = { bedMode: 'solo-left' }
+    }
+    await solo({ left: baseline, right: null })
+    frame(0, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: true, raw: true, load: 400 }])
+    await solo({ left: null, right: baseline })
+    frame(1, empty, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toEqual([])
+    expect(bridgeTest.state.presence.load.left).toBe(400)
+    frame(2, empty, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, raw: false, load: 0 }])
   })
 
   it('reads unknown with no baseline or no recent reading', async () => {

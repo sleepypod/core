@@ -168,3 +168,93 @@ export class PresenceHold {
     return true
   }
 }
+
+/**
+ * Getting out of bed takes most of the load off the mattress within seconds,
+ * and the load stays off. Rolling over moves it but doesn't remove it, so with
+ * a single sleeper the combined load of both sides shows an exit that a fixed
+ * line can miss: something left on the bed (pillows, bedding) or a slowly
+ * settling mattress can hold the load over the line long after the sleeper
+ * has gone.
+ *
+ * An exit counts when every reading of the last `COLLAPSE_AFTER_MS` is under
+ * `COLLAPSE_FRACTION` of the median load a minute earlier (from 90 s to 30 s
+ * ago), and the drop is at least `COLLAPSE_MIN_DROP` thresholds.
+ */
+export const COLLAPSE_FRACTION = 0.3
+export const COLLAPSE_MIN_DROP = 2.5
+export const COLLAPSE_AFTER_MS = 10_000
+export const COLLAPSE_BEFORE_FROM_MS = 90_000
+export const COLLAPSE_BEFORE_TO_MS = 30_000
+/** After a collapse, getting back in counts once its load has lasted this long. */
+export const REENTRY_MS = 5_000
+/** Readings each window needs before a collapse can count (the stream sends about 2 a second). */
+const COLLAPSE_MIN_BEFORE = 20
+const COLLAPSE_MIN_AFTER = 10
+
+/**
+ * Presence from one load series (a single sleeper's combined load), with the
+ * collapse exit. After an exit, the load left behind is the new empty level:
+ * presence enters again once the load has stayed a threshold over it for
+ * `REENTRY_MS`, so pushing off the mattress to stand up doesn't read as
+ * getting back in. That level only falls afterwards, following the load as
+ * the mattress settles or the object is taken off, so it never hides a
+ * sleeper getting back in.
+ */
+export class CollapsePresence {
+  private history: { at: number, load: number }[] = []
+  private residualLoad = 0
+  private present: boolean | null = null
+  /** When the load over the residual first read as getting back in. */
+  private entering: number | null = null
+
+  /** The load treated as empty since the last collapse (0 when none). */
+  get residual(): number {
+    return this.residualLoad
+  }
+
+  /** Forget the readings (a gap or a change of source); the residual is kept. */
+  reset(): void {
+    this.history = []
+    this.present = null
+    this.entering = null
+  }
+
+  /**
+   * Feed one reading. Returns the load over the residual and the presence
+   * reading for it: `instantPresence` on that load, or out when it collapsed.
+   */
+  update(load: number, atMs: number, threshold: number, exitFraction = EXIT_FRACTION): { load: number, present: boolean } {
+    this.history = this.history.filter(r => r.at >= atMs - COLLAPSE_BEFORE_FROM_MS && r.at <= atMs)
+    this.history.push({ at: atMs, load })
+    this.residualLoad = Math.min(this.residualLoad, Math.max(load, 0))
+    let present = instantPresence(load - this.residualLoad, threshold, this.present === true, exitFraction)
+    if (present && this.present === false && this.residualLoad > 0) {
+      this.entering ??= atMs
+      if (atMs - this.entering < REENTRY_MS) present = false
+    }
+    else {
+      this.entering = null
+    }
+    if (present && this.present === true) {
+      const after = this.history.filter(r => r.at > atMs - COLLAPSE_AFTER_MS).map(r => r.load)
+      const before = this.history.filter(r => r.at < atMs - COLLAPSE_BEFORE_TO_MS).map(r => r.load)
+      if (after.length >= COLLAPSE_MIN_AFTER && before.length >= COLLAPSE_MIN_BEFORE) {
+        const was = median(before)
+        const now = Math.max(...after)
+        if (now < COLLAPSE_FRACTION * was && was - now >= COLLAPSE_MIN_DROP * threshold) {
+          this.residualLoad = Math.max(this.residualLoad, now)
+          present = false
+        }
+      }
+    }
+    this.present = present
+    return { load: load - this.residualLoad, present }
+  }
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = sorted.length >> 1
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
