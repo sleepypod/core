@@ -5,6 +5,7 @@ usage() {
   cat << EOF
 Usage: $(basename "$0") {block|unblock|restore|hosts-unblock|dns-block|dns-unblock|status}
        $(basename "$0") firmware-updates {allow|block|status}
+       INTERNET_CONTROL_ROOT=/mnt/slot_b $(basename "$0") {dns-install|dns-uninstall}
 
 Control internet access for SleepyPod device.
 
@@ -15,6 +16,10 @@ Commands:
   hosts-unblock - Remove the old Eight Sleep 0.0.0.0 entries from /etc/hosts
   dns-block     - Make every *.8slp.net name NXDOMAIN with a local dnsmasq (127.0.0.1)
   dns-unblock   - Remove the dnsmasq blackhole and restore /etc/resolv.conf
+  dns-install   - Write and enable the dnsmasq blackhole in a root filesystem
+                  that is not running (INTERNET_CONTROL_ROOT, e.g. the other
+                  boot slot mounted by sp-neutralize-slot-b); starts nothing
+  dns-uninstall - Remove what dns-install wrote from that root
   status        - Show current blocking status (iptables, names, services)
   firmware-updates allow|block|status
                 - Opt in to (or back out of) stock Eight Sleep firmware
@@ -503,6 +508,87 @@ remove_dns_block() {
   wait_for_dns || true
 }
 
+# Offline dns-block for a root filesystem that is not running: the other boot
+# slot, mounted by sp-neutralize-slot-b with INTERNET_CONTROL_ROOT pointing at
+# it. Writes the same files dns-block does and enables the unit with the
+# multi-user.target.wants symlink `systemctl enable` would create, but starts
+# and verifies nothing: the unit's own start hook checks the blackhole and
+# repoints resolv.conf when that root boots, and leaves the original resolver
+# in place if it can't. The stock dnsmasq.service is disabled there as well:
+# it binds *:53, where ours needs 127.0.0.1:53, so the two can't coexist (the
+# running slot has it disabled already).
+DNS_WANTS_DIR="/etc/systemd/system/multi-user.target.wants"
+STOCK_DNSMASQ_UNIT="dnsmasq.service"
+
+require_offline_root() {
+  if [ -z "$ROOT" ]; then
+    echo "Error: $COMMAND writes to a mounted root filesystem; set INTERNET_CONTROL_ROOT to it." >&2
+    echo "  On the running pod use dns-block / dns-unblock instead." >&2
+    return 1
+  fi
+  if [ "$ROOT" = / ] || [ ! -d "$ROOT/etc" ]; then
+    echo "Error: INTERNET_CONTROL_ROOT=$ROOT is not a mounted root filesystem (no $ROOT/etc)" >&2
+    return 1
+  fi
+}
+
+install_dns_layer_offline() {
+  local dnsmasq_bin wants="$ROOT$DNS_WANTS_DIR"
+  require_offline_root || return 1
+
+  # Resolvers read /etc/hosts before DNS (and dnsmasq serves it too), so a
+  # leftover 0.0.0.0 block would beat the NXDOMAIN answer: remove it first.
+  if ! remove_hosts_block; then
+    echo "Error: the old /etc/hosts block can't be removed, and it would override the NXDOMAIN blackhole." >&2
+    return 1
+  fi
+  if ! dnsmasq_bin=$(find_dnsmasq); then
+    echo "dnsmasq not found under $ROOT — no name blocking there"
+    return 0
+  fi
+  if [ ! -L "$ROOT$RESOLV_CONF" ]; then
+    echo "$RESOLV_CONF under $ROOT is not a symlink, so it can't be swapped and restored safely — no name blocking there"
+    return 0
+  fi
+
+  write_if_changed "$ROOT$DNS_CONF" "$(dnsmasq_conf_content)" || true
+  write_if_changed "$ROOT$DNS_HOOK" "$(dns_hook_content)" || true
+  write_if_changed "$ROOT$DNS_RESOLV" "nameserver 127.0.0.1" || true
+  write_if_changed "$ROOT$DNS_UNIT_FILE" "$(dns_unit_content "$dnsmasq_bin")" || true
+  chmod 0755 "$ROOT$DNS_HOOK"
+  # Keep the recorded original if an earlier run already swapped resolv.conf
+  # there; otherwise record where it points now, so the hook can restore it.
+  if ! resolv_points_to_ours; then
+    printf '%s\n' "$(readlink "$ROOT$RESOLV_CONF")" > "$ROOT$DNS_ORIG_TARGET"
+  fi
+  # Same check dns-block makes, with that root's binary. A failure here is
+  # most likely a binary this slot can't run (other build), not a bad conf:
+  # the conf is the one the running slot's dnsmasq already accepted.
+  if ! "$ROOT$dnsmasq_bin" --test --conf-file="$ROOT$DNS_CONF" >/dev/null 2>&1; then
+    echo "Warning: $ROOT$dnsmasq_bin --test did not accept $DNS_CONF (continuing; the unit's start hook keeps the original resolver if dnsmasq fails there)" >&2
+  fi
+
+  mkdir -p "$wants"
+  ln -sfn "$DNS_UNIT_FILE" "$wants/$DNS_UNIT"
+  if [ -L "$wants/$STOCK_DNSMASQ_UNIT" ]; then
+    echo "Disabling the stock $STOCK_DNSMASQ_UNIT under $ROOT (it binds *:53; $DNS_UNIT needs 127.0.0.1:53)"
+    rm -f "$wants/$STOCK_DNSMASQ_UNIT"
+  fi
+  echo "Installed $DNS_UNIT under $ROOT: ${DNS_BLOCK_ZONES[*]} (and every subdomain) NXDOMAIN once that root boots"
+}
+
+remove_dns_layer_offline() {
+  local wants="$ROOT$DNS_WANTS_DIR"
+  require_offline_root || return 1
+  if [ ! -e "$ROOT$DNS_UNIT_FILE" ] && [ ! -L "$wants/$DNS_UNIT" ]; then
+    echo "No dnsmasq wildcard block found under $ROOT"
+    return 0
+  fi
+  restore_original_resolv
+  rm -f "$wants/$DNS_UNIT" "$ROOT$DNS_UNIT_FILE" "$ROOT$DNS_CONF" "$ROOT$DNS_HOOK" "$ROOT$DNS_RESOLV" "$ROOT$DNS_ORIG_TARGET"
+  echo "Removed dnsmasq wildcard block from $ROOT"
+}
+
 # ---------------------------------------------------------------------------
 # IPv4 WAN block (block, and restore at boot)
 # ---------------------------------------------------------------------------
@@ -892,6 +978,20 @@ case "$COMMAND" in
     echo ""
     remove_dns_block
     echo ""
+    ;;
+
+  dns-install)
+    echo "========================================"
+    echo "  Install Eight Sleep Telemetry Block (dnsmasq, offline)"
+    echo "========================================"
+    install_dns_layer_offline
+    ;;
+
+  dns-uninstall)
+    echo "========================================"
+    echo "  Remove Eight Sleep Telemetry Block (dnsmasq, offline)"
+    echo "========================================"
+    remove_dns_layer_offline
     ;;
 
   status)

@@ -162,4 +162,42 @@ for s in frank.service capybara.service persistent-manager.service \
   printf "%-40s %s\n" "$s" "$(active_or "$s")"
 done
 
+# ----- boot slots ----------------------------------------------------------
+# A/B eMMC pods: U-Boot boots the other (stock) slot once an unconfirmed
+# slot runs out of retries. Read-only: fw_printenv and /proc/cmdline.
+probe_section "boot slots"
+uboot_var() {
+  fw_printenv -n "$1" 2>/dev/null | head -n 1
+}
+RUNNING_SLOT=$(grep -o 'rootfs_[ab]' /proc/cmdline 2>/dev/null | head -n 1)
+if [ -z "$RUNNING_SLOT" ]; then
+  printf "running:     not an A/B eMMC layout (no rootfs_a/b in /proc/cmdline)\n"
+elif ! command -v fw_printenv >/dev/null 2>&1; then
+  printf "running:     %s (fw_printenv not available; U-Boot state unknown)\n" "$RUNNING_SLOT"
+else
+  slot=${RUNNING_SLOT#rootfs_}
+  current=$(uboot_var current_slot)
+  success=$(uboot_var "boot_${slot}_success")
+  retry=$(uboot_var "retry_boot_${slot}")
+  printf "running:     %s (current_slot=%s boot_%s_success=%s retry_boot_%s=%s)\n" \
+    "$RUNNING_SLOT" "${current:-?}" "$slot" "${success:-?}" "$slot" "${retry:-?}"
+  if [ -n "$current" ] && [ "$current" != "$slot" ]; then
+    printf "WARNING:     U-Boot boots rootfs_%s next; that slot is stock unless neutralized\n" "$current"
+  elif [ "$success" = "0" ]; then
+    printf "WARNING:     this slot is unconfirmed; U-Boot switches to the other slot after %s more boot(s)\n" "${retry:-?}"
+    printf "             confirm it: sudo fw_setenv boot_%s_success 1 retry_boot_%s 5\n" "$slot" "$slot"
+  fi
+fi
+NEUTRALIZE="$(dirname "$0")/sp-neutralize-slot-b"
+if [ -z "$RUNNING_SLOT" ]; then
+  :
+elif [ "$(id -u)" -ne 0 ]; then
+  printf "other slot:  run as root to check (sudo sp-neutralize-slot-b status)\n"
+elif [ -x "$NEUTRALIZE" ]; then
+  "$NEUTRALIZE" status --brief 2>/dev/null \
+    || printf "other slot:  unknown (sp-neutralize-slot-b status failed)\n"
+else
+  printf "other slot:  unknown (sp-neutralize-slot-b not installed)\n"
+fi
+
 echo
