@@ -43,6 +43,7 @@ web web text
 pod pod text
 app sleepypod text
 firmware firmware text
+slots slots slots
 service service state
 frank frank state
 dns dnsmasq state
@@ -285,6 +286,31 @@ fact_dns() {
   fact blocked "$zones"
 }
 
+# Boot slots on A/B eMMC pods: the running slot's U-Boot confirmation (an
+# unconfirmed slot counts down to a switch into the other, stock slot) and
+# whether the other slot was neutralized (sp-neutralize-slot-b leaves a copy
+# of its marker on this slot, so no mount is needed here).
+fact_slots() {
+  running=$(lim 1 grep -o 'rootfs_[ab]' /proc/cmdline 2>/dev/null | head -1 | cut -c8)
+  [ -n "$running" ] || return 0
+  other=b
+  [ "$running" = a ] || other=a
+  current=$(lim 1 fw_printenv -n current_slot 2>/dev/null)
+  success=$(lim 1 fw_printenv -n "boot_${running}_success" 2>/dev/null)
+  retry=$(lim 1 fw_printenv -n "retry_boot_${running}" 2>/dev/null)
+  if [ -n "$current" ] && [ "$current" != "$running" ]; then
+    fact slots "$running now, boots $current next!"
+  elif [ "$success" = 0 ]; then
+    fact slots "$running UNCONFIRMED, ${retry:-?} boots left"
+  else
+    mine=$running
+    [ "$success" = 1 ] && mine="$running confirmed"
+    theirs=stock
+    lim 1 test -s /etc/sleepypod/other-slot-neutralized && theirs=neutralized
+    fact slots "$mine, $other $theirs"
+  fi
+}
+
 fact_disk() {
   usage_line=$(lim 1 df -Pk /persistent 2>/dev/null | awk '
     function human(k) {
@@ -363,6 +389,7 @@ facts_live() {
   (fact service "$(unit_state sleepypod.service)") &
   (fact frank "$(unit_state frank.service)") &
   fact_dns &
+  fact_slots &
   wait
 }
 
@@ -372,6 +399,7 @@ facts_demo() {
   fact pod 'Pod 5 (J55)'
   fact app '6179822 (dev)'
   fact firmware ca35aafa
+  fact slots 'a confirmed, b neutralized'
   fact service active
   fact frank active
   fact dns 'active'
@@ -471,6 +499,14 @@ render() {
       return warn
     }
 
+    # Red for a pending switch or countdown, green only when the other
+    # slot can no longer update over this one, amber for a stock other slot.
+    function slots_colour(v) {
+      if (v ~ /UNCONFIRMED|next!/) return bad
+      if (v ~ /neutralized/) return good
+      return warn
+    }
+
     function bar_value(k, room,   p, text, filled, c, out, i, step) {
       p = val[k] + 0
       text = p "% " detail[k]
@@ -515,6 +551,7 @@ render() {
       v = fit(val[k], room)
       if (row_style[i] == "temperature") return head temperature_value(v)
       if (row_style[i] == "state") return head tint(state_colour(val[k]), v)
+      if (row_style[i] == "slots") return head tint(slots_colour(val[k]), v)
       return head v
     }
 

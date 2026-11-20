@@ -14,10 +14,10 @@ set -euo pipefail
 #   - root SSH by key: the keys sshd reads for root on this slot go into the
 #     file the other slot's sshd reads; PermitRootLogin prohibit-password and
 #     root added to AllowUsers. Password auth stays off there.
-#   - masks for swupdate.socket, swupdate.service, swupdate-progress.service,
-#     defibrillator.service and eight-kernel.service (symlinks to /dev/null).
-#     defibrillator is not optional: a stock slot without internet reboots
-#     itself about every five minutes.
+#   - /dev/null masks for the eight stock units the running slot masks too:
+#     vector, telegraf, dac, swupdate.socket/.service/-progress,
+#     defibrillator and eight-kernel. defibrillator is not optional: a
+#     stock slot without internet reboots itself about every five minutes.
 #   - the dnsmasq NXDOMAIN layer (internet-control dns-install), enabled so
 #     it starts and verifies itself when that slot boots.
 #   - a marker, /etc/sleepypod/slot-neutralized, that sp-status reads.
@@ -92,11 +92,14 @@ fi
 source "$TREE/scripts/lib/ssh-helpers"
 INTERNET_CONTROL="$TREE/scripts/internet-control"
 
-# Same list and order as STOCK_FIRMWARE_UPDATE_UNITS + STOCK_KERNEL_UNITS in
-# scripts/lib/telemetry-helpers: socket first, so socket activation can't
-# bring the service back.
-MASK_UNITS=(swupdate.socket swupdate.service swupdate-progress.service defibrillator.service eight-kernel.service)
+# The same eight units install and sp-update mask on the running slot
+# (scripts/lib/telemetry-helpers: telemetry, stock app, updater, kernel-log
+# shipper), socket first so socket activation can't bring swupdate back.
+MASK_UNITS=(vector.service telegraf.service dac.service swupdate.socket swupdate.service swupdate-progress.service defibrillator.service eight-kernel.service)
 MARKER="/etc/sleepypod/slot-neutralized"
+# Copy of the marker on the running slot, so sp-welcome and sp-status can
+# say "other slot: neutralized" without mounting it.
+MARKER_COPY="/etc/sleepypod/other-slot-neutralized"
 FIRMWARE_UPDATES_CHOICE="/etc/sleepypod/firmware-updates"
 WANTS_DIR="/etc/systemd/system/multi-user.target.wants"
 STOCK_DNSMASQ_UNIT="dnsmasq.service"
@@ -425,10 +428,12 @@ write_marker() {
   } > "$MNT$MARKER"
   # The owner's choice as internet-control reads it: blocked.
   printf 'block\n' > "$MNT$FIRMWARE_UPDATES_CHOICE"
+  mkdir -p "$HOST_ROOT/etc/sleepypod"
+  cp -f "$MNT$MARKER" "$HOST_ROOT$MARKER_COPY"
 }
 
 remove_marker() {
-  rm -f "$MNT$MARKER" "$MNT$FIRMWARE_UPDATES_CHOICE"
+  rm -f "$MNT$MARKER" "$MNT$FIRMWARE_UPDATES_CHOICE" "$HOST_ROOT$MARKER_COPY"
   rmdir "$MNT/etc/sleepypod" 2>/dev/null || true
 }
 
@@ -454,7 +459,7 @@ cmd_apply() {
   sync
   cleanup_hostkey
   echo ""
-  echo "✓ $OTHER_LABEL neutralized ($(marker_date)); marker $MARKER"
+  echo "✓ $OTHER_LABEL neutralized ($(marker_date)); marker $MARKER (copy at $MARKER_COPY here)"
   echo "  If U-Boot ever boots it: root SSH on port 8822 by key, no stock updater or watchdog,"
   echo "  Eight Sleep names NXDOMAIN. Switch back to rootfs_$RUNNING deliberately from there."
   echo "  A stock OTA would rewrite that slot and undo this; keep 8slp.net blocked on your network."

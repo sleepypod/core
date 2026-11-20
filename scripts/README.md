@@ -256,9 +256,10 @@ sudo sp-neutralize-slot-b undo      # back to stock
 `apply` writes only inside the other slot (mounted at `/mnt/slot_b` for the
 duration): the keys sshd reads for root here go into the file that slot's
 sshd reads, `PermitRootLogin prohibit-password` and root in `AllowUsers`
-(password auth stays off); `/dev/null` masks for `swupdate.socket`,
-`swupdate.service`, `swupdate-progress.service`, `defibrillator.service`
-and `eight-kernel.service`; the dnsmasq layer via
+(password auth stays off); `/dev/null` masks for the same eight
+stock units this slot masks (`vector`, `telegraf`, `dac`, `swupdate.socket`,
+`swupdate.service`, `swupdate-progress.service`, `defibrillator.service`,
+`eight-kernel.service`); the dnsmasq layer via
 `INTERNET_CONTROL_ROOT=/mnt/slot_b sp-internet-control dns-install` (same
 files as `dns-block`, enabled by symlink, started and verified by its own
 hook when that slot boots; the stock `dnsmasq.service` there is disabled

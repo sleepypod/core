@@ -118,17 +118,20 @@ rm -rf "$d"
 OpenSSH 8.9 prints `permitrootlogin without-password` (the old spelling of
 `prohibit-password`) and one `allowusers` line per entry.
 
-## Step 3: mask the stock updater and watchdog in B
+## Step 3: mask the stock units in B
 
-Masking is a symlink to `/dev/null` in `/etc/systemd/system/`; it takes
-precedence over the `multi-user.target.wants` / `sockets.target.wants` enable
-links, so those can stay.
+The same eight units the installer masks on slot A (`scripts/lib/
+telemetry-helpers`): telemetry shippers, the stock app, the updater, the
+watchdog, the kernel-log shipper. Masking is a symlink to `/dev/null` in
+`/etc/systemd/system/`; it takes precedence over the
+`multi-user.target.wants` / `sockets.target.wants` enable links, so those
+can stay.
 
 ```bash
-for u in swupdate.socket swupdate.service swupdate-progress.service defibrillator.service eight-kernel.service; do
+for u in vector.service telegraf.service dac.service swupdate.socket swupdate.service swupdate-progress.service defibrillator.service eight-kernel.service; do
   ln -sfn /dev/null "/mnt/slot_b/etc/systemd/system/$u"
 done
-ls -l /mnt/slot_b/etc/systemd/system/ | grep -E "swupdate|defibrillator|eight-kernel"
+ls -l /mnt/slot_b/etc/systemd/system/ | grep -E "vector|telegraf|dac|swupdate|defibrillator|eight-kernel"
 ```
 
 `defibrillator` is not optional: a stock slot without internet reboots
@@ -186,7 +189,7 @@ was enabled) so that `undo` can put things back exactly.
 mount -o ro /dev/mmcblk0p7 /mnt/slot_b
 cut -c1-40 /mnt/slot_b/etc/ssh/authorized_keys; ls -l /mnt/slot_b/etc/ssh/authorized_keys   # 0644
 grep -E "^(PermitRootLogin|AllowUsers)" /mnt/slot_b/etc/ssh/sshd_config
-ls -l /mnt/slot_b/etc/systemd/system/ | grep -c "/dev/null"                   # 5
+ls -l /mnt/slot_b/etc/systemd/system/ | grep -c "/dev/null"                   # 8
 ls -l /mnt/slot_b/etc/systemd/system/multi-user.target.wants/ | grep -E "dnsmasq|sleepypod"   # only sleepypod-dns.service
 grep -c 0.0.0.0 /mnt/slot_b/etc/hosts                                          # 0
 cat /mnt/slot_b/etc/sleepypod/slot-neutralized
@@ -194,7 +197,7 @@ umount /mnt/slot_b
 fw_printenv current_slot boot_a_success retry_boot_a boot_b_success retry_boot_b   # unchanged: a / 1 / 5 / 1 / 5
 ```
 
-Result on this pod, 2026-11-19T23:47:12Z: all of the above as expected.
+Result on this pod, 2026-11-19: all of the above as expected (re-applied after the mask list grew to eight).
 
 Do **not** test by switching `current_slot` to `b`. That is the one write
 that can leave the pod on the stock slot, and the only way back is another
@@ -209,7 +212,7 @@ fallback we did not choose is survivable.
 mount -o rw /dev/mmcblk0p7 /mnt/slot_b
 mv -f /mnt/slot_b/etc/ssh/sshd_config.pre-neutralize /mnt/slot_b/etc/ssh/sshd_config
 rm -f /mnt/slot_b/etc/ssh/authorized_keys        # stock B had none
-for u in swupdate.service swupdate.socket swupdate-progress.service defibrillator.service eight-kernel.service; do rm -f "/mnt/slot_b/etc/systemd/system/$u"; done
+for u in vector.service telegraf.service dac.service swupdate.service swupdate.socket swupdate-progress.service defibrillator.service eight-kernel.service; do rm -f "/mnt/slot_b/etc/systemd/system/$u"; done
 INTERNET_CONTROL_ROOT=/mnt/slot_b /home/dac/sleepypod-core/scripts/internet-control dns-uninstall
 ln -sfn /lib/systemd/system/dnsmasq.service /mnt/slot_b/etc/systemd/system/multi-user.target.wants/dnsmasq.service
 rm -rf /mnt/slot_b/etc/sleepypod
@@ -240,3 +243,8 @@ sync; umount /mnt/slot_b
 - Marker is `/etc/sleepypod/slot-neutralized` (the name #942 specifies), and
   `/etc/sleepypod/firmware-updates` is set to `block`.
 - Mount point is `/mnt/slot_b`, matching the docs' sync script.
+- Masks cover the same eight units slot A masks (vector, telegraf, dac
+  added), not just the five update/watchdog units #942 listed.
+- `apply` also leaves a copy of the marker at
+  `/etc/sleepypod/other-slot-neutralized` on the running slot, which
+  `sp-welcome` shows in its `slots` row without mounting B.

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const script = resolve('scripts/bin/sp-neutralize-slot-b')
 const controlScript = resolve('scripts/internet-control')
 
-const MASKED = ['swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service', 'eight-kernel.service']
+const MASKED = ['vector.service', 'telegraf.service', 'dac.service', 'swupdate.socket', 'swupdate.service', 'swupdate-progress.service', 'defibrillator.service', 'eight-kernel.service']
 const KEY_A = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa laptop'
 const KEY_B = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb phone'
 const STOCK_SSHD_CONFIG = [
@@ -133,7 +133,7 @@ beforeEach(() => {
   for (const unit of [...MASKED, 'dnsmasq.service', 'capybara.service', 'frank.service']) {
     writeFileSync(s('lib/systemd/system', unit), `[Unit]\nDescription=${unit}\n`)
   }
-  for (const unit of ['swupdate.service', 'defibrillator.service', 'eight-kernel.service', 'dnsmasq.service', 'capybara.service', 'frank.service']) {
+  for (const unit of ['swupdate.service', 'defibrillator.service', 'eight-kernel.service', 'vector.service', 'dac.service', 'dnsmasq.service', 'capybara.service', 'frank.service']) {
     symlinkSync(`/lib/systemd/system/${unit}`, s('etc/systemd/system/multi-user.target.wants', unit))
   }
   symlinkSync('/lib/systemd/system/swupdate.socket', s('etc/systemd/system/sockets.target.wants/swupdate.socket'))
@@ -160,7 +160,7 @@ describe('sp-neutralize-slot-b apply', () => {
     expect(readFileSync(s('etc/ssh/sshd_config.pre-neutralize'), 'utf8')).toBe(STOCK_SSHD_CONFIG)
     expect(existsSync(s('etc/ssh/sshd_config_readonly'))).toBe(false)
 
-    // Masks for the updater, its socket and progress unit, the watchdog and the kernel-log shipper.
+    // The same eight masks the running slot carries; frank and Capybara are never touched.
     for (const unit of MASKED) expect(isMask(unit), unit).toBe(true)
     expect(isMask('capybara.service')).toBe(false)
     expect(isMask('frank.service')).toBe(false)
@@ -182,6 +182,7 @@ describe('sp-neutralize-slot-b apply', () => {
     expect(marker()).toContain('authorized_keys_created=yes\n')
     expect(marker()).toContain('stock_dnsmasq_enabled=yes\n')
     expect(readFileSync(s('etc/sleepypod/firmware-updates'), 'utf8')).toBe('block\n')
+    expect(readFileSync(join(host, 'etc/sleepypod/other-slot-neutralized'), 'utf8')).toBe(marker())
     expect(result.stdout).toContain('rootfs_b neutralized')
     expect(result.stdout).toContain('current_slot=a')
   })
@@ -295,7 +296,7 @@ describe('sp-neutralize-slot-b status', () => {
     expect(result.status, result.stderr).toBe(0)
     expect(calls()).toEqual([`mount -o ro ${dev('rootfs_b')} ${slot}`, `umount ${slot}`])
     expect(result.stdout).toContain('Marker:   none (stock slot)')
-    expect(result.stdout).toContain('Masked:   0/5')
+    expect(result.stdout).toContain('Masked:   0/8')
     expect(result.stdout).toContain('stock dnsmasq.service enabled')
     expect(result.stdout).toContain('PermitRootLogin no; AllowUsers rewt')
     expect(run('status', '--brief').stdout.trim()).toBe('other slot (rootfs_b): stock (updater on; sudo sp-neutralize-slot-b to neutralize)')
@@ -306,7 +307,7 @@ describe('sp-neutralize-slot-b status', () => {
     expect(run().status).toBe(0)
     const result = run('status')
     expect(result.stdout).toContain('Marker:   neutralized 20')
-    expect(result.stdout).toContain('Masked:   5/5')
+    expect(result.stdout).toContain('Masked:   8/8')
     expect(result.stdout).toContain('sleepypod-dns.service installed and enabled')
     expect(result.stdout).toContain('PermitRootLogin prohibit-password; AllowUsers rewt root; PasswordAuthentication no')
     expect(result.stdout).toContain('2 key(s) in /etc/ssh/authorized_keys')
@@ -316,7 +317,7 @@ describe('sp-neutralize-slot-b status', () => {
   it('calls a half-applied slot out', () => {
     expect(run().status).toBe(0)
     rmSync(s('etc/systemd/system/defibrillator.service'))
-    expect(run('status', '--brief').stdout).toContain('partly neutralized (4/5 units masked)')
+    expect(run('status', '--brief').stdout).toContain('partly neutralized (7/8 units masked)')
   })
 })
 
@@ -332,6 +333,7 @@ describe('sp-neutralize-slot-b undo', () => {
     expect(existsSync(s('etc/systemd/system/sleepypod-dns.service'))).toBe(false)
     expect(existsSync(s('etc/systemd/system/multi-user.target.wants/sleepypod-dns.service'))).toBe(false)
     expect(existsSync(s('etc/sleepypod'))).toBe(false)
+    expect(existsSync(join(host, 'etc/sleepypod/other-slot-neutralized'))).toBe(false)
     expect(readlinkSync(s('etc/systemd/system/multi-user.target.wants/dnsmasq.service'))).toBe('/lib/systemd/system/dnsmasq.service')
     expect(readlinkSync(s('etc/resolv.conf'))).toBe('/etc/resolv-conf.NetworkManager')
     expect(calls().at(-1)).toBe(`umount ${slot}`)

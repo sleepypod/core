@@ -32,14 +32,19 @@ beforeEach(() => {
   mkdirSync(bin)
   mkdirSync(install)
   writeFileSync(join(root, 'rat_version'), 'f76374f38f9ffed57b320b1b079c6fcf00242bf5\n')
+  writeFileSync(join(root, 'cmdline'), 'console=ttyS0 root=PARTLABEL=rootfs_a rootwait\n')
+  writeFileSync(join(root, 'uboot-env'), 'current_slot=a\nboot_a_success=1\nretry_boot_a=5\n')
   writeFileSync(join(install, '.git-info'), JSON.stringify({ commitHash: 'abc1234def', branch: 'main', buildDate: '2026-10-05' }))
   writeFileSync(join(install, '.env'), 'PORT=3333\nAPI_TOKEN=secret-for-redaction-test\n')
   script = join(root, 'sp-welcome')
-  writeFileSync(script, readFileSync(resolve('scripts/bin/sp-welcome'), 'utf8').replaceAll('/etc/rat_version', join(root, 'rat_version')))
+  writeFileSync(script, readFileSync(resolve('scripts/bin/sp-welcome'), 'utf8').replaceAll('/etc/rat_version', join(root, 'rat_version'))
+    .replaceAll('/proc/cmdline', join(root, 'cmdline'))
+    .replaceAll('/etc/sleepypod/other-slot-neutralized', join(root, 'other-slot-neutralized')))
   stub('curl', 'for arg do url=$arg; done; [ "$url" = "http://127.0.0.1:${EXPECTED_PORT:-3000}/api/device/status" ] || exit 1; printf "%s" "$MOCK_STATUS"')
   stub('systemctl', 'echo active')
+  stub('fw_printenv', `[ "$1" = -n ] && awk -F= -v k="$2" '$1 == k { print $2 }' "\${UBOOT_ENV}"`)
   stub('df', 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/mmcblk0p8 6291456 2726298 3565158 91%% /persistent\\n"')
-  env = { ...process.env, PORT: undefined, PATH: `${bin}:${process.env.PATH}`, INSTALL_DIR: install, MOCK_STATUS: STATUS, COLUMNS: '80' }
+  env = { ...process.env, PORT: undefined, PATH: `${bin}:${process.env.PATH}`, INSTALL_DIR: install, MOCK_STATUS: STATUS, COLUMNS: '80', UBOOT_ENV: join(root, 'uboot-env') }
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
@@ -345,4 +350,19 @@ fi
 exec '${spawnSync('which', ['python3'], { encoding: 'utf8' }).stdout.trim()}' "$@"`)
   const output = run().stdout
   expect(output).toMatch(/writes\s+10[0-2][0-9]\.[0-9] KiB\/s \(1s\)/)
+})
+
+it('shows the boot slots: confirmed and the other slot stock until neutralized', () => {
+  expect(run().stdout).toMatch(/slots\s+a confirmed, b stock/)
+  writeFileSync(join(root, 'other-slot-neutralized'), '2026-11-19T23:47:12Z\n')
+  expect(run().stdout).toMatch(/slots\s+a confirmed, b neutralized/)
+})
+
+it('warns in the slots row when U-Boot is counting down or about to switch', () => {
+  writeFileSync(join(root, 'uboot-env'), 'current_slot=a\nboot_a_success=0\nretry_boot_a=3\n')
+  expect(run().stdout).toMatch(/slots\s+a UNCONFIRMED, 3 boots left/)
+  writeFileSync(join(root, 'uboot-env'), 'current_slot=b\nboot_a_success=0\nretry_boot_a=0\n')
+  expect(run().stdout).toMatch(/slots\s+a now, boots b next!/)
+  writeFileSync(join(root, 'cmdline'), 'root=/dev/mmcblk1p2 rootwait\n')
+  expect(run().stdout).toMatch(/slots\s+-/)
 })
