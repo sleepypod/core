@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -181,6 +181,7 @@ describe('sp-neutralize-slot-b apply', () => {
     expect(marker()).toContain('target_build=4.0.2 8df35cc8\n')
     expect(marker()).toContain('authorized_keys_created=yes\n')
     expect(marker()).toContain('stock_dnsmasq_enabled=yes\n')
+    expect(marker()).toContain('dns_installed=yes\n')
     expect(readFileSync(s('etc/sleepypod/firmware-updates'), 'utf8')).toBe('block\n')
     expect(readFileSync(join(host, 'etc/sleepypod/other-slot-neutralized'), 'utf8')).toBe(marker())
     expect(result.stdout).toContain('rootfs_b neutralized')
@@ -224,6 +225,33 @@ describe('sp-neutralize-slot-b apply', () => {
     expect(result.status, result.stderr).toBe(0)
     expect(calls()[0]).toBe(`mount -o rw ${dev('rootfs_a')} ${slot}`)
     expect(result.stdout).toContain('rootfs_a neutralized')
+  })
+
+  it('warns, and the marker and brief status say so, when the other slot has no dnsmasq to block names with', () => {
+    rmSync(s('usr/bin/dnsmasq'))
+    const result = run()
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    expect(result.stderr).toContain('Warning: no name blocking was installed in rootfs_b')
+    expect(result.stdout).toContain('rootfs_b neutralized')
+    expect(result.stdout).toContain('but no name blocking')
+    expect(result.stdout).not.toContain('NXDOMAIN')
+    expect(marker()).toContain('dns_installed=no\n')
+    expect(existsSync(s('etc/systemd/system/sleepypod-dns.service'))).toBe(false)
+    for (const unit of MASKED) expect(isMask(unit), unit).toBe(true)
+    expect(run('status', '--brief').stdout.trim()).toMatch(/^other slot \(rootfs_b\): neutralized 20\d\d-.* without name blocking/)
+  })
+
+  it('makes one throwaway host key per run and removes it', () => {
+    const tmp = join(root, 'tmp')
+    mkdirSync(tmp)
+    stub(join(bin, 'ssh-keygen'), `echo "ssh-keygen" >> "$ROOT/calls.log"\n${SSH_KEYGEN}`)
+    for (const args of [[], ['status'], ['undo']]) {
+      const result = spawnSync('/bin/bash', [script, ...args], { encoding: 'utf8', env: env({ TMPDIR: tmp }) })
+      expect(result.status, args.join(' ') + result.stderr).toBe(0)
+      expect(calls().filter(line => line === 'ssh-keygen'), args.join(' ')).toHaveLength(1)
+      expect(readdirSync(tmp), args.join(' ')).toEqual([])
+      rmSync(join(root, 'calls.log'))
+    }
   })
 
   it('never writes the U-Boot environment', () => {

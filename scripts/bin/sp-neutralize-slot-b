@@ -199,17 +199,18 @@ this_build() {
 # SSH: the keys root uses here, into the file the other slot's sshd reads
 # ---------------------------------------------------------------------------
 TMP_HOSTKEY=""
-temp_hostkey() {
+init_hostkey() {
   # sshd -t / -T refuse to run without a host key; the other slot generates
   # its own at boot (sshdgenkeys), so lend it a throwaway one. The key is
-  # never written into the slot.
+  # never written into the slot. Called once per command in the main shell:
+  # inside a $(...) the assignment would be lost, every sshd call would make
+  # a fresh key, and cleanup_hostkey would find nothing to remove.
   if [ -z "$TMP_HOSTKEY" ]; then
     local dir
     dir="$(mktemp -d)" || die "mktemp failed"
     ssh-keygen -q -t ed25519 -N '' -f "$dir/hostkey" >/dev/null 2>&1 || die "ssh-keygen could not make a temporary host key"
     TMP_HOSTKEY="$dir/hostkey"
   fi
-  echo "$TMP_HOSTKEY"
 }
 
 cleanup_hostkey() {
@@ -220,8 +221,8 @@ cleanup_hostkey() {
 # consults for root, with %h/%u/%U expanded against that slot's passwd.
 other_slot_authorized_keys() {
   local cfg="$MNT/etc/ssh/sshd_config" entry home
-  entry="$(_sshd_authorized_keys_directive "$cfg" -h "$(temp_hostkey)" -C "user=root,host=localhost,addr=127.0.0.1")"
-  [ -n "$entry" ] || entry="$(_sshd_authorized_keys_directive "$cfg" -h "$(temp_hostkey)")"
+  entry="$(_sshd_authorized_keys_directive "$cfg" -h "$TMP_HOSTKEY" -C "user=root,host=localhost,addr=127.0.0.1")"
+  [ -n "$entry" ] || entry="$(_sshd_authorized_keys_directive "$cfg" -h "$TMP_HOSTKEY")"
   [ -n "$entry" ] || entry="$(awk 'tolower($1) == "authorizedkeysfile" { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }' "$cfg" 2>/dev/null || true)"
   [ -n "$entry" ] || entry=".ssh/authorized_keys"
   entry="${entry%%[[:space:]]*}"
@@ -242,7 +243,7 @@ other_slot_authorized_keys() {
 
 # sshd's effective config for a root login against the other slot's file.
 other_slot_sshd_dump() {
-  sshd -T -h "$(temp_hostkey)" -C "user=root,host=localhost,addr=127.0.0.1" -f "$MNT/etc/ssh/sshd_config" 2>/dev/null || true
+  sshd -T -h "$TMP_HOSTKEY" -C "user=root,host=localhost,addr=127.0.0.1" -f "$MNT/etc/ssh/sshd_config" 2>/dev/null || true
 }
 
 # Effective value of directive $1 (first match); prohibit-password is
@@ -262,6 +263,7 @@ other_slot_effective_list() {
 
 apply_ssh() {
   local cfg="$MNT/etc/ssh/sshd_config" src_keys rel_dest dest_keys dest_dir entries line added=0 value
+  init_hostkey
   src_keys="$(resolve_authorized_keys_path root "$HOST_ROOT/etc/ssh/sshd_config")" || die "cannot tell which authorized_keys sshd reads for root on this slot"
   [ "$src_keys" != none ] || die "sshd on this slot reads no authorized_keys for root (AuthorizedKeysFile none)"
   src_keys="$HOST_ROOT$src_keys"
@@ -307,7 +309,7 @@ apply_ssh() {
     set_sshd_directive AllowUsers "$entries root" "$cfg" || die "could not add root to AllowUsers in $cfg"
   fi
 
-  if ! sshd -t -h "$(temp_hostkey)" -f "$cfg" >/dev/null 2>&1; then
+  if ! sshd -t -h "$TMP_HOSTKEY" -f "$cfg" >/dev/null 2>&1; then
     cp -p "$cfg$BACKUP_SUFFIX" "$cfg"
     die "the edited sshd_config does not pass sshd -t; the stock file was put back"
   fi
@@ -327,6 +329,7 @@ apply_ssh() {
 
 undo_ssh() {
   local cfg="$MNT/etc/ssh/sshd_config" rel_dest dest_keys
+  init_hostkey
   if [ -f "$cfg$BACKUP_SUFFIX" ]; then
     mv -f "$cfg$BACKUP_SUFFIX" "$cfg"
     echo "SSH: sshd_config restored"
@@ -425,6 +428,7 @@ write_marker() {
     echo "target_build=$(other_build)"
     echo "authorized_keys_created=${KEYS_CREATED:-no}"
     echo "stock_dnsmasq_enabled=${STOCK_DNSMASQ_WAS:-no}"
+    echo "dns_installed=${DNS_OK:-no}"
   } > "$MNT$MARKER"
   # The owner's choice as internet-control reads it: blocked.
   printf 'block\n' > "$MNT$FIRMWARE_UPDATES_CHOICE"
@@ -442,6 +446,7 @@ remove_marker() {
 # ---------------------------------------------------------------------------
 KEYS_CREATED=""
 STOCK_DNSMASQ_WAS=""
+DNS_OK=""
 
 cmd_apply() {
   check_uboot_slot
@@ -455,13 +460,25 @@ cmd_apply() {
   apply_ssh
   apply_masks
   apply_dns
+  # dns-install exits 0 when it has nothing to write (no dnsmasq there, or
+  # /etc/resolv.conf not a symlink); say so instead of claiming NXDOMAIN.
+  if dns_installed; then
+    DNS_OK=yes
+  else
+    DNS_OK=no
+    echo "Warning: no name blocking was installed in $OTHER_LABEL (no dnsmasq there, or its /etc/resolv.conf is not a symlink); block 8slp.net on your network" >&2
+  fi
   write_marker
   sync
   cleanup_hostkey
   echo ""
   echo "✓ $OTHER_LABEL neutralized ($(marker_date)); marker $MARKER (copy at $MARKER_COPY here)"
   echo "  If U-Boot ever boots it: root SSH on port 8822 by key, no stock updater or watchdog,"
-  echo "  Eight Sleep names NXDOMAIN. Switch back to rootfs_$RUNNING deliberately from there."
+  if [ "$DNS_OK" = yes ]; then
+    echo "  Eight Sleep names NXDOMAIN. Switch back to rootfs_$RUNNING deliberately from there."
+  else
+    echo "  but no name blocking. Switch back to rootfs_$RUNNING deliberately from there."
+  fi
   echo "  A stock OTA would rewrite that slot and undo this; keep 8slp.net blocked on your network."
   print_uboot_counters
 }
@@ -469,10 +486,13 @@ cmd_apply() {
 cmd_status() {
   local masked
   mount_other_slot ro
+  init_hostkey
   masked="$(count_masked)"
   if [ "$BRIEF" = true ]; then
-    if [ -n "$(marker_date)" ] && [ "$masked" -eq "${#MASK_UNITS[@]}" ]; then
+    if [ -n "$(marker_date)" ] && [ "$masked" -eq "${#MASK_UNITS[@]}" ] && dns_installed; then
       echo "other slot ($OTHER_LABEL): neutralized $(marker_date)"
+    elif [ -n "$(marker_date)" ] && [ "$masked" -eq "${#MASK_UNITS[@]}" ]; then
+      echo "other slot ($OTHER_LABEL): neutralized $(marker_date) without name blocking (no dnsmasq there)"
     elif [ -n "$(marker_date)" ]; then
       echo "other slot ($OTHER_LABEL): partly neutralized ($masked/${#MASK_UNITS[@]} units masked); re-run sudo $(basename "$0")"
     else
