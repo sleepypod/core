@@ -1,0 +1,547 @@
+#!/bin/bash
+set -euo pipefail
+
+# sp-neutralize-slot-b — make the other boot slot survivable.
+#
+# The hub keeps two root filesystems (rootfs_a on mmcblk0p5, rootfs_b on
+# mmcblk0p7). The one sleepypod runs from has the stock updater and watchdog
+# masked and Eight Sleep names blackholed; the other is stock. U-Boot boots
+# the other slot after five unconfirmed boots or a failed boot, and a stock
+# slot then phones home, pulls the current OTA and installs it over the
+# sleepypod slot. Everything here is written into the other slot, mounted
+# read-write for the duration:
+#
+#   - root SSH by key: the keys sshd reads for root on this slot go into the
+#     file the other slot's sshd reads; PermitRootLogin prohibit-password and
+#     root added to AllowUsers. Password auth stays off there.
+#   - /dev/null masks for the eight stock units the running slot masks too:
+#     vector, telegraf, dac, swupdate.socket/.service/-progress,
+#     defibrillator and eight-kernel. defibrillator is not optional: a
+#     stock slot without internet reboots itself about every five minutes.
+#   - the dnsmasq NXDOMAIN layer (internet-control dns-install), enabled so
+#     it starts and verifies itself when that slot boots.
+#   - a marker, /etc/sleepypod/slot-neutralized, that sp-status reads.
+#
+# Nothing here touches the U-Boot environment (current_slot, boot counters),
+# the running slot, or the firmware partition the reset button restores. A
+# later stock OTA rewrites the other slot wholesale and removes all of this;
+# a LAN-level block of 8slp.net is the only layer that survives that.
+#
+# Usage: sp-neutralize-slot-b [apply|status [--brief]|undo]
+#
+# Test hooks (never set on a pod): SP_SLOT_CMDLINE, SP_SLOT_DEV_DIR,
+# SP_SLOT_MOUNT, SP_SLOT_HOST_ROOT, and stubs for mount/umount/findmnt/
+# fw_printenv/sshd/ssh-keygen on PATH.
+
+usage() {
+  cat << EOF
+Usage: $(basename "$0") [apply|status [--brief]|undo]
+
+  apply    Mount the other boot slot read-write and make it survivable:
+           root SSH by key, stock updater and watchdog masked, Eight Sleep
+           names blackholed, marker written. Idempotent. (default)
+  status   Mount it read-only and report what is in place.
+  undo     Put the stock files back and remove everything apply wrote.
+
+Writes only inside the other slot; never the U-Boot environment, the running
+slot, or the firmware partition. Do not test by switching current_slot.
+EOF
+  exit 1
+}
+
+COMMAND="${1:-apply}"
+BRIEF=false
+case "$COMMAND" in
+  apply|undo) [ $# -le 1 ] || usage ;;
+  status)
+    case "${2:-}" in
+      '') [ $# -le 1 ] || usage ;;
+      --brief) [ $# -eq 2 ] || usage; BRIEF=true ;;
+      *) usage ;;
+    esac
+    ;;
+  *) usage ;;
+esac
+
+CMDLINE="${SP_SLOT_CMDLINE:-/proc/cmdline}"
+DEV_DIR="${SP_SLOT_DEV_DIR:-/dev/disk/by-partlabel}"
+MNT="${SP_SLOT_MOUNT:-/mnt/slot_b}"
+HOST_ROOT="${SP_SLOT_HOST_ROOT:-}"
+INSTALL_DIR="${INSTALL_DIR:-/home/dac/sleepypod-core}"
+
+if [ "$EUID" -ne 0 ] && [ -z "${SP_SLOT_MOUNT:-}" ]; then
+  echo "Error: run as root (sudo $(basename "$0") $COMMAND)" >&2
+  exit 1
+fi
+
+# internet-control and ssh-helpers come from the source tree: beside this
+# script when run from scripts/bin/, else the installed tree.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+TREE=""
+for candidate in "$SCRIPT_DIR/../.." "$INSTALL_DIR"; do
+  if [ -f "$candidate/scripts/internet-control" ] && [ -f "$candidate/scripts/lib/ssh-helpers" ]; then
+    TREE="$(cd "$candidate" && pwd -P)"
+    break
+  fi
+done
+if [ -z "$TREE" ]; then
+  echo "Error: sleepypod source tree not found (needs scripts/internet-control and scripts/lib/ssh-helpers); set INSTALL_DIR" >&2
+  exit 1
+fi
+# shellcheck source=../lib/ssh-helpers
+source "$TREE/scripts/lib/ssh-helpers"
+INTERNET_CONTROL="$TREE/scripts/internet-control"
+
+# The same eight units install and sp-update mask on the running slot
+# (scripts/lib/telemetry-helpers: telemetry, stock app, updater, kernel-log
+# shipper), socket first so socket activation can't bring swupdate back.
+MASK_UNITS=(vector.service telegraf.service dac.service swupdate.socket swupdate.service swupdate-progress.service defibrillator.service eight-kernel.service)
+MARKER="/etc/sleepypod/slot-neutralized"
+# Copy of the marker on the running slot, so sp-welcome and sp-status can
+# say "other slot: neutralized" without mounting it.
+MARKER_COPY="/etc/sleepypod/other-slot-neutralized"
+FIRMWARE_UPDATES_CHOICE="/etc/sleepypod/firmware-updates"
+WANTS_DIR="/etc/systemd/system/multi-user.target.wants"
+STOCK_DNSMASQ_UNIT="dnsmasq.service"
+DNS_UNIT="sleepypod-dns.service"
+BACKUP_SUFFIX=".pre-neutralize"
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Which slot runs, which is the other, and is it safe to touch
+# ---------------------------------------------------------------------------
+running_slot() {
+  grep -o 'rootfs_[ab]' "$CMDLINE" 2>/dev/null | head -n 1 | cut -c8
+}
+
+RUNNING="$(running_slot || true)"
+[ -n "$RUNNING" ] || die "this pod does not boot from rootfs_a/rootfs_b (no such root= in $CMDLINE); only the verified A/B eMMC layout is supported"
+if [ "$RUNNING" = a ]; then OTHER=b; else OTHER=a; fi
+OTHER_LABEL="rootfs_$OTHER"
+DEV_LINK="$DEV_DIR/$OTHER_LABEL"
+[ -e "$DEV_LINK" ] || die "no partition labelled $OTHER_LABEL ($DEV_LINK)"
+DEV="$(readlink -f "$DEV_LINK" 2>/dev/null || echo "$DEV_LINK")"
+if [ -z "${SP_SLOT_DEV_DIR:-}" ] && [ ! -b "$DEV" ]; then
+  die "$DEV is not a block device"
+fi
+
+# U-Boot's view. current_slot other than the running slot means the
+# bootloader will switch on the next boot: not the moment to edit that slot.
+uboot_env() {
+  command -v fw_printenv >/dev/null 2>&1 || return 0
+  fw_printenv "$@" 2>/dev/null || true
+}
+
+check_uboot_slot() {
+  local current
+  current="$(uboot_env -n current_slot | head -n 1)"
+  if [ -n "$current" ] && [ "$current" != "$RUNNING" ]; then
+    die "U-Boot current_slot=$current but the pod runs from rootfs_$RUNNING: the bootloader is about to switch slots. Sort that out first (sp-status shows the counters); nothing was changed"
+  fi
+}
+
+print_uboot_counters() {
+  local env
+  env="$(uboot_env current_slot "boot_${RUNNING}_success" "retry_boot_$RUNNING" "boot_${OTHER}_success" "retry_boot_$OTHER")"
+  [ -n "$env" ] || return 0
+  echo "U-Boot (unchanged by this tool): $(echo "$env" | tr '\n' ' ')"
+}
+
+mounted_at() {
+  findmnt -n -o TARGET -S "$DEV" 2>/dev/null | head -n 1 || true
+}
+
+MOUNTED=false
+cleanup() {
+  if [ "$MOUNTED" = true ]; then
+    sync
+    if umount "$MNT" 2>/dev/null; then
+      MOUNTED=false
+    else
+      echo "Warning: could not unmount $MNT; run: umount $MNT" >&2
+    fi
+  fi
+}
+trap 'cleanup; cleanup_hostkey' EXIT
+
+mount_other_slot() {
+  local mode="$1" source where
+  where="$(mounted_at)"
+  [ -z "$where" ] || die "$DEV ($OTHER_LABEL) is already mounted at $where; unmount it first"
+  mkdir -p "$MNT"
+  mount -o "$mode" "$DEV" "$MNT" || die "could not mount $DEV at $MNT"
+  MOUNTED=true
+  source="$(findmnt -n -o SOURCE "$MNT" 2>/dev/null | head -n 1 || true)"
+  [ "$source" = "$DEV" ] || die "mount mismatch: $MNT is $source, expected $DEV"
+  [ -f "$MNT/etc/ssh/sshd_config" ] && [ -d "$MNT/etc/systemd/system" ] && [ -d "$MNT/lib/systemd/system" ] \
+    || die "$DEV does not look like a Pod root filesystem (no etc/ssh/sshd_config or systemd directories)"
+}
+
+other_build() {
+  local hash version
+  hash="$(head -c 40 "$MNT/etc/rat_version" 2>/dev/null || true)"
+  version="$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2; exit }' "$MNT/usr/lib/os-release" "$MNT/etc/os-release" 2>/dev/null || true)"
+  echo "${version:-?} ${hash:0:8}"
+}
+
+this_build() {
+  local hash version
+  hash="$(head -c 40 "$HOST_ROOT/etc/rat_version" 2>/dev/null || true)"
+  version="$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2; exit }' "$HOST_ROOT/usr/lib/os-release" "$HOST_ROOT/etc/os-release" 2>/dev/null || true)"
+  echo "${version:-?} ${hash:0:8}"
+}
+
+# ---------------------------------------------------------------------------
+# SSH: the keys root uses here, into the file the other slot's sshd reads
+# ---------------------------------------------------------------------------
+TMP_HOSTKEY=""
+init_hostkey() {
+  # sshd -t / -T refuse to run without a host key; the other slot generates
+  # its own at boot (sshdgenkeys), so lend it a throwaway one. The key is
+  # never written into the slot. Called once per command in the main shell:
+  # inside a $(...) the assignment would be lost, every sshd call would make
+  # a fresh key, and cleanup_hostkey would find nothing to remove.
+  if [ -z "$TMP_HOSTKEY" ]; then
+    local dir
+    dir="$(mktemp -d)" || die "mktemp failed"
+    ssh-keygen -q -t ed25519 -N '' -f "$dir/hostkey" >/dev/null 2>&1 || die "ssh-keygen could not make a temporary host key"
+    TMP_HOSTKEY="$dir/hostkey"
+  fi
+}
+
+cleanup_hostkey() {
+  [ -z "$TMP_HOSTKEY" ] || rm -rf "$(dirname "$TMP_HOSTKEY")"
+}
+
+# Path (inside the other slot) of the first AuthorizedKeysFile its sshd
+# consults for root, with %h/%u/%U expanded against that slot's passwd.
+other_slot_authorized_keys() {
+  local cfg="$MNT/etc/ssh/sshd_config" entry home
+  entry="$(_sshd_authorized_keys_directive "$cfg" -h "$TMP_HOSTKEY" -C "user=root,host=localhost,addr=127.0.0.1")"
+  [ -n "$entry" ] || entry="$(_sshd_authorized_keys_directive "$cfg" -h "$TMP_HOSTKEY")"
+  [ -n "$entry" ] || entry="$(awk 'tolower($1) == "authorizedkeysfile" { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }' "$cfg" 2>/dev/null || true)"
+  [ -n "$entry" ] || entry=".ssh/authorized_keys"
+  entry="${entry%%[[:space:]]*}"
+  [ "$entry" != none ] || die "the other slot's sshd has AuthorizedKeysFile none; it would never read a key"
+  home="$(awk -F: '$1 == "root" { print $6; exit }' "$MNT/etc/passwd" 2>/dev/null || true)"
+  home="${home:-/home/root}"
+  local sentinel=$'\x01'
+  entry="${entry//%%/$sentinel}"
+  entry="${entry//%h/$home}"
+  entry="${entry//%U/0}"
+  entry="${entry//%u/root}"
+  entry="${entry//$sentinel/%}"
+  case "$entry" in
+    /*) printf '%s\n' "$entry" ;;
+    *) printf '%s\n' "${home%/}/$entry" ;;
+  esac
+}
+
+# sshd's effective config for a root login against the other slot's file.
+other_slot_sshd_dump() {
+  sshd -T -h "$TMP_HOSTKEY" -C "user=root,host=localhost,addr=127.0.0.1" -f "$MNT/etc/ssh/sshd_config" 2>/dev/null || true
+}
+
+# Effective value of directive $1 (first match); prohibit-password is
+# normalised like scripts/lib/ssh-helpers does.
+other_slot_effective() {
+  local lowered value
+  lowered="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  value="$(other_slot_sshd_dump | awk -v want="$lowered" 'tolower($1) == want { print $2; exit }' || true)"
+  _sshd_canonical_value "$lowered" "$value"
+}
+
+# Every entry of list directive $1 (sshd -T prints one line per entry),
+# space-separated.
+other_slot_effective_list() {
+  _sshd_list_entries "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" "$(other_slot_sshd_dump)" | tr '\n' ' ' | sed 's/ $//'
+}
+
+apply_ssh() {
+  local cfg="$MNT/etc/ssh/sshd_config" src_keys rel_dest dest_keys dest_dir entries line added=0 value
+  init_hostkey
+  src_keys="$(resolve_authorized_keys_path root "$HOST_ROOT/etc/ssh/sshd_config")" || die "cannot tell which authorized_keys sshd reads for root on this slot"
+  [ "$src_keys" != none ] || die "sshd on this slot reads no authorized_keys for root (AuthorizedKeysFile none)"
+  src_keys="$HOST_ROOT$src_keys"
+  [ -s "$src_keys" ] || die "no SSH key enrolled for root on this slot ($src_keys is missing or empty); enrol one first (scripts/install does)"
+
+  rel_dest="$(other_slot_authorized_keys)"
+  dest_keys="$MNT$rel_dest"
+  dest_dir="$(dirname "$dest_keys")"
+
+  [ -f "$cfg$BACKUP_SUFFIX" ] || cp -p "$cfg" "$cfg$BACKUP_SUFFIX"
+  # Back up a key file the stock slot already had; one an earlier run
+  # created (the marker says so) is ours to remove on undo.
+  if [ ! -e "$dest_keys" ] || [ "$(marker_value authorized_keys_created)" = yes ]; then
+    KEYS_CREATED=yes
+  else
+    [ -f "$dest_keys$BACKUP_SUFFIX" ] || cp -p "$dest_keys" "$dest_keys$BACKUP_SUFFIX"
+    KEYS_CREATED=no
+  fi
+
+  mkdir -p "$dest_dir"
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    case "$line" in \#*) continue ;; esac
+    if ! grep -qxF -- "$line" "$dest_keys" 2>/dev/null; then
+      printf '%s\n' "$line" >> "$dest_keys"
+      added=$((added + 1))
+    fi
+  done < "$src_keys"
+  chown 0:0 "$dest_keys" 2>/dev/null || true
+  # A file under /etc/ssh is shared by every login (stock: rewt): sshd opens
+  # it as that user, so it must stay world-readable, and /etc/ssh keeps its
+  # stock mode because every user's ssh client reads ssh_config there. A
+  # file under a home gets the private modes StrictModes expects.
+  case "$rel_dest" in
+    /etc/*) chmod 644 "$dest_keys" ;;
+    *) chmod 600 "$dest_keys"; chown 0:0 "$dest_dir" 2>/dev/null || true; chmod 700 "$dest_dir" ;;
+  esac
+  [ -s "$dest_keys" ] || die "$dest_keys is empty after writing it"
+
+  set_sshd_directive PermitRootLogin prohibit-password "$cfg" || die "could not set PermitRootLogin in $cfg"
+  entries="$(awk 'tolower($1) == "allowusers" { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }' "$cfg" 2>/dev/null || true)"
+  if [ -n "$entries" ] && ! printf ' %s ' "$entries" | grep -q ' root '; then
+    set_sshd_directive AllowUsers "$entries root" "$cfg" || die "could not add root to AllowUsers in $cfg"
+  fi
+
+  if ! sshd -t -h "$TMP_HOSTKEY" -f "$cfg" >/dev/null 2>&1; then
+    cp -p "$cfg$BACKUP_SUFFIX" "$cfg"
+    die "the edited sshd_config does not pass sshd -t; the stock file was put back"
+  fi
+  value="$(other_slot_effective PermitRootLogin)"
+  case "$value" in
+    prohibit-password|yes) ;;
+    *) cp -p "$cfg$BACKUP_SUFFIX" "$cfg"; die "sshd would still refuse root on the other slot (PermitRootLogin ${value:-unknown}); the stock file was put back" ;;
+  esac
+  value="$(other_slot_effective_list AllowUsers)"
+  if [ -n "$value" ] && ! printf ' %s ' "$value" | grep -q ' root '; then
+    cp -p "$cfg$BACKUP_SUFFIX" "$cfg"
+    die "sshd's AllowUsers on the other slot ($value) would still refuse root; the stock file was put back"
+  fi
+
+  echo "SSH: $added key(s) added to $rel_dest (from $src_keys); PermitRootLogin $(other_slot_effective PermitRootLogin), AllowUsers ${value:-any}, PasswordAuthentication $(other_slot_effective PasswordAuthentication)"
+}
+
+undo_ssh() {
+  local cfg="$MNT/etc/ssh/sshd_config" rel_dest dest_keys
+  init_hostkey
+  if [ -f "$cfg$BACKUP_SUFFIX" ]; then
+    mv -f "$cfg$BACKUP_SUFFIX" "$cfg"
+    echo "SSH: sshd_config restored"
+  fi
+  rel_dest="$(other_slot_authorized_keys)"
+  dest_keys="$MNT$rel_dest"
+  if [ -f "$dest_keys$BACKUP_SUFFIX" ]; then
+    mv -f "$dest_keys$BACKUP_SUFFIX" "$dest_keys"
+    echo "SSH: $rel_dest restored"
+  elif [ "$(marker_value authorized_keys_created)" = yes ] && [ -e "$dest_keys" ]; then
+    rm -f "$dest_keys"
+    echo "SSH: $rel_dest removed"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Masks: a /dev/null symlink in /etc/systemd/system beats the wants links
+# ---------------------------------------------------------------------------
+mask_path() { echo "$MNT/etc/systemd/system/$1"; }
+
+unit_masked() {
+  [ "$(readlink "$(mask_path "$1")" 2>/dev/null || true)" = /dev/null ]
+}
+
+apply_masks() {
+  local unit path masked=0
+  for unit in "${MASK_UNITS[@]}"; do
+    path="$(mask_path "$unit")"
+    if [ -e "$path" ] && [ ! -L "$path" ]; then
+      die "$path is a real unit file, not a symlink; not masking over it"
+    fi
+    ln -sfn /dev/null "$path"
+    unit_masked "$unit" && masked=$((masked + 1))
+  done
+  echo "Masked: $masked/${#MASK_UNITS[@]} stock units (${MASK_UNITS[*]})"
+}
+
+undo_masks() {
+  local unit
+  for unit in "${MASK_UNITS[@]}"; do
+    unit_masked "$unit" && rm -f "$(mask_path "$unit")"
+  done
+  echo "Masks removed"
+}
+
+count_masked() {
+  local unit n=0
+  for unit in "${MASK_UNITS[@]}"; do
+    unit_masked "$unit" && n=$((n + 1))
+  done
+  echo "$n"
+}
+
+# ---------------------------------------------------------------------------
+# Name blocking: the dnsmasq NXDOMAIN layer, written offline
+# ---------------------------------------------------------------------------
+stock_dnsmasq_enabled() {
+  [ -L "$MNT$WANTS_DIR/$STOCK_DNSMASQ_UNIT" ]
+}
+
+apply_dns() {
+  if stock_dnsmasq_enabled; then STOCK_DNSMASQ_WAS=yes; else STOCK_DNSMASQ_WAS="$(marker_value stock_dnsmasq_enabled)"; fi
+  INTERNET_CONTROL_ROOT="$MNT" bash "$INTERNET_CONTROL" dns-install || die "internet-control dns-install failed"
+}
+
+undo_dns() {
+  INTERNET_CONTROL_ROOT="$MNT" bash "$INTERNET_CONTROL" dns-uninstall || echo "Warning: internet-control dns-uninstall failed" >&2
+  if [ "$(marker_value stock_dnsmasq_enabled)" = yes ] && [ -f "$MNT/lib/systemd/system/$STOCK_DNSMASQ_UNIT" ] && ! stock_dnsmasq_enabled; then
+    mkdir -p "$MNT$WANTS_DIR"
+    ln -sfn "/lib/systemd/system/$STOCK_DNSMASQ_UNIT" "$MNT$WANTS_DIR/$STOCK_DNSMASQ_UNIT"
+    echo "Stock $STOCK_DNSMASQ_UNIT enabled again"
+  fi
+}
+
+dns_installed() {
+  [ -f "$MNT/etc/systemd/system/$DNS_UNIT" ] && [ -L "$MNT$WANTS_DIR/$DNS_UNIT" ] && [ -f "$MNT/etc/sleepypod/dnsmasq.conf" ]
+}
+
+# ---------------------------------------------------------------------------
+# Marker
+# ---------------------------------------------------------------------------
+marker_value() {
+  awk -F= -v key="$1" '$1 == key { print substr($0, length(key) + 2); exit }' "$MNT$MARKER" 2>/dev/null || true
+}
+
+marker_date() {
+  head -n 1 "$MNT$MARKER" 2>/dev/null || true
+}
+
+write_marker() {
+  mkdir -p "$MNT/etc/sleepypod"
+  {
+    date -u +%FT%TZ
+    echo "neutralized_by=$(basename "$0")"
+    echo "from_slot=rootfs_$RUNNING ($(this_build))"
+    echo "target_build=$(other_build)"
+    echo "authorized_keys_created=${KEYS_CREATED:-no}"
+    echo "stock_dnsmasq_enabled=${STOCK_DNSMASQ_WAS:-no}"
+    echo "dns_installed=${DNS_OK:-no}"
+  } > "$MNT$MARKER"
+  # The owner's choice as internet-control reads it: blocked.
+  printf 'block\n' > "$MNT$FIRMWARE_UPDATES_CHOICE"
+  mkdir -p "$HOST_ROOT/etc/sleepypod"
+  cp -f "$MNT$MARKER" "$HOST_ROOT$MARKER_COPY"
+}
+
+remove_marker() {
+  rm -f "$MNT$MARKER" "$MNT$FIRMWARE_UPDATES_CHOICE" "$HOST_ROOT$MARKER_COPY"
+  rmdir "$MNT/etc/sleepypod" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+KEYS_CREATED=""
+STOCK_DNSMASQ_WAS=""
+DNS_OK=""
+
+cmd_apply() {
+  check_uboot_slot
+  echo "Running from rootfs_$RUNNING ($(this_build)); other slot $OTHER_LABEL is $DEV"
+  print_uboot_counters
+  mount_other_slot rw
+  echo "Other slot: build $(other_build), mounted read-write at $MNT"
+  if [ -n "$(marker_date)" ]; then
+    echo "Already neutralized on $(marker_date); re-applying"
+  fi
+  apply_ssh
+  apply_masks
+  apply_dns
+  # dns-install exits 0 when it has nothing to write (no dnsmasq there, or
+  # /etc/resolv.conf not a symlink); say so instead of claiming NXDOMAIN.
+  if dns_installed; then
+    DNS_OK=yes
+  else
+    DNS_OK=no
+    echo "Warning: no name blocking was installed in $OTHER_LABEL (no dnsmasq there, or its /etc/resolv.conf is not a symlink); block 8slp.net on your network" >&2
+  fi
+  write_marker
+  sync
+  cleanup_hostkey
+  echo ""
+  echo "✓ $OTHER_LABEL neutralized ($(marker_date)); marker $MARKER (copy at $MARKER_COPY here)"
+  echo "  If U-Boot ever boots it: root SSH on port 8822 by key, no stock updater or watchdog,"
+  if [ "$DNS_OK" = yes ]; then
+    echo "  Eight Sleep names NXDOMAIN. Switch back to rootfs_$RUNNING deliberately from there."
+  else
+    echo "  but no name blocking. Switch back to rootfs_$RUNNING deliberately from there."
+  fi
+  echo "  A stock OTA would rewrite that slot and undo this; keep 8slp.net blocked on your network."
+  print_uboot_counters
+}
+
+cmd_status() {
+  local masked
+  mount_other_slot ro
+  init_hostkey
+  masked="$(count_masked)"
+  if [ "$BRIEF" = true ]; then
+    if [ -n "$(marker_date)" ] && [ "$masked" -eq "${#MASK_UNITS[@]}" ] && dns_installed; then
+      echo "other slot ($OTHER_LABEL): neutralized $(marker_date)"
+    elif [ -n "$(marker_date)" ] && [ "$masked" -eq "${#MASK_UNITS[@]}" ]; then
+      echo "other slot ($OTHER_LABEL): neutralized $(marker_date) without name blocking (no dnsmasq there)"
+    elif [ -n "$(marker_date)" ]; then
+      echo "other slot ($OTHER_LABEL): partly neutralized ($masked/${#MASK_UNITS[@]} units masked); re-run sudo $(basename "$0")"
+    else
+      echo "other slot ($OTHER_LABEL): stock (updater on; sudo $(basename "$0") to neutralize)"
+    fi
+    return 0
+  fi
+  echo "Running from rootfs_$RUNNING ($(this_build)); other slot $OTHER_LABEL is $DEV (build $(other_build))"
+  print_uboot_counters
+  if [ -n "$(marker_date)" ]; then
+    echo "Marker:   neutralized $(marker_date)"
+  else
+    echo "Marker:   none (stock slot)"
+  fi
+  echo "Masked:   $masked/${#MASK_UNITS[@]} (${MASK_UNITS[*]})"
+  if dns_installed; then
+    echo "Names:    $DNS_UNIT installed and enabled (dnsmasq NXDOMAIN at boot)"
+  else
+    echo "Names:    no sleepypod name blocking"
+  fi
+  if stock_dnsmasq_enabled; then
+    echo "          stock $STOCK_DNSMASQ_UNIT enabled (would take port 53)"
+  fi
+  echo "SSH:      PermitRootLogin $(other_slot_effective PermitRootLogin); AllowUsers $(other_slot_effective_list AllowUsers); PasswordAuthentication $(other_slot_effective PasswordAuthentication)"
+  local rel_dest
+  rel_dest="$(other_slot_authorized_keys)"
+  if [ -s "$MNT$rel_dest" ]; then
+    echo "          $(grep -Ecv '^[[:space:]]*(#|$)' "$MNT$rel_dest") key(s) in $rel_dest"
+  else
+    echo "          no keys in $rel_dest"
+  fi
+  cleanup_hostkey
+}
+
+cmd_undo() {
+  check_uboot_slot
+  mount_other_slot rw
+  echo "Other slot: $OTHER_LABEL ($DEV), build $(other_build), mounted read-write at $MNT"
+  undo_ssh
+  undo_masks
+  undo_dns
+  remove_marker
+  sync
+  cleanup_hostkey
+  echo "✓ $OTHER_LABEL back to stock: updater and watchdog enabled, no root SSH, no name blocking"
+}
+
+case "$COMMAND" in
+  apply) cmd_apply ;;
+  status) cmd_status ;;
+  undo) cmd_undo ;;
+esac
