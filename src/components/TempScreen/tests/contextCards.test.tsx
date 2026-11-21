@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({
 vi.mock('next/navigation', () => ({ usePathname: () => '/de' }))
 vi.mock('@/src/utils/trpc', () => ({ trpc: {
   useUtils: () => ({ schedules: { getAll: { invalidate: mock.invalidate } } }),
-  schedules: { getAll: { useQuery: () => ({ data: mock.schedule, isLoading: mock.loading, error: mock.error }) }, updateAlarmSchedule: { useMutation: () => ({ mutateAsync: mock.mutate, error: mock.mutationError }) } },
+  schedules: { getAll: { useQuery: () => ({ data: mock.schedule, isLoading: mock.loading, error: mock.error }) }, updateAlarmSchedule: { useMutation: () => ({ mutateAsync: mock.mutate, error: mock.mutationError }) }, batchUpdate: { useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }) } },
   biometrics: {
     getLatestSleep: { useQuery: () => ({ data: mock.latest, isLoading: mock.loading, error: mock.error }) },
     getVitalsSummary: { useQuery: (input: unknown) => {
