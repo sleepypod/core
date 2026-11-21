@@ -342,6 +342,7 @@ describe('mqtt.testConnection', () => {
   })
 
   it('normalises optional fields — missing username/password become null, tlsEnabled defaults to false', async () => {
+    bridgeMock.resolveConfig.mockResolvedValue({ config: { url: null, password: null }, sources: {} })
     bridgeMock.testConnection.mockResolvedValue({ ok: false, error: 'connect timeout' })
 
     const result = await caller.testConnection({ url: 'mqtt://broker:1883' })
@@ -353,5 +354,39 @@ describe('mqtt.testConnection', () => {
       password: null,
       tlsEnabled: false,
     })
+  })
+
+  it('falls back to the stored password when none is supplied for the saved broker URL', async () => {
+    bridgeMock.resolveConfig.mockResolvedValue({ config: { url: 'mqtt://broker:1883', password: 'stored' }, sources: {} })
+    bridgeMock.testConnection.mockResolvedValue({ ok: true })
+
+    await caller.testConnection({ url: 'mqtt://broker:1883', username: 'u' })
+
+    expect(bridgeMock.testConnection).toHaveBeenCalledWith({
+      url: 'mqtt://broker:1883',
+      username: 'u',
+      password: 'stored',
+      tlsEnabled: false,
+    })
+  })
+
+  it('never sends the stored password to a different broker URL', async () => {
+    bridgeMock.resolveConfig.mockResolvedValue({ config: { url: 'mqtt://broker:1883', password: 'stored' }, sources: {} })
+    bridgeMock.testConnection.mockResolvedValue({ ok: false, error: 'not authorized' })
+
+    await caller.testConnection({ url: 'mqtt://attacker:1883', username: 'u' })
+
+    expect(bridgeMock.testConnection).toHaveBeenCalledWith(expect.objectContaining({ url: 'mqtt://attacker:1883', password: null }))
+  })
+
+  it('does not consult the stored password when one is supplied or explicitly null', async () => {
+    bridgeMock.testConnection.mockResolvedValue({ ok: true })
+
+    await caller.testConnection({ url: 'mqtt://broker:1883', password: 'typed' })
+    await caller.testConnection({ url: 'mqtt://broker:1883', password: null })
+
+    expect(bridgeMock.resolveConfig).not.toHaveBeenCalled()
+    expect(bridgeMock.testConnection).toHaveBeenNthCalledWith(1, expect.objectContaining({ password: 'typed' }))
+    expect(bridgeMock.testConnection).toHaveBeenNthCalledWith(2, expect.objectContaining({ password: null }))
   })
 })
