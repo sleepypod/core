@@ -286,7 +286,7 @@ class RepublishFilter:
         if last is not None and 0 <= ts - last[0] <= REPUBLISH_MAX_GAP_S and readings == last[1]:
             self.dropped += 1
             if self.dropped == 1:
-                log.info("%s frames are republished; dropping the copies", rtype)
+                log.warning("%s frames are republished; dropping the copies", rtype)
             return True
         self._last[rtype] = (ts, readings)
         return False
