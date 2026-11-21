@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type * as SnoozeManagerModule from '@/src/hardware/snoozeManager'
 
 const helpersMock = vi.hoisted(() => {
   const client = {
@@ -35,6 +36,7 @@ const primeMock = vi.hoisted(() => ({
 const snoozeMock = vi.hoisted(() => ({
   snoozeAlarm: vi.fn(),
   cancelSnooze: vi.fn(),
+  cancelSideSnooze: vi.fn(),
   getSnoozeStatus: vi.fn<(side?: string) => { active: boolean, snoozeUntil: number | null }>(() => ({ active: false, snoozeUntil: null })),
 }))
 
@@ -160,7 +162,11 @@ vi.mock('@/src/hardware/primeNotification', () => primeMock)
 vi.mock('@/src/hardware/snoozeManager', () => snoozeMock)
 vi.mock('@/src/streaming/broadcastMutationStatus', () => broadcastMock)
 vi.mock('@/src/hardware/dacTransport', () => transportMock)
-vi.mock('@/src/hardware/dacMonitor.instance', () => ({ getDacMonitorIfRunning: monitorMock.getDacMonitorIfRunning }))
+vi.mock('@/src/hardware/dacMonitor.instance', () => ({
+  getDacMonitorIfRunning: monitorMock.getDacMonitorIfRunning,
+  // A snooze restart, for tests that run the real snoozeManager.
+  getSharedHardwareClient: () => helpersMock.client,
+}))
 vi.mock('@/src/hardware/sharedClient', () => ({ getSharedHardwareClient: sharedClientMock.getSharedHardwareClient }))
 vi.mock('@/src/hardware/deviceStateSync', () => stateSyncMock)
 vi.mock('@/src/hardware/pumpStallGuard', () => pumpStallMock)
@@ -211,6 +217,7 @@ beforeEach(() => {
   primeMock.dismissPrimeNotification.mockReset()
   snoozeMock.snoozeAlarm.mockReset()
   snoozeMock.cancelSnooze.mockReset()
+  snoozeMock.cancelSideSnooze.mockReset()
   snoozeMock.getSnoozeStatus.mockReset().mockReturnValue({ active: false, snoozeUntil: null })
   broadcastMock.broadcastMutationStatus.mockReset()
   transportMock.sendCommand.mockReset()
@@ -731,7 +738,7 @@ describe('device.setAlarm / clearAlarm / snoozeAlarm', () => {
       duration: 60,
     })
 
-    expect(snoozeMock.cancelSnooze).toHaveBeenCalledWith('left')
+    expect(snoozeMock.cancelSideSnooze).toHaveBeenCalledWith('left')
     expect(helpersMock.client.setAlarm).toHaveBeenCalledWith('left', {
       vibrationIntensity: 50,
       vibrationPattern: 'rise',
@@ -743,6 +750,22 @@ describe('device.setAlarm / clearAlarm / snoozeAlarm', () => {
       lastUpdated: expect.any(Date),
     })
     expect(helpersMock.withHardwareClient.mock.calls[0]?.[1]).toBe('Failed to set alarm')
+  })
+
+  it('setAlarm on the unused side leaves a single sleeper\'s snooze recorded on the other side armed', async () => {
+    const actual = await vi.importActual<typeof SnoozeManagerModule>('@/src/hardware/snoozeManager')
+    snoozeMock.cancelSnooze.mockImplementation(actual.cancelSnooze)
+    snoozeMock.cancelSideSnooze.mockImplementation(actual.cancelSideSnooze)
+    try {
+      // Left sleeps alone and snoozed their alarm, which rang on both sides.
+      actual.snoozeAlarm('left', 300, { vibrationIntensity: 50, vibrationPattern: 'rise', duration: 120, linkedSide: 'right', ownerSide: 'left' })
+      // A haptics test on right.
+      await caller.setAlarm({ side: 'right', vibrationIntensity: 50, vibrationPattern: 'rise', duration: 60 })
+      expect(actual.getSnoozeStatus('left').active).toBe(true)
+    }
+    finally {
+      actual.cancelSnooze('left')
+    }
   })
 
   it('clearAlarm hits hardware and broadcasts vibrating=false', async () => {
@@ -806,6 +829,30 @@ describe('device.setAlarm / clearAlarm / snoozeAlarm', () => {
     finally {
       suspendActiveAlarms()
       error.mockRestore()
+    }
+  })
+
+  it('snoozeAlarm brings the alarm back with its snooze settings, so a tap snooze after it is tapered', async () => {
+    const actual = await vi.importActual<typeof SnoozeManagerModule>('@/src/hardware/snoozeManager')
+    const { nextSnoozeSeconds } = await import('@/src/hardware/snoozeLength')
+    const { markAlarmStarted, getActiveAlarmConfig, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    snoozeMock.snoozeAlarm.mockImplementation(actual.snoozeAlarm)
+    vi.useFakeTimers()
+    try {
+      const alarm = { vibrationIntensity: 80, vibrationPattern: 'double' as const, duration: 90, snoozeDuration: 540, snoozeTaper: 30 }
+      await markAlarmStarted('left', alarm)
+      // What the MQTT bridge sends for this alarm's first snooze: 9 min.
+      await caller.snoozeAlarm({ side: 'left', duration: 540, vibrationIntensity: 80, vibrationPattern: 'double', alarmDuration: 90 })
+      await vi.advanceTimersByTimeAsync(540_000)
+      const restarted = getActiveAlarmConfig('left')
+      expect(restarted).toEqual({ ...alarm, snoozeCount: 1 })
+      // A tap snoozes the restarted alarm 30% shorter: 6.3 min, not the 5 min default.
+      expect(restarted && nextSnoozeSeconds(restarted)).toBe(378)
+    }
+    finally {
+      actual.cancelSnooze('left')
+      suspendActiveAlarms()
+      vi.useRealTimers()
     }
   })
 

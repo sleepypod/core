@@ -1073,12 +1073,34 @@ describe('mqttBridge — message dispatch', () => {
     fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'left', duration: 600 })))
     await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith(expect.objectContaining({ side: 'left', duration: 600 })))
 
-    // No alarm of ours ringing: the procedure's defaults.
+    // No alarm of ours ringing but the side marked vibrating: the procedure's defaults.
+    dbMock.state.deviceStateRows = [{ side: 'right', isAlarmVibrating: true }]
     deviceMock.snoozeAlarm.mockClear()
     fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'right' })))
     await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith({ side: 'right', duration: undefined }))
 
     await shutdownMqttBridge()
+  })
+
+  it('ignores a snooze with no alarm ringing, even with a duration', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    dbMock.state.deviceStateRows = [{ side: 'left', isAlarmVibrating: false }, { side: 'right', isAlarmVibrating: true }]
+    const fake = await startBridgeWithFake()
+    fake.connected = true
+    fake.emit('connect')
+    const cmd = `sleepypod/${deviceId()}/cmd/snooze-alarm`
+
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'left' })))
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'left', duration: 600 })))
+    await vi.waitFor(() => expect(log.mock.calls.filter(([msg]) => msg === '[mqtt] snooze-alarm ignored: no alarm ringing on left')).toHaveLength(2))
+    expect(deviceMock.snoozeAlarm).not.toHaveBeenCalled()
+
+    // A malformed side still goes to the procedure, whose schema rejects it.
+    fake.emit('message', cmd, Buffer.from(JSON.stringify({ side: 'middle' })))
+    await vi.waitFor(() => expect(deviceMock.snoozeAlarm).toHaveBeenCalledWith({ side: 'middle', duration: undefined }))
+
+    await shutdownMqttBridge()
+    log.mockRestore()
   })
 
   it('keeps a tapered snooze within the procedure\'s 1-30 min', async () => {

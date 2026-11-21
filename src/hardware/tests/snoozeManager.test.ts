@@ -26,6 +26,12 @@ vi.mock('@/src/streaming/broadcastMutationStatus', () => ({
   broadcastMutationStatus: mockBroadcastMutationStatus,
 }))
 
+// Who is in bed when a snooze restarts. Default: right is away, so left sleeps alone.
+const mockReadAwayModes = vi.fn()
+vi.mock('../awayModes', () => ({
+  readAwayModes: () => mockReadAwayModes(),
+}))
+
 import { snoozeAlarm, cancelSnooze, getSnoozeStatus, restoreSnoozes, suspendSnoozes, SNOOZE_LATE_GRACE_MS } from '../snoozeManager'
 import { loadAlarmState, resetAlarmStateCache, updateAlarmState } from '../alarmPersistence'
 
@@ -42,6 +48,7 @@ describe('snoozeManager', () => {
     mockSetAlarm.mockClear()
     mockSetAlarm.mockResolvedValue(undefined)
     mockBroadcastMutationStatus.mockClear()
+    mockReadAwayModes.mockReset().mockResolvedValue({ right: { awayMode: true } })
     cancelSnooze('left')
     cancelSnooze('right')
   })
@@ -125,6 +132,45 @@ describe('snoozeManager', () => {
       ['right', { ...solo, snoozeCount: 1, linkedSide: 'left', linkId }],
     ])
     expect(mockMarkAlarmStarted).toHaveBeenCalledWith('right', { ...solo, snoozeCount: 1, linkedSide: 'left', linkId })
+  })
+
+  it('rings only the owner when the partner came back during the snooze', async () => {
+    const solo = { ...config, linkedSide: 'right' as const, ownerSide: 'left' as const, linkId: 'first' }
+    snoozeAlarm('left', 60, solo)
+    mockReadAwayModes.mockResolvedValue({ left: { awayMode: false }, right: { awayMode: false } })
+    await vi.advanceTimersByTimeAsync(60_000)
+    // Comes back unlinked: stopping or snoozing it no longer reaches right.
+    expect(mockSetAlarm.mock.calls).toEqual([['left', { ...config, snoozeCount: 1 }]])
+    expect(mockMarkAlarmStarted.mock.calls).toEqual([['left', { ...config, snoozeCount: 1 }]])
+  })
+
+  it('brings a snooze tapped on the unused side back on the owner\'s side first', async () => {
+    // Tapped on the unused right side: recorded there, linked to left.
+    snoozeAlarm('right', 60, { ...config, linkedSide: 'left', ownerSide: 'left' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    const linkId = (mockSetAlarm.mock.calls[0][1] as { linkId: string }).linkId
+    expect(mockSetAlarm.mock.calls).toEqual([
+      ['left', { ...config, snoozeCount: 1, linkedSide: 'right', ownerSide: 'left', linkId }],
+      ['right', { ...config, snoozeCount: 1, linkedSide: 'left', ownerSide: 'left', linkId }],
+    ])
+  })
+
+  it('does not ring the unused side it was tapped on once the partner is back', async () => {
+    snoozeAlarm('right', 60, { ...config, linkedSide: 'left', ownerSide: 'left' })
+    mockReadAwayModes.mockResolvedValue({})
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockSetAlarm.mock.calls).toEqual([['left', { ...config, snoozeCount: 1 }]])
+  })
+
+  it('rings only the owner when the away modes can\'t be read', async () => {
+    const failure = new Error('db locked')
+    mockReadAwayModes.mockRejectedValue(failure)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    snoozeAlarm('left', 60, { ...config, linkedSide: 'right', ownerSide: 'left' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(error).toHaveBeenCalledWith('[Snooze] Failed to read away modes; restarting left only:', failure)
+    expect(mockSetAlarm.mock.calls).toEqual([['left', { ...config, snoozeCount: 1 }]])
+    error.mockRestore()
   })
 
   it('gives an unlinked alarm no occurrence id', async () => {
@@ -229,6 +275,18 @@ describe('snoozeManager', () => {
       expect(mockSetAlarm).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
       expect(mockSetAlarm).toHaveBeenCalledWith('right', config)
+    })
+
+    it('a restored linked snooze rings only the owner once the partner is back', async () => {
+      vi.setSystemTime(0)
+      const solo = { ...config, linkedSide: 'right' as const, ownerSide: 'left' as const, linkId: 'first' }
+      updateAlarmState((s) => {
+        s.snoozes.left = { until: 60_000, config: solo }
+      })
+      mockReadAwayModes.mockResolvedValue({ bedMode: 'two' })
+      restoreSnoozes()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(mockSetAlarm.mock.calls).toEqual([['left', config]])
     })
 
     it('fires at once a snooze missed by a short outage', async () => {

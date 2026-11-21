@@ -764,7 +764,8 @@ const MAX_SNOOZE_SECONDS = 1800
  * lasts the ringing alarm's own snooze length (shortened by its taper, within
  * the procedure's 1-30 min) and the alarm comes back with the same vibration.
  * A `duration` in the payload (seconds) sets the length instead. With no
- * alarm of ours ringing, the procedure's defaults apply.
+ * alarm of ours ringing but the side still marked vibrating, the procedure's
+ * defaults apply.
  */
 function snoozeInput(payload: CommandPayload): Record<string, unknown> {
   const { side, duration } = payload
@@ -778,6 +779,20 @@ function snoozeInput(payload: CommandPayload): Record<string, unknown> {
     vibrationPattern: active.vibrationPattern,
     alarmDuration: active.duration,
   }
+}
+
+/**
+ * Whether a snooze sent over MQTT has an alarm to snooze: one of ours ringing
+ * on the side, or the side marked vibrating (what a tap checks). Snoozing
+ * nothing would arm a snooze and vibrate the bed minutes later, so the
+ * command is dropped then, even with a `duration`. A side that isn't left or
+ * right goes on to the procedure, whose schema rejects it.
+ */
+async function hasAlarmToSnooze(side: unknown): Promise<boolean> {
+  if (side !== 'left' && side !== 'right') return true
+  if (getActiveAlarmConfig(side)) return true
+  const rows = await db.select({ side: deviceState.side, isAlarmVibrating: deviceState.isAlarmVibrating }).from(deviceState)
+  return rows.find(r => r.side === side)?.isAlarmVibrating ?? false
 }
 
 async function handleCommand(verb: string, payload: CommandPayload): Promise<void> {
@@ -798,6 +813,10 @@ async function handleCommand(verb: string, payload: CommandPayload): Promise<voi
       await caller.device.clearAlarm(payload as never)
       return
     case 'snooze-alarm':
+      if (!await hasAlarmToSnooze(payload.side)) {
+        console.log(`[mqtt] snooze-alarm ignored: no alarm ringing on ${String(payload.side)}`)
+        return
+      }
       await caller.device.snoozeAlarm(snoozeInput(payload) as never)
       return
     case 'start-priming':
