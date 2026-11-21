@@ -89,6 +89,8 @@ function resetSchema(): void {
       mqtt_ha_discovery INTEGER,
       mqtt_tls_enabled INTEGER,
       mqtt_tls_insecure INTEGER,
+      mqtt_presence_hold_seconds INTEGER,
+      mqtt_presence_exit_percent INTEGER,
       homekit_enabled INTEGER NOT NULL DEFAULT 0,
       pump_stall_protection_enabled INTEGER NOT NULL DEFAULT 1,
       pump_stall_rpm_threshold INTEGER NOT NULL DEFAULT 500,

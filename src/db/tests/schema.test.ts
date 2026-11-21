@@ -213,6 +213,8 @@ const expectedTables: Record<string, TableSpec> = {
       { name: 'mqtt_ha_discovery', notNull: false, default: undefined },
       { name: 'mqtt_tls_enabled', notNull: false, default: undefined },
       { name: 'mqtt_tls_insecure', notNull: false, default: undefined },
+      { name: 'mqtt_presence_hold_seconds', notNull: false, default: undefined },
+      { name: 'mqtt_presence_exit_percent', notNull: false, default: undefined },
       { name: 'homekit_enabled', notNull: true, default: false },
       { name: 'pump_stall_protection_enabled', notNull: true, default: false },
       { name: 'pump_stall_rpm_threshold', notNull: true, default: 500 },

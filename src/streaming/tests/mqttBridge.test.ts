@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import os from 'node:os'
 import { alarmSchedules, sideSettings } from '@/src/db/schema'
 import type * as AlarmStateModule from '@/src/hardware/alarmState'
+import type * as BedPresenceModule from '@/src/lib/bedPresence'
 
 // Hoisted state shared with the @/src/db mock factory — lets each test stub
 // the device_settings row that resolveConfig will read.
@@ -202,7 +203,7 @@ vi.mock('@/src/server/routers/app', () => ({
 // Hoisted onServerFrame mock — lifecycle tests need to capture the frame
 // listener so they can assert frame-driven publishes.
 const piezoMock = vi.hoisted(() => {
-  const state: { listener: ((frame: any) => void) | null } = { listener: null }
+  const state: { listener: ((frame: any) => void) | null, snapshot: any } = { listener: null, snapshot: null }
   const unsubscribe = vi.fn()
   const onServerFrame = vi.fn((cb: (frame: any) => void) => {
     state.listener = cb
@@ -213,7 +214,17 @@ const piezoMock = vi.hoisted(() => {
 
 vi.mock('@/src/streaming/piezoStream', () => ({
   onServerFrame: piezoMock.onServerFrame,
+  getLatestCapSenseSnapshot: () => piezoMock.state.snapshot,
 }))
+
+// Empty-bed baselines the bridge reads from the sleep-detector state file.
+const presenceMock = vi.hoisted(() => ({
+  baselines: { left: null, right: null } as Record<'left' | 'right', any>,
+}))
+vi.mock('@/src/lib/bedPresence', async (importOriginal) => {
+  const actual = await importOriginal<typeof BedPresenceModule>()
+  return { ...actual, readPresenceBaselines: async () => presenceMock.baselines }
+})
 
 const dacMock = vi.hoisted(() => ({
   getLastStatus: vi.fn<() => any>(() => null),
@@ -227,6 +238,7 @@ vi.mock('@/src/hardware/dacMonitor.instance', () => ({
 const bridgeModule = await import('../mqttBridge')
 const { __test__, getBridgeStatus, startMqttBridge, shutdownMqttBridge, testConnection } = bridgeModule
 const { resolveConfig, slugify, deviceId, parsePayload, state: bridgeState } = __test__
+const bridgeTest = __test__
 
 const MQTT_ENV_KEYS = [
   'MQTT_ENABLED',
@@ -237,6 +249,8 @@ const MQTT_ENV_KEYS = [
   'MQTT_HA_DISCOVERY',
   'MQTT_TLS',
   'MQTT_TLS_INSECURE',
+  'MQTT_PRESENCE_HOLD_SECONDS',
+  'MQTT_PRESENCE_EXIT_PERCENT',
   'MQTT_DEVICE_ID',
 ] as const
 
@@ -279,7 +293,7 @@ afterEach(() => {
 // Drive the bridge through startMqttBridge() with a controllable fake client.
 // Returns the fake so the test can emit() events / inspect spies.
 async function startBridgeWithFake(opts: {
-  config?: Partial<{ enabled: boolean, url: string | null, topicPrefix: string, haDiscovery: boolean, tlsEnabled: boolean, tlsInsecure: boolean, username: string | null, password: string | null }>
+  config?: Partial<{ enabled: boolean, url: string | null, topicPrefix: string, haDiscovery: boolean, tlsEnabled: boolean, tlsInsecure: boolean, username: string | null, password: string | null, presenceHoldSeconds: number, presenceExitPercent: number }>
 } = {}): Promise<FakeClient> {
   // Reset bridge module state between tests since startMqttBridge() short-
   // circuits when runState !== 'stopped'.
@@ -287,6 +301,7 @@ async function startBridgeWithFake(opts: {
   bridgeState.runState = 'stopped'
   bridgeState.lastError = null
   bridgeState.publishTimer = null
+  bridgeState.presenceTimer = null
   bridgeState.unsubscribeFrame = null
   bridgeState.resolved = null
   bridgeState.messagesPublished = 0
@@ -301,6 +316,8 @@ async function startBridgeWithFake(opts: {
     mqttHaDiscovery: opts.config?.haDiscovery ?? false,
     mqttTlsEnabled: opts.config?.tlsEnabled ?? false,
     mqttTlsInsecure: opts.config?.tlsInsecure ?? false,
+    mqttPresenceHoldSeconds: opts.config?.presenceHoldSeconds ?? null,
+    mqttPresenceExitPercent: opts.config?.presenceExitPercent ?? null,
   }
 
   const fake = createFakeClient()
@@ -322,6 +339,8 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       haDiscovery: 'default',
       tlsEnabled: 'default',
       tlsInsecure: 'default',
+      presenceHoldSeconds: 'default',
+      presenceExitPercent: 'default',
     })
     expect(config).toEqual({
       enabled: false,
@@ -332,6 +351,8 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       haDiscovery: true,
       tlsEnabled: false,
       tlsInsecure: false,
+      presenceHoldSeconds: 0,
+      presenceExitPercent: 50,
     })
   })
 
@@ -344,6 +365,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
     process.env.MQTT_HA_DISCOVERY = '0'
     process.env.MQTT_TLS = '1'
     process.env.MQTT_TLS_INSECURE = 'true'
+    process.env.MQTT_PRESENCE_HOLD_SECONDS = '20'
 
     const { config, sources } = await resolveConfig()
 
@@ -356,6 +378,8 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       haDiscovery: 'env',
       tlsEnabled: 'env',
       tlsInsecure: 'env',
+      presenceHoldSeconds: 'env',
+      presenceExitPercent: 'default',
     })
     expect(config).toEqual({
       enabled: true,
@@ -366,6 +390,8 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       haDiscovery: false,
       tlsEnabled: true,
       tlsInsecure: true,
+      presenceHoldSeconds: 20,
+      presenceExitPercent: 50,
     })
   })
 
@@ -379,6 +405,7 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       mqttHaDiscovery: false,
       mqttTlsEnabled: true,
       mqttTlsInsecure: true,
+      mqttPresenceHoldSeconds: 45,
     }
 
     const { config, sources } = await resolveConfig()
@@ -392,6 +419,8 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       haDiscovery: 'db',
       tlsEnabled: 'db',
       tlsInsecure: 'db',
+      presenceHoldSeconds: 'db',
+      presenceExitPercent: 'default',
     })
     expect(config).toEqual({
       enabled: true,
@@ -402,7 +431,35 @@ describe('mqttBridge — resolveConfig source attribution', () => {
       haDiscovery: false,
       tlsEnabled: true,
       tlsInsecure: true,
+      presenceHoldSeconds: 45,
+      presenceExitPercent: 50,
     })
+  })
+
+  it('keeps the presence hold within 0–600 s', async () => {
+    process.env.MQTT_PRESENCE_HOLD_SECONDS = '-5'
+    expect((await resolveConfig()).config.presenceHoldSeconds).toBe(0)
+    dbMock.state.row = { mqttPresenceHoldSeconds: 9999 }
+    expect((await resolveConfig()).config.presenceHoldSeconds).toBe(600)
+    dbMock.state.row = undefined
+    process.env.MQTT_PRESENCE_HOLD_SECONDS = 'soon'
+    expect((await resolveConfig()).config).toMatchObject({ presenceHoldSeconds: 0 })
+    expect((await resolveConfig()).sources.presenceHoldSeconds).toBe('default')
+  })
+
+  it('resolves the out-of-bed line from db, then env, then 50%, kept within 25–90%', async () => {
+    expect(await resolveConfig()).toMatchObject({ config: { presenceExitPercent: 50 }, sources: { presenceExitPercent: 'default' } })
+    process.env.MQTT_PRESENCE_EXIT_PERCENT = '70'
+    expect(await resolveConfig()).toMatchObject({ config: { presenceExitPercent: 70 }, sources: { presenceExitPercent: 'env' } })
+    dbMock.state.row = { mqttPresenceExitPercent: 80 }
+    expect(await resolveConfig()).toMatchObject({ config: { presenceExitPercent: 80 }, sources: { presenceExitPercent: 'db' } })
+    dbMock.state.row = { mqttPresenceExitPercent: 100 }
+    expect((await resolveConfig()).config.presenceExitPercent).toBe(90)
+    dbMock.state.row = undefined
+    process.env.MQTT_PRESENCE_EXIT_PERCENT = '5'
+    expect((await resolveConfig()).config.presenceExitPercent).toBe(25)
+    process.env.MQTT_PRESENCE_EXIT_PERCENT = 'high'
+    expect((await resolveConfig()).sources.presenceExitPercent).toBe('default')
   })
 })
 
@@ -641,6 +698,8 @@ describe('mqttBridge — getBridgeStatus', () => {
       haDiscovery: true,
       tlsEnabled: false,
       tlsInsecure: false,
+      presenceHoldSeconds: 0,
+      presenceExitPercent: 50,
     }
     const ts = new Date('2026-01-02T03:04:05Z')
     bridgeState.messagesPublished = 7
@@ -1194,6 +1253,261 @@ describe('mqttBridge — frame subscription', () => {
     expect(stringify).not.toHaveBeenCalled()
 
     await shutdownMqttBridge()
+  })
+})
+
+describe('mqttBridge — bed presence', () => {
+  const ID = 'pod-test'
+  const baseline = { format: 'capSense', means: { out: 1000, cen: 1500, in: 1700 }, threshold: 300, refMean: null }
+  // capSense as the live snapshot carries it: [out, out, cen, cen, in, in].
+  const reading = (load: number) => [1000 + load, 1000 + load, 1500, 1500, 1700, 1700]
+  const empty = reading(0)
+  let frameAt = 0
+
+  /** A new live reading, `ts` seconds into the night. */
+  function frame(ts: number, left: number[], right: number[] = empty) {
+    frameAt += 1
+    const receivedAtMs = Date.now() + frameAt
+    piezoMock.state.snapshot = { type: 'capSense', ts, receivedAtMs, live: true, left, right }
+    return receivedAtMs
+  }
+
+  async function start(hold = 0, exitPercent?: number) {
+    process.env.MQTT_DEVICE_ID = ID
+    presenceMock.baselines = { left: baseline, right: baseline }
+    const fake = await startBridgeWithFake({ config: { presenceHoldSeconds: hold, presenceExitPercent: exitPercent } })
+    fake.connected = true
+    fake.emit('connect')
+    await new Promise(r => setTimeout(r, 0))
+    await new Promise(r => setTimeout(r, 0))
+    bridgeTest.state.presence.modes = { bedMode: 'two' }
+    fake.publish.mockClear()
+    seen = { left: 0, right: 0 }
+    return fake
+  }
+
+  /** How far into the publish calls each side has been read. */
+  let seen = { left: 0, right: 0 }
+
+  /** Presence payloads published for `side` since the last call for that side. */
+  function published(fake: FakeClient, side: 'left' | 'right' = 'left') {
+    const calls = fake.publish.mock.calls as [string, string][]
+    const out = calls.slice(seen[side])
+      .filter(([t]) => t === `sleepypod/${ID}/state/${side}/presence`)
+      .map(([, payload]) => JSON.parse(payload))
+    seen[side] = calls.length
+    return out
+  }
+
+  afterEach(async () => {
+    piezoMock.state.snapshot = null
+    presenceMock.baselines = { left: null, right: null }
+    await shutdownMqttBridge()
+  })
+
+  it('with a higher out-of-bed line, reads out of bed while the vacated mattress still settles', async () => {
+    const fake = await start(0, 80)
+    frame(1000, reading(1700))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, exitThreshold: 240 }])
+    // Off the bed, but the mattress still reads 215 over empty: under 80%, over 50%.
+    frame(1001, reading(215))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: false, raw: false, load: 215, exitThreshold: 240, since: new Date(1_001_000).toISOString() }])
+  })
+
+  it('reports getting in and out of bed at the first reading that shows it', async () => {
+    const fake = await start()
+    frame(1000, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake)).toEqual([{
+      ts: expect.any(Number),
+      inBed: false,
+      since: new Date(1_000_000).toISOString(),
+      raw: false,
+      load: 0,
+      threshold: 300,
+      exitThreshold: 150,
+      holdSeconds: 0,
+      residual: null,
+    }])
+
+    frame(1001, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, raw: true, load: 400, since: new Date(1_001_000).toISOString() }])
+    // Unchanged readings don't republish; the same frame isn't re-read.
+    bridgeTest.samplePresence()
+    frame(1002, reading(380))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toEqual([])
+
+    // Hysteresis: under the threshold but over half of it is still in bed.
+    frame(1003, reading(200))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toEqual([])
+    frame(1004, reading(100))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: false, raw: false, load: 100 }])
+  })
+
+  it('with a hold, reports a change once it lasts, and ignores a shorter one', async () => {
+    const fake = await start(10)
+    frame(0, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, holdSeconds: 10 }])
+
+    // Out for 5 s: the raw reading shows it, the in-bed state doesn't.
+    frame(100, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, raw: false }])
+    frame(105, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, raw: true }])
+
+    // Out for 10 s: reported, dated from when it began.
+    frame(200, empty)
+    bridgeTest.samplePresence()
+    frame(205, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, raw: false }])
+    frame(210, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: false, since: new Date(200_000).toISOString() }])
+  })
+
+  it('a single sleeper reads the combined load of both sides', async () => {
+    const fake = await start()
+    bridgeTest.state.presence.modes = { bedMode: 'solo-left' }
+    frame(0, empty, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, load: 0, residual: 0 }])
+    expect(published(fake, 'right')).toMatchObject([{ inBed: false, load: 0, residual: null }])
+    // Lying across the middle: neither side is over the line, both together are.
+    frame(1, reading(200), reading(200))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: true, raw: true, load: 400 }])
+    // Each side's own reading stays its own.
+    expect(published(fake, 'right')).toEqual([])
+    expect(bridgeTest.state.presence.load.right).toBe(200)
+    // 200 together is over the 150 exit line.
+    frame(2, reading(100), reading(100))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toEqual([])
+    frame(3, reading(40), reading(40))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, raw: false, load: 80 }])
+  })
+
+  it('a single sleeper reads out of bed when the load collapses, though something left on the bed holds it over the line', async () => {
+    const fake = await start()
+    bridgeTest.state.presence.modes = { bedMode: 'solo-left' }
+    const at = (s: number) => {
+      frame(s, s < 100 ? reading(500) : reading(320), s < 100 ? reading(1500) : reading(50))
+      bridgeTest.samplePresence()
+    }
+    for (let s = 0; s < 100; s += 0.5) at(s)
+    expect(published(fake, 'left')).toMatchObject([{ inBed: true, load: 2000 }])
+    for (let s = 100; s < 109.5; s += 0.5) at(s)
+    expect(published(fake, 'left')).toEqual([])
+    at(109.5)
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, raw: false, load: 0, residual: 370, since: new Date(109_500).toISOString() }])
+    // The sleep-detector's own reading of the left side alone still says occupied.
+    expect(bridgeTest.state.presence.load.right).toBe(50)
+  })
+
+  it('a single sleeper falls back to either side when one side cannot be read', async () => {
+    const fake = await start()
+    const solo = async (baselines: typeof presenceMock.baselines) => {
+      presenceMock.baselines = baselines
+      await bridgeTest.refreshPresenceInputs()
+      bridgeTest.state.presence.modes = { bedMode: 'solo-left' }
+    }
+    await solo({ left: baseline, right: null })
+    frame(0, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: true, raw: true, load: 400 }])
+    await solo({ left: null, right: baseline })
+    frame(1, empty, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toEqual([])
+    expect(bridgeTest.state.presence.load.left).toBe(400)
+    frame(2, empty, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toMatchObject([{ inBed: false, raw: false, load: 0 }])
+  })
+
+  it('reads unknown with no baseline or no recent reading', async () => {
+    const fake = await start()
+    presenceMock.baselines = { left: null, right: baseline }
+    await bridgeTest.refreshPresenceInputs()
+    frame(0, reading(400), reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toEqual([])
+    expect(published(fake, 'right')).toMatchObject([{ inBed: true, raw: true, load: 400 }])
+    frame(1, reading(400), reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake, 'left')).toEqual([])
+    expect(published(fake, 'right')).toEqual([])
+
+    // Stopped receiving readings: unknown, so Home Assistant doesn't keep a stale state.
+    piezoMock.state.snapshot = { ...piezoMock.state.snapshot, receivedAtMs: Date.now() - 31_000 }
+    bridgeTest.samplePresence()
+    expect(published(fake, 'right')).toMatchObject([{ inBed: null, raw: null, load: null, since: null }])
+  })
+
+  it('does not read a frame replayed from a RAW backlog as a change', async () => {
+    const fake = await start()
+    frame(1000, empty)
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: false }])
+    // An hours-old reading of someone in bed, replayed after a file switch.
+    piezoMock.state.snapshot = { type: 'capSense', ts: 1, receivedAtMs: Date.now() + 100, live: false, left: reading(1700), right: empty }
+    bridgeTest.samplePresence()
+    expect(published(fake)).toEqual([])
+    frame(1001, reading(1700))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true, since: new Date(1_001_000).toISOString() }])
+  })
+
+  it('keeps the state through a short gap in live readings, then reads unknown', async () => {
+    const fake = await start()
+    const lastLive = frame(1000, reading(400))
+    bridgeTest.samplePresence()
+    expect(published(fake)).toMatchObject([{ inBed: true }])
+    // Switching RAW files clears the reading, then refills it from backlog.
+    piezoMock.state.snapshot = null
+    bridgeTest.samplePresence(lastLive + 30_000)
+    piezoMock.state.snapshot = { type: 'capSense', ts: 1, receivedAtMs: lastLive + 1000, live: false, left: empty, right: empty }
+    bridgeTest.samplePresence(lastLive + 30_000)
+    expect(published(fake)).toEqual([])
+    bridgeTest.samplePresence(lastLive + 30_001)
+    expect(published(fake)).toMatchObject([{ inBed: null, raw: null, load: null, since: null }])
+  })
+
+  it('dates a change from the receive time when the frame timestamp is not a date', async () => {
+    const fake = await start()
+    const now = Date.now()
+    for (const ts of [Number.NaN, Infinity, 1e13]) {
+      frame(ts, reading(400))
+      bridgeTest.samplePresence(now)
+      expect(published(fake)).toMatchObject([{ inBed: true, since: new Date(now).toISOString() }])
+      frame(0, empty)
+      bridgeTest.samplePresence(now)
+      published(fake)
+    }
+  })
+
+  it('samples the live reading twice a second', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const fake = await start()
+      frame(0, reading(400))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(published(fake)).toMatchObject([{ inBed: true }])
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -2155,6 +2469,31 @@ describe('mqttBridge — HA discovery payload contents (mutation coverage)', () 
         payload_press: JSON.stringify({ side }),
         icon: 'mdi:alarm-off',
         device: DEVICE,
+      }
+      const presenceTopic = `sleepypod/${ID}/state/${side}/presence`
+      expected[`homeassistant/binary_sensor/${ID}/${side}_in_bed/config`] = {
+        name: `${Side} in bed`,
+        unique_id: `${ID}_${side}_in_bed`,
+        availability_topic: AVAIL,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: presenceTopic,
+        value_template: '{{ \'on\' if value_json.inBed == true else (\'off\' if value_json.inBed == false else \'None\') }}',
+        payload_on: 'on',
+        payload_off: 'off',
+        json_attributes_topic: presenceTopic,
+        device_class: 'occupancy',
+        icon: 'mdi:bed',
+        device: DEVICE,
+      }
+      expected[`homeassistant/sensor/${ID}/${side}_bed_load/config`] = {
+        ...sensorCfg({
+          name: `${Side} bed load`,
+          unique_id: `${ID}_${side}_bed_load`,
+          state_topic: presenceTopic,
+          value_template: '{{ value_json.load if value_json.load is not none else \'None\' }}',
+        }),
+        icon: 'mdi:weight',
       }
     }
 

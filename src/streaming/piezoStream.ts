@@ -155,6 +155,8 @@ export interface LatestCapSenseSnapshot {
   ts: number
   /** Wall-clock epoch ms when the snapshot was written. Used for staleness. */
   receivedAtMs: number
+  /** False for a frame replayed from a RAW backlog (received now, read earlier). */
+  live: boolean
   /** Per-side channels — capSense (Pod 3) carries a scalar; capSense2 carries the
    *  raw `[A1,A2,B1,B2,C1,C2,ref1,ref2]` array. */
   left: number | number[]
@@ -1110,6 +1112,7 @@ function dispatchSensorFrame(frame: Record<string, unknown>, backlog = false): v
         type: frameType,
         ts,
         receivedAtMs: Date.now(),
+        live: !backlog,
         left,
         right,
       }
