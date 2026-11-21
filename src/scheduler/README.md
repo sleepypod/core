@@ -7,7 +7,7 @@ Automated scheduling system for pod control operations.
 The scheduler manages automated tasks including:
 - **Temperature schedules** - Per-side, per-day temperature changes
 - **Power schedules** - Automated on/off with custom temperatures
-- **Alarm schedules** - Wake-up vibrations with temperature control, optionally fired early by movement in a wake window (`wakeWindow.ts`)
+- **Alarm schedules** - Wake-up vibrations with temperature control, optionally fired early by restless movement in a wake window (`wakeWindow.ts`)
 - **Daily priming** - Automated maintenance
 - **Daily reboots** - System restarts
 

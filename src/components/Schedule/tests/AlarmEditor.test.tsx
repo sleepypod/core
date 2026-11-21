@@ -162,10 +162,10 @@ describe('AlarmEditor', () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={group} />)
     const wakeWindow = within(s.getByRole('tablist', { name: 'Wake window' }))
     expect(wakeWindow.getByRole('tab', { name: '20' }).getAttribute('aria-selected')).toBe('true')
-    expect(s.getByText(/up to 20 min early, the first time you move after 7:40 AM\. Otherwise it goes off at 8:00 AM/)).toBeTruthy()
+    expect(s.getByText(/up to 20 min early, once you've been moving for a few minutes after 7:40 AM\. Otherwise it goes off at 8:00 AM/)).toBeTruthy()
 
     fireEvent.click(wakeWindow.getByRole('tab', { name: '30 min' }))
-    expect(s.getByText(/up to 30 min early, the first time you move after 7:30 AM/)).toBeTruthy()
+    expect(s.getByText(/up to 30 min early, once you've been moving for a few minutes after 7:30 AM/)).toBeTruthy()
     fireEvent.click(saveButton(s))
     await waitFor(() => expect(m.batch.mutateAsync).toHaveBeenCalled())
     expect(m.batch.mutateAsync.mock.calls[0][0].creates.alarm[0].wakeWindow).toBe(30)
@@ -173,7 +173,7 @@ describe('AlarmEditor', () => {
 
   it('wraps the window start across midnight and turns off', async () => {
     const s = render(<AlarmEditor open onClose={vi.fn()} side="left" existingGroup={{ ...group, time: '00:10' }} />)
-    expect(s.getByText(/first time you move after 11:50 PM/)).toBeTruthy()
+    expect(s.getByText(/moving for a few minutes after 11:50 PM/)).toBeTruthy()
     fireEvent.click(within(s.getByRole('tablist', { name: 'Wake window' })).getByRole('tab', { name: 'Off' }))
     expect(s.getByText('Goes off at the set time.')).toBeTruthy()
     fireEvent.click(saveButton(s))
