@@ -1299,6 +1299,14 @@ class TestAbsenceReadiness:
             b.observe_absence_reference(ts, EMPTY)
         assert b.absence_ready
 
+    def test_learns_from_2hz_frames_stamped_to_the_whole_second(self):
+        # Pod 5 firmware: two frames per second share one integer ts.
+        t = _live_tracker()
+        frames = [0] * 120 + [600] * 1200 + [0] * 1200
+        for i, rise in enumerate(frames):
+            t.process(1_777_000_000 + i // 2, _cap(rise))
+        assert t.baseline.absence_ready
+
 
 def _cap2(a, b, c, side="left", ref=1.16):
     return {"type": "capSense2", side: {"values": [a, a, b, b, c, c, ref, ref]}}
@@ -1648,3 +1656,75 @@ class TestPod5Movement:
         assert obs.delta == 0.0 and obs.present is None
         obs = t.observe(self.T0 + 1.5, _cap2(*self.LOADED))
         assert obs.delta < 0.01
+
+
+def _republished(samples, start):
+    """1 Hz samples as the J57 cover's NATS firmware publishes them: each
+    one, then a copy stamped one second later (natsFramesPod5J57.json)."""
+    frames = []
+    for i, rec in enumerate(samples):
+        frames.append((start + i, dict(rec, ts=start + i)))
+        frames.append((start + i + 1, dict(rec, ts=start + i + 1)))
+    return frames
+
+
+def _capture(rise, rng=None, sigma=0.0):
+    left = {ch: int(round(v + rise + (rng.gauss(0, sigma) if rng else 0.0))) for ch, v in EMPTY.items()}
+    return {"type": "capSense", "left": dict(left, status="good")}
+
+
+class TestRepublishedFrames:
+    T0 = 1_795_146_055
+
+    def _publish(self, t, frames, flt):
+        for ts, rec in frames:
+            if flt is not None and flt.is_copy(ts, rec):
+                continue
+            t.process(ts, rec)
+
+    def test_drops_the_one_second_copy_of_each_sample(self):
+        samples = [_capture(r) for r in (0, 3, 1, 4, 1)]
+        flt = main.RepublishFilter()
+        kept = [ts for ts, rec in _republished(samples, self.T0) if not flt.is_copy(ts, rec)]
+        assert kept == [self.T0 + i for i in range(5)]
+        assert flt.dropped == 5
+
+    def test_keeps_a_repeated_reading_once_the_gap_exceeds_a_second(self):
+        flt = main.RepublishFilter()
+        assert not flt.is_copy(self.T0, _capture(0))
+        assert not flt.is_copy(self.T0 + 1.5, _capture(0))
+
+    def test_keeps_distinct_readings_that_share_a_timestamp(self):
+        flt = main.RepublishFilter()
+        assert not flt.is_copy(self.T0, _capture(0))
+        assert not flt.is_copy(self.T0, _capture(5))
+
+    def test_tracks_each_record_type_separately(self):
+        flt = main.RepublishFilter()
+        cap2 = {"type": "capSense2", "left": {"values": [1.0] * 8}}
+        assert not flt.is_copy(self.T0, _capture(0))
+        assert not flt.is_copy(self.T0 + 0.5, cap2)
+        assert flt.is_copy(self.T0 + 1, _capture(0))
+
+    def _enter_and_leave(self, flt):
+        t = _live_tracker()
+        samples = [_capture(0)] * 60 + [_capture(600)] * 600 + [_capture(0)] * 600
+        # Each sample differs from the last so only the copies repeat.
+        samples = [dict(s, left=dict(s["left"], out=s["left"]["out"] + i % 2)) for i, s in enumerate(samples)]
+        self._publish(t, _republished(samples, self.T0), flt)
+        return t
+
+    def test_absence_readiness_is_learned_from_a_republished_stream(self):
+        t = self._enter_and_leave(main.RepublishFilter())
+        assert t.baseline.absence_ready
+        assert t.snapshot()["vitals_presence"] is False
+
+    def test_copies_do_not_collapse_the_movement_noise_estimate(self):
+        import random
+        rng = random.Random(7)
+        samples = [_capture(0, rng, 10) for _ in range(300)]
+        unfiltered, filtered = _live_tracker(), _live_tracker()
+        self._publish(unfiltered, _republished(samples, self.T0), None)
+        self._publish(filtered, _republished(samples, self.T0), main.RepublishFilter())
+        assert unfiltered._cap_noise == [main.CAPSENSE_NOISE_FLOOR] * 3
+        assert min(filtered._cap_noise) > 5

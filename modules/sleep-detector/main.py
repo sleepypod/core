@@ -263,6 +263,35 @@ def sanitize_ts(raw_ts) -> float:
     return ts
 
 
+# NATS firmware on a Pod 5 hub with a J57 cover publishes every capSense
+# sample twice, the copy stamped one second later with the same channel
+# values (natsFramesPod5J57.json). A copy shares its ts with the next real
+# sample, which resets the absence-readiness clock every other frame, and its
+# zero delta pins the movement noise estimate to CAPSENSE_NOISE_FLOOR, so
+# sensor jitter on an empty side scores as movement.
+REPUBLISH_MAX_GAP_S = 1.0
+
+
+class RepublishFilter:
+    """Drops a capSense frame that repeats the last kept frame's readings."""
+
+    def __init__(self) -> None:
+        self._last: Dict[str, tuple] = {}
+        self.dropped = 0
+
+    def is_copy(self, ts: float, record: dict) -> bool:
+        rtype = record.get("type")
+        readings = {k: v for k, v in record.items() if k != "ts"}
+        last = self._last.get(rtype)
+        if last is not None and 0 <= ts - last[0] <= REPUBLISH_MAX_GAP_S and readings == last[1]:
+            self.dropped += 1
+            if self.dropped == 1:
+                log.info("%s frames are republished; dropping the copies", rtype)
+            return True
+        self._last[rtype] = (ts, readings)
+        return False
+
+
 # After this many consecutive write failures, discard the current biometrics
 # connection and open a fresh one on the next write (#325).
 _DB_RECONNECT_THRESHOLD = 5
@@ -706,7 +735,9 @@ class AdaptiveBaseline:
         First-frame stability alone is never evidence of an empty bed. This
         confidence is persisted separately from the baseline's source label.
         """
-        gap = self._absence_last_ts is None or not 0 < ts - self._absence_last_ts <= BASELINE_MAX_STEP_S
+        # Pod 5 firmware stamps 2 Hz frames to the whole second, so half of
+        # all steps are 0 s; only a backwards step or a long one is a gap.
+        gap = self._absence_last_ts is None or not 0 <= ts - self._absence_last_ts <= BASELINE_MAX_STEP_S
         self._absence_last_ts = ts
         if gap or values is None:
             self._absence_drop_since = self._absence_rise_since = None
@@ -1727,6 +1758,7 @@ def main() -> None:
     # Source selected once at startup: NatsFollower on new-firmware pods (NATS
     # reachable), else the unchanged .RAW tailer. Same decoded-record contract.
     follower = create_follower(RAW_DATA_DIR, _shutdown, poll_interval=0.5)
+    republished = RepublishFilter()
 
     report_health("healthy", "sleep-detector started")
     log.info("Calibration profiles will be loaded from biometrics.db (reload every %ds)", CALIBRATION_RELOAD_S)
@@ -1761,6 +1793,8 @@ def main() -> None:
             log_capsense_status_once(record, "sleep-detector")
 
             ts = sanitize_ts(record.get("ts"))
+            if republished.is_copy(ts, record):
+                continue
             process_sleeper_frame(left, right, ts, record, bed_mode)
 
             if (left.state_dirty or right.state_dirty
