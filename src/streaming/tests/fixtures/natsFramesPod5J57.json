@@ -1,0 +1,617 @@
+{
+  "_comment": "Field capture from a Pod 5 hub (March 2026) + J57 cover (July 2026 replacement) on NATS firmware rat_version cb31cf9 (built 2026-11-01), Discord report 2026-11-19, taken with scripts/probe-nats-capture.py. Subjects are on the rawmem.* prefix. No Blanket accessory is attached. sensHealth reports both sides connected:false while the cover streams normally. capsense is a contiguous ~10 s run (2 Hz, each record published twice) with a still sleeper on the LEFT and the RIGHT empty: left out/cen/in ~2545/2985/2037 and breathing on cen, right flat ~1536/1868/2100. blanketReadings shows is_connected:false with identical left/right readings (one hub-side TMAG5273). payloadB64 is the raw CBOR body as published; decoded is the probe's cbor2 decode, kept for readability. DO NOT hand-edit; regenerate from a fresh capture.",
+  "hardware": {
+    "hub": "Pod 5 (model unverified by sp-logs)",
+    "cover": "Pod 5 (J57)",
+    "rat_version": "cb31cf9d05e15197723d53491dd99d27331a0357",
+    "prefix": "rawmem",
+    "blanket": false
+  },
+  "ground_truth": {
+    "left": "occupied, still sleeper",
+    "right": "empty"
+  },
+  "sensHealth": [
+    {
+      "subject": "rawmem.sens.health",
+      "type": "sensHealth",
+      "size": 70,
+      "payloadB64": "v2R0eXBlanNlbnNIZWFsdGhidHMaav+8Lmd2ZXJzaW9uAWRsZWZ0oWljb25uZWN0ZWT0ZXJpZ2h0oWljb25uZWN0ZWT0/w==",
+      "decoded": {
+        "type": "sensHealth",
+        "ts": 1795144750,
+        "version": 1,
+        "left": {
+          "connected": false
+        },
+        "right": {
+          "connected": false
+        }
+      }
+    }
+  ],
+  "blanketReadings": [
+    {
+      "subject": "rawmem.sens.blanket",
+      "type": "blanketReadings",
+      "size": 305,
+      "payloadB64": "v2R0eXBlb2JsYW5rZXRSZWFkaW5nc2d2ZXJzaW9uAmJ0cxpq/7wjZGxlZnS/ZHRlbXD6QaYAAGxlcnJvcl9zdHJpbmf2c2NvcnJlY3Rfb3JpZW50YXRpb272bGlzX2Nvbm5lY3RlZPRpc2Vuc29yX2lkEGZzZW5zb3JqVE1BRzUyNzNBMWF6+r1hAABuZmxvd19kaXJlY3Rpb272YXn6vX8AAGF4+r41QAD/ZXJpZ2h0v2R0ZW1w+kGmAABsZXJyb3Jfc3RyaW5n9nNjb3JyZWN0X29yaWVudGF0aW9u9mxpc19jb25uZWN0ZWT0aXNlbnNvcl9pZBBmc2Vuc29yalRNQUc1MjczQTFhevq9YQAAbmZsb3dfZGlyZWN0aW9u9mF5+r1/AABhePq+NUAA//8=",
+      "decoded": {
+        "type": "blanketReadings",
+        "version": 2,
+        "ts": 1795144739,
+        "left": {
+          "temp": 20.75,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.054931640625,
+          "flow_direction": null,
+          "y": -0.062255859375,
+          "x": -0.177001953125
+        },
+        "right": {
+          "temp": 20.75,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.054931640625,
+          "flow_direction": null,
+          "y": -0.062255859375,
+          "x": -0.177001953125
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.blanket",
+      "type": "blanketReadings",
+      "size": 305,
+      "payloadB64": "v2R0eXBlb2JsYW5rZXRSZWFkaW5nc2d2ZXJzaW9uAmJ0cxpq/7wlZGxlZnS/ZHRlbXD6QaWAAGxlcnJvcl9zdHJpbmf2c2NvcnJlY3Rfb3JpZW50YXRpb272bGlzX2Nvbm5lY3RlZPRpc2Vuc29yX2lkEGZzZW5zb3JqVE1BRzUyNzNBMWF6+r0HAABuZmxvd19kaXJlY3Rpb272YXn6vXUAAGF4+r43wAD/ZXJpZ2h0v2R0ZW1w+kGlgABsZXJyb3Jfc3RyaW5n9nNjb3JyZWN0X29yaWVudGF0aW9u9mxpc19jb25uZWN0ZWT0aXNlbnNvcl9pZBBmc2Vuc29yalRNQUc1MjczQTFhevq9BwAAbmZsb3dfZGlyZWN0aW9u9mF5+r11AABhePq+N8AA//8=",
+      "decoded": {
+        "type": "blanketReadings",
+        "version": 2,
+        "ts": 1795144741,
+        "left": {
+          "temp": 20.6875,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.032958984375,
+          "flow_direction": null,
+          "y": -0.059814453125,
+          "x": -0.179443359375
+        },
+        "right": {
+          "temp": 20.6875,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.032958984375,
+          "flow_direction": null,
+          "y": -0.059814453125,
+          "x": -0.179443359375
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.blanket",
+      "type": "blanketReadings",
+      "size": 305,
+      "payloadB64": "v2R0eXBlb2JsYW5rZXRSZWFkaW5nc2d2ZXJzaW9uAmJ0cxpq/7wnZGxlZnS/ZHRlbXD6QaWAAGxlcnJvcl9zdHJpbmf2c2NvcnJlY3Rfb3JpZW50YXRpb272bGlzX2Nvbm5lY3RlZPRpc2Vuc29yX2lkEGZzZW5zb3JqVE1BRzUyNzNBMWF6+rzmAABuZmxvd19kaXJlY3Rpb272YXn6vUgAAGF4+r4gAAD/ZXJpZ2h0v2R0ZW1w+kGlgABsZXJyb3Jfc3RyaW5n9nNjb3JyZWN0X29yaWVudGF0aW9u9mxpc19jb25uZWN0ZWT0aXNlbnNvcl9pZBBmc2Vuc29yalRNQUc1MjczQTFhevq85gAAbmZsb3dfZGlyZWN0aW9u9mF5+r1IAABhePq+IAAA//8=",
+      "decoded": {
+        "type": "blanketReadings",
+        "version": 2,
+        "ts": 1795144743,
+        "left": {
+          "temp": 20.6875,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.028076171875,
+          "flow_direction": null,
+          "y": -0.048828125,
+          "x": -0.15625
+        },
+        "right": {
+          "temp": 20.6875,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.028076171875,
+          "flow_direction": null,
+          "y": -0.048828125,
+          "x": -0.15625
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.blanket",
+      "type": "blanketReadings",
+      "size": 305,
+      "payloadB64": "v2R0eXBlb2JsYW5rZXRSZWFkaW5nc2d2ZXJzaW9uAmJ0cxpq/7wpZGxlZnS/ZHRlbXD6QaWAAGxlcnJvcl9zdHJpbmf2c2NvcnJlY3Rfb3JpZW50YXRpb272bGlzX2Nvbm5lY3RlZPRpc2Vuc29yX2lkEGZzZW5zb3JqVE1BRzUyNzNBMWF6+r0gAABuZmxvd19kaXJlY3Rpb272YXn6vVwAAGF4+r4cQAD/ZXJpZ2h0v2R0ZW1w+kGlgABsZXJyb3Jfc3RyaW5n9nNjb3JyZWN0X29yaWVudGF0aW9u9mxpc19jb25uZWN0ZWT0aXNlbnNvcl9pZBBmc2Vuc29yalRNQUc1MjczQTFhevq9IAAAbmZsb3dfZGlyZWN0aW9u9mF5+r1cAABhePq+HEAA//8=",
+      "decoded": {
+        "type": "blanketReadings",
+        "version": 2,
+        "ts": 1795144745,
+        "left": {
+          "temp": 20.6875,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.0390625,
+          "flow_direction": null,
+          "y": -0.0537109375,
+          "x": -0.152587890625
+        },
+        "right": {
+          "temp": 20.6875,
+          "error_string": null,
+          "correct_orientation": null,
+          "is_connected": false,
+          "sensor_id": 16,
+          "sensor": "TMAG5273A1",
+          "z": -0.0390625,
+          "flow_direction": null,
+          "y": -0.0537109375,
+          "x": -0.152587890625
+        }
+      }
+    }
+  ],
+  "capSense": [
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUdkbGVmdKRjb3V0GQn1Y2NlbhkLomJpbhkH92ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQX/Y2NlbhkHTGJpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146055,
+        "left": {
+          "out": 2549,
+          "cen": 2978,
+          "in": 2039,
+          "status": "good"
+        },
+        "right": {
+          "out": 1535,
+          "cen": 1868,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUhkbGVmdKRjb3V0GQn1Y2NlbhkLomJpbhkH92ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQX/Y2NlbhkHTGJpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146056,
+        "left": {
+          "out": 2549,
+          "cen": 2978,
+          "in": 2039,
+          "status": "good"
+        },
+        "right": {
+          "out": 1535,
+          "cen": 1868,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUhkbGVmdKRjb3V0GQn2Y2NlbhkLpWJpbhkH92ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHSmJpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146056,
+        "left": {
+          "out": 2550,
+          "cen": 2981,
+          "in": 2039,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1866,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUlkbGVmdKRjb3V0GQn2Y2NlbhkLpWJpbhkH92ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHSmJpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146057,
+        "left": {
+          "out": 2550,
+          "cen": 2981,
+          "in": 2039,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1866,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUlkbGVmdKRjb3V0GQnrY2NlbhkLn2JpbhkH+GZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHS2JpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146057,
+        "left": {
+          "out": 2539,
+          "cen": 2975,
+          "in": 2040,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1867,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUpkbGVmdKRjb3V0GQnrY2NlbhkLn2JpbhkH+GZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHS2JpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146058,
+        "left": {
+          "out": 2539,
+          "cen": 2975,
+          "in": 2040,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1867,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUpkbGVmdKRjb3V0GQnzY2NlbhkLpWJpbhkH9mZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHSmJpbhkINGZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146058,
+        "left": {
+          "out": 2547,
+          "cen": 2981,
+          "in": 2038,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1866,
+          "in": 2100,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUtkbGVmdKRjb3V0GQnzY2NlbhkLpWJpbhkH9mZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHSmJpbhkINGZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146059,
+        "left": {
+          "out": 2547,
+          "cen": 2981,
+          "in": 2038,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1866,
+          "in": 2100,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUtkbGVmdKRjb3V0GQnvY2NlbhkLpWJpbhkH9WZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHS2JpbhkIMmZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146059,
+        "left": {
+          "out": 2543,
+          "cen": 2981,
+          "in": 2037,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1867,
+          "in": 2098,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUxkbGVmdKRjb3V0GQnvY2NlbhkLpWJpbhkH9WZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHS2JpbhkIMmZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146060,
+        "left": {
+          "out": 2543,
+          "cen": 2981,
+          "in": 2037,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1867,
+          "in": 2098,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wUxkbGVmdKRjb3V0GQn0Y2NlbhkLqmJpbhkH9WZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHTGJpbhkIM2ZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146060,
+        "left": {
+          "out": 2548,
+          "cen": 2986,
+          "in": 2037,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1868,
+          "in": 2099,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wU1kbGVmdKRjb3V0GQn0Y2NlbhkLqmJpbhkH9WZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHTGJpbhkIM2ZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146061,
+        "left": {
+          "out": 2548,
+          "cen": 2986,
+          "in": 2037,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1868,
+          "in": 2099,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wU1kbGVmdKRjb3V0GQnuY2NlbhkLrmJpbhkH9GZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQX/Y2NlbhkHTWJpbhkIM2ZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146061,
+        "left": {
+          "out": 2542,
+          "cen": 2990,
+          "in": 2036,
+          "status": "good"
+        },
+        "right": {
+          "out": 1535,
+          "cen": 1869,
+          "in": 2099,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wU5kbGVmdKRjb3V0GQnuY2NlbhkLrmJpbhkH9GZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQX/Y2NlbhkHTWJpbhkIM2ZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146062,
+        "left": {
+          "out": 2542,
+          "cen": 2990,
+          "in": 2036,
+          "status": "good"
+        },
+        "right": {
+          "out": 1535,
+          "cen": 1869,
+          "in": 2099,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wU5kbGVmdKRjb3V0GQnvY2NlbhkLr2JpbhkH82ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHTGJpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146062,
+        "left": {
+          "out": 2543,
+          "cen": 2991,
+          "in": 2035,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1868,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wU9kbGVmdKRjb3V0GQnvY2NlbhkLr2JpbhkH82ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYAY2NlbhkHTGJpbhkINWZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146063,
+        "left": {
+          "out": 2543,
+          "cen": 2991,
+          "in": 2035,
+          "status": "good"
+        },
+        "right": {
+          "out": 1536,
+          "cen": 1868,
+          "in": 2101,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wU9kbGVmdKRjb3V0GQn0Y2NlbhkLt2JpbhkH8mZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHTWJpbhkINGZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146063,
+        "left": {
+          "out": 2548,
+          "cen": 2999,
+          "in": 2034,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1869,
+          "in": 2100,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wVBkbGVmdKRjb3V0GQn0Y2NlbhkLt2JpbhkH8mZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHTWJpbhkINGZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146064,
+        "left": {
+          "out": 2548,
+          "cen": 2999,
+          "in": 2034,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1869,
+          "in": 2100,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wVBkbGVmdKRjb3V0GQntY2NlbhkLw2JpbhkH82ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHTGJpbhkIM2ZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146064,
+        "left": {
+          "out": 2541,
+          "cen": 3011,
+          "in": 2035,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1868,
+          "in": 2099,
+          "status": "good"
+        }
+      }
+    },
+    {
+      "subject": "rawmem.sens.capsense",
+      "type": "capSense",
+      "size": 101,
+      "payloadB64": "v2R0eXBlaGNhcFNlbnNlYnRzGmr/wVFkbGVmdKRjb3V0GQntY2NlbhkLw2JpbhkH82ZzdGF0dXNkZ29vZGVyaWdodKRjb3V0GQYBY2NlbhkHTGJpbhkIM2ZzdGF0dXNkZ29vZP8=",
+      "decoded": {
+        "type": "capSense",
+        "ts": 1795146065,
+        "left": {
+          "out": 2541,
+          "cen": 3011,
+          "in": 2035,
+          "status": "good"
+        },
+        "right": {
+          "out": 1537,
+          "cen": 1868,
+          "in": 2099,
+          "status": "good"
+        }
+      }
+    }
+  ]
+}

@@ -9,8 +9,9 @@
  *      compared to RESTLESS_SCORE_MIN. Identical to the original HomeKit logic.
  *
  *   2. Level signal (catches a still occupant — deep sleep, etc.).
- *      Live capSense2 channel readings vs the per-side calibration baseline
- *      from `calibration_profiles`, with reference-channel compensation.
+ *      Live capSense2 (or Pod 3-dialect capSense, as NATS firmware sends on
+ *      every pod) channel readings vs the per-side calibration baseline from
+ *      `calibration_profiles`; capSense2 adds reference-channel compensation.
  *      Mirrors the Python sleep-detector's per-sample presence check.
  *
  * Movement alone is blind to a person who is lying perfectly still; level
@@ -194,13 +195,11 @@ function readLevelSignal(side: Side): LevelSignal {
     return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
   }
 
-  // Pod-3 legacy capSense uses a scalar-per-side and a different calibration
-  // shape; level scoring there is not implemented (movement signal still works).
-  if (snap.type !== 'capSense2') {
-    return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
-  }
-
-  const cal = readCapSenseCalibration(side)
+  // Both dialects arrive as a flat [a,a,b,b,c,c(,ref,ref)] array (capSideChannels
+  // doubles Pod 3 {out,cen,in}), so zone pairing is shared. Each needs its own
+  // calibration: capSense2 profiles are A/B/C floats with a ref channel; capSense
+  // profiles (NATS firmware, Pod 3 dialect) are out/cen/in integer counts.
+  const cal = readCapSenseCalibration(side, snap.type === 'capSense2' ? 'capSense2' : 'capSense')
   if (!cal) {
     return { active: false, deviation: null, threshold: null, ageMs, zoneDeviations: null, zones: null }
   }
@@ -216,7 +215,7 @@ function readLevelSignal(side: Side): LevelSignal {
   const c = avgPair(values[4], values[5])
 
   let refDelta = 0
-  if (values.length >= 8) {
+  if (cal.format === 'capSense2' && values.length >= 8) {
     const ref = avgPair(values[6], values[7])
     const refNominal = cal.ref?.mean ?? REF_NOMINAL
     refDelta = ref - refNominal
@@ -243,7 +242,7 @@ function readLevelSignal(side: Side): LevelSignal {
   }
 }
 
-function readCapSenseCalibration(side: Side): CapSenseCalibration | null {
+function readCapSenseCalibration(side: Side, format: 'capSense' | 'capSense2'): CapSenseCalibration | null {
   try {
     const [row] = biometricsDb
       .select({ parameters: calibrationProfiles.parameters })
@@ -256,15 +255,21 @@ function readCapSenseCalibration(side: Side): CapSenseCalibration | null {
       .limit(1)
       .all()
     if (!row) return null
-    const parsed = row.parameters as CapSenseCalibration
-    if (parsed?.format !== 'capSense2') return null
-    if (typeof parsed.channels?.A?.mean !== 'number'
-      || typeof parsed.channels?.B?.mean !== 'number'
-      || typeof parsed.channels?.C?.mean !== 'number') {
-      return null
-    }
+    const parsed = row.parameters as Record<string, unknown> & { channels?: Record<string, { mean?: unknown }>, threshold?: unknown, ref?: { mean: number } }
+    if (parsed?.format !== format) return null
     if (typeof parsed.threshold !== 'number') return null
-    return parsed
+    // The Python calibrator names Pod 3 channels out/cen/in; map them onto the A/B/C zones.
+    const [ka, kb, kc] = format === 'capSense2' ? ['A', 'B', 'C'] : ['out', 'cen', 'in']
+    const a = parsed.channels?.[ka]?.mean
+    const b = parsed.channels?.[kb]?.mean
+    const c = parsed.channels?.[kc]?.mean
+    if (typeof a !== 'number' || typeof b !== 'number' || typeof c !== 'number') return null
+    return {
+      channels: { A: { mean: a }, B: { mean: b }, C: { mean: c } },
+      threshold: parsed.threshold,
+      format,
+      ref: parsed.ref,
+    }
   }
   catch {
     return null

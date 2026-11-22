@@ -8,6 +8,7 @@ import type { CapSenseFrame, CapSense2Frame, SensorFrame } from '@/src/hooks/use
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { trpc } from '@/src/utils/trpc'
 import { Card, SectionLabel, Skeleton, StatusDot } from '@/src/components/ds'
+import { disconnectedCovers } from '@/src/components/diagnostics/dashboardLogic'
 
 /**
  * Bed presence card.
@@ -19,7 +20,8 @@ import { Card, SectionLabel, Skeleton, StatusDot } from '@/src/components/ds'
  * right now, but NOT the source of truth for occupancy.
  *
  * Newer cover firmware sends sensHealth; a side it reports unlinked gets a
- * Disconnected dot. Without the frame (older firmware) nothing is added.
+ * Disconnected dot, unless cover frames are still arriving (see
+ * disconnectedCovers). Without the frame (older firmware) nothing is added.
  */
 
 const VARIANCE_WINDOW = 20
@@ -59,6 +61,9 @@ export function PresenceCard() {
   const capSense2 = useSensorFrame('capSense2')
   const frame: CapSenseFrame | CapSense2Frame | undefined = capSense2 ?? capSense
   const sensHealth = useSensorFrame('sensHealth')
+  const bedTemp = useSensorFrame('bedTemp')
+  const bedTemp2 = useSensorFrame('bedTemp2')
+  const disconnected = disconnectedCovers(sensHealth, [frame, bedTemp, bedTemp2])
   const { sideName } = useSideNames()
 
   const occupancyQuery = trpc.biometrics.getOccupancy.useQuery(undefined, {
@@ -129,7 +134,7 @@ export function PresenceCard() {
                     sub={occ ? presenceSub(occ) : '--'}
                     variance={side === 'left' ? variance.leftVariance : variance.rightVariance}
                     hasFrames={!!frame}
-                    disconnected={sensHealth?.[side]?.connected === false}
+                    disconnected={disconnected.includes(side)}
                   />
                 )
               })}

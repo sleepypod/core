@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  attentionItems, disconnectedCovers, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow,
+  attentionItems, COVER_LIVE_WINDOW_S, disconnectedCovers, isPodLaneJob, jobsInWindow, nextTemperatureJob, podJobLabel, tonightWindow,
 } from '../dashboardLogic'
 import type { SchedJob } from '../diagnosticsLogic'
 
@@ -108,5 +108,21 @@ describe('disconnectedCovers', () => {
   it('only counts an explicit connected: false', () => {
     expect(disconnectedCovers({ type: 'sensHealth', ts: 1 } as never)).toEqual([])
     expect(disconnectedCovers({ type: 'sensHealth', ts: 1, left: {}, right: { connected: null } } as never)).toEqual([])
+  })
+
+  // Pod 5 (J57) on rat firmware: sensHealth says false/false while the cover streams.
+  describe('fresh cover frames override sensHealth', () => {
+    const health = { type: 'sensHealth' as const, ts: 1_000, version: 1, left: { connected: false }, right: { connected: false } }
+    it('clears both sides when a cover frame is within the live window', () => {
+      expect(disconnectedCovers(health, [{ ts: 1_000 }])).toEqual([])
+      expect(disconnectedCovers(health, [{ ts: 1_000 - COVER_LIVE_WINDOW_S }])).toEqual([])
+      expect(disconnectedCovers(health, [undefined, { ts: 995 }])).toEqual([])
+    })
+    it('trusts sensHealth when cover frames are stale, missing or malformed', () => {
+      expect(disconnectedCovers(health, [{ ts: 1_000 - COVER_LIVE_WINDOW_S - 1 }])).toEqual(['left', 'right'])
+      expect(disconnectedCovers(health, [undefined, undefined])).toEqual(['left', 'right'])
+      expect(disconnectedCovers(health, [{ ts: Number.NaN }])).toEqual(['left', 'right'])
+      expect(disconnectedCovers(health)).toEqual(['left', 'right'])
+    })
   })
 })
