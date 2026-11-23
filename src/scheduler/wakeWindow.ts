@@ -1,15 +1,19 @@
 /**
- * Wake window — an alarm with `wakeWindow` minutes set fires early, the first
- * time its side moves within that many minutes before the set time. The set
- * time is the latest it fires: with no movement it fires then as usual.
+ * Wake window — an alarm with `wakeWindow` minutes set fires early once its
+ * side turns restless within that many minutes before the set time. The set
+ * time is the latest it fires: without restlessness it fires then as usual.
  *
- * Movement comes from the sleep-detector's per-minute `movement` rows, so an
- * early fire lands within about a minute of the movement. The detector only
- * writes rows while it holds a session open for an occupied side, so an empty
- * bed never trips it.
+ * Movement comes from the sleep-detector's per-minute `movement` rows. A
+ * single turn-over in deep sleep scores as high as getting up, and sleepers
+ * turn over every few minutes, so one moving minute fires nearly every window
+ * as soon as it opens. Restless means moving in WAKE_RESTLESS_MINUTES of any
+ * WAKE_RESTLESS_SPAN_MINUTES in a row: in recorded nights a sleeper did that in
+ * about 2% of 20-minute stretches, while someone waking on their own did it
+ * several minutes before getting up. The detector only writes rows while it holds a session open for
+ * an occupied side, so an empty bed never trips it.
  */
 
-import { and, eq, gte, max } from 'drizzle-orm'
+import { and, asc, eq, gte } from 'drizzle-orm'
 import { biometricsDb } from '@/src/db'
 import { movement } from '@/src/db/biometrics-schema'
 
@@ -21,6 +25,12 @@ type Side = 'left' | 'right'
  * the hundreds.
  */
 export const WAKE_MOVEMENT_THRESHOLD = 300
+
+/** Moving minutes, within WAKE_RESTLESS_SPAN_MINUTES, that count as waking. */
+export const WAKE_RESTLESS_MINUTES = 4
+
+/** The span, in minutes, the moving minutes must fall within. */
+export const WAKE_RESTLESS_SPAN_MINUTES = 8
 
 /** How often an open window re-reads movement. Rows land once a minute. */
 export const WAKE_POLL_MS = 20_000
@@ -49,14 +59,38 @@ export function slotBefore(dayOfWeek: DayOfWeek, hour: number, minute: number, m
   }
 }
 
-/** Highest movement score written for `side` at or after `since`, or null when none. */
-export function peakMovementSince(side: Side, since: Date): number | null {
-  const [row] = biometricsDb
-    .select({ peak: max(movement.totalMovement) })
+export interface MovementMinute {
+  /** Unix seconds. */
+  timestamp: number
+  score: number
+}
+
+/** Movement rows written for `side` at or after `since`, oldest first. */
+export function movementSince(side: Side, since: Date): MovementMinute[] {
+  return biometricsDb
+    .select({ timestamp: movement.timestamp, score: movement.totalMovement })
     .from(movement)
     .where(and(eq(movement.side, side), gte(movement.timestamp, since)))
+    .orderBy(asc(movement.timestamp))
     .all()
-  return row?.peak ?? null
+    .map(row => ({ timestamp: Math.floor(row.timestamp.getTime() / 1000), score: row.score }))
+}
+
+/**
+ * Whether `rows` hold WAKE_RESTLESS_MINUTES moving minutes within some
+ * WAKE_RESTLESS_SPAN_MINUTES, going by timestamps so a missing minute
+ * counts as still. Returns the span's moving scores, or null.
+ */
+export function restlessSpan(rows: MovementMinute[]): number[] | null {
+  const moving = rows.filter(row => row.score >= WAKE_MOVEMENT_THRESHOLD)
+  const span = WAKE_RESTLESS_SPAN_MINUTES * 60
+  for (let end = WAKE_RESTLESS_MINUTES - 1; end < moving.length; end++) {
+    const start = end - (WAKE_RESTLESS_MINUTES - 1)
+    if (moving[end].timestamp - moving[start].timestamp < span) {
+      return moving.slice(start, end + 1).map(row => row.score)
+    }
+  }
+  return null
 }
 
 interface Watch {
@@ -65,32 +99,32 @@ interface Watch {
 }
 
 interface WakeWindowsOptions {
-  readMovement?: (side: Side, since: Date) => number | null
+  readMovement?: (side: Side, since: Date) => MovementMinute[]
   now?: () => number
   pollMs?: number
 }
 
 /**
  * The open wake windows, one per alarm schedule row. `open` starts polling
- * movement until the alarm time; the first reading at or over the threshold
- * fires the alarm and records that occurrence so the set-time job skips it.
+ * movement until the alarm time; the first restless span fires the alarm and
+ * records that occurrence so the set-time job skips it.
  */
 export class WakeWindows {
   private watches = new Map<number, Watch>()
   private firedEarly = new Map<number, number>()
-  private readonly readMovement: (side: Side, since: Date) => number | null
+  private readonly readMovement: (side: Side, since: Date) => MovementMinute[]
   private readonly now: () => number
   private readonly pollMs: number
 
   constructor(options: WakeWindowsOptions = {}) {
-    this.readMovement = options.readMovement ?? peakMovementSince
+    this.readMovement = options.readMovement ?? movementSince
     this.now = options.now ?? Date.now
     this.pollMs = options.pollMs ?? WAKE_POLL_MS
   }
 
   /**
    * Watch `side` for movement from `windowMinutes` before `alarmAt` until
-   * `alarmAt`, calling `fire` on the first movement. Reopening replaces the
+   * `alarmAt`, calling `fire` once the side turns restless. Reopening replaces the
    * watch (a reload or edit brings new settings); an occurrence that already
    * fired early is not watched again.
    */
@@ -106,18 +140,19 @@ export class WakeWindows {
         this.close(scheduleId)
         return
       }
-      let peak: number | null
+      let rows: MovementMinute[]
       try {
-        peak = this.readMovement(side, since)
+        rows = this.readMovement(side, since)
       }
       catch (error) {
         console.warn(`[wakeWindow] alarm-${scheduleId}: movement read failed:`, error instanceof Error ? error.message : error)
         return
       }
-      if (peak == null || peak < WAKE_MOVEMENT_THRESHOLD) return
+      const restless = restlessSpan(rows)
+      if (!restless) return
       this.close(scheduleId)
       this.firedEarly.set(scheduleId, due)
-      console.log(`[wakeWindow] alarm-${scheduleId}: ${side} moved (${peak}) ${Math.round((due - this.now()) / 60_000)} min before the alarm — firing now`)
+      console.log(`[wakeWindow] alarm-${scheduleId}: ${side} restless (${restless.join(', ')}) ${Math.round((due - this.now()) / 60_000)} min before the alarm — firing now`)
       try {
         await fire()
       }

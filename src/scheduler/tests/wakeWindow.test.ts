@@ -6,13 +6,23 @@ vi.mock('@/src/db', () => {
   chain.select = () => chain
   chain.from = () => chain
   chain.where = () => chain
+  chain.orderBy = () => chain
   chain.all = () => dbRows.rows
   return { biometricsDb: chain }
 })
 
-import { WAKE_MOVEMENT_THRESHOLD, WakeWindows, peakMovementSince, slotBefore } from '../wakeWindow'
+import { WAKE_MOVEMENT_THRESHOLD, WakeWindows, movementSince, restlessSpan, slotBefore } from '../wakeWindow'
+import type { MovementMinute } from '../wakeWindow'
 
 const MIN = 60_000
+const T0 = Date.UTC(2026, 8, 30, 10, 55) / 1000
+
+/** One row per score, a minute apart from T0. */
+const minutes = (...scores: number[]): MovementMinute[] =>
+  scores.map((score, i) => ({ timestamp: T0 + i * 60, score }))
+
+/** Restless: four moving minutes in a row. */
+const RESTLESS = minutes(800, 800, 800, 800)
 
 describe('slotBefore', () => {
   it('moves back within the same day', () => {
@@ -33,20 +43,65 @@ describe('slotBefore', () => {
   })
 })
 
-describe('peakMovementSince', () => {
-  it('returns the peak score, or null when no rows were written', () => {
-    dbRows.rows = [{ peak: 420 }]
-    expect(peakMovementSince('left', new Date())).toBe(420)
-    dbRows.rows = [{ peak: null }]
-    expect(peakMovementSince('left', new Date())).toBeNull()
+describe('movementSince', () => {
+  it('returns the rows as unix seconds and scores', () => {
+    dbRows.rows = [
+      { timestamp: new Date(T0 * 1000), score: 420 },
+      { timestamp: new Date((T0 + 60) * 1000 + 999), score: 0 },
+    ]
+    expect(movementSince('left', new Date())).toEqual([
+      { timestamp: T0, score: 420 },
+      { timestamp: T0 + 60, score: 0 },
+    ])
     dbRows.rows = []
-    expect(peakMovementSince('left', new Date())).toBeNull()
+    expect(movementSince('left', new Date())).toEqual([])
+  })
+})
+
+describe('restlessSpan', () => {
+  const T = WAKE_MOVEMENT_THRESHOLD
+
+  it('is null with no rows or only still minutes', () => {
+    expect(restlessSpan([])).toBeNull()
+    expect(restlessSpan(minutes(0, T - 1, 0, T - 1, T - 1))).toBeNull()
+  })
+
+  it('ignores a lone turn-over, however large', () => {
+    expect(restlessSpan(minutes(1000, 0, 0, 0, 0, 1000, 0, 0, 0, 0, 1000))).toBeNull()
+  })
+
+  it('ignores three moving minutes in eight', () => {
+    expect(restlessSpan(minutes(1000, 1000, 0, 0, 0, 0, 0, 1000))).toBeNull()
+  })
+
+  it('fires on four moving minutes within eight, from the threshold up', () => {
+    expect(restlessSpan(minutes(T, 0, 500, 0, 1000, 0, 0, 600))).toEqual([T, 500, 1000, 600])
+    expect(restlessSpan(minutes(0, T, T, T, T))).toEqual([T, T, T, T])
+  })
+
+  it('does not count moving minutes spread over nine', () => {
+    expect(restlessSpan(minutes(800, 0, 800, 0, 800, 0, 0, 0, 800))).toBeNull()
+  })
+
+  it('treats a missing minute as still', () => {
+    const rows = [
+      { timestamp: T0, score: 800 },
+      { timestamp: T0 + 60, score: 800 },
+      { timestamp: T0 + 120, score: 800 },
+      { timestamp: T0 + 480, score: 800 },
+    ]
+    expect(restlessSpan(rows)).toBeNull()
+    expect(restlessSpan([...rows.slice(0, 3), { timestamp: T0 + 479, score: 800 }])).toEqual([800, 800, 800, 800])
+  })
+
+  it('finds a later span after scattered movement', () => {
+    expect(restlessSpan(minutes(1000, 0, 0, 0, 0, 0, 0, 0, 900, 0, 0, 0, 0, 0, 0, 0, 400, 0, 600, 700, 0, 300))).toEqual([400, 600, 700, 300])
   })
 })
 
 describe('WakeWindows', () => {
   let now: number
-  let peak: number | null
+  let rows: MovementMinute[]
   let reads: Array<{ side: string, since: Date }>
   let windows: WakeWindows
   const fire = vi.fn(async () => {})
@@ -54,13 +109,13 @@ describe('WakeWindows', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     now = Date.UTC(2026, 8, 30, 10, 55)
-    peak = null
+    rows = []
     reads = []
     fire.mockClear()
     windows = new WakeWindows({
       readMovement: (side, since) => {
         reads.push({ side, since })
-        return peak
+        return rows
       },
       now: () => now,
       pollMs: 1000,
@@ -82,8 +137,8 @@ describe('WakeWindows', () => {
     expect(reads[0]).toEqual({ side: 'left', since: new Date(alarmAt().getTime() - 20 * MIN) })
   })
 
-  it('does not fire while movement stays under the threshold', async () => {
-    peak = WAKE_MOVEMENT_THRESHOLD - 1
+  it('does not fire on a lone turn-over or movement under the threshold', async () => {
+    rows = minutes(1000, WAKE_MOVEMENT_THRESHOLD - 1, WAKE_MOVEMENT_THRESHOLD - 1, 0, 1000)
     windows.open(1, 'left', alarmAt(), 20, fire)
     await vi.advanceTimersByTimeAsync(5000)
     expect(fire).not.toHaveBeenCalled()
@@ -91,11 +146,12 @@ describe('WakeWindows', () => {
     expect(reads.length).toBeGreaterThan(3)
   })
 
-  it('fires once on the first reading at the threshold and closes', async () => {
+  it('fires once when the side turns restless and closes', async () => {
+    rows = minutes(1000, 0, 1000, 0, 1000)
     windows.open(1, 'left', alarmAt(), 20, fire)
     await vi.advanceTimersByTimeAsync(2000)
     expect(fire).not.toHaveBeenCalled()
-    peak = WAKE_MOVEMENT_THRESHOLD
+    rows = minutes(1000, 0, 1000, 0, 1000, WAKE_MOVEMENT_THRESHOLD)
     await vi.advanceTimersByTimeAsync(1000)
     expect(fire).toHaveBeenCalledTimes(1)
     expect(windows.isOpen(1)).toBe(false)
@@ -104,7 +160,7 @@ describe('WakeWindows', () => {
   })
 
   it('lets the set-time job skip an occurrence that fired early, once', async () => {
-    peak = 800
+    rows = RESTLESS
     windows.open(1, 'left', alarmAt(), 20, fire)
     await vi.advanceTimersByTimeAsync(0)
     expect(fire).toHaveBeenCalledTimes(1)
@@ -114,7 +170,7 @@ describe('WakeWindows', () => {
   })
 
   it('does not skip an occurrence that fired early long ago', async () => {
-    peak = 800
+    rows = RESTLESS
     windows.open(1, 'left', alarmAt(), 20, fire)
     await vi.advanceTimersByTimeAsync(0)
     now = alarmAt().getTime() + 7 * 24 * 60 * MIN
@@ -130,7 +186,7 @@ describe('WakeWindows', () => {
   })
 
   it('does not reopen an occurrence that already fired early', async () => {
-    peak = 800
+    rows = RESTLESS
     windows.open(1, 'left', alarmAt(), 20, fire)
     await vi.advanceTimersByTimeAsync(0)
     windows.open(1, 'left', alarmAt(), 20, fire)
@@ -143,7 +199,7 @@ describe('WakeWindows', () => {
     windows.open(1, 'left', alarmAt(), 20, fire)
     await vi.advanceTimersByTimeAsync(0)
     now = alarmAt().getTime()
-    peak = 900
+    rows = RESTLESS
     await vi.advanceTimersByTimeAsync(1000)
     expect(fire).not.toHaveBeenCalled()
     expect(windows.isOpen(1)).toBe(false)
@@ -159,7 +215,7 @@ describe('WakeWindows', () => {
     windows.open(1, 'left', alarmAt(), 20, fire)
     const other = vi.fn(async () => {})
     windows.open(1, 'right', alarmAt(), 10, other)
-    peak = 500
+    rows = RESTLESS
     await vi.advanceTimersByTimeAsync(1000)
     expect(fire).not.toHaveBeenCalled()
     expect(other).toHaveBeenCalledTimes(1)
@@ -173,7 +229,7 @@ describe('WakeWindows', () => {
     expect(windows.isOpen(1)).toBe(false)
     expect(windows.isOpen(2)).toBe(true)
     windows.closeAll()
-    peak = 900
+    rows = RESTLESS
     await vi.advanceTimersByTimeAsync(3000)
     expect(fire).not.toHaveBeenCalled()
   })
@@ -185,7 +241,7 @@ describe('WakeWindows', () => {
     const replacement = vi.fn(async () => {})
     windows.open(1, 'right', alarmAt(), 10, replacement)
     reads.length = 0
-    peak = 800
+    rows = RESTLESS
     stalePoll()
     expect(reads).toEqual([])
     expect(fire).not.toHaveBeenCalled()
@@ -199,7 +255,7 @@ describe('WakeWindows', () => {
     const failure = { code: 'SQLITE_BUSY' }
     const readMovement = vi.fn().mockImplementationOnce(() => {
       throw failure
-    }).mockReturnValue(600)
+    }).mockReturnValue(RESTLESS)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     windows = new WakeWindows({ readMovement, now: () => now, pollMs: 1000 })
     windows.open(1, 'left', alarmAt(), 20, fire)
@@ -214,7 +270,7 @@ describe('WakeWindows', () => {
   it('allows the set-time alarm after a non-Error early-fire failure', async () => {
     const failure = { code: 'DAC_DISCONNECTED' }
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    peak = 600
+    rows = RESTLESS
     windows.open(1, 'left', alarmAt(), 20, vi.fn().mockRejectedValue(failure))
     await vi.advanceTimersByTimeAsync(0)
     expect(error).toHaveBeenCalledExactlyOnceWith('[wakeWindow] alarm-1: early fire failed:', failure)
@@ -229,7 +285,7 @@ describe('WakeWindows', () => {
     windows = new WakeWindows({
       readMovement: () => {
         if (fail) throw new Error('db busy')
-        return 600
+        return RESTLESS
       },
       now: () => now,
       pollMs: 1000,
@@ -245,7 +301,7 @@ describe('WakeWindows', () => {
 
   it('leaves a failed early fire to the set-time job', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    peak = 600
+    rows = RESTLESS
     windows.open(1, 'left', alarmAt(), 20, async () => {
       throw new Error('hardware down')
     })
