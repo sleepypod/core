@@ -17,6 +17,8 @@ import { loadAlarmState, updateAlarmState, type AlarmConfig } from './alarmPersi
 import { getActiveAlarmConfig, markAlarmStarted } from './alarmState'
 import { withSideLock } from './sideLock'
 import { ringLinked } from './linkedAlarm'
+import { readAwayModes } from './awayModes'
+import { alarmPartnerSide } from '@/src/lib/singleSleeper'
 export { MIN_SNOOZE_SECONDS, nextSnoozeSeconds } from './snoozeLength'
 import type { Side } from './types'
 
@@ -55,17 +57,21 @@ function schedule(side: Side, snoozeUntil: Date, config: AlarmConfig, now: numbe
     })
     try {
       const client = getSharedHardwareClient()
-      await withSideLock(side, async () => {
-        await client.setAlarm(side, config)
-        await markAlarmStarted(side, config)
+      // A linked snooze may be recorded on the side that was tapped: the
+      // alarm comes back on its owner's side first.
+      const owner = config.ownerSide ?? side
+      const restart = await relinked(owner, config)
+      await withSideLock(owner, async () => {
+        await client.setAlarm(owner, restart)
+        await markAlarmStarted(owner, restart)
       })
       // A single sleeper's alarm comes back on both sides, as it rang: the
       // other side under its own lock, unless it was stopped meanwhile.
-      const linked = config.linkedSide
-      if (linked && linked !== side) {
+      const linked = restart.linkedSide
+      if (linked && linked !== owner) {
         await withSideLock(linked, async () => {
-          if (getActiveAlarmConfig(side) !== config) return
-          await ringLinked(client, side, config)
+          if (getActiveAlarmConfig(owner) !== restart) return
+          await ringLinked(client, owner, restart)
         })
       }
     }
@@ -74,6 +80,29 @@ function schedule(side: Side, snoozeUntil: Date, config: AlarmConfig, now: numbe
     }
   }, Math.min(Math.max(0, snoozeUntil.getTime() - now), MAX_DELAY_MS))
   getActiveSnoozes().set(side, { timeoutId, snoozeUntil, config })
+}
+
+/**
+ * A snoozed linked alarm, as it comes back on `owner`: still ringing the
+ * other side only while the owner is still the bed's single sleeper (the
+ * partner may have come back during the snooze), unlinked otherwise. If the
+ * away modes can't be read it comes back on the owner's side only.
+ */
+async function relinked(owner: Side, config: AlarmConfig): Promise<AlarmConfig> {
+  if (!config.linkedSide) return config
+  let partner: Side | null = null
+  try {
+    partner = alarmPartnerSide(owner, await readAwayModes())
+  }
+  catch (err) {
+    console.error(`[Snooze] Failed to read away modes; restarting ${owner} only:`, err)
+  }
+  if (partner) return { ...config, linkedSide: partner, ownerSide: owner }
+  const solo = { ...config }
+  delete solo.linkedSide
+  delete solo.ownerSide
+  delete solo.linkId
+  return solo
 }
 
 export function snoozeAlarm(
@@ -111,11 +140,12 @@ export function snoozeAlarm(
 export function cancelSnooze(side: Side): void {
   const other = side === 'left' ? 'right' : 'left'
   const linked = getActiveSnoozes().get(other)?.config.linkedSide === side
-  cancel(side)
-  if (linked) cancel(other)
+  cancelSideSnooze(side)
+  if (linked) cancelSideSnooze(other)
 }
 
-function cancel(side: Side): void {
+/** Cancel the snooze recorded on `side` only, leaving a linked one on the other side. */
+export function cancelSideSnooze(side: Side): void {
   const map = getActiveSnoozes()
   const existing = map.get(side)
   if (existing) {
