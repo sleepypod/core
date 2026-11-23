@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars (gitignored) and edit.
+
+bucket_name = "sleepypod-archive-yourname-1234"
+region      = "us-east-1"
+
+# One entry per pod. Each becomes a <name>/ prefix and its own key.
+pods = ["bedroom"]
+
+# Optional: only accept pod keys from your home IP. Skip if it changes often.
+# allowed_source_cidrs = ["203.0.113.7/32"]
+
+# Optional: email when monthly S3 spend passes $5.
+# budget_email = "you@example.com"
+# budget_usd   = 5
