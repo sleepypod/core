@@ -1456,3 +1456,128 @@ it('getCurveForDay splits days with the same set points by end action', () => {
   expect(result.current.getCurveForDay('monday').days).toEqual(['monday', 'tuesday'])
   expect(result.current.getCurveForDay('wednesday').days).toEqual(['wednesday', 'thursday'])
 })
+
+describe('useSchedule — #591 survivors (run 44913797057)', () => {
+  it('deleteCurve clears notes only for the single schedule side (kills NoCoverage ArrayDeclaration L60)', async () => {
+    // An independent-zone editor collapses activeSides to [singleScheduleSide];
+    // an emptied array would drop every notes reset from the batch.
+    sideMock.state.primarySide = 'left'
+    sideMock.state.activeSides = ['left', 'right']
+    sideMock.state.singleScheduleSide = 'right'
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 7, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.deleteCurve(['monday'])
+    })
+    expect(trpcMock.batchMutate.mock.calls[0][0]).toEqual({
+      deletes: { temperature: [7], power: [] },
+      notes: [{ side: 'right', dayOfWeek: 'monday', notes: null }],
+    })
+  })
+
+  it('deleteCurve follows activeSides changes after mount (kills ArrayDeclaration L60 useMemo deps)', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 2, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result, rerender } = renderHook(() => useSchedule())
+    sideMock.state.activeSides = ['left', 'right']
+    rerender()
+    await act(async () => {
+      await result.current.deleteCurve(['monday'])
+    })
+    expect(trpcMock.batchMutate.mock.calls[0][0]).toEqual({
+      deletes: { temperature: [1, 2], power: [] },
+      notes: [
+        { side: 'left', dayOfWeek: 'monday', notes: null },
+        { side: 'right', dayOfWeek: 'monday', notes: null },
+      ],
+    })
+  })
+
+  it('togglePowerSchedule clears the previous confirm message while the batch is in flight (kills CallExpression L181)', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = { temperature: [], power: [], alarm: [] }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.togglePowerSchedule()
+    })
+    expect(result.current.confirmMessage).toBe('Schedule enabled for 1 day')
+
+    let release: () => void = () => {}
+    trpcMock.batchMutate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => {
+        release = () => resolve(undefined)
+      }),
+    )
+    let togglePromise: Promise<void> = Promise.resolve()
+    act(() => {
+      togglePromise = result.current.togglePowerSchedule()
+    })
+    expect(result.current.confirmMessage).toBeNull()
+    await act(async () => {
+      release()
+      await togglePromise
+    })
+    expect(result.current.confirmMessage).toBe('Schedule enabled for 1 day')
+  })
+
+  it('applyToOtherDays clears the previous confirm message while the batch is in flight (kills CallExpression L336)', async () => {
+    trpcMock.overrides.allLeft = { temperature: [], power: [], alarm: [] }
+    trpcMock.overrides.day = {
+      temperature: [{ id: 1, side: 'left', dayOfWeek: 'monday', time: '07:00', temperature: 68, enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    await act(async () => {
+      await result.current.applyToOtherDays(['tuesday'])
+    })
+    expect(result.current.confirmMessage).toBe('Schedule applied to 1 day. Scheduler reloaded.')
+
+    let release: () => void = () => {}
+    trpcMock.batchMutate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => {
+        release = () => resolve(undefined)
+      }),
+    )
+    let applyPromise: Promise<void> = Promise.resolve()
+    act(() => {
+      applyPromise = result.current.applyToOtherDays(['tuesday', 'wednesday'])
+    })
+    expect(result.current.confirmMessage).toBeNull()
+    await act(async () => {
+      release()
+      await applyPromise
+    })
+    expect(result.current.confirmMessage).toBe('Schedule applied to 2 days. Scheduler reloaded.')
+  })
+
+  it('getCurveForDay matches end actions regardless of power row order (kills MethodExpression L458)', () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [
+        { id: 1, dayOfWeek: 'monday', time: '22:00', temperature: 75, enabled: true },
+        { id: 2, dayOfWeek: 'tuesday', time: '22:00', temperature: 75, enabled: true },
+      ],
+      power: [
+        { id: 1, dayOfWeek: 'monday', endAction: 'maintain' },
+        { id: 2, dayOfWeek: 'monday', endAction: 'turn_off' },
+        { id: 3, dayOfWeek: 'tuesday', endAction: 'turn_off' },
+        { id: 4, dayOfWeek: 'tuesday', endAction: 'maintain' },
+      ],
+      alarm: [],
+    }
+    const { result } = renderHook(() => useSchedule())
+    expect(result.current.getCurveForDay('monday').days).toEqual(['monday', 'tuesday'])
+  })
+})
