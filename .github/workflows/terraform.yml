@@ -1,0 +1,48 @@
+name: Terraform
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [deploy/aws-archive-bucket]
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive -diff
+
+      - name: Init
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate
+        run: terraform validate

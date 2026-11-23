@@ -1,0 +1,8 @@
+# State and plans hold the pods' secret access keys.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+terraform.tfvars
+*.auto.tfvars
