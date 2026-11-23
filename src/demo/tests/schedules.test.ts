@@ -27,7 +27,7 @@ const cases = [
 describe('demo alarm schedules', () => {
   it('leaves alarms untouched when a batch omits alarm creates', async () => {
     const before = await required(schedules.getAll)({ side: 'left' })
-    expect(await required(schedules.batchUpdate)({ creates: {} })).toEqual({ success: true })
+    expect(await required(schedules.batchUpdate)({ creates: {} })).toEqual({ success: true, created: { temperature: [], power: [], alarm: [] } })
     const after = await required(schedules.getAll)({ side: 'left' })
     expect(after.alarm).toEqual(before.alarm)
   })
@@ -42,7 +42,7 @@ describe('demo alarm schedules', () => {
   it.each(cases)('persists $name on batch creation', async ({ settings, expected }) => {
     const before = await required(schedules.getAll)({ side: 'left' })
     const ids = new Set(before.alarm.map(row => row.id))
-    expect(await required(schedules.batchUpdate)({ creates: { alarm: [{ ...alarm, ...settings }] } })).toEqual({ success: true })
+    expect(await required(schedules.batchUpdate)({ creates: { alarm: [{ ...alarm, ...settings }] } })).toEqual({ success: true, created: { temperature: [], power: [], alarm: [expect.any(Number)] } })
     const after = await required(schedules.getAll)({ side: 'left' })
     const added = after.alarm.filter(row => !ids.has(row.id))
     expect(added).toHaveLength(1)
@@ -70,7 +70,7 @@ describe('demo power schedules', () => {
   it.each(powerCases)('persists $name on batch creation', async ({ settings, expected }) => {
     const before = await required(schedules.getAll)({ side: 'left' })
     const ids = new Set(before.power.map(row => row.id))
-    expect(await required(schedules.batchUpdate)({ creates: { power: [{ ...powerRow, ...settings }] } })).toEqual({ success: true })
+    expect(await required(schedules.batchUpdate)({ creates: { power: [{ ...powerRow, ...settings }] } })).toEqual({ success: true, created: { temperature: [], power: [expect.any(Number)], alarm: [] } })
     const after = await required(schedules.getAll)({ side: 'left' })
     const added = after.power.filter(row => !ids.has(row.id))
     expect(added).toHaveLength(1)

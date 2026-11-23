@@ -6,8 +6,10 @@ import { Bell, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Button, Card, InlineError, Skeleton, Toggle } from '@/src/components/ds'
+import type { AlarmGroup } from '@/src/components/Schedule/AlarmCard'
 import { AlarmEditor } from '@/src/components/Schedule/AlarmEditor'
-import { groupAlarms } from '@/src/components/Schedule/AlarmSection'
+import { deleteAlarmMessage, groupAlarms } from '@/src/components/Schedule/AlarmSection'
+import { ConfirmDialog } from '@/src/components/Schedule/ConfirmDialog'
 
 import type { Side } from '@/src/providers/SideProvider'
 import { trpc } from '@/src/utils/trpc'
@@ -18,22 +20,28 @@ import { useNow } from './TonightCard'
  * Next alarm for the side with an on/off toggle. Alarms sharing a time are one
  * group ("Weekdays · 10s buzz"); the toggle flips every day in the group.
  * Tapping the alarm edits it, and with none set, Add opens the same editor
- * as the Schedule page (deleting stays there).
+ * as the Schedule page, with the same delete confirmation.
  *
  * Wires into schedules.getAll (alarm rows), schedules.updateAlarmSchedule and
- * AlarmEditor (schedules.batchUpdate).
+ * schedules.batchUpdate (AlarmEditor saves, deletes).
  */
 export function AlarmCard({ side }: { side: Side }) {
   const { formatTime } = useTimeFormatter()
   const utils = trpc.useUtils()
   const { data, isLoading, error } = trpc.schedules.getAll.useQuery({ side })
   const update = trpc.schedules.updateAlarmSchedule.useMutation()
+  const batchUpdate = trpc.schedules.batchUpdate.useMutation()
   const now = useNow(60_000)
   // Keep the toggled group on screen after it turns off (otherwise the card
   // would jump to the next enabled alarm).
   const [pinnedTime, setPinnedTime] = useState<string | null>(null)
   const [pendingOn, setPendingOn] = useState<boolean | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
+  // The alarm the editor was opened on, kept until it closes: its saves
+  // refetch, and the next alarm may then be a different one.
+  const [editing, setEditing] = useState<AlarmGroup | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<AlarmGroup | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   if (isLoading) return <Skeleton className="h-[70px]" />
 
@@ -43,6 +51,31 @@ export function AlarmCard({ side }: { side: Side }) {
   const editGroup = group
     ? groupAlarms(data?.alarm ?? []).find(g => g.ids.includes((group.rows.find(r => r.enabled) ?? group.rows[0]).id)) ?? null
     : null
+
+  const openEditor = (target: AlarmGroup | null) => {
+    setEditing(target)
+    setEditorOpen(true)
+  }
+
+  const closeEditor = () => {
+    setEditorOpen(false)
+    setEditing(null)
+  }
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    setDeleteError(null)
+    try {
+      await batchUpdate.mutateAsync({ deletes: { alarm: pendingDelete.ids } })
+      void utils.schedules.getAll.invalidate()
+      void utils.schedules.getByDay.invalidate()
+      setPendingDelete(null)
+    }
+    catch (err) {
+      // Stays open to retry or cancel, as on the Schedule page.
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete alarm')
+    }
+  }
 
   const handleToggle = async (next: boolean) => {
     if (!group) return
@@ -72,7 +105,7 @@ export function AlarmCard({ side }: { side: Side }) {
                 <button
                   type="button"
                   aria-label={`Edit ${formatTime(group.time)} alarm`}
-                  onClick={() => setEditorOpen(true)}
+                  onClick={() => openEditor(editGroup)}
                   className="flex min-w-0 cursor-pointer flex-col items-start bg-transparent p-0 text-left"
                 >
                   <span className="font-mono text-sm">{formatTime(group.time)}</span>
@@ -95,16 +128,33 @@ export function AlarmCard({ side }: { side: Side }) {
             />
           )
         : !error && (
-            <Button icon={Plus} className="ml-auto" onClick={() => setEditorOpen(true)}>
+            <Button icon={Plus} className="ml-auto" onClick={() => openEditor(null)}>
               Add
             </Button>
           )}
       <AlarmEditor
         open={editorOpen}
-        onClose={() => setEditorOpen(false)}
+        onClose={closeEditor}
         side={side}
-        existingGroup={editGroup}
+        existingGroup={editing}
         onSaved={() => { void utils.schedules.getAll.invalidate() }}
+        onRequestDelete={(target) => {
+          closeEditor()
+          setPendingDelete(target)
+        }}
+      />
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete alarm?"
+        message={deleteAlarmMessage(pendingDelete?.days.length ?? 0, deleteError)}
+        confirmLabel={deleteError ? 'Retry' : 'Delete'}
+        variant="danger"
+        busy={batchUpdate.isPending}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          setPendingDelete(null)
+          setDeleteError(null)
+        }}
       />
     </Card>
   )
