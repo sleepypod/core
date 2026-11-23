@@ -110,6 +110,8 @@ the bridge resolves config in this order: `device_settings` row > env var > buil
 | HA discovery prefix | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` |
 | TLS | `MQTT_TLS` | `false` |
 | TLS allow self-signed | `MQTT_TLS_INSECURE` | `false` |
+| Presence hold (s) | `MQTT_PRESENCE_HOLD_SECONDS` | `0` |
+| Out-of-bed line (%) | `MQTT_PRESENCE_EXIT_PERCENT` | `50` |
 
 The URL scheme decides whether the connection is encrypted: `mqtts://` uses
 TLS, `mqtt://` is plain TCP. The TLS toggle does not upgrade an `mqtt://` URL;
@@ -130,6 +132,7 @@ both are on.
 | `<prefix>/<device-id>/state/biometrics/<side>` | pod → broker | latest HR / HRV / BR |
 | `<prefix>/<device-id>/state/environment/ambient` | pod → broker | `{"ts": <epoch_ms>, "temperature": <number\|null>, "humidity": <number\|null>}` (°C, %) |
 | `<prefix>/<device-id>/state/<side>/alarm` | pod → broker | `{"ts", "nextAlarm": <ISO\|null>, "time": "HH:mm", "day", "wakeWindowMinutes", "wakeWindowStart": <ISO\|null>, "ringing", "snoozedUntil": <ISO\|null>}` |
+| `<prefix>/<device-id>/state/<side>/presence` | pod → broker | `{"ts", "inBed": <bool\|null>, "since": <ISO\|null>, "raw": <bool\|null>, "load": <number\|null>, "threshold", "exitThreshold", "holdSeconds"}` |
 | `<prefix>/<device-id>/cmd/set-temperature` | broker → pod | `{"side","temperature","duration?"}` |
 | `<prefix>/<device-id>/cmd/set-power` | broker → pod | `{"side","powered","temperature?"}` |
 | `<prefix>/<device-id>/cmd/set-alarm` | broker → pod | `{"side","vibrationIntensity","vibrationPattern","duration"}` |
@@ -152,6 +155,43 @@ publish `cmd/snooze-alarm` and `cmd/clear-alarm`. A snooze works like tapping
 the bed: it lasts the ringing alarm's own snooze length (shortened by its
 snooze taper, kept within 1–30 min) and the alarm comes back with the same
 vibration. Put `duration` in the payload to snooze for a set time instead.
+
+### Bed presence
+
+Each side gets an **In bed** binary sensor (occupancy) and a **Bed load**
+sensor. The bridge reads the live capacitance sensor about twice a second
+and compares it with the sleep-detector's empty-bed baseline, so the sensor
+changes within a few seconds of getting in or out of bed, without the
+sleep-detector's 30 s wait.
+
+- `load` is the side's summed rise over its empty-bed level. Presence starts
+  above `threshold` and ends below `exitThreshold`, so a reading near the line
+  doesn't flap. `exitThreshold` is the **Out-of-bed line** (Settings → MQTT,
+  25–90% of `threshold`, default 50% as the sleep-detector uses). A mattress
+  just vacated can read well above its empty level for a minute or more
+  (warmth, compressed foam), so with the default line the exit can show 10–20 s
+  late. Raising the line reports it sooner; keep it under the lowest `load` you
+  see while asleep, or a sleeper who shifts can read as out.
+- `raw` is the sensor's reading right now. `inBed` is the same reading after
+  the **Presence hold** (Settings → MQTT, default off): a change counts once it
+  has lasted that long, so rolling onto the edge for a moment doesn't read as
+  leaving. `since` is when the current state began, not when it was reported.
+- With one sleeper (one side away, or a solo bed), the sleeper's side reads
+  the combined load of both sides, so lying across the middle still counts.
+  It also reads out of bed when that load collapses: under 30% of what it was
+  a minute earlier, by at least 2.5 thresholds, for 10 s. Getting up does
+  that; rolling over doesn't, since the load only moves. This catches an exit
+  that the line misses, such as pillows or bedding left on the bed or a
+  mattress slow to settle. The load left behind is then treated as empty
+  (`residual`), and getting back in counts from it. `residual` falls with the
+  load as the mattress settles or things are taken off, and is `null` on a
+  side without a single sleeper. The other side's sensor keeps its own
+  reading.
+- The state is unknown (`null`) while the sleep-detector isn't running or the
+  sensor stops reporting.
+
+An automation that should ignore a short trip out of bed can also add `for:`
+to its trigger, which leaves the sensor itself instant.
 
 Commands route through the same tRPC procedures the iOS app calls, so Zod
 input schemas validate every payload — the bridge cannot accidentally

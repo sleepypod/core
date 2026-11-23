@@ -76,6 +76,7 @@ function makeFrame(side: 'left' | 'right', values: number[]): LatestCapSenseSnap
     type: 'capSense2',
     ts: Math.floor(FIXED_NOW / 1000),
     receivedAtMs: FIXED_NOW - 500,
+    live: true,
     left: side === 'left' ? values : [14.45, 14.45, 13.65, 13.65, 19.3, 19.3, 1.157, 1.157],
     right: side === 'right' ? values : [14.45, 14.45, 13.65, 13.65, 19.3, 19.3, 1.157, 1.157],
   }
@@ -180,6 +181,7 @@ describe('getOccupancy', () => {
       type: 'capSense2',
       ts: Math.floor((FIXED_NOW - 60_000) / 1000),
       receivedAtMs: FIXED_NOW - 60_000, // 60s old → stale
+      live: true,
       left: [25, 25, 23, 23, 30, 30, 1.157, 1.157],
       right: [14.45, 14.45, 13.65, 13.65, 19.3, 19.3, 1.157, 1.157],
     }
@@ -196,6 +198,7 @@ describe('getOccupancy', () => {
     snapshot = {
       ...makeFrame('left', [25, 25, 23, 23, 30, 30, 1.157, 1.157]),
       receivedAtMs: FIXED_NOW - 30_000,
+      live: true,
     }
     calRows = [{ parameters: BASELINE_CAL }]
 
@@ -211,6 +214,7 @@ describe('getOccupancy', () => {
       type: 'capSense',
       ts: Math.floor(FIXED_NOW / 1000),
       receivedAtMs: FIXED_NOW - 500,
+      live: true,
       left: 2000,
       right: 100,
     }

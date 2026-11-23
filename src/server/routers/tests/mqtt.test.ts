@@ -60,6 +60,8 @@ describe('mqtt.getSettings', () => {
         haDiscovery: true,
         tlsEnabled: false,
         tlsInsecure: false,
+        presenceHoldSeconds: 15,
+        presenceExitPercent: 80,
       },
       sources: {
         enabled: 'db',
@@ -70,6 +72,8 @@ describe('mqtt.getSettings', () => {
         haDiscovery: 'default',
         tlsEnabled: 'default',
         tlsInsecure: 'default',
+        presenceHoldSeconds: 'db',
+        presenceExitPercent: 'db',
       },
     })
 
@@ -85,6 +89,8 @@ describe('mqtt.getSettings', () => {
       topicPrefix: 'sp',
       haDiscovery: true,
       tlsEnabled: false,
+      presenceHoldSeconds: 15,
+      presenceExitPercent: 80,
       sources: {
         enabled: 'db',
         url: 'db',
@@ -93,6 +99,8 @@ describe('mqtt.getSettings', () => {
         topicPrefix: 'default',
         haDiscovery: 'default',
         tlsEnabled: 'default',
+        presenceHoldSeconds: 'db',
+        presenceExitPercent: 'db',
       },
     })
     // The router never leaks the password field itself.
@@ -103,14 +111,14 @@ describe('mqtt.getSettings', () => {
     bridgeMock.resolveConfig.mockResolvedValue({
       config: {
         enabled: false, url: null, username: null, password: null,
-        topicPrefix: 'sp', haDiscovery: true, tlsEnabled: false, tlsInsecure: false,
+        topicPrefix: 'sp', haDiscovery: true, tlsEnabled: false, tlsInsecure: false, presenceHoldSeconds: 0, presenceExitPercent: 50,
       },
       // resolveConfig may report password source as 'env' if MQTT_PASSWORD was
       // checked; the router collapses absent passwords to 'default' so the UI
       // doesn't claim the value came from somewhere it didn't.
       sources: {
         enabled: 'default', url: 'default', username: 'default', password: 'env',
-        topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', tlsInsecure: 'default',
+        topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', tlsInsecure: 'default', presenceHoldSeconds: 'default', presenceExitPercent: 'default',
       },
     })
 
@@ -124,11 +132,11 @@ describe('mqtt.getSettings', () => {
     bridgeMock.resolveConfig.mockResolvedValue({
       config: {
         enabled: false, url: null, username: null, password: '',
-        topicPrefix: 'sp', haDiscovery: true, tlsEnabled: false, tlsInsecure: false,
+        topicPrefix: 'sp', haDiscovery: true, tlsEnabled: false, tlsInsecure: false, presenceHoldSeconds: 0, presenceExitPercent: 50,
       },
       sources: {
         enabled: 'default', url: 'default', username: 'default', password: 'db',
-        topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', tlsInsecure: 'default',
+        topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', tlsInsecure: 'default', presenceHoldSeconds: 'default', presenceExitPercent: 'default',
       },
     })
 
@@ -142,11 +150,11 @@ describe('mqtt.getSettings', () => {
     bridgeMock.resolveConfig.mockResolvedValue({
       config: {
         enabled: false, url: null, username: null, password: 'secret',
-        topicPrefix: 'sp', haDiscovery: true, tlsEnabled: false, tlsInsecure: false,
+        topicPrefix: 'sp', haDiscovery: true, tlsEnabled: false, tlsInsecure: false, presenceHoldSeconds: 0, presenceExitPercent: 50,
       },
       sources: {
         enabled: 'default', url: 'default', username: 'default', password: 'env',
-        topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', tlsInsecure: 'default',
+        topicPrefix: 'default', haDiscovery: 'default', tlsEnabled: 'default', tlsInsecure: 'default', presenceHoldSeconds: 'default', presenceExitPercent: 'default',
       },
     })
 
@@ -176,6 +184,7 @@ describe('mqtt.updateSettings — field discrimination', () => {
     expect(updates).not.toHaveProperty('mqttTopicPrefix')
     expect(updates).not.toHaveProperty('mqttHaDiscovery')
     expect(updates).not.toHaveProperty('mqttTlsEnabled')
+    expect(updates).not.toHaveProperty('mqttPresenceHoldSeconds')
   })
 
   it('null clears a field (password → mqttPassword: null)', async () => {
@@ -220,6 +229,32 @@ describe('mqtt.updateSettings — field discrimination', () => {
     const updates = dbMock.setSpy.mock.calls[0][0]
     expect(updates).toMatchObject({ mqttEnabled: true, updatedAt: expect.any(Date) })
     expect(updates).not.toHaveProperty('mqttUrl')
+  })
+
+  it('writes the presence hold, and null clears it back to env/default', async () => {
+    await caller.updateSettings({ presenceHoldSeconds: 15 })
+    expect(dbMock.setSpy.mock.calls[0][0]).toMatchObject({ mqttPresenceHoldSeconds: 15 })
+    await caller.updateSettings({ presenceHoldSeconds: 0 })
+    expect(dbMock.setSpy.mock.calls[1][0]).toMatchObject({ mqttPresenceHoldSeconds: 0 })
+    await caller.updateSettings({ presenceHoldSeconds: null })
+    expect(dbMock.setSpy.mock.calls[2][0]).toMatchObject({ mqttPresenceHoldSeconds: null })
+  })
+
+  it('writes the out-of-bed line, and null clears it back to env/default', async () => {
+    await caller.updateSettings({ presenceExitPercent: 80 })
+    expect(dbMock.setSpy.mock.calls[0][0]).toMatchObject({ mqttPresenceExitPercent: 80 })
+    await caller.updateSettings({ presenceExitPercent: null })
+    expect(dbMock.setSpy.mock.calls[1][0]).toMatchObject({ mqttPresenceExitPercent: null })
+  })
+
+  it.each([20, 95, 52.5])('rejects an out-of-bed line of %s%%', async (presenceExitPercent) => {
+    await expect(caller.updateSettings({ presenceExitPercent })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(dbMock.setSpy).not.toHaveBeenCalled()
+  })
+
+  it.each([-1, 601, 2.5])('rejects a presence hold of %s seconds', async (presenceHoldSeconds) => {
+    await expect(caller.updateSettings({ presenceHoldSeconds })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(dbMock.setSpy).not.toHaveBeenCalled()
   })
 
   it('preserves haDiscovery=true rather than treating it as a nullish clear', async () => {

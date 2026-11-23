@@ -1,0 +1,1 @@
+ALTER TABLE `device_settings` ADD `mqtt_presence_hold_seconds` integer;

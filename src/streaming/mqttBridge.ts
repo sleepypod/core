@@ -22,6 +22,7 @@
  *   <prefix>/<device-id>/state/environment/ambient   — ambient temp (°C) + humidity (%)
  *   <prefix>/<device-id>/state/<side>/alarm          — next alarm (ISO time, set time, day,
  *                                                      wake window), snooze and ringing state
+ *   <prefix>/<device-id>/state/<side>/presence       — in bed, raw sensor reading and load
  *   <prefix>/<device-id>/cmd/set-temperature         — JSON {side, temperature, duration?}
  *   <prefix>/<device-id>/cmd/set-power               — JSON {side, powered, temperature?}
  *   <prefix>/<device-id>/cmd/set-alarm               — JSON {side, vibrationIntensity, vibrationPattern, duration}
@@ -45,7 +46,20 @@ import { alarmSchedules, deviceSettings, deviceState, sideSettings } from '@/src
 import { bedTemp, flowReadings, vitals } from '@/src/db/biometrics-schema'
 import { getPumpStallNotice } from '@/src/hardware/pumpStallNotification'
 import { centiDegreesToC, centiPercentToPercent } from '@/src/lib/tempUtils'
-import { onServerFrame } from './piezoStream'
+import { getLatestCapSenseSnapshot, onServerFrame } from './piezoStream'
+import { activeSleeperSides, type BedState } from '@/src/lib/singleSleeper'
+import {
+  bedLoad,
+  EXIT_FRACTION,
+  CollapsePresence,
+  instantPresence,
+  MAX_EXIT_PERCENT,
+  MAX_PRESENCE_HOLD_SECONDS,
+  MIN_EXIT_PERCENT,
+  PresenceHold,
+  readPresenceBaselines,
+  type PresenceBaseline,
+} from '@/src/lib/bedPresence'
 import { getDacMonitorIfRunning } from '@/src/hardware/dacMonitor.instance'
 import { getSnoozeStatus } from '@/src/hardware/snoozeManager'
 import { nextSnoozeSeconds } from '@/src/hardware/snoozeLength'
@@ -61,6 +75,12 @@ const STATE_PUBLISH_INTERVAL_MS = 30_000
 const RECONNECT_PERIOD_MS = 5_000
 const CONNECT_TIMEOUT_MS = 10_000
 const TEST_CONNECT_TIMEOUT_MS = 5_000
+/** capSense arrives at ~2 Hz; sample the latest reading at that rate. */
+const PRESENCE_SAMPLE_MS = 500
+/** No capSense reading for this long: presence is unknown. */
+const PRESENCE_FRAME_STALE_MS = 30_000
+/** The largest epoch ms a Date can hold. */
+const MAX_DATE_MS = 8.64e15
 
 export type ConfigSource = 'db' | 'env' | 'default'
 
@@ -73,6 +93,10 @@ export interface ResolvedMqttConfig {
   haDiscovery: boolean
   tlsEnabled: boolean
   tlsInsecure: boolean
+  /** Seconds a bed presence change must last before it is reported. */
+  presenceHoldSeconds: number
+  /** Presence leaves below this percent of the threshold. */
+  presenceExitPercent: number
 }
 
 export interface ResolvedMqttSources {
@@ -84,6 +108,8 @@ export interface ResolvedMqttSources {
   haDiscovery: ConfigSource
   tlsEnabled: ConfigSource
   tlsInsecure: ConfigSource
+  presenceHoldSeconds: ConfigSource
+  presenceExitPercent: ConfigSource
 }
 
 function envBool(value: string | undefined): boolean | null {
@@ -107,6 +133,8 @@ export async function resolveConfig(): Promise<{
   const envHaDiscovery = envBool(process.env.MQTT_HA_DISCOVERY)
   const envTls = envBool(process.env.MQTT_TLS)
   const envTlsInsecure = envBool(process.env.MQTT_TLS_INSECURE)
+  const envHold = Number.parseInt(process.env.MQTT_PRESENCE_HOLD_SECONDS ?? '', 10)
+  const envExit = Number.parseInt(process.env.MQTT_PRESENCE_EXIT_PERCENT ?? '', 10)
 
   const pick = <T>(dbVal: T | null | undefined, envVal: T | null, fallback: T): { value: T, source: ConfigSource } => {
     if (dbVal !== null && dbVal !== undefined) return { value: dbVal, source: 'db' }
@@ -122,6 +150,10 @@ export async function resolveConfig(): Promise<{
   const haDiscovery = pick<boolean>(row?.mqttHaDiscovery ?? null, envHaDiscovery, true)
   const tlsEnabled = pick<boolean>(row?.mqttTlsEnabled ?? null, envTls, false)
   const tlsInsecure = pick<boolean>(row?.mqttTlsInsecure ?? null, envTlsInsecure, false)
+  const presenceHold = pick<number>(row?.mqttPresenceHoldSeconds ?? null, Number.isFinite(envHold) ? envHold : null, 0)
+  const presenceHoldSeconds = Math.min(MAX_PRESENCE_HOLD_SECONDS, Math.max(0, presenceHold.value))
+  const presenceExit = pick<number>(row?.mqttPresenceExitPercent ?? null, Number.isFinite(envExit) ? envExit : null, EXIT_FRACTION * 100)
+  const presenceExitPercent = Math.min(MAX_EXIT_PERCENT, Math.max(MIN_EXIT_PERCENT, presenceExit.value))
 
   return {
     config: {
@@ -133,6 +165,8 @@ export async function resolveConfig(): Promise<{
       haDiscovery: haDiscovery.value,
       tlsEnabled: tlsEnabled.value,
       tlsInsecure: tlsInsecure.value,
+      presenceHoldSeconds,
+      presenceExitPercent,
     },
     sources: {
       enabled: enabled.source,
@@ -143,6 +177,8 @@ export async function resolveConfig(): Promise<{
       haDiscovery: haDiscovery.source,
       tlsEnabled: tlsEnabled.source,
       tlsInsecure: tlsInsecure.source,
+      presenceHoldSeconds: presenceHold.source,
+      presenceExitPercent: presenceExit.source,
     },
   }
 }
@@ -182,6 +218,38 @@ interface BridgeState {
   ringingInFlight: Record<'left' | 'right', boolean | null>
   /** Ringing the latest status frame reported, published once nothing is in flight. */
   ringingWanted: Record<'left' | 'right', boolean | null>
+  presenceTimer: ReturnType<typeof setInterval> | null
+  presence: PresenceTracking
+}
+
+type PresenceSide = 'left' | 'right'
+
+interface PresenceTracking {
+  baselines: Record<PresenceSide, PresenceBaseline | null>
+  modes: BedState | null
+  holds: Record<PresenceSide, PresenceHold>
+  /** Each side's own instant reading (before merging and the hold). */
+  raw: Record<PresenceSide, boolean | null>
+  load: Record<PresenceSide, number | null>
+  /** A single sleeper's side, and its presence from both sides' combined load. */
+  solo: { side: PresenceSide, presence: CollapsePresence } | null
+  /** receivedAtMs of the capSense reading last sampled. */
+  lastFrameAt: number | null
+  /** What each presence topic last carried, so unchanged samples aren't republished. */
+  published: Record<PresenceSide, string | null>
+}
+
+function newPresenceTracking(holdSeconds = 0): PresenceTracking {
+  return {
+    baselines: { left: null, right: null },
+    modes: null,
+    holds: { left: new PresenceHold(holdSeconds * 1000), right: new PresenceHold(holdSeconds * 1000) },
+    raw: { left: null, right: null },
+    load: { left: null, right: null },
+    solo: null,
+    lastFrameAt: null,
+    published: { left: null, right: null },
+  }
 }
 
 const state: BridgeState = {
@@ -196,6 +264,8 @@ const state: BridgeState = {
   lastRinging: { left: null, right: null },
   ringingInFlight: { left: null, right: null },
   ringingWanted: { left: null, right: null },
+  presenceTimer: null,
+  presence: newPresenceTracking(),
 }
 
 export interface BridgeStatus {
@@ -518,6 +588,36 @@ function publishHaDiscovery(): void {
     button('snooze_alarm', 'snooze alarm', 'snooze-alarm', 'mdi:alarm-snooze')
     button('stop_alarm', 'stop alarm', 'clear-alarm', 'mdi:alarm-off')
   }
+
+  // Bed presence: the in-bed state (after the optional hold), with the raw
+  // sensor reading and load as attributes, plus the load as its own sensor.
+  for (const side of ['left', 'right'] as const) {
+    const label = side === 'left' ? 'Left' : 'Right'
+    const presenceTopic = topic('state', side, 'presence')
+    safePublish(
+      `${haPrefix}/binary_sensor/${id}/${side}_in_bed/config`,
+      JSON.stringify({
+        name: `${label} in bed`,
+        unique_id: `${id}_${side}_in_bed`,
+        availability_topic: availability,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+        state_topic: presenceTopic,
+        value_template: '{{ \'on\' if value_json.inBed == true else (\'off\' if value_json.inBed == false else \'None\') }}',
+        payload_on: 'on',
+        payload_off: 'off',
+        json_attributes_topic: presenceTopic,
+        device_class: 'occupancy',
+        icon: 'mdi:bed',
+        device: dev,
+      }),
+      RETAINED_QOS_0,
+    )
+    const load = sensor(`${side}_bed_load`, `${label} bed load`, presenceTopic,
+      '{{ value_json.load if value_json.load is not none else \'None\' }}')
+    load.icon = 'mdi:weight'
+    safePublish(`${haPrefix}/sensor/${id}/${side}_bed_load/config`, JSON.stringify(load), RETAINED_QOS_0)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -656,6 +756,127 @@ async function publishState(): Promise<void> {
     )
     safePublish(topic('pump', side, 'clog_detected'), 'off', RETAINED_QOS_0)
   }
+
+  await refreshPresenceInputs()
+  for (const side of ['left', 'right'] as const) publishPresence(side, true)
+}
+
+// ---------------------------------------------------------------------------
+// Bed presence
+// ---------------------------------------------------------------------------
+
+/** Re-read the empty-bed baselines and the bed mode; both change slowly. */
+async function refreshPresenceInputs(): Promise<void> {
+  try {
+    state.presence.baselines = await readPresenceBaselines()
+  }
+  catch (err) {
+    console.warn('[mqtt] presence baseline read failed:', err instanceof Error ? err.message : err)
+  }
+  try {
+    const [settings] = await db.select({ bedMode: deviceSettings.bedMode, unusedZoneMode: deviceSettings.unusedZoneMode }).from(deviceSettings).limit(1)
+    const sides = await db.select({ side: sideSettings.side, awayMode: sideSettings.awayMode }).from(sideSettings)
+    state.presence.modes = {
+      bedMode: settings?.bedMode,
+      unusedZoneMode: settings?.unusedZoneMode,
+      ...Object.fromEntries(sides.map(r => [r.side, { awayMode: r.awayMode }])),
+    }
+  }
+  catch (err) {
+    console.warn('[mqtt] presence bed mode read failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+/**
+ * Evaluate the latest capacitance reading against each side's empty-bed
+ * baseline, and publish a side's presence topic as soon as its state changes.
+ * With a single sleeper (one active side) the sleeper's side reads the
+ * combined load of both sides, so rolling across the middle doesn't matter,
+ * and leaving shows as that load collapsing (see CollapsePresence).
+ */
+function samplePresence(now = Date.now()): void {
+  const p = state.presence
+  const snap = getLatestCapSenseSnapshot()
+  // A frame replayed from a RAW backlog is received now but was read earlier,
+  // so only a live frame can show a change.
+  const live = snap !== null && snap.live
+  const fresh = live && now - snap.receivedAtMs <= PRESENCE_FRAME_STALE_MS
+  if (fresh && snap.receivedAtMs === p.lastFrameAt) return
+  // Switching RAW files clears the reading, then replays the new file's
+  // backlog; keep the last state through that gap rather than flash unknown.
+  if (!live && p.lastFrameAt !== null && now - p.lastFrameAt <= PRESENCE_FRAME_STALE_MS) return
+  p.lastFrameAt = fresh ? snap.receivedAtMs : null
+  const at = fresh ? frameTime(snap.ts, now) : now
+
+  const exitFraction = exitPercent() / 100
+  const loads = { left: null as number | null, right: null as number | null }
+  for (const side of ['left', 'right'] as const) {
+    const baseline = p.baselines[side]
+    const load = fresh && baseline ? bedLoad(snap.type, snap[side], baseline) : null
+    loads[side] = load
+    p.load[side] = load
+    p.raw[side] = load === null || !baseline ? null : instantPresence(load, baseline.threshold, p.raw[side] === true, exitFraction)
+  }
+
+  const active = activeSleeperSides(p.modes)
+  const home = active.length === 1 ? active[0] : null
+  if (p.solo?.side !== home) p.solo = home ? { side: home, presence: new CollapsePresence() } : null
+  if (p.solo) {
+    const other = p.solo.side === 'left' ? 'right' : 'left'
+    const threshold = p.baselines[p.solo.side]?.threshold ?? p.baselines[other]?.threshold
+    const { left, right } = loads
+    if (left !== null && right !== null && threshold !== undefined) {
+      const combined = p.solo.presence.update(left + right, at, threshold, exitFraction)
+      p.load[p.solo.side] = combined.load
+      p.raw[p.solo.side] = combined.present
+    }
+    else {
+      // One side unreadable: the combined series breaks, so start it over and
+      // read the sleeper from whichever side remains.
+      p.solo.presence.reset()
+      const own = p.raw[p.solo.side]
+      p.raw[p.solo.side] = own === true || p.raw[other] === true ? true : own ?? p.raw[other]
+      p.load[p.solo.side] = p.load[p.solo.side] ?? p.load[other]
+    }
+  }
+
+  for (const side of ['left', 'right'] as const) {
+    p.holds[side].update(p.raw[side], at)
+    publishPresence(side)
+  }
+}
+
+/** A frame's unix-seconds timestamp in ms, or `fallback` when it isn't a usable date. */
+function frameTime(ts: number, fallback: number): number {
+  const ms = Math.round(ts * 1000)
+  return Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS ? ms : fallback
+}
+
+function exitPercent(): number {
+  return state.resolved?.presenceExitPercent ?? EXIT_FRACTION * 100
+}
+
+/** Publish one side's presence; `force` republishes an unchanged state (periodic refresh). */
+function publishPresence(side: PresenceSide, force = false): void {
+  if (!state.client?.connected) return
+  const p = state.presence
+  const { inBed, since } = p.holds[side].current
+  const key = JSON.stringify([inBed, since, p.raw[side]])
+  if (!force && key === p.published[side]) return
+  p.published[side] = key
+  const baseline = p.baselines[side]
+  const load = p.load[side]
+  safePublish(topic('state', side, 'presence'), JSON.stringify({
+    ts: Date.now(),
+    inBed,
+    since: since !== null ? new Date(since).toISOString() : null,
+    raw: p.raw[side],
+    load: load !== null ? Math.round(load * 10) / 10 : null,
+    threshold: baseline?.threshold ?? null,
+    exitThreshold: baseline ? Math.round(baseline.threshold * exitPercent()) / 100 : null,
+    holdSeconds: state.resolved?.presenceHoldSeconds ?? 0,
+    residual: p.solo?.side === side ? Math.round(p.solo.presence.residual * 10) / 10 : null,
+  }), RETAINED_QOS_0)
 }
 
 /**
@@ -883,6 +1104,7 @@ export async function startMqttBridge(): Promise<void> {
 
   const { config } = await resolveConfig()
   state.resolved = config
+  state.presence = newPresenceTracking(config.presenceHoldSeconds)
 
   if (!config.enabled) {
     console.log('[mqtt] disabled (set mqtt_enabled=true in device_settings or MQTT_ENABLED=true)')
@@ -960,6 +1182,10 @@ export async function startMqttBridge(): Promise<void> {
     void publishState()
   }, STATE_PUBLISH_INTERVAL_MS)
 
+  // Bed presence follows the live capacitance stream, not the 30 s refresh.
+  void refreshPresenceInputs()
+  state.presenceTimer = setInterval(() => samplePresence(), PRESENCE_SAMPLE_MS)
+
   // React to live status frames so HA sees temperature changes immediately
   // rather than waiting for the periodic re-publish.
   state.unsubscribeFrame = onServerFrame((frame) => {
@@ -1011,6 +1237,10 @@ export async function shutdownMqttBridge(): Promise<void> {
     clearInterval(state.publishTimer)
     state.publishTimer = null
   }
+  if (state.presenceTimer) {
+    clearInterval(state.presenceTimer)
+    state.presenceTimer = null
+  }
   if (state.unsubscribeFrame) {
     try {
       state.unsubscribeFrame()
@@ -1057,4 +1287,6 @@ export const __test__ = {
   slugify,
   parsePayload,
   state,
+  samplePresence,
+  refreshPresenceInputs,
 }
