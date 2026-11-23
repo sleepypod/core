@@ -65,7 +65,7 @@ describe('runtime recovery across builds', () => {
   it('preserves pinned intent and rollback history during fallback, including after biometric reset', () => {
     const revision = activate(true)
     if (!revision) throw new Error('Missing revision')
-    configRaw.prepare('UPDATE biometric_profile_revisions SET base_manifest_hash = ? WHERE id = ?').run('previous-build', revision.id)
+    configRaw.prepare('UPDATE biometric_profile_revisions SET resolved_hash = ? WHERE id = ?').run('corrupt', revision.id)
     expect(tickBiometricRuntime(config, bio, now).errors).toEqual([])
     const binding = new ProfileStore(config).binding('left')
     expect(binding).toMatchObject({ desiredRevisionId: revision.id, previousRevisionId: null, generation: 2 })
@@ -84,9 +84,9 @@ describe('runtime recovery across builds', () => {
   it('restores a compatible-again pinned revision at the next session, never silently rewriting old snapshots', () => {
     const revision = activate(true)
     if (!revision) throw new Error('Missing revision')
-    configRaw.prepare('UPDATE biometric_profile_revisions SET base_manifest_hash = ?').run('previous-build')
+    configRaw.prepare('UPDATE biometric_profile_revisions SET resolved_hash = ?').run('corrupt')
     recoverRuntimeIntent(config, 'left', now)
-    configRaw.prepare('UPDATE biometric_profile_revisions SET base_manifest_hash = ?').run(manifestHash)
+    configRaw.prepare('UPDATE biometric_profile_revisions SET resolved_hash = ?').run(revision.resolvedHash)
     const restored = recoverRuntimeIntent(config, 'left', now)
     expect(restored?.evidence).toMatchObject({ status: 'profile_restored', actualRevisionId: revision.id })
     expect(config.select().from(configSchema.biometricConfigOutbox).all().find(row => row.generation === 3)?.payload)
@@ -121,5 +121,99 @@ describe('runtime recovery across builds', () => {
     expect(new ProfileStore(config).binding('left').generation).toBe(1)
     expect(config.select().from(configSchema.biometricActivationEvents).all()).toHaveLength(1)
     expect(config.select().from(configSchema.biometricConfigOutbox).get()?.state).toBe('pending')
+  })
+})
+
+/** A revision saved by an earlier build, with overrides that build accepted. */
+function pinnedToPreviousBuild(overrides: Array<{ path: string, value: unknown }>) {
+  const revision = activate(true)
+  if (!revision) throw new Error('Missing revision')
+  configRaw.prepare('UPDATE biometric_profile_revisions SET base_manifest_hash = ?, overrides = ? WHERE id = ?')
+    .run('previous-build', JSON.stringify(overrides), revision.id)
+  obsoleteProjection()
+  return revision
+}
+function events() {
+  return config.select().from(configSchema.biometricActivationEvents).all()
+}
+function payload(generation: number) {
+  return config.select().from(configSchema.biometricConfigOutbox).all().find(row => row.generation === generation)?.payload
+}
+describe('rebasing a pinned profile onto a new engine', () => {
+  const tolerance = { path: 'heart_rate.trackingToleranceBpm', value: 20 }
+  const retired = { path: 'heart_rate.retiredKnob', value: 3 }
+  const outOfRange = { path: 'breathing_rate.intervalLowerRatio', value: 5 }
+
+  it('carries a fully compatible profile over immediately with no warning', () => {
+    const original = pinnedToPreviousBuild([tolerance])
+    expect(tickBiometricRuntime(config, bio, now).errors).toEqual([])
+    const profiles = new ProfileStore(config)
+    const binding = profiles.binding('left')
+    expect(binding).toMatchObject({ generation: 2, previousRevisionId: null })
+    const rebased = profiles.getRevision(binding.desiredRevisionId ?? '')
+    expect(rebased).toMatchObject({ origin: 'migration', requester: 'engine-rebase', parentRevisionId: original.id, familyId: original.familyId,
+      baseManifestHash: manifestHash, overrides: [tolerance], resolvedHash: original.resolvedHash })
+    expect(events().find(row => row.generation === 2)).toMatchObject({ action: 'fallback', previousRevisionId: original.id, nextRevisionId: rebased.id,
+      nextHash: original.resolvedHash, reason: 'Pinned profile rebased onto this build with every override kept',
+      evidence: { status: 'profile_rebased', rebasedFromRevisionId: original.id, actualRevisionId: rebased.id, droppedOverrides: [], warning: null } })
+    expect(payload(2)).toMatchObject({ revisionId: rebased.id, resolvedHash: original.resolvedHash, boundary: 'immediate' })
+    expect(profiles.effective('left')).toMatchObject({ isDefault: false, warning: null, hash: original.resolvedHash,
+      rebase: { sourceRevisionId: original.id, droppedPaths: [] } })
+    tickBiometricRuntime(config, bio, now + 1)
+    expect(profiles.binding('left').generation).toBe(2)
+    expect(config.select().from(configSchema.biometricProfileRevisions).all()).toHaveLength(2)
+  })
+
+  it('activates the compatible subset of a partly compatible profile and names every dropped path', () => {
+    const original = pinnedToPreviousBuild([tolerance, retired, outOfRange])
+    const event = recoverRuntimeIntent(config, 'left', now)
+    const profiles = new ProfileStore(config)
+    const rebased = profiles.getRevision(profiles.binding('left').desiredRevisionId ?? '')
+    expect(rebased.overrides).toEqual([tolerance])
+    expect(event).toMatchObject({ nextRevisionId: rebased.id, reason: 'Pinned profile rebased onto this build without heart_rate.retiredKnob, breathing_rate.intervalLowerRatio',
+      evidence: { status: 'profile_rebased', rebasedFromRevisionId: original.id,
+        warning: 'PROFILE_REBASED: dropped overrides this build rejects: heart_rate.retiredKnob, breathing_rate.intervalLowerRatio',
+        droppedOverrides: [{ path: retired.path, reason: 'Unknown override path: heart_rate.retiredKnob' },
+          { path: outOfRange.path, reason: 'Invalid biometric parameter: breathing_rate.intervalLowerRatio' }] } })
+    expect(payload(2)).toMatchObject({ revisionId: rebased.id, boundary: 'immediate', resolved: { heart_rate: { trackingToleranceBpm: 20 } } })
+    expect(profiles.effective('left')).toMatchObject({ isDefault: false, warning: null,
+      rebase: { sourceRevisionId: original.id, droppedPaths: [retired.path, outOfRange.path] } })
+  })
+
+  it('keeps an incompatible profile pinned, on defaults, with every path named instead of a silent fallback', () => {
+    const original = pinnedToPreviousBuild([retired, outOfRange])
+    const event = recoverRuntimeIntent(config, 'left', now)
+    const profiles = new ProfileStore(config)
+    const desired = profiles.effective('left')
+    expect(desired).toMatchObject({ isDefault: false, warning: null, hash: configHash(defaultConfig),
+      rebase: { sourceRevisionId: original.id, droppedPaths: [retired.path, outOfRange.path] } })
+    expect(profiles.getRevision(desired.binding.desiredRevisionId ?? '').overrides).toEqual([])
+    expect(event?.evidence).toMatchObject({ status: 'profile_rebased', droppedOverrides: [{ path: retired.path }, { path: outOfRange.path }] })
+  })
+
+  it('rebases again from the authored profile on the next deploy, so the warning lasts while paths stay dropped', () => {
+    const original = pinnedToPreviousBuild([tolerance, retired])
+    recoverRuntimeIntent(config, 'left', now)
+    const first = new ProfileStore(config).binding('left').desiredRevisionId
+    configRaw.prepare('UPDATE biometric_profile_revisions SET base_manifest_hash = ? WHERE id = ?').run('second-build', first)
+    configRaw.prepare('UPDATE biometric_profile_revisions SET idempotency_key = ? WHERE id = ?').run('engine-rebase:earlier-build', first)
+    const event = recoverRuntimeIntent(config, 'left', now + 1)
+    const profiles = new ProfileStore(config)
+    const second = profiles.getRevision(profiles.binding('left').desiredRevisionId ?? '')
+    expect(second.id).not.toBe(first)
+    expect(second.parentRevisionId).toBe(original.id)
+    expect(event?.evidence).toMatchObject({ status: 'profile_rebased', requestedRevisionId: first, rebasedFromRevisionId: original.id, droppedOverrides: [{ path: retired.path }] })
+    expect(profiles.effective('left').rebase).toEqual({ sourceRevisionId: original.id, droppedPaths: [retired.path] })
+  })
+
+  it('returns to the authored revision itself when an engine accepts it again', () => {
+    const original = pinnedToPreviousBuild([tolerance])
+    recoverRuntimeIntent(config, 'left', now)
+    const rebased = new ProfileStore(config).binding('left').desiredRevisionId
+    configRaw.prepare('UPDATE biometric_profile_revisions SET base_manifest_hash = ? WHERE id = ?').run('other-build', rebased)
+    configRaw.prepare('UPDATE biometric_profile_revisions SET base_manifest_hash = ? WHERE id = ?').run(manifestHash, original.id)
+    const event = recoverRuntimeIntent(config, 'left', now + 1)
+    expect(event).toMatchObject({ previousRevisionId: rebased, nextRevisionId: original.id, evidence: { status: 'profile_rebased', droppedOverrides: [] } })
+    expect(new ProfileStore(config).effective('left')).toMatchObject({ warning: null, rebase: null, binding: { desiredRevisionId: original.id } })
   })
 })

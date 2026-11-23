@@ -1,17 +1,21 @@
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { z } from 'zod'
 import { extractBundle, verifyBundle } from './bundle'
 import { candidateFileSchema, defaultPythonLocation, fitCandidates, LOCAL_SPLITS, type Candidate, type LocalSplit } from './fit'
 import { DEFAULT_GRID, expandGrid } from './grid'
-import { compareWithPod, parseLocalReport, rankCandidates, rankingMarkdown } from './report'
+import { compareWithPod, parseLocalReport, RANK_KEYS, rankCandidates, rankingMarkdown, type RankKey } from './report'
+import { nightSchema, profileFileSchema, replayArchive } from './replay'
 
 const usage = `Usage:
   verify BUNDLE
-  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--include-holdout] [--save-readings] [--min-coverage 0.75] [--protocol FILE] [--python PATH]
+  fit BUNDLE CANDIDATES.json OUTPUT_DIR [--jobs N] [--splits tuning,validation] [--include-holdout] [--save-readings] [--min-coverage 0.75] [--rank hr|breathing] [--protocol FILE] [--python PATH]
   sweep BUNDLE GRID.json|default OUTPUT_DIR [same options as fit]
   parity OUTPUT_DIR POD_RESULT.json [POD_RESULT.json ...]
-BUNDLE is the tar from GET /api/biometric-tuning/datasets/{id}/export, or a directory extracted from it.`
+  replay --archive DEST/POD_ID --nights YYYY-MM-DD,...|all --side left|right --config PROFILE.json|defaults OUTPUT_DIR [--jobs N] [--export NIGHT=PATH.tar.gz ...] [--timezone IANA] [--compare-stored] [--python PATH]
+BUNDLE is the tar from GET /api/biometric-tuning/datasets/{id}/export, or a directory extracted from it.
+DEST/POD_ID is a pnpm biometrics:archive pull destination; --export takes a GET /api/export/archive tarball for a night the archive has no RAW for.`
 
 function options(args: string[]) {
   const values: Record<string, string> = {}
@@ -22,6 +26,63 @@ function options(args: string[]) {
     else positional.push(args[index])
   }
   return { values, positional }
+}
+
+const replayArgsSchema = z.object({
+  archive: z.string({ error: '--archive is required' }).min(1),
+  nights: z.string({ error: '--nights is required' }).transform(value => value === 'all' ? 'all' as const : value.split(','))
+    .pipe(z.union([z.literal('all'), z.array(nightSchema).min(1)])),
+  side: z.enum(['left', 'right'], { error: '--side is left or right' }),
+  config: z.string({ error: '--config is required' }).min(1),
+  jobs: z.coerce.number().int('--jobs is a positive whole number of parallel replays').positive('--jobs is a positive whole number of parallel replays').optional(),
+  export: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}=.+$/, '--export is NIGHT=PATH.tar.gz')).default([])
+    .refine(rows => new Set(rows.map(row => row.slice(0, 10))).size === rows.length, 'Give one --export per night'),
+  timezone: z.string().refine((value) => {
+    try {
+      new Intl.DateTimeFormat('en-CA', { timeZone: value })
+      return true
+    }
+    catch {
+      return false
+    }
+  }, '--timezone is an IANA zone such as America/Los_Angeles').default(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
+  compareStored: z.boolean(),
+  python: z.string().min(1).optional(),
+  output: z.string({ error: 'OUTPUT_DIR is required' }).min(1),
+}).strict()
+
+function replayOptions(args: string[]) {
+  const values: Record<string, unknown> = { compareStored: false }
+  const exports: string[] = []
+  const positional: string[] = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (arg === '--compare-stored') values.compareStored = true
+    else if (arg === '--export' && index + 1 < args.length) exports.push(args[++index])
+    else if (['--archive', '--nights', '--side', '--config', '--jobs', '--timezone', '--python'].includes(arg) && index + 1 < args.length) values[arg.slice(2)] = args[++index]
+    else if (arg.startsWith('--')) throw new Error(`Unknown or incomplete option: ${arg}\n${usage}`)
+    else positional.push(arg)
+  }
+  if (positional.length > 1) throw new Error(`Give one OUTPUT_DIR\n${usage}`)
+  return { ...values, export: exports, output: positional[0] }
+}
+
+async function replay(args: string[]) {
+  const parsed = replayArgsSchema.safeParse(replayOptions(args))
+  if (!parsed.success) throw new Error(`${parsed.error.issues.map(issue => issue.message).join('; ')}\n${usage}`)
+  const flags = parsed.data
+  const overrides = flags.config === 'defaults' ? [] : profileFileSchema.parse(await readJson(flags.config))
+  const outputDirectory = resolve(flags.output)
+  await mkdir(outputDirectory, { recursive: true })
+  const manifest = await replayArchive({ archiveDirectory: resolve(flags.archive), nights: flags.nights, side: flags.side,
+    config: { source: flags.config === 'defaults' ? 'defaults' : resolve(flags.config), overrides }, outputDirectory, timezone: flags.timezone,
+    exports: new Map(flags.export.map(row => [row.slice(0, 10), resolve(row.slice(11))])), jobs: flags.jobs, compareStored: flags.compareStored,
+    python: flags.python ? defaultPythonLocation(flags.python) : undefined, onProgress: line => process.stderr.write(`${line}\n`) })
+  process.stdout.write(`${JSON.stringify({ nights: manifest.nights.length, skipped: manifest.skipped.length, configHash: manifest.config.configHash,
+    manifestHash: manifest.engine.manifestHash, ...(manifest.parity ? { parity: manifest.parity } : {}),
+    totalMinutes: Number((manifest.totalWallMs / 60000).toFixed(1)) })}\n`)
+  if (manifest.parity && !manifest.parity.passed) process.exitCode = 2
+  return manifest
 }
 
 async function readJson(path: string) {
@@ -47,6 +108,8 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
   if (minimumCoverage !== undefined && !(Number.isFinite(minimumCoverage) && minimumCoverage >= 0 && minimumCoverage <= 1)) {
     throw new Error('--min-coverage is a fraction from 0 to 1, for example 0.75')
   }
+  const rank = (flags.rank ?? 'hr') as RankKey
+  if (!RANK_KEYS.includes(rank)) throw new Error('--rank is hr or breathing')
   await mkdir(outputDirectory, { recursive: true })
   const bundle = await openBundle(bundlePath, outputDirectory)
   const includeHoldout = flags['include-holdout'] === 'true'
@@ -62,7 +125,7 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
     await mkdir(join(outputDirectory, report.candidate.id), { recursive: true })
     await writeFile(join(outputDirectory, report.candidate.id, `${report.split}.json`), `${JSON.stringify(report)}\n`)
   }
-  const ranking = rankCandidates(result.reports, minimumCoverage)
+  const ranking = rankCandidates(result.reports, minimumCoverage, rank)
   await writeFile(join(outputDirectory, 'ranking.json'), `${JSON.stringify(ranking, null, 2)}\n`)
   await writeFile(join(outputDirectory, 'ranking.md'), rankingMarkdown(ranking))
   const totalWallMs = performance.now() - started
@@ -76,6 +139,7 @@ async function fit(bundlePath: string, candidates: Candidate[], outputDirectory:
 
 export async function runLocalFitCli(args: string[]) {
   const [command, ...rest] = args
+  if (command === 'replay') return replay(rest)
   const { values, positional } = options(rest)
   if (command === 'verify' && positional.length === 1) {
     const path = positional[0]

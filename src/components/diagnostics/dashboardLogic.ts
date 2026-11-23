@@ -74,13 +74,28 @@ export interface MaintenanceFacts {
 
 const PRIME_STALE_MS = 7 * 24 * HOUR
 
+/** A cover frame this close to the sensHealth frame (pod clock, seconds) proves the cover is linked. */
+export const COVER_LIVE_WINDOW_S = 60
+
 /**
  * Sides whose cover sensor reports no link in the latest `sensHealth` frame.
  * Empty without a frame: older firmware never sends one. Only an explicit
  * `connected: false` counts.
+ *
+ * Fresh cover data overrides the flag. Pod 5 (J57) on rat firmware publishes
+ * `sensHealth` with both sides `connected: false` while capSense, piezo and
+ * bedTemp stream normally from that cover, so a cover frame within
+ * COVER_LIVE_WINDOW_S of the health frame wins. Cover frames carry both sides,
+ * so liveness clears both. Timestamps are compared on the pod clock to stay
+ * clear of browser clock skew.
  */
-export function disconnectedCovers(frame: SensHealthFrame | undefined): Array<'left' | 'right'> {
+export function disconnectedCovers(
+  frame: SensHealthFrame | undefined,
+  coverFrames: ReadonlyArray<{ ts: number } | undefined> = [],
+): Array<'left' | 'right'> {
   if (!frame) return []
+  const coverLive = coverFrames.some(f => f != null && Number.isFinite(f.ts) && f.ts >= frame.ts - COVER_LIVE_WINDOW_S)
+  if (coverLive) return []
   return (['left', 'right'] as const).filter(side => frame[side]?.connected === false)
 }
 

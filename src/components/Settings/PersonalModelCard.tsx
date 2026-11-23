@@ -5,7 +5,15 @@ import { trpc } from '@/src/utils/trpc'
 import { stageModelSchema } from '@/src/lib/personal-stage-model'
 import { Button, Card, CardHeader, InlineError, Toggle } from '@/src/components/ds'
 
+import type { InputMismatch } from '@/src/lib/stage-model-set'
 import { ModelScorecard, modelScore } from './ModelScorecard'
+
+/** Q6: a set's expected vitals differing from the side's is worth knowing, never a reason to stop staging. */
+function mismatchNote({ expected, actual }: InputMismatch) {
+  if (typeof actual !== 'object') return 'This side has no recorded vitals settings to check against the ones this model was trained on. Nights still stage with it.'
+  const changed = [actual.engine !== expected.engine && 'vitals engine', actual.profile !== expected.profile && 'vitals tuning profile'].filter(Boolean).join(' and ')
+  return `This model was trained on a different ${changed} than this side runs now. Nights still stage with it, and each one is flagged.`
+}
 
 /** Uploads only save candidates. Activation is a separate, explicit user action. */
 export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
@@ -161,6 +169,7 @@ export function PersonalModelCard({ side }: { side: 'left' | 'right' }) {
       )}
       <p className="text-xs text-fg-2">Uploads are saved for this side without replacing or activating another model.</p>
       {stored && <p className="text-xs text-fg-2">{model.data?.active ? 'Nights are staged by the active model; the rules below are the fallback when it cannot stage a night.' : 'Nights are staged by the rules below. Activate a model to use it instead.'}</p>}
+      {stored && model.data?.inputMismatch && (!selected || selected.selected) && choice !== 'rules' && <p role="note" className="text-xs text-warn">{mismatchNote(model.data.inputMismatch)}</p>}
       {message && <p role="status" className="text-sm">{message}</p>}
       {error && <InlineError>{error}</InlineError>}
     </Card>

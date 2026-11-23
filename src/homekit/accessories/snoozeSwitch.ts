@@ -11,6 +11,7 @@ import {
   snoozeAlarm,
 } from '@/src/hardware/snoozeManager'
 import { nextSnoozeSeconds } from '@/src/hardware/snoozeLength'
+import { stopLinked } from '@/src/hardware/linkedAlarm'
 import { getSharedHardwareClient } from '@/src/hardware/dacMonitor.instance'
 import { getActiveAlarmConfig, markAlarmEnded } from '@/src/hardware/alarmState'
 import type { Side } from '@/src/hardware/types'
@@ -46,6 +47,11 @@ export function buildSnoozeSwitch(side: Side): SnoozeSwitchAccessory {
         }
         snoozeAlarm(side, nextSnoozeSeconds(config, SNOOZE_SECONDS), config)
         await markAlarmEnded(side)
+        // A single sleeper's alarm rings on both sides: snooze both. If the
+        // other side can't be stopped, tell the Home app the snooze failed.
+        if (!await stopLinked(getSharedHardwareClient(), side, config)) {
+          throw new Error(`snooze(${side}): the linked side is still vibrating`)
+        }
       }
       else {
         cancelSnooze(side)

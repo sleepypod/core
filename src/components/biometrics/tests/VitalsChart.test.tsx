@@ -6,7 +6,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { VitalsExplorer } from '../VitalsExplorer'
-import { splitSessions } from '../biometricsLogic'
+import { splitSessions, type VitalPoint } from '../biometricsLogic'
 import { nearestReference, referenceInSession, referenceRuns, VitalsChart, VitalsLegend } from '../VitalsChart'
 
 vi.mock('@/src/providers/TimeFormatProvider', () => ({ useTimeFormat: () => '12h' }))
@@ -84,6 +84,36 @@ describe('VitalsChart reference overlay', () => {
   })
 })
 
+describe('VitalsChart breathing floor', () => {
+  function hoverFirstMinute(points: VitalPoint[]) {
+    withWidth()
+    const { container } = render(<VitalsChart sessions={splitSessions(points)} stall={null} bands={bands} />)
+    const overlay = container.querySelector('rect[style*="touch-action"]') as SVGRectElement
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 900, height: 300, right: 900, bottom: 300, toJSON: () => ({}) })
+    fireEvent.pointerMove(overlay, { clientX: 2, clientY: 50 })
+  }
+
+  it('labels a spiking minute with the floor and its stored value', () => {
+    const points = podSession(START, 60)
+    points[0] = { ...points[0], br: 22 }
+    hoverFirstMinute(points)
+    expect(screen.getByTestId('vitals-hover-br').textContent).toBe('16.0 · stored 22.0')
+    expect(screen.getByTestId('vitals-hover-hr').textContent).not.toContain('stored')
+  })
+
+  it('shows one value when the stored minute is the floor', () => {
+    hoverFirstMinute(podSession(START, 60))
+    expect(screen.getByTestId('vitals-hover-br').textContent).toBe('16.0')
+  })
+
+  it('draws no breathing label for a minute without a stored rate', () => {
+    const points: VitalPoint[] = podSession(START, 60)
+    points[0] = { ...points[0], br: null }
+    hoverFirstMinute(points)
+    expect(screen.queryByTestId('vitals-hover-br')).toBeNull()
+  })
+})
+
 describe('reference helpers', () => {
   it('referenceInSession keeps samples inside the session bounds inclusive', () => {
     const s = { start: 1000, end: 2000 }
@@ -118,13 +148,13 @@ describe('VitalsLegend', () => {
     render(<VitalsLegend bandLabel="middle 50%" stalled reference referenceHrv referenceRmssd referenceBr />)
     const pod = screen.getByText('Pod').nextElementSibling?.textContent
     const watch = screen.getByText('Apple Watch').nextElementSibling?.textContent
-    for (const series of ['9-min average', 'per minute', 'middle 50%', 'in bed, no vitals']) {
+    for (const series of ['9-min average', 'breathing · 15-min floor', 'per minute', 'middle 50%', 'in bed, no vitals']) {
       expect(pod).toContain(series)
       expect(watch).not.toContain(series)
     }
     for (const series of ['heart rate', 'HRV · SDNN', 'HRV · RMSSD', 'breathing']) {
       expect(watch).toContain(series)
-      expect(pod).not.toContain(series)
+      expect(pod?.replace('breathing · 15-min floor', '')).not.toContain(series)
     }
   })
 
@@ -137,7 +167,7 @@ describe('VitalsLegend', () => {
 })
 
 describe('movement alignment', () => {
-  it('plots position changes in their own row, restricted to visible sessions', () => {
+  it('plots minutes moving in their own row, restricted to visible sessions', () => {
     withWidth()
     render(
       <VitalsChart
@@ -151,8 +181,8 @@ describe('movement alignment', () => {
       />
     )
     expect(screen.getAllByTestId('movement-bar')).toHaveLength(1)
-    expect(screen.getByTestId('movement-bar').textContent).toContain('3 position changes')
-    expect(screen.getByText('changes / 5 min')).toBeTruthy()
+    expect(screen.getByTestId('movement-bar').textContent).toContain('3 minutes moving')
+    expect(screen.getByText('min moving / 15 min')).toBeTruthy()
   })
 })
 
@@ -398,15 +428,15 @@ describe('VitalsChart Apple Watch movement overlay', () => {
     expect(screen.queryAllByTestId('watch-movement-line')).toHaveLength(0)
   })
 
-  it('sums into the pod\'s 5-minute buckets, breaks the line at missing buckets, dots isolated ones and ignores minutes outside sessions', () => {
+  it('sums into the pod\'s 15-minute buckets, breaks the line at missing buckets, dots isolated ones and ignores minutes outside sessions', () => {
     withWidth()
     const watchMovement = [
       // Before the first session: outside the night, never drawn or counted.
       { t: START - 30 * MIN, moving: 500 },
-      { t: START, moving: 2 }, { t: START + MIN, moving: 4 }, { t: START + 6 * MIN, moving: 1 }, { t: START + 11 * MIN, moving: 20 },
+      { t: START, moving: 2 }, { t: START + 3 * MIN, moving: 4 }, { t: START + 18 * MIN, moving: 1 }, { t: START + 33 * MIN, moving: 20 },
       // A bucket without bins: a new run, and this one stands alone.
-      { t: START + 20 * MIN, moving: 5 },
-      { t: START + 30 * MIN, moving: 3 }, { t: START + 35 * MIN, moving: 2 },
+      { t: START + 60 * MIN, moving: 5 },
+      { t: START + 90 * MIN, moving: 3 }, { t: START + 105 * MIN, moving: 2 },
       // Between sessions.
       { t: START + 4 * 60 * MIN, moving: 50 },
     ]

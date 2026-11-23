@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TRPCError } from '@trpc/server'
 import * as mainSchema from '@/src/db/schema'
 import * as bioSchema from '@/src/db/biometrics-schema'
+import { gte } from 'drizzle-orm'
+import { stageModelSchema } from '@/src/lib/personal-stage-model'
+import { stageModelSha256 } from '@/src/lib/stage-model-set'
 import { writeLegacyStageClassifier } from '@/src/biometrics/profiles/legacy-stage'
 import { deliverRuntimeOutbox } from '@/src/biometrics/profiles/runtime'
 import {
@@ -463,7 +466,7 @@ describe('sleepStages router', () => {
     })
 
     it('stores a validated model per side and removes it with null', async () => {
-      expect(await caller.getModel({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false })
+      expect(await caller.getModel({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false, inputMismatch: null })
       const stored = await caller.setModel({ side: 'left', model })
       expect(stored).toEqual({ stored: true, version: 'test-forest' })
       const out = await caller.getModel({ side: 'left' })
@@ -555,12 +558,109 @@ describe('sleepStages router', () => {
       expect((await rejectionOf(caller.previewModel({ side: 'left', model: unknown }))).code).toBe('BAD_REQUEST')
       // A stored document that no longer validates reads back as nothing stored, and cannot be active.
       main.insert(mainSchema.sideStageModels).values({ side: 'right', model: { nonsense: true }, version: 'x', uploadedAt: new Date(), active: true }).run()
-      expect(await caller.getModel({ side: 'right' })).toEqual({ model: null, uploadedAt: expect.any(Number), active: false })
+      expect(await caller.getModel({ side: 'right' })).toEqual({ model: null, uploadedAt: expect.any(Number), active: false, inputMismatch: null })
       expect((await rejectionOf(caller.previewModel({ side: 'right' }))).code).toBe('NOT_FOUND')
       dbHolder.bio = throwing(new Error('disk gone'))
       const error = await rejectionOf(caller.previewModel({ side: 'left', model }))
       expect(error.code).toBe('INTERNAL_SERVER_ERROR')
       expect(error.message).toBe('Failed to preview stage model: disk gone')
+    })
+
+    describe('model sets', () => {
+      const ENGINE = 'a'.repeat(64)
+      const PROFILE = 'b'.repeat(64)
+      const OTHER = 'c'.repeat(64)
+      const stageNode = () => ({ version: model.version, sha256: stageModelSha256(stageModelSchema.parse(model)), binding: 'pinned' as const })
+      const modelSet = (nodes: Record<string, unknown> = {}) => ({
+        formatVersion: 'modelset-v1' as const,
+        id: 'left-podContext-20261115',
+        nodes: { stage: stageNode(), vitals: { engine: ENGINE, profile: PROFILE, binding: 'expected' as const }, ...nodes },
+        training: { nights: { first: '2026-10-18', last: '2026-11-13', count: 24 }, inputs: 'live' },
+        evaluation: { run: 'r1', holdoutScored: false },
+      })
+      /** A live processing run; vitals at or after `fromMinute` of the seeded night are attributed to it. */
+      function produce(id: string, engine: string, profile: string, fromMinute = 0) {
+        bio.insert(bioSchema.biometricProcessingRuns).values({ id, side: 'left', kind: 'live', bundle: { manifestHash: engine },
+          configHash: profile, inputIdentity: {}, startedAtMs: at(fromMinute).getTime() }).run()
+        bio.update(bioSchema.vitals).set({ processingRunId: id }).where(gte(bioSchema.vitals.timestamp, at(fromMinute))).run()
+      }
+      async function stageWithSet() {
+        const { biometricsRouter } = await import('@/src/server/routers/biometrics')
+        const record = seedNight()
+        const { id } = await caller.uploadModel({ side: 'left', model, modelSet: modelSet() })
+        await caller.selectModel({ side: 'left', id, active: true })
+        return () => biometricsRouter.createCaller({}).getSleepStages({ side: 'left', sleepRecordId: record.id })
+      }
+
+      it('stores a valid set with the library entry and lists it', async () => {
+        const { id } = await caller.uploadModel({ side: 'left', model, modelSet: modelSet() })
+        const [entry] = await caller.listModels({ side: 'left' })
+        expect(entry.id).toBe(id)
+        expect(entry.modelSet).toEqual(modelSet())
+        // A bare re-upload keeps the stored set; a model uploaded without one lists null.
+        expect(await caller.uploadModel({ side: 'left', model })).toEqual({ id, version: model.version })
+        expect((await caller.listModels({ side: 'left' }))[0].modelSet).toEqual(modelSet())
+        await caller.uploadModel({ side: 'left', model: { ...model, version: 'bare' } })
+        expect((await caller.listModels({ side: 'left' }))[0]).toMatchObject({ version: 'bare', modelSet: null })
+      })
+
+      it('refuses a set whose stage sha256 is not this model, without storing anything', async () => {
+        const error = await rejectionOf(caller.uploadModel({ side: 'left', model, modelSet: modelSet({ stage: { ...stageNode(), sha256: OTHER } }) }))
+        expect(error.code).toBe('BAD_REQUEST')
+        expect(error.message).toMatch(/pins stage sha256 c{64} but this model hashes to [a-f0-9]{64}/)
+        expect(await caller.listModels({ side: 'left' })).toEqual([])
+      })
+
+      it('refuses a set pinning a movement model', async () => {
+        const set = modelSet({ movementModel: { version: 'movementRaw-v1-20261201', sha256: OTHER, binding: 'pinned' } })
+        const error = await rejectionOf(caller.uploadModel({ side: 'left', model, modelSet: set }))
+        expect(error.code).toBe('BAD_REQUEST')
+        expect(error.message).toMatch(/^Movement models are not supported on this pod yet/)
+        expect(await caller.listModels({ side: 'left' })).toEqual([])
+      })
+
+      it('stages a night produced by other vitals normally and flags the mismatch', async () => {
+        const stages = await stageWithSet()
+        produce('00000000-0000-4000-8000-000000000001', ENGINE, OTHER)
+        const out = await stages()
+        expect(out.blocks.map(b => b.stage)).toEqual(['light', 'deep', 'light'])
+        expect(out.stagedBy).toEqual({ engine: 'model', version: 'test-forest',
+          inputMismatch: { expected: { engine: ENGINE, profile: PROFILE }, actual: { engine: ENGINE, profile: OTHER } } })
+        expect((await caller.getModel({ side: 'left' })).inputMismatch).toEqual({
+          expected: { engine: ENGINE, profile: PROFILE }, actual: { engine: ENGINE, profile: OTHER } })
+      })
+
+      it('does not flag a night produced by the expected vitals', async () => {
+        const stages = await stageWithSet()
+        produce('00000000-0000-4000-8000-000000000001', ENGINE, PROFILE)
+        expect((await stages()).stagedBy).toEqual({ engine: 'model', version: 'test-forest' })
+        expect((await caller.getModel({ side: 'left' })).inputMismatch).toBeNull()
+      })
+
+      it('flags a night spanning a vitals change as mixed, even when one part matches', async () => {
+        const stages = await stageWithSet()
+        produce('00000000-0000-4000-8000-000000000001', ENGINE, PROFILE)
+        produce('00000000-0000-4000-8000-000000000002', ENGINE, OTHER, 30)
+        expect((await stages()).stagedBy?.inputMismatch).toEqual({ expected: { engine: ENGINE, profile: PROFILE }, actual: 'mixed' })
+        // A restart under the same configuration is a new run but not a change.
+        produce('00000000-0000-4000-8000-000000000003', ENGINE, PROFILE, 30)
+        expect((await stages()).stagedBy?.inputMismatch).toBeUndefined()
+      })
+
+      it('flags vitals with no recorded run as unknown, and nothing without a vitals node or a set', async () => {
+        const stages = await stageWithSet()
+        expect((await stages()).stagedBy?.inputMismatch).toEqual({ expected: { engine: ENGINE, profile: PROFILE }, actual: 'unknown' })
+        expect((await caller.getModel({ side: 'left' })).inputMismatch?.actual).toBe('unknown')
+        const { id } = await caller.uploadModel({ side: 'left', model, modelSet: modelSet({ vitals: undefined }) })
+        expect((await stages()).stagedBy).toEqual({ engine: 'model', version: 'test-forest' })
+        const bare = await caller.uploadModel({ side: 'left', model: { ...model, version: 'bare' } })
+        await caller.selectModel({ side: 'left', id: bare.id, active: true })
+        expect((await stages()).stagedBy).toEqual({ engine: 'model', version: 'bare' })
+        expect((await caller.getModel({ side: 'left' })).inputMismatch).toBeNull()
+        // Rules never carry a flag.
+        await caller.selectModel({ side: 'left', id, active: false })
+        expect((await stages()).stagedBy).toEqual({ engine: 'rules', version: null })
+      })
     })
   })
 })

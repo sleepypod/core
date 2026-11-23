@@ -756,6 +756,81 @@ describe('device.setAlarm / clearAlarm / snoozeAlarm', () => {
     expect(helpersMock.withHardwareClient.mock.calls[0]?.[1]).toBe('Failed to clear alarm')
   })
 
+  it('clearAlarm stops a single sleeper\'s alarm on both sides', async () => {
+    const { markAlarmStarted, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    try {
+      await markAlarmStarted('left', { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, linkedSide: 'right', ownerSide: 'left' })
+      await caller.clearAlarm({ side: 'left' })
+      expect(helpersMock.client.clearAlarm.mock.calls).toEqual([['left'], ['right']])
+      expect(snoozeMock.cancelSnooze).toHaveBeenCalledWith('left')
+      expect(snoozeMock.cancelSnooze).toHaveBeenCalledWith('right')
+      expect(broadcastMock.broadcastMutationStatus).toHaveBeenCalledWith('right', { isAlarmVibrating: false })
+    }
+    finally {
+      suspendActiveAlarms()
+    }
+  })
+
+  it('snoozeAlarm keeps a single sleeper\'s alarm linked and stops the other side', async () => {
+    const { markAlarmStarted, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    snoozeMock.snoozeAlarm.mockReturnValue(new Date(1700000000000))
+    try {
+      await markAlarmStarted('left', { vibrationIntensity: 100, vibrationPattern: 'rise', duration: 120, linkedSide: 'right', ownerSide: 'left' })
+      await caller.snoozeAlarm({ side: 'left', duration: 300 })
+      expect(snoozeMock.snoozeAlarm).toHaveBeenCalledWith('left', 300, expect.objectContaining({ linkedSide: 'right', ownerSide: 'left' }))
+      expect(helpersMock.client.clearAlarm.mock.calls).toEqual([['left'], ['right']])
+    }
+    finally {
+      suspendActiveAlarms()
+    }
+  })
+
+  it('clearAlarm reports a linked side it could not stop, after cancelling both snoozes', async () => {
+    const { markAlarmStarted, getActiveAlarmConfig, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    helpersMock.client.clearAlarm.mockImplementation(async (side: string) => {
+      if (side === 'right') throw new Error('socket ended')
+    })
+    try {
+      const owner = { vibrationIntensity: 100, vibrationPattern: 'rise' as const, duration: 120, linkedSide: 'right' as const, ownerSide: 'left' as const }
+      await markAlarmStarted('left', owner)
+      await markAlarmStarted('right', { ...owner, linkedSide: 'left' })
+      await expect(caller.clearAlarm({ side: 'left' })).rejects.toMatchObject({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Stopped this side, but the alarm is still vibrating on the right side',
+      })
+      expect(snoozeMock.cancelSnooze).toHaveBeenCalledWith('right')
+      // Still marked ringing, so another Stop retries it.
+      expect(getActiveAlarmConfig('right')).not.toBeNull()
+    }
+    finally {
+      suspendActiveAlarms()
+      error.mockRestore()
+    }
+  })
+
+  it('snoozeAlarm reports a linked side it could not stop', async () => {
+    const { markAlarmStarted, suspendActiveAlarms } = await import('@/src/hardware/alarmState')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    snoozeMock.snoozeAlarm.mockReturnValue(new Date(1700000000000))
+    helpersMock.client.clearAlarm.mockImplementation(async (side: string) => {
+      if (side === 'right') throw new Error('DAC write failed')
+    })
+    try {
+      const owner = { vibrationIntensity: 100, vibrationPattern: 'rise' as const, duration: 120, linkedSide: 'right' as const, ownerSide: 'left' as const }
+      await markAlarmStarted('left', owner)
+      await markAlarmStarted('right', { ...owner, linkedSide: 'left' })
+      await expect(caller.snoozeAlarm({ side: 'left', duration: 300 })).rejects.toMatchObject({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Stopped this side, but the alarm is still vibrating on the right side',
+      })
+    }
+    finally {
+      suspendActiveAlarms()
+      error.mockRestore()
+    }
+  })
+
   it('snoozeAlarm clears alarm + invokes snoozeManager and returns timestamp', async () => {
     const snoozeUntil = new Date(1700000000000)
     snoozeMock.snoozeAlarm.mockReturnValue(snoozeUntil)

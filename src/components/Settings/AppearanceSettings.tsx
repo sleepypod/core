@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { trpc } from '@/src/utils/trpc'
 import { Card, CardHeader, InlineError, SegmentedControl, SettingRow, TempBackdrop, Toggle } from '@/src/components/ds'
 import { ZONE_MODE_LABELS, ZONE_MODES, useStageAutoReturn, useStageZones } from '@/src/components/Stage/stagePrefs'
+import { useChartStyle, type ChartStyle } from '@/src/components/Chart3D/chart3dData'
 import { TempControl } from '@/src/components/TempControl/TempControl'
 import { nightPhases, type NightPhaseKey, type ScheduleTempRow } from '@/src/components/TempScreen/nightPhases'
 import { TempStepper, stepperBackdrop } from '@/src/components/TempScreen/TempStepper'
@@ -49,6 +50,18 @@ export function TempDisplayControl() {
   const { tempDisplay, setTempDisplay } = usePrefs()
   return (
     <SegmentedControl ariaLabel="Show temperature as" value={tempDisplay} options={TEMP_DISPLAY_OPTIONS} onChange={setTempDisplay} />
+  )
+}
+
+const CHART_STYLE_OPTIONS: { value: ChartStyle, label: string }[] = [
+  { value: 'flat', label: 'Flat' },
+  { value: '3d', label: '3D' },
+]
+
+export function ChartStyleControl() {
+  const [style, setStyle] = useChartStyle()
+  return (
+    <SegmentedControl ariaLabel="Chart style" value={style} options={CHART_STYLE_OPTIONS} onChange={setStyle} />
   )
 }
 
@@ -248,6 +261,9 @@ export function AppearanceSettings({ temperatureUnit }: { temperatureUnit: strin
         <CardHeader title="Display" />
         <SettingRow label="Theme">
           <ThemeControl />
+        </SettingRow>
+        <SettingRow label="Charts" sub="3D draws the flow rate, movement and schedule charts with three.js on this device.">
+          <ChartStyleControl />
         </SettingRow>
         <SettingRow label="Units">
           <UnitsControl unit={temperatureUnit} />

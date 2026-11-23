@@ -13,6 +13,8 @@ import { sortChronological } from '@/src/lib/scheduleGrouping'
 import { useTemperatureUnit } from '@/src/hooks/useTemperatureUnit'
 import { formatSetpointF, setpointFToDisplay, type TempUnit } from '@/src/lib/tempUtils'
 import { buildTimeline, CurveChart, CurveLegend, dropHolds, MiniCurve, type BedSample } from './CurveChart'
+import { CurveChart3D } from './CurveChart3D'
+import { useChartStyle } from '@/src/components/Chart3D/chart3dData'
 import { TONE_TEXT, formatDayRange, tempTone } from './scheduleFormat'
 
 interface CurveCardProps {
@@ -154,6 +156,7 @@ function stop(fn: () => void) {
 export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent = null, featured = false, bed, notes, name, unsaved = false }: CurveCardProps) {
   const { timeFormat } = useTimeFormatter()
   const { unit } = useTemperatureUnit()
+  const [chartStyle] = useChartStyle()
   const hasSetPoints = group.setPoints.length > 0
   const paused = !!group.allDisabled
   const days = formatDayRange(group.days)
@@ -193,7 +196,9 @@ export function CurveCard({ group, onEdit, onDelete, isActive = false, nextEvent
 
         {/* Desktop: full chart + set-point strip */}
         <div className="hidden flex-col gap-3.5 min-[900px]:flex">
-          <CurveChart setPoints={group.setPoints} height={220} showNow={active} bed={bed?.samples} />
+          {chartStyle === '3d'
+            ? <CurveChart3D setPoints={group.setPoints} showNow={active} bed={bed?.samples} />
+            : <CurveChart setPoints={group.setPoints} height={220} showNow={active} bed={bed?.samples} />}
           <PhaseStrip endAction={group.endAction} setPoints={group.setPoints} className="border-t border-line pt-3.5" />
           {notes && <p className="whitespace-pre-line text-[13px] text-fg-2">{notes}</p>}
         </div>

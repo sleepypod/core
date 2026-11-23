@@ -13,6 +13,7 @@ import { runWaveformChild } from '@/src/biometrics/backtest/waveform-child'
 import type { waveformEvaluationSchema } from '@/src/biometrics/backtest/waveform-output'
 import type { VerifiedBundle } from './bundle'
 import { summarizeLocalReport, type LocalFitReport } from './report'
+import { referenceBreathing, referenceStages, remLightSeparation } from './stages'
 
 export const LOCAL_SPLITS = ['tuning', 'validation'] as const
 export type LocalSplit = typeof LOCAL_SPLITS[number] | 'holdout'
@@ -70,7 +71,7 @@ export async function prepareWorkerSlots(rawDirectory: string, workDirectory: st
 }
 
 /** Run items across slots; the first failure aborts every replay still running. */
-async function runPool<T>(items: T[], slots: string[], work: (item: T, slot: string, signal: AbortSignal) => Promise<void>) {
+export async function runPool<T>(items: T[], slots: string[], work: (item: T, slot: string, signal: AbortSignal) => Promise<void>) {
   let next = 0
   const controller = new AbortController()
   await Promise.all(slots.map(async (slot) => {
@@ -180,8 +181,16 @@ export async function fitCandidates(options: FitOptions) {
         datasetId: bundle.index.dataset.id, datasetHash: bundle.index.dataset.contentHash, protocol, protocolHash: configHash(protocol),
         holdoutUse: 0, evidence: 'descriptive_only' as const }
       const report = evaluateBacktest({ job, dataset: { manifest: bundle.manifest, snapshot }, waveform: { hash: dataHash(runOutputs), outputs: runOutputs } })
+      // REM-light breathing separation on the candidate's readings and on the Watch's own, by Watch stage.
+      const windows = assignments.filter(row => row.split === split).map(row => ({ cohortId: row.cohortId, stages: referenceStages(snapshot, row.startMs, row.endMs),
+        watch: referenceBreathing(snapshot, row.startMs, row.endMs) }))
+      const breathingStages = {
+        pod: remLightSeparation(windows.map(night => ({ stages: night.stages, values: (outputs.get(`${night.cohortId}:${candidate.resolvedHash}`)?.readings ?? [])
+          .flatMap(reading => reading.side === snapshot.side && reading.breathingRate !== null ? [{ timestampMs: reading.timestampMs, value: reading.breathingRate }] : []) }))),
+        watch: remLightSeparation(windows.map(night => ({ stages: night.stages, values: night.watch }))),
+      }
       reports.push(summarizeLocalReport({ candidate, split, report, dataset: bundle.index.dataset,
-        build: { pythonBuildHash: build.hash, pythonSourcesHash: build.sourcesHash, evaluatorBuildHash }, protocol }))
+        build: { pythonBuildHash: build.hash, pythonSourcesHash: build.sourcesHash, evaluatorBuildHash }, protocol, breathingStages }))
     }
   }
   return { reports, build, replayWallMs, workItems: items.length, jobs }

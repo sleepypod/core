@@ -206,7 +206,7 @@ export const biometricTuning: DemoHandlers<'biometricTuning'> = {
     const binding = structuredClone(bindings[side])
     const desired = await selected(side, binding.desiredRevisionId)
     const stageView = await demoStageView(side)
-    return { desired: { binding, resolved: desired.resolved, hash: desired.hash, isDefault: binding.desiredRevisionId === null, warning: null },
+    return { desired: { binding, resolved: desired.resolved, hash: desired.hash, isDefault: binding.desiredRevisionId === null, warning: null, rebase: null },
       stageView,
       legacyStageView: { classifier: defaultConfig.sleep_stages, personalized: false, migrationPending: false },
       runtimeHealth: noHealth, runtimeStatus: 'unreported', receipts: [], sensorCalibration: [], activationAvailable: true,

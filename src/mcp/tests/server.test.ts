@@ -1852,6 +1852,13 @@ describe('personal stage model tools', () => {
     expect(callerMock.sleepStages.selectModel).not.toHaveBeenCalled()
   })
 
+  it('passes a model set through to the library upload', async () => {
+    callerMock.sleepStages.uploadModel.mockResolvedValue({ id: 6, version: MODEL.version })
+    const modelSet = { formatVersion: 'modelset-v1', id: 'set-1', nodes: { stage: { version: MODEL.version, sha256: 'a'.repeat(64), binding: 'pinned' } } }
+    await (await connect()).callTool({ name: 'add_stage_model', arguments: { side: 'left', model: MODEL, modelSet } })
+    expect(callerMock.sleepStages.uploadModel).toHaveBeenCalledWith({ side: 'left', model: expect.objectContaining({ trees: MODEL.trees }), modelSet })
+  })
+
   it('reports a model the pod refuses for its contract or test vectors', async () => {
     callerMock.sleepStages.uploadModel.mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST', message: 'Model fails its test vectors' }))
     const result = await (await connect()).callTool({ name: 'add_stage_model', arguments: { side: 'left', model: MODEL } }) as CallToolResult

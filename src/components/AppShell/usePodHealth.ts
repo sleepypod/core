@@ -17,11 +17,14 @@ export function usePodHealth() {
   const health = trpc.health.system.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
   const maintenance = trpc.health.maintenance.useQuery({}, { staleTime: 30_000, refetchInterval: 60_000 })
   const water = trpc.waterLevel.getLatest.useQuery({}, { staleTime: 10_000, refetchInterval: 30_000 })
-  useSensorSubscription({ sensors: ['sensHealth'] })
+  // bedTemp/bedTemp2 (~0.1 Hz) prove the cover is live without a 2 Hz capSense subscription on every page.
+  useSensorSubscription({ sensors: ['sensHealth', 'bedTemp', 'bedTemp2'] })
   const sensHealth = useSensorFrame('sensHealth')
+  const bedTemp = useSensorFrame('bedTemp')
+  const bedTemp2 = useSensorFrame('bedTemp2')
   const nowMinute = useNowMinute()
   const attention = nowMinute == null
     ? []
-    : attentionItems(maintenance.data, water.data?.level ?? status.data?.waterLevel, nowMinute * 60_000, [], disconnectedCovers(sensHealth))
+    : attentionItems(maintenance.data, water.data?.level ?? status.data?.waterLevel, nowMinute * 60_000, [], disconnectedCovers(sensHealth, [bedTemp, bedTemp2]))
   return { footer: footerStatus(health.data, attention), podVersion: status.data?.podVersion }
 }

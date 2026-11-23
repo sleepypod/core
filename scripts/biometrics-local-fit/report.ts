@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { evaluateBacktest } from '@/src/biometrics/backtest/evaluator'
 import { defaultConfig, type Override } from '@/src/biometrics/algorithms/registry'
 import type { createNumericNightSummary } from '@/src/biometrics/backtest/numeric-night-summary'
+import type { RemLightSeparation } from './stages'
 
 export const METRICS = ['heart_rate', 'breathing_rate', 'window_ibi_variability_v1'] as const
 type Metric = typeof METRICS[number]
@@ -63,6 +64,8 @@ export function summarizeLocalReport(input: {
   dataset: { id: string, contentHash: string }
   build: { pythonBuildHash: string, pythonSourcesHash: string, evaluatorBuildHash: string }
   protocol: unknown
+  /** REM-light breathing separation by Watch stage, for the candidate's readings and the Watch's. */
+  breathingStages?: { pod: RemLightSeparation, watch: RemLightSeparation }
 }) {
   return { version: 'biometrics-local-fit-report-v1' as const, label: 'exploratory-local' as const,
     evidence: 'not_activation_evidence' as const,
@@ -70,6 +73,7 @@ export function summarizeLocalReport(input: {
     candidate: { id: input.candidate.id, overrides: input.candidate.overrides as Override[], resolvedHash: input.candidate.resolvedHash },
     split: input.split, dataset: { id: input.dataset.id, contentHash: input.dataset.contentHash }, build: input.build, protocol: input.protocol,
     summary: Object.fromEntries(METRICS.map(metric => [metric, metricSummary(input.report, metric)])) as Record<Metric, MetricSummary>,
+    ...(input.breathingStages ? { breathingStages: input.breathingStages } : {}),
     report: input.report }
 }
 export type LocalFitReport = ReturnType<typeof summarizeLocalReport>
@@ -81,9 +85,13 @@ export function parseLocalReport(value: unknown) {
   return reportShape.parse(value) as unknown as LocalFitReport
 }
 
-/** Rank by the tuning split's equal-night mean HR error difference against
- * defaults on common support (lower is better), validation shown alongside. */
-export function rankCandidates(reports: LocalFitReport[], minimumCoverage = 0.75) {
+export const RANK_KEYS = ['hr', 'breathing'] as const
+export type RankKey = typeof RANK_KEYS[number]
+
+/** Rank by the tuning split's own-support error for the ranked metric (HR by
+ * default, or breathing rate), among candidates keeping minimumCoverage of the
+ * defaults' Watch coverage for that metric; validation shown alongside. */
+export function rankCandidates(reports: LocalFitReport[], minimumCoverage = 0.75, rank: RankKey = 'hr') {
   if (!Number.isFinite(minimumCoverage) || minimumCoverage < 0 || minimumCoverage > 1) throw new Error('Minimum coverage must be a fraction from 0 to 1')
   const ids = [...new Set(reports.map(report => report.candidate.id))]
   const pick = (id: string, split: 'tuning' | 'validation' | 'holdout') => reports.find(report => report.candidate.id === id && report.split === split)
@@ -101,26 +109,36 @@ export function rankCandidates(reports: LocalFitReport[], minimumCoverage = 0.75
     const candidate = (tuning ?? validation ?? holdout)?.candidate
     return { id, overrides: candidate?.overrides ?? [], resolvedHash: candidate?.resolvedHash ?? '', changedDefaults: changes(candidate?.overrides ?? []),
       heartRate: { tuning: view(tuning, 'heart_rate'), validation: view(validation, 'heart_rate'), ...(holdout ? { holdout: view(holdout, 'heart_rate') } : {}) },
-      breathingRate: { tuning: view(tuning, 'breathing_rate'), validation: view(validation, 'breathing_rate') },
+      breathingRate: { tuning: view(tuning, 'breathing_rate'), validation: view(validation, 'breathing_rate'),
+        ...(holdout && rank === 'breathing' ? { holdout: view(holdout, 'breathing_rate') } : {}) },
       hrv: { tuning: view(tuning, 'window_ibi_variability_v1'), validation: view(validation, 'window_ibi_variability_v1') } }
   })
+  const ranked = (row: typeof rows[number]) => rank === 'breathing' ? row.breathingRate : row.heartRate
   // A candidate below the coverage floor ranks after every one above it, so
   // abstaining on most of the night cannot win on error alone.
-  const kept = (row: typeof rows[number]) => (row.heartRate.tuning?.coverage ?? 1) >= minimumCoverage ? 0 : 1
+  const kept = (row: typeof rows[number]) => (ranked(row).tuning?.coverage ?? 1) >= minimumCoverage ? 0 : 1
   rows.sort((a, b) => kept(a) - kept(b)
-    || key(a.heartRate.tuning?.ownMae) - key(b.heartRate.tuning?.ownMae)
-    || key(a.heartRate.validation?.ownMae) - key(b.heartRate.validation?.ownMae)
-    || (a.heartRate.tuning?.coverageReducedNights ?? 0) - (b.heartRate.tuning?.coverageReducedNights ?? 0)
+    || key(ranked(a).tuning?.ownMae) - key(ranked(b).tuning?.ownMae)
+    || key(ranked(a).validation?.ownMae) - key(ranked(b).validation?.ownMae)
+    || (ranked(a).tuning?.coverageReducedNights ?? 0) - (ranked(b).tuning?.coverageReducedNights ?? 0)
     || a.changedDefaults - b.changedDefaults
     || a.id.localeCompare(b.id))
+  const stages = (id: string, split: 'tuning' | 'validation') => pick(id, split)?.breathingStages ?? null
   return { version: 'biometrics-local-fit-ranking-v1' as const, label: 'exploratory-local' as const, evidence: 'not_activation_evidence' as const,
-    rankedBy: 'tuning.heart_rate.ownSupport_equalNightMeanMae_with_reference_coverage_floor' as const, minimumCoverage,
-    rows: rows.map((row, index) => ({ rank: index + 1, ...row })) }
+    rankedBy: rank === 'breathing'
+      ? 'tuning.breathing_rate.ownSupport_equalNightMeanMae_with_reference_coverage_floor' as const
+      : 'tuning.heart_rate.ownSupport_equalNightMeanMae_with_reference_coverage_floor' as const,
+    minimumCoverage,
+    rows: rows.map((row, index) => ({ rank: index + 1, ...row,
+      ...(rank === 'breathing' ? { breathingStages: { tuning: stages(row.id, 'tuning'), validation: stages(row.id, 'validation') } } : {}) })) }
 }
 
 const format = (value: number | null | undefined, digits = 3) => value === null || value === undefined ? 'n/a' : value.toFixed(digits)
 const percent = (value: number | null | undefined) => value === null || value === undefined ? 'n/a' : `${Math.round(value * 100)}%`
+const separation = (value: RemLightSeparation | null | undefined) => value?.status === 'scored' ? format(value.standardized, 2) : 'no_paired_reference'
+
 export function rankingMarkdown(ranking: ReturnType<typeof rankCandidates>) {
+  if (ranking.rankedBy.startsWith('tuning.breathing_rate.')) return breathingMarkdown(ranking)
   const holdout = ranking.rows.some(row => row.heartRate.holdout)
   const splits = ['tuning', 'validation', ...(holdout ? ['holdout'] : [])] as const
   const lines = [`_Exploratory, computed off-pod. Not activation evidence. Ranked by tuning HR error on each candidate's own readings, among candidates keeping ≥${percent(ranking.minimumCoverage)} of the defaults' Watch coverage._`, '',
@@ -132,6 +150,23 @@ export function rankingMarkdown(ranking: ReturnType<typeof rankCandidates>) {
       return `${format(view?.ownMae)} | ${format(view?.maeDifference)} | ${percent(view?.coverage)}`
     })
     lines.push(`| ${row.rank} | ${row.id} | ${cells.join(' | ')} | ${format(row.breathingRate.tuning?.maeDifference)} | ${format(row.hrv.tuning?.maeDifference)} |`)
+  }
+  return `${lines.join('\n')}\n`
+}
+
+function breathingMarkdown(ranking: ReturnType<typeof rankCandidates>) {
+  const holdout = ranking.rows.some(row => row.heartRate.holdout)
+  const splits = ['tuning', 'validation', ...(holdout ? ['holdout'] : [])] as const
+  const lines = [`_Exploratory, computed off-pod. Not activation evidence. Ranked by tuning breathing-rate error vs the Watch on each candidate's own readings, among candidates keeping ≥${percent(ranking.minimumCoverage)} of the defaults' Watch breathing coverage. REM−light is the REM minus light breathing difference in pooled within-night SD, by Watch stage._`, '',
+    `| # | candidate | ${splits.map(split => `${split} BR MAE | ${split} Δ common | ${split} coverage`).join(' | ')} | REM−light (t) | Watch REM−light (t) | HR Δ (t) |`,
+    `| ---: | --- | ${splits.map(() => '---: | ---: | ---:').join(' | ')} | ---: | ---: | ---: |`]
+  for (const row of ranking.rows) {
+    const cells = splits.map((split) => {
+      const view = (row.breathingRate as Partial<Record<typeof split, typeof row.breathingRate.tuning>>)[split]
+      return `${format(view?.ownMae)} | ${format(view?.maeDifference)} | ${percent(view?.coverage)}`
+    })
+    const stages = 'breathingStages' in row ? row.breathingStages?.tuning : null
+    lines.push(`| ${row.rank} | ${row.id} | ${cells.join(' | ')} | ${separation(stages?.pod)} | ${separation(stages?.watch)} | ${format(row.heartRate.tuning?.maeDifference)} |`)
   }
   return `${lines.join('\n')}\n`
 }

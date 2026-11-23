@@ -9,7 +9,9 @@ import { deviceSettings } from '@/src/db/schema'
 import { eq, and, gt, gte, lt, lte, desc, asc, avg, min, max, count, sql, getTableColumns, inArray } from 'drizzle-orm'
 import { sideSchema, idSchema, validateDateRange } from '@/src/server/validation-schemas'
 import { listRawFiles } from './raw'
-import { loadActiveStageModel, loadReference, loadStageView, loadStageInputs } from './sleepStages'
+import { loadActiveStageModel, loadActiveStageModelSet, loadReference, loadStageView, loadStageInputs } from './sleepStages'
+import { inputMismatch, inputMismatchSchema } from '@/src/lib/stage-model-set'
+import { nightVitalsIdentity } from '@/src/biometrics/profiles/vitals-identity'
 import { stageViewSchema, type StageView } from '@/src/biometrics/profiles/stage-view'
 import { classifyWithStageModel, type StageModel } from '@/src/lib/personal-stage-model'
 import type { SleepEpoch } from '@/src/lib/sleep-stages'
@@ -96,8 +98,12 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const WATCH_DEVIATION_DEFAULT_DAYS = 14
 const WATCH_DEVIATION_MAX_DAYS = 31
 
-/** Which algorithm staged a night: the profile's rules, or the side's active personal model. */
-const stagedBySchema = z.object({ engine: z.enum(['rules', 'model']), version: z.string().nullable() })
+/**
+ * Which algorithm staged a night: the profile's rules, or the side's active personal model. A model
+ * whose set expects other vitals than produced the night still stages it, flagged by `inputMismatch`.
+ */
+const stagedBySchema = z.object({ engine: z.enum(['rules', 'model']), version: z.string().nullable(),
+  inputMismatch: inputMismatchSchema.optional() })
 type StagedBy = z.infer<typeof stagedBySchema>
 
 /**
@@ -503,6 +509,8 @@ export const biometricsRouter = router({
           startDate: z.date().optional(),
           endDate: z.date().optional(),
           bucketSeconds: z.number().int().min(60).max(86400),
+          /** Score a minute must reach to count in eventCount; defaults to POSITION_CHANGE_SCORE_MIN. */
+          eventScoreMin: z.number().int().min(1).max(1000).optional(),
           limit: z.number().int().min(1).max(10000).default(2000),
         })
         .strict()
@@ -527,13 +535,14 @@ export const biometricsRouter = router({
         const bSec = Math.floor(input.bucketSeconds)
         const bucket = sql<number>`(${movement.timestamp} / ${sql.raw(String(bSec))}) * ${sql.raw(String(bSec))}`
         const minNonStill = pickMinBucketNonStillEpochs(bSec)
+        const eventScoreMin = input.eventScoreMin ?? POSITION_CHANGE_SCORE_MIN
         const nonStillEpochs = sql<number>`SUM(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(RESTLESS_SCORE_MIN))} THEN 1 ELSE 0 END)`
 
         const rows = await biometricsDb
           .select({
             bucketStart: bucket,
             totalMovement: sql<number>`SUM(${movement.totalMovement})`,
-            eventCount: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(POSITION_CHANGE_SCORE_MIN))} THEN 1 END)`,
+            eventCount: sql<number>`COUNT(CASE WHEN ${movement.totalMovement} >= ${sql.raw(String(eventScoreMin))} THEN 1 END)`,
             sampleCount: count(),
           })
           .from(movement)
@@ -1859,8 +1868,15 @@ export const biometricsRouter = router({
         const classifier = stageView.classifier
 
         // Classify stages: the side's active personal model over the record window, else the rules.
-        const { epochs, stagedBy } = stageNight(vitalsData, movementData, calibrationQuality, classifier.ruleset,
+        const staged = stageNight(vitalsData, movementData, calibrationQuality, classifier.ruleset,
           loadActiveStageModel(input.side), { start: windowStart, end: windowEnd })
+        const { epochs } = staged
+        // Q6: a set's expected vitals never block staging; a night produced by others is only flagged.
+        const set = staged.stagedBy.engine === 'model' ? loadActiveStageModelSet(input.side) : null
+        const mismatch = set?.nodes.vitals
+          ? inputMismatch(set, nightVitalsIdentity(biometricsDb, input.side, windowStart, windowEnd))
+          : null
+        const stagedBy = mismatch ? { ...staged.stagedBy, inputMismatch: mismatch } : staged.stagedBy
 
         if (epochs.length === 0) {
           return {

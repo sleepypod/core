@@ -42,7 +42,7 @@ describe('demo sleepStages', () => {
     } })).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('demo') })
     expect(await required(sleepStages.listModels)({ side: 'left' })).toEqual([])
     await expect(required(sleepStages.selectModel)({ side: 'left', id: 1, active: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    expect(await required(sleepStages.getModel)({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false })
+    expect(await required(sleepStages.getModel)({ side: 'left' })).toEqual({ model: null, uploadedAt: null, active: false, inputMismatch: null })
     expect(await required(sleepStages.setModelActive)({ side: 'left', active: false })).toEqual({ active: false, version: null })
     await expect(required(sleepStages.setModelActive)({ side: 'left', active: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })

@@ -212,6 +212,30 @@ it('opens workbench views from the page and returns', () => {
   expect(screen.getByRole('group', { name: 'Profile lifecycle' })).toBeTruthy()
 })
 
+it('names the paths a rebase dropped and says when the side is on defaults, and stays quiet otherwise', () => {
+  const desired = (mock.overview as { desired: object }).desired
+  const result = render(view())
+  expect(screen.queryByText(/carried onto this software version/)).toBeNull()
+  mock.overview = { ...(mock.overview as object), desired: { ...desired,
+    rebase: { sourceRevisionId: 'authored-id', droppedPaths: ['heart_rate.retiredKnob', 'breathing_rate.intervalLowerRatio'] } } }
+  result.rerender(view())
+  expect(screen.getByText('The saved profile was carried onto this software version without settings it no longer accepts')).toBeTruthy()
+  expect(screen.getByText('heart_rate.retiredKnob, breathing_rate.intervalLowerRatio')).toBeTruthy()
+  mock.overview = { ...(mock.overview as object), desired: { ...desired, warning: 'PROFILE_INCOMPATIBLE: immutable snapshot integrity check failed', rebase: null } }
+  result.rerender(view())
+  expect(screen.getByRole('alert').textContent).toContain('so this side uses system defaults')
+  expect(screen.getByText('PROFILE_INCOMPATIBLE: immutable snapshot integrity check failed')).toBeTruthy()
+})
+
+it('labels a rebase in the activity log instead of calling it a fallback', () => {
+  mock.history = { items: [{ id: 'rebase', side: 'left', generation: 4, action: 'fallback', previousRevisionId: 'old-id', nextRevisionId: 'saved-id', previousHash: 'h-old', nextHash: 'h-saved',
+    evidence: { status: 'profile_rebased' }, requester: 'runtime-coordinator', state: 'applied', reason: 'Pinned profile rebased onto this build with every override kept',
+    createdAtMs: mock.now - min, updatedAtMs: mock.now - min }], nextGeneration: null }
+  render(view())
+  expect(screen.getByText('Carried the saved profile onto this software version')).toBeTruthy()
+  expect(screen.queryByText('Fell back to a compatible profile')).toBeNull()
+})
+
 it('shows loading or errors without substituting a healthy state', () => {
   mock.overview = undefined
   const result = render(view())

@@ -12,7 +12,13 @@ into a long-term store on a laptop or NAS. Run it daily or weekly.
 pnpm biometrics:archive pull --pod 192.168.1.88 --dest /Volumes/nas/sleepypod
 pnpm biometrics:archive pull --pod pod.local:3000 --dest ~/sleepypod-archive --since 2026-10-01T00:00:00Z --until 2026-10-08T00:00:00Z
 pnpm biometrics:archive pull --pod 192.168.1.88 --dest ~/sleepypod-archive --no-raw   # database only
+pnpm biometrics:archive pull --pod 192.168.1.88 --dest ~/sleepypod-archive --curl     # macOS without Local Network access
 ```
+
+On macOS, Local Network privacy can refuse node's connection to the pod with
+`EHOSTUNREACH` even though `curl` reaches it, typically from a launchd agent or a terminal
+that was never granted the permission. `--curl` downloads through `/usr/bin/curl`, which
+is exempt, and verifies the export exactly as the default transport does.
 
 Each pull calls `GET http://POD:3000/api/biometrics/analysis-export?start=&end=&raw=1`
 ([format](../../docs/biometrics-datasets.md#analysis-snapshot-export)). It's read-only on the pod.
@@ -183,7 +189,7 @@ launchd (macOS), `~/Library/LaunchAgents/com.sleepypod.biometrics-archive.plist`
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string><string>-lc</string>
-    <string>cd ~/src/sleepypod-core &amp;&amp; pnpm -s biometrics:archive pull --pod 192.168.1.88 --dest /Volumes/nas/sleepypod</string>
+    <string>cd ~/src/sleepypod-core &amp;&amp; pnpm -s biometrics:archive pull --pod 192.168.1.88 --dest /Volumes/nas/sleepypod --curl</string>
   </array>
   <key>StartCalendarInterval</key><dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer></dict>
   <key>StandardOutPath</key><string>/tmp/sleepypod-archive.log</string>

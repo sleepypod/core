@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLingui } from '@lingui/react/macro'
+import { AlertTriangle } from 'lucide-react'
 import { defaultConfig, type BiometricConfig } from '@/src/biometrics/algorithms/registry-core'
 import { trpc } from '@/src/utils/trpc'
 import { cn } from '@/lib/utils'
-import { InlineError, SegmentedControl, Skeleton } from '@/src/components/ds'
+import { InlineError, NoticeStack, SegmentedControl, Skeleton, type Notice } from '@/src/components/ds'
 import { useSideNames } from '@/src/hooks/useSideNames'
 import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 import { numericReportViewSchema } from './report-view'
@@ -215,7 +216,12 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
       }
       else if (event.action === 'rollback') rows.push({ id: event.id, atMs: event.createdAtMs, actor: requester, what: t`Restored the previous profile and requested it`, detail: null })
       else if (event.action === 'reset') rows.push({ id: event.id, atMs: event.createdAtMs, actor: requester, what: t`Restored system defaults and requested them`, detail: null })
-      else rows.push({ id: event.id, atMs: event.createdAtMs, actor: { kind: 'pod', name: 'pod' }, what: event.action === 'migration' ? t`Migrated sleep-stage settings into the profile` : t`Fell back to a compatible profile`, detail: event.reason })
+      else {
+        const rebased = (event.evidence as { status?: unknown } | null)?.status === 'profile_rebased'
+        rows.push({ id: event.id, atMs: event.createdAtMs, actor: { kind: 'pod', name: 'pod' },
+          what: event.action === 'migration' ? t`Migrated sleep-stage settings into the profile` : rebased ? t`Carried the saved profile onto this software version` : t`Fell back to a compatible profile`,
+          detail: event.reason })
+      }
       if (event.state === 'applied') rows.push({ id: `${event.id}:ack`, atMs: event.updatedAtMs, actor: { kind: 'pod', name: 'pod' }, what: t`Processor acknowledged generation ${event.generation}`, detail: null })
       if (event.state === 'failed') rows.push({ id: `${event.id}:failed`, atMs: event.updatedAtMs, actor: { kind: 'pod', name: 'pod' }, what: t`Processor rejected generation ${event.generation}`, detail: event.reason })
     }
@@ -272,6 +278,17 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
       : null,
     runtimeReported: overview.data.runtimeStatus === 'receipts_available',
   })
+  // A side on defaults or missing part of its profile must say so, never silently.
+  const notices: Notice[] = []
+  if (overview.data.desired.warning) {
+    notices.push({ id: `profile-incompatible:${side}`, kind: 'progress', tone: 'danger', icon: AlertTriangle,
+      title: t`The saved profile can't run on this software version, so this side uses system defaults`, detail: overview.data.desired.warning })
+  }
+  const droppedPaths = overview.data.desired.rebase?.droppedPaths ?? []
+  if (droppedPaths.length > 0) {
+    notices.push({ id: `profile-rebased:${side}`, kind: 'progress', tone: 'warn', icon: AlertTriangle,
+      title: t`The saved profile was carried onto this software version without settings it no longer accepts`, detail: droppedPaths.join(', ') })
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -285,6 +302,8 @@ export function CalibrationPage({ side, onSideChange, onOpenTool }: {
         <LifecycleStrip {...strip} />
         <RestoreMenu className="ml-auto" disabled={saving} hasPrevious={binding.generation > 0} onSelect={setRestore} />
       </div>
+
+      <NoticeStack notices={notices} />
 
       <div className="grid items-start gap-4 @min-[1040px]:grid-cols-[minmax(0,1fr)_420px]">
         <div className="flex min-w-0 flex-col gap-4">

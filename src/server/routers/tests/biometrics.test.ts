@@ -1117,6 +1117,18 @@ describe('biometrics WHERE/SELECT fragment construction', () => {
     expect(toQuery(dbState.havingArgs[0]).sql).toBe('SUM(CASE WHEN "movement"."total_movement" >= 50 THEN 1 ELSE 0 END) >= 3')
   })
 
+  it('getMovementBuckets counts events at the requested score', async () => {
+    dbState.rowsQueue.push([])
+    await caller.getMovementBuckets({ side: 'left', bucketSeconds: 900, eventScoreMin: 400, limit: 100 })
+    const fields = dbState.selectFields[0] as Record<string, unknown>
+    expect(toQuery(fields.eventCount).sql).toBe('COUNT(CASE WHEN "movement"."total_movement" >= 400 THEN 1 END)')
+  })
+
+  it('getMovementBuckets rejects an event score outside 1..1000', async () => {
+    await expect(caller.getMovementBuckets({ side: 'left', bucketSeconds: 900, eventScoreMin: 0 })).rejects.toThrow()
+    await expect(caller.getMovementBuckets({ side: 'left', bucketSeconds: 900, eventScoreMin: 1001 })).rejects.toThrow()
+  })
+
   it('getMovementSummary restricts to the side and to recorded in-bed windows', async () => {
     dbState.rowsQueue.push([{ positionChanges: 0, restlessMinutes: 0, sampleCount: 0 }])
     await caller.getMovementSummary({ side: 'left' })

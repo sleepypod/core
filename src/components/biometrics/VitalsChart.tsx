@@ -5,14 +5,16 @@
  * empty stretches between them collapse to a dashed break labelled with the
  * gap. When the side is in bed but vitals stopped, a hatched amber segment
  * shows the stall. Each row draws gridlines → the range's p25–p75 band → the
- * raw per-minute line → a 9-minute centred mean. Hover (or tap and drag)
- * shows one crosshair through all rows, snapped to the nearest reading.
+ * raw per-minute line → a 9-minute centred mean (breathing: a 15-minute
+ * rolling floor, `breathingFloor`). Hover (or tap and drag) shows one
+ * crosshair through all rows, snapped to the nearest reading; the breathing
+ * label also gives the stored per-minute value.
  * Imported Apple Watch heart rate (`reference`) is drawn as a dashed line over
  * the heart-rate row so the two sensors can be compared night by night.
  * Watch blood oxygen has no pod counterpart, so it gets a fourth row of its own,
  * drawn only when a reading falls inside a session.
  * Apple Watch wrist movement (`watchMovement`) is drawn as a line over the
- * movement bars in the same 5-minute buckets, scaled to each night's own peak
+ * movement bars in the same 15-minute buckets, scaled to each night's own peak
  * and broken at gaps.
  */
 'use client'
@@ -21,9 +23,10 @@ import { useTimeFormat } from '@/src/providers/TimeFormatProvider'
 
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import {
-  axisTicks, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, OXYGEN_ROW, readingsInSessions, rollingMean, sessionHeader,
+  axisTicks, breathingFloor, timeAtX, clampTo, clock, fmtDuration, fmtGap, layoutAxis, METRICS, nearestIndex, OXYGEN_ROW, readingsInSessions, rollingMean, sessionHeader,
   type MetricKey, type RangeWindow, type Session,
 } from './biometricsLogic'
+import { MOVEMENT_BUCKET_DAY_SECONDS } from '@/src/lib/movement'
 import { splitRuns, WATCH_MAX_SCALE, watchBuckets, type WatchMinute } from '@/src/lib/watchMovement'
 
 const LABEL_W = 130
@@ -107,7 +110,7 @@ const REFERENCE_STROKE = 'var(--text-1)'
 const WATCH_MOVEMENT_STROKE = 'var(--accent-cool)'
 const MOVEMENT_H = 48
 /** The pod's movement bars span this long; the Watch line uses the same buckets so the two compare like for like. */
-const MOVEMENT_BUCKET_MS = 300_000
+const MOVEMENT_BUCKET_MS = MOVEMENT_BUCKET_DAY_SECONDS * 1000
 
 export function VitalsChart({ sessions, stall, bands, reference = [], referenceHrv = [], referenceRmssd = [], referenceBr = [], referenceOxygen = [], movement = [], watchMovement = [], onSelectWindow }: {
   sessions: Session[]
@@ -136,7 +139,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
   const smooth = useMemo(() => sessions.map(s => ({
     hr: rollingMean(s.points, 'hr'),
     hrv: rollingMean(s.points, 'hrv'),
-    br: rollingMean(s.points, 'br'),
+    br: breathingFloor(s.points),
   })), [sessions])
   const [hover, setHover] = useState<{ seg: number, idx: number } | null>(null)
   const referenceBySession = useMemo(() => sessions.map(s => referenceInSession(reference, s)), [sessions, reference])
@@ -265,7 +268,7 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
 
         <div className="absolute left-0 flex flex-col text-[13px]" style={{ top: HEAD_H + vitalsH + 22, width: LABEL_W }}>
           <span>Movement</span>
-          <span className="font-mono text-[11px] text-fg-2">changes / 5 min</span>
+          <span className="font-mono text-[11px] text-fg-2">min moving / 15 min</span>
         </div>
       </div>
       {plotW > 0 && (
@@ -316,12 +319,12 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
             <line x1={0} x2={plotW} y1={HEAD_H + PLOT_H} y2={HEAD_H + PLOT_H} stroke="var(--border-grid)" />
             {axis.segments.filter(s => s.kind === 'session').flatMap(seg => movement.filter((b) => {
               const t = new Date(b.bucketStart).getTime()
-              return t + 300_000 > seg.start && t <= seg.end && b.eventCount > 0
+              return t + MOVEMENT_BUCKET_MS > seg.start && t <= seg.end && b.eventCount > 0
             }).map((b) => {
               const t = new Date(b.bucketStart).getTime()
               const x = axis.xOf(seg, t)
               const h = b.eventCount / maxMovement * 48
-              return <rect key={`${seg.index}-${t}`} data-testid="movement-bar" x={x} y={HEAD_H + PLOT_H - h} width={Math.max(1, axis.xOf(seg, t + 300_000) - x)} height={h} fill="var(--text-3)"><title>{`${clock(t, timeFormat)} · ${b.eventCount} position changes`}</title></rect>
+              return <rect key={`${seg.index}-${t}`} data-testid="movement-bar" x={x} y={HEAD_H + PLOT_H - h} width={Math.max(1, axis.xOf(seg, t + MOVEMENT_BUCKET_MS) - x)} height={h} fill="var(--text-3)"><title>{`${clock(t, timeFormat)} · ${b.eventCount} ${b.eventCount === 1 ? 'minute' : 'minutes'} moving`}</title></rect>
             }))}
             {axis.segments.filter(s => s.kind === 'session').flatMap(seg => splitRuns(watchScaled.filter(m => m.t + MOVEMENT_BUCKET_MS > seg.start && m.t <= seg.end), MOVEMENT_BUCKET_MS).map((run) => {
               const xs = run.map(m => axis.xOf(seg, clampTo(m.t + MOVEMENT_BUCKET_MS / 2, [seg.start, seg.end])))
@@ -355,11 +358,14 @@ export function VitalsChart({ sessions, stall, bands, reference = [], referenceH
                   const v = (hover && hoverSmooth?.[m.key][hover.idx]) ?? hovered[m.key]
                   if (v == null) return null
                   const y = yOf(i, v)
-                  const text = v.toFixed(m.digits)
+                  const stored = m.key === 'br' ? hovered.br : null
+                  const text = stored != null && stored.toFixed(m.digits) !== v.toFixed(m.digits)
+                    ? `${v.toFixed(m.digits)} · stored ${stored.toFixed(m.digits)}`
+                    : v.toFixed(m.digits)
                   const w = text.length * 6.6 + 10
                   const flip = hoverX + 8 + w > plotW
                   return (
-                    <g key={m.key}>
+                    <g key={m.key} data-testid={`vitals-hover-${m.key}`}>
                       <circle cx={hoverX} cy={y} r={3} fill={m.color} stroke="var(--surface-card)" strokeWidth={1.5} />
                       <rect x={flip ? hoverX - 8 - w : hoverX + 8} y={y - 22} width={w} height={17} rx={3} fill="var(--surface-active)" stroke="var(--border-2)" />
                       <text x={flip ? hoverX - 8 - w / 2 : hoverX + 8 + w / 2} y={y - 10} textAnchor="middle" className="fill-fg font-mono" fontSize={11}>{text}</text>
@@ -453,6 +459,10 @@ export function VitalsLegend({ bandLabel, stalled, reference = false, referenceH
         <span className="flex items-center gap-2">
           <span className="h-0.5 w-4 rounded bg-fg-2" />
           9-min average
+        </span>
+        <span className="flex items-center gap-2" data-testid="legend-breathing-floor" title="15th percentile of each 15-minute window, so upward spikes in unstable minutes do not lift the line. The thin line and the hover label show stored per-minute values.">
+          <span className="h-0.5 w-4 rounded" style={{ background: 'var(--chart-vital-br)' }} />
+          breathing · 15-min floor
         </span>
         <span className="flex items-center gap-2">
           <span className="h-px w-4 bg-fg-3" />

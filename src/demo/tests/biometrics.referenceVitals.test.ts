@@ -104,3 +104,15 @@ it.each(['hrv_sdnn', 'breathing_rate'] as const)('keeps %s samples stable across
   expect(all.slice(1).some((r, i) => r.timestamp.getTime() - all[i].timestamp.getTime() === 300_000)).toBe(true)
   expect(await required(biometrics.getReferenceSamples)({ ...input, startDate: all[1].timestamp, endDate: all[1].timestamp })).toEqual([all[1]])
 })
+
+describe('demo biometrics.getMovementBuckets', () => {
+  it('counts fewer events at a higher eventScoreMin', async () => {
+    const night = demoNights('left')[0]
+    const input = { side: 'left' as const, startDate: new Date(night.vitals[0].t), endDate: new Date(night.vitals[night.vitals.length - 1].t), bucketSeconds: 900, limit: 2000 }
+    const total = (rows: Array<{ eventCount: number }>) => rows.reduce((sum, r) => sum + r.eventCount, 0)
+    const atDefault = total(await required(biometrics.getMovementBuckets)(input))
+    const atChart = total(await required(biometrics.getMovementBuckets)({ ...input, eventScoreMin: 400 }))
+    expect(atDefault).toBeGreaterThan(0)
+    expect(atChart).toBeLessThan(atDefault)
+  })
+})

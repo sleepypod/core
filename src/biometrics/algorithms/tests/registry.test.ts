@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { canonicalJson, configHash } from '../canonical'
-import { biometricManifest, defaultConfig, legacyStageOverrides, manifestHash, removeOverride, resolveConfig, validateConfig } from '../registry'
+import { biometricManifest, defaultConfig, legacyStageOverrides, manifestHash, rebaseOverrides, removeOverride, resolveConfig, validateConfig } from '../registry'
 import { DEFAULT_STAGE_CLASSIFIER, stageClassifierSchema } from '@/src/lib/sleep-stage-rules'
 
 const fixtures = [
@@ -157,4 +157,25 @@ it('validates constants, required keys, array bounds and string leaves from the 
   const rules = Array.from({ length: 65 }, () => defaultConfig.sleep_stages.ruleset.rules[0])
   expect(() => validateConfig({ ...defaultConfig, sleep_stages: { ...defaultConfig.sleep_stages, ruleset: { ...defaultConfig.sleep_stages.ruleset, rules } } })).toThrow('Invalid biometric parameter')
   expect(() => validateConfig({ ...defaultConfig, sleep_stages: { ...defaultConfig.sleep_stages, ruleset: { ...defaultConfig.sleep_stages.ruleset, outliers: { ...defaultConfig.sleep_stages.ruleset.outliers, heartRate: { min: 100, max: 50 } } } } })).toThrow('Invalid ordered range')
+})
+
+describe('rebasing overrides onto this manifest', () => {
+  it('keeps every accepted override in order and names why each other one was dropped', () => {
+    const result = rebaseOverrides([
+      { path: 'breathing_rate.intervalLowerRatio', value: 0.9 },
+      { path: 'heart_rate.retiredKnob', value: 3 },
+      { path: 'heart_rate.trackingToleranceBpm', value: 31 },
+      { path: 'heart_rate.trackingToleranceBpm', value: 10 },
+    ])
+    expect(result.kept).toEqual([{ path: 'breathing_rate.intervalLowerRatio', value: 0.9 }, { path: 'heart_rate.trackingToleranceBpm', value: 10 }])
+    expect(result.dropped).toEqual([
+      { path: 'heart_rate.retiredKnob', reason: 'Unknown override path: heart_rate.retiredKnob' },
+      { path: 'heart_rate.trackingToleranceBpm', reason: 'Invalid biometric parameter: heart_rate.trackingToleranceBpm' },
+    ])
+  })
+  it('keeps a min/max pair that is only valid together, whatever its order', () => {
+    const pair = [{ path: 'sleep_stages.ruleset.outliers.heartRate.min', value: 140 }, { path: 'sleep_stages.ruleset.outliers.heartRate.max', value: 150 }]
+    expect(rebaseOverrides(pair)).toEqual({ kept: pair, dropped: [] })
+    expect(rebaseOverrides([pair[0]]).dropped).toEqual([{ path: pair[0].path, reason: 'Invalid ordered range: sleep_stages.ruleset.outliers.heartRate' }])
+  })
 })

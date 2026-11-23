@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import pod5J57 from '@/src/streaming/tests/fixtures/natsFramesPod5J57.json'
+import { capSideChannels } from '@/src/streaming/normalizeFrame'
 import type { LatestCapSenseSnapshot } from '@/src/streaming/piezoStream'
 
 interface MovementRow { peak: number | null }
@@ -203,7 +205,7 @@ describe('getOccupancy', () => {
     expect(result.available).toBe(true)
   })
 
-  it('skips level signal for legacy capSense (Pod 3) frames', () => {
+  it('skips level signal for Pod 3 capSense frames without a capSense profile', () => {
     movementRows = [{ peak: 0 }]
     snapshot = {
       type: 'capSense',
@@ -217,7 +219,59 @@ describe('getOccupancy', () => {
     expect(r.level.active).toBe(false)
     expect(r.level.deviation).toBeNull()
     expect(r.level.threshold).toBeNull()
-    expect(calAll).not.toHaveBeenCalled()
+  })
+
+  // Captured on a Pod 5 hub + J57 cover (NATS firmware, Pod 3 capSense dialect)
+  // with a still sleeper on the left and the right side empty.
+  describe('Pod 3-dialect capSense (NATS firmware)', () => {
+    const POD3_CAL = { format: 'capSense', threshold: 300, channels: { out: { mean: 1540, std: 5 }, cen: { mean: 1870, std: 5 }, in: { mean: 2100, std: 5 } } }
+    // Real frame from fixtures/natsFramesPod5J57.json, unwrapped the way piezoStream does.
+    const natsFrame = (): LatestCapSenseSnapshot => {
+      const f = pod5J57.capSense[0].decoded
+      return {
+        type: 'capSense',
+        ts: Math.floor(FIXED_NOW / 1000),
+        receivedAtMs: FIXED_NOW - 500,
+        left: capSideChannels(f.left) ?? [],
+        right: capSideChannels(f.right) ?? [],
+      } as LatestCapSenseSnapshot
+    }
+
+    it('detects a still sleeper from level alone', () => {
+      movementRows = [{ peak: 0 }]
+      snapshot = natsFrame()
+      calRows = [{ parameters: POD3_CAL }]
+      const left = getOccupancy('left')
+      expect(left.available).toBe(true)
+      expect(left.level.active).toBe(true)
+      expect(left.level.zones).toBe(2)
+      expect(left.occupied).toBe(true)
+      expect(left.classification).toBe('person')
+    })
+
+    it('reads the empty side as empty and available', () => {
+      movementRows = [{ peak: 0 }]
+      snapshot = natsFrame()
+      calRows = [{ parameters: POD3_CAL }]
+      const right = getOccupancy('right')
+      expect(right.available).toBe(true)
+      expect(right.level.active).toBe(false)
+      expect(right.occupied).toBe(false)
+    })
+
+    it('ignores ref compensation and capSense2 profiles for Pod 3 frames', () => {
+      movementRows = [{ peak: 0 }]
+      snapshot = natsFrame()
+      calRows = [{ parameters: BASELINE_CAL }]
+      expect(getOccupancy('left').available).toBe(false)
+    })
+
+    it('rejects a capSense profile missing a channel', () => {
+      movementRows = [{ peak: 0 }]
+      snapshot = natsFrame()
+      calRows = [{ parameters: { ...POD3_CAL, channels: { out: { mean: 1 }, cen: { mean: 1 } } } }]
+      expect(getOccupancy('left').level.deviation).toBeNull()
+    })
   })
 
   it('skips level signal when calibration is missing', () => {

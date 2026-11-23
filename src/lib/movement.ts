@@ -10,8 +10,17 @@
 export const RESTLESS_SCORE_MIN = 50
 export const POSITION_CHANGE_SCORE_MIN = 200
 
+/**
+ * Score a minute must reach to count as a movement in the charts. On a Pod 5
+ * the score sits near 100 even when the wrist is still, so 200 put a bar in
+ * most 5-minute buckets. Against Apple Watch wrist movement over 6 nights,
+ * 15-minute buckets counting minutes >= 400 agreed best (Spearman 0.31, vs
+ * 0.24 for 5-minute buckets >= 200). Charts only; summary stats keep 200.
+ */
+export const MOVEMENT_CHART_SCORE_MIN = 400
+
 /** Default chart bucket sizes in seconds, by visible range. */
-export const MOVEMENT_BUCKET_DAY_SECONDS = 5 * 60
+export const MOVEMENT_BUCKET_DAY_SECONDS = 15 * 60
 export const MOVEMENT_BUCKET_WEEK_SECONDS = 30 * 60
 
 export function pickMovementBucketSeconds(rangeMs: number): number {

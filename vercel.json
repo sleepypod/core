@@ -3,7 +3,7 @@
   "buildCommand": "rm -f instrumentation.ts tests/instrumentation*.test.ts && NEXT_PUBLIC_DEMO=1 SP_BRANCH=demo pnpm build",
   "git": {
     "deploymentEnabled": {
-      "*": false,
+      "**": false,
       "dev": true
     }
   }

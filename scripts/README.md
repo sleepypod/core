@@ -187,6 +187,7 @@ After installation (installed from `scripts/bin/`):
 - `sp-logs` - View live logs with support context; `--firmware` adds firmware logs, `--since TIME --until TIME` selects history across retained boots
 - `sp-bundle-logs` - One-shot diagnostic capture (`/tmp/sleepypod-bundle-<ts>.tar.gz`); includes firmware/app journals and their combined timeline plus pod/firmware/build context; `--since TIME --until TIME` captures an incident across retained boots; redacts secrets by default, pass `--no-redact` for raw
 - `sp-update` - Update to latest version from GitHub
+- `sp-neutralize-slot-b` - Make the other boot slot survivable (`apply`, `status`, `undo`): root SSH by key, stock updater and watchdog masked, Eight Sleep names NXDOMAIN, marker for `sp-status`. See "The other boot slot" below.
 - `sp-uninstall` - Remove sleepypod and all related services
 
 ## Discovery / probe scripts (not installed)
@@ -236,6 +237,39 @@ sudo sp-internet-control firmware-updates block   # mask them again (default)
 installs, updates and maintenance runs leave the updater unmasked. Any other
 content, or no file, means blocked. `sp-internet-control status` also lists the
 stock services and the choice.
+
+### The other boot slot
+
+All of the above lives in the root filesystem the pod runs from. A/B eMMC
+pods keep a second one (`rootfs_b` on `mmcblk0p7`, or `rootfs_a` when
+running from B) that is stock: updater on, `defibrillator` on, no name
+blocking. U-Boot boots it after five unconfirmed boots or a failed boot, and
+it then installs the current Eight Sleep firmware over the sleepypod slot.
+
+```bash
+sudo sp-status                      # "boot slots": counters, warning if unconfirmed, other slot state
+sudo sp-neutralize-slot-b status    # read-only: mounts the other slot ro and reports
+sudo sp-neutralize-slot-b           # apply: root SSH by key, masks, dnsmasq NXDOMAIN layer, marker
+sudo sp-neutralize-slot-b undo      # back to stock
+```
+
+`apply` writes only inside the other slot (mounted at `/mnt/slot_b` for the
+duration): the keys sshd reads for root here go into the file that slot's
+sshd reads, `PermitRootLogin prohibit-password` and root in `AllowUsers`
+(password auth stays off); `/dev/null` masks for the same eight
+stock units this slot masks (`vector`, `telegraf`, `dac`, `swupdate.socket`,
+`swupdate.service`, `swupdate-progress.service`, `defibrillator.service`,
+`eight-kernel.service`); the dnsmasq layer via
+`INTERNET_CONTROL_ROOT=/mnt/slot_b sp-internet-control dns-install` (same
+files as `dns-block`, enabled by symlink, started and verified by its own
+hook when that slot boots; the stock `dnsmasq.service` there is disabled
+since it would take port 53); and `/etc/sleepypod/slot-neutralized`. It
+never writes the U-Boot environment and refuses when `current_slot` is not
+the running slot or the other slot is already mounted. A later stock OTA
+rewrites that slot wholesale and removes all of it; only a LAN-level block
+of `8slp.net` survives that, and the factory image used by the reset button
+is deliberately left stock. Details and the hand steps:
+`docs/slot-b-insurance-runbook.md`.
 
 ## Service Management
 
