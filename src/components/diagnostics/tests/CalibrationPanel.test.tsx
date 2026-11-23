@@ -116,7 +116,7 @@ it('plots uncalibrated legacy signals and disables active calibration', () => {
       vi.advanceTimersByTime(250)
     }
   })
-  expect(screen.getByText('raw reading · no capSense2 baseline')).toBeTruthy()
+  expect(screen.getByText('raw reading · not calibrated')).toBeTruthy()
   const rawBox = within(screen.getByTestId('cal-capacitance')).getByText('-30s').parentElement?.previousElementSibling as HTMLElement
   vi.spyOn(rawBox, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 96, right: 400, bottom: 96, toJSON: () => ({}) })
   fireEvent.pointerMove(rawBox, { clientX: 399, clientY: 10 })

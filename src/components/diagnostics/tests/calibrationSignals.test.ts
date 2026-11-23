@@ -49,12 +49,30 @@ describe('peakToPeak', () => {
 })
 
 describe('capSense2 baseline', () => {
-  it('parses capSense2 params and rejects legacy capSense', () => {
+  it('parses capSense2 params and rejects malformed ones', () => {
     const cal = parseCapParams(capParams)
     expect(cal?.means).toEqual({ A: 10, B: 20, C: 30 })
     expect(cal?.refMean).toBe(1.2)
-    expect(parseCapParams({ ...capParams, format: 'capSense' })).toBeNull()
+    expect(parseCapParams({ ...capParams, format: 'other' })).toBeNull()
     expect(parseCapParams({ ...capParams, channels: { A: { mean: 1, std: 1 } } })).toBeNull()
+  })
+
+  it('reads capSense out/cen/in profiles as zones A/B/C', () => {
+    // Shape the calibrator and the sleep-detector write for NATS firmware.
+    const pod3 = { format: 'capSense', threshold: 300, channels: { out: { mean: 1553.43, std: 5 }, cen: { mean: 1553.23, std: 5 }, in: { mean: 1917.33, std: 5 } } }
+    const cal = must(parseCapParams(pod3))
+    expect(cal.means).toEqual({ A: 1553.43, B: 1553.23, C: 1917.33 })
+    expect(cal.threshold).toBe(300)
+    // capSense profiles use out/cen/in; A/B/C keys are not a capSense profile.
+    expect(parseCapParams({ ...capParams, format: 'capSense' })).toBeNull()
+    const dev = must(capDeviation([1560, 1560, 1547, 1547, 1923, 1923], cal))
+    expect(dev.sum).toBeCloseTo(6.01, 2)
+    expect(channelsInBaseline(dev, cal)).toBe(3)
+  })
+
+  it('skips a partial capSense frame instead of producing NaN', () => {
+    const cal = must(parseCapParams({ format: 'capSense', threshold: 300, channels: { out: { mean: 1, std: 5 }, cen: { mean: 1, std: 5 }, in: { mean: 1, std: 5 } } }))
+    expect(capDeviation([1, 1, Number.NaN, Number.NaN, 1, 1], cal)).toBeNull()
   })
 
   it('falls back to the nominal reference when ref is missing', () => {
