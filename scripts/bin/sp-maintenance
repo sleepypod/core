@@ -200,26 +200,28 @@ guard_stock_firmware() {
 }
 ( guard_stock_firmware ) || echo "WARNING: stock firmware guard failed (continuing)" >&2
 
-# 5. Self-heal /persistent/deviceinfo perms so next-server can unlink
+# 5. Self-heal both supported socket directories so next-server can unlink
 # stale dac.sock on startup. Older installs created the dir with mkdir's
 # default umask (root:root 0755), which denies write to the sleepypod user
 # (even with SupplementaryGroups=dac) — getStatus then fails with
 # "EACCES: permission denied, unlink '/persistent/deviceinfo/dac.sock'".
-# Newer installs set this correctly; this block reconciles existing pods.
-DEVICEINFO_DIR=/persistent/deviceinfo
+# /deviceinfo may be a separate directory (including on Pod 3), not an alias
+# for /persistent/deviceinfo. Repair both layouts, including existing installs.
 if getent group dac &>/dev/null; then
-  mkdir -p "$DEVICEINFO_DIR"
-  OWNER_GROUP=$(stat -c '%U:%G' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
-  MODE=$(stat -c '%a' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
-  if [ "$OWNER_GROUP" != "root:dac" ] || [ "$MODE" != "2770" ]; then
-    if [ -z "$OWNER_GROUP" ] || [ -z "$MODE" ]; then
-      echo "Repairing $DEVICEINFO_DIR perms (stat failed → forcing root:dac 2770)..."
-    else
-      echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2770)..."
+  for DEVICEINFO_DIR in /persistent/deviceinfo /deviceinfo; do
+    mkdir -p "$DEVICEINFO_DIR"
+    OWNER_GROUP=$(stat -c '%U:%G' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
+    MODE=$(stat -c '%a' "$DEVICEINFO_DIR" 2>/dev/null || echo "")
+    if [ "$OWNER_GROUP" != "root:dac" ] || [ "$MODE" != "2770" ]; then
+      if [ -z "$OWNER_GROUP" ] || [ -z "$MODE" ]; then
+        echo "Repairing $DEVICEINFO_DIR perms (stat failed → forcing root:dac 2770)..."
+      else
+        echo "Repairing $DEVICEINFO_DIR perms ($OWNER_GROUP $MODE → root:dac 2770)..."
+      fi
+      chown root:dac "$DEVICEINFO_DIR" || { echo "ERROR: chown $DEVICEINFO_DIR failed — next-server will fail to unlink dac.sock" >&2; exit 1; }
+      chmod 2770 "$DEVICEINFO_DIR"
     fi
-    chown root:dac "$DEVICEINFO_DIR" || { echo "ERROR: chown $DEVICEINFO_DIR failed — next-server will fail to unlink dac.sock" >&2; exit 1; }
-    chmod 2770 "$DEVICEINFO_DIR"
-  fi
+  done
 fi
 
 # 6. Self-heal the reboot sudoers rule for pods that updated via sp-update
