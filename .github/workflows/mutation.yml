@@ -25,45 +25,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mutate:
+  plan:
     # Only run on PR if the `mutation-test` label was just applied
     if: >-
       github.event_name != 'pull_request'
       || github.event.label.name == 'mutation-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Splits each shard into parts that fit the job timeout. Shard dirs
+      # and part counts live in scripts/mutation-plan.mjs; a manual
+      # `scope` replaces the whole matrix with one `custom` job.
+      - name: Plan shard parts
+        id: plan
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: echo "matrix=$(node scripts/mutation-plan.mjs "$SCOPE")" >> "$GITHUB_OUTPUT"
+
+  mutate:
+    needs: plan
+    runs-on: ubuntu-latest
+    # Parts are sized for ~40 min of mutant testing; the rest is headroom
+    # for line-count weighting misjudging a slow region.
+    timeout-minutes: 150
     strategy:
-      # Don't cancel the whole matrix when one shard fails — the report
-      # from the healthy shard is still useful.
+      # Don't cancel the whole matrix when one part fails — the reports
+      # from the healthy parts are still useful.
       fail-fast: false
-      matrix:
-        shard:
-          # The --mutate CLI flag overrides the config's exclude patterns,
-          # so we repeat the exclusions here per shard. Keep these in sync
-          # with stryker.config.mjs's mutate: block. Each shard runs on
-          # its own runner in parallel; partition by module group so any
-          # single shard stays under the 90-min job timeout.
-          - name: services-scheduler
-            mutate: "src/services/**/*.ts,src/scheduler/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          - name: hardware-lib
-            mutate: "src/hardware/**/*.ts,src/lib/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          - name: homekit
-            mutate: "src/homekit/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          - name: server
-            mutate: "src/server/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          # hooks/streaming/db split into three shards: a combined shard
-          # ran a 1049-test baseline (React jsdom overhead) and tripped
-          # the 90-min timeout on PR #590. Each split shard now has a
-          # smaller per-mutant test set under perTest coverage analysis.
-          - name: streaming
-            mutate: "src/streaming/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          - name: hooks
-            mutate: "src/hooks/**/*.ts,src/hooks/**/*.tsx,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          - name: biometrics
-            mutate: "src/biometrics/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-          - name: db
-            mutate: "src/db/**/*.ts,!src/**/tests/**,!src/**/*.test.ts,!src/**/*.test.tsx,!src/**/*.d.ts"
-    name: mutate (${{ matrix.shard.name }})
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: mutate (${{ matrix.name }})
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -84,36 +92,35 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Incremental cache, keyed per-shard so the two shards don't stomp
-      # on each other. `restore-keys` lets us fall back to older branch
+      # Incremental cache, keyed per part so parts don't stomp on each
+      # other. `restore-keys` lets us fall back to older branch
       # baselines or the trunk baseline when the current commit is new.
       - name: Restore mutation-incremental cache
         uses: actions/cache@v5
         with:
           path: reports/mutation/incremental.json
-          key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
+          key: stryker-incremental-${{ matrix.name }}-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
-            stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-
-            stryker-incremental-${{ matrix.shard.name }}-
+            stryker-incremental-${{ matrix.name }}-${{ github.ref_name }}-
+            stryker-incremental-${{ matrix.name }}-
 
       - name: Run mutation tests
-        run: |
-          SCOPE="${{ inputs.scope }}"
-          SCOPE="${SCOPE:-${{ matrix.shard.mutate }}}"
-          pnpm stryker run --mutate "$SCOPE" --incremental
+        env:
+          MUTATE: ${{ matrix.mutate }}
+        run: pnpm stryker run --mutate "$MUTATE" --incremental
 
       - name: Save mutation-incremental cache
         if: always()
         uses: actions/cache/save@v5
         with:
           path: reports/mutation/incremental.json
-          key: stryker-incremental-${{ matrix.shard.name }}-${{ github.ref_name }}-${{ github.sha }}
+          key: stryker-incremental-${{ matrix.name }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutation-report-${{ matrix.shard.name }}
+          name: mutation-report-${{ matrix.name }}
           path: reports/mutation/
           retention-days: 30
 
@@ -173,14 +180,15 @@ jobs:
           script: |
             const fs = require('fs')
             const path = require('path')
-            const shards = fs.readdirSync('shards').map(name => {
-              const p = path.join('shards', name, 'mutation.json')
+            const parts = fs.readdirSync('shards').map(dir => {
+              const name = dir.replace(/^mutation-report-/, '').replace(/--\d+$/, '')
+              const p = path.join('shards', dir, 'mutation.json')
               if (!fs.existsSync(p)) return { name, missing: true }
               const data = JSON.parse(fs.readFileSync(p, 'utf8'))
               const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
               const count = s => mutants.filter(m => m.status === s).length
               return {
-                name: name.replace(/^mutation-report-/, ''),
+                name,
                 total: mutants.length,
                 killed: count('Killed'),
                 survived: count('Survived'),
@@ -189,11 +197,21 @@ jobs:
                 err: count('CompileError') + count('RuntimeError'),
               }
             })
+            // Parts of one shard upload as `<shard>--NN`; fold them into one row.
+            const shards = Object.entries(Object.groupBy(parts, p => p.name)).map(([name, ps]) => {
+              const done = ps.filter(p => !p.missing)
+              if (done.length === 0) return { name, missing: true }
+              const row = { name, partial: done.length < ps.length ? ` (${ps.length - done.length}/${ps.length} parts missing)` : '' }
+              for (const k of ['total', 'killed', 'survived', 'noCov', 'timeout', 'err']) {
+                row[k] = done.reduce((n, p) => n + p[k], 0)
+              }
+              return row
+            })
             const rows = shards.map(s => {
               if (s.missing) return `| ${s.name} | — | — | — | — | — | — | (report missing) |`
               const scoreBase = s.killed + s.survived + s.timeout + s.noCov
               const score = scoreBase > 0 ? ((s.killed / scoreBase) * 100).toFixed(1) : '—'
-              return `| ${s.name} | ${score}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
+              return `| ${s.name}${s.partial} | ${score}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
             }).join('\n')
             const body = [
               '## Mutation test report',
@@ -202,7 +220,7 @@ jobs:
               '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
               rows,
               '',
-              'Full HTML reports: `mutation-report-<shard>` artifacts. Actionable hit list: `mutation-hitlist` artifact.',
+              'Full HTML reports: `mutation-report-<shard>--NN` artifacts. Actionable hit list: `mutation-hitlist` artifact.',
             ].join('\n')
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -223,14 +241,15 @@ jobs:
             const path = require('path')
 
             // Aggregate per-shard tallies from the downloaded artifacts.
-            const shards = fs.readdirSync('shards').map(name => {
-              const p = path.join('shards', name, 'mutation.json')
+            const parts = fs.readdirSync('shards').map(dir => {
+              const name = dir.replace(/^mutation-report-/, '').replace(/--\d+$/, '')
+              const p = path.join('shards', dir, 'mutation.json')
               if (!fs.existsSync(p)) return { name, missing: true }
               const data = JSON.parse(fs.readFileSync(p, 'utf8'))
               const mutants = Object.values(data.files ?? {}).flatMap(f => f.mutants ?? [])
               const count = s => mutants.filter(m => m.status === s).length
               return {
-                name: name.replace(/^mutation-report-/, ''),
+                name,
                 total: mutants.length,
                 killed: count('Killed'),
                 survived: count('Survived'),
@@ -238,6 +257,16 @@ jobs:
                 timeout: count('Timeout'),
                 err: count('CompileError') + count('RuntimeError'),
               }
+            })
+            // Parts of one shard upload as `<shard>--NN`; fold them into one row.
+            const shards = Object.entries(Object.groupBy(parts, p => p.name)).map(([name, ps]) => {
+              const done = ps.filter(p => !p.missing)
+              if (done.length === 0) return { name, missing: true }
+              const row = { name, partial: done.length < ps.length ? ` (${ps.length - done.length}/${ps.length} parts missing)` : '' }
+              for (const k of ['total', 'killed', 'survived', 'noCov', 'timeout', 'err']) {
+                row[k] = done.reduce((n, p) => n + p[k], 0)
+              }
+              return row
             })
 
             const totals = shards.reduce((acc, s) => {
@@ -285,7 +314,7 @@ jobs:
               if (s.missing) return `| ${s.name} | — | — | — | — | — | — | (missing) |`
               const base = s.killed + s.survived + s.timeout + s.noCov
               const sc = base > 0 ? ((s.killed / base) * 100).toFixed(1) : '—'
-              return `| ${s.name} | ${sc}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
+              return `| ${s.name}${s.partial} | ${sc}% | ${s.killed} | ${s.survived} | ${s.noCov} | ${s.timeout} | ${s.err} | ${s.total} |`
             }).join('\n')
 
             // Embed the hit-list summary (truncated to fit GitHub issue limits).
@@ -305,7 +334,7 @@ jobs:
               '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
               shardRows,
               '',
-              `- HTML reports: attached as \`mutation-report-<shard>\` artifacts on [run ${context.runId}](${runUrl}).`,
+              `- HTML reports: attached as \`mutation-report-<shard>--NN\` artifacts on [run ${context.runId}](${runUrl}).`,
               `- Hit list artifact: \`mutation-hitlist\` on the same run.`,
               `- Last updated: ${ts} (commit \`${context.sha.slice(0, 7)}\`, trigger: \`${context.eventName}\`).`,
               '',

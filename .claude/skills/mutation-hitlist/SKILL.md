@@ -22,16 +22,21 @@ gh issue view 591 --repo sleepypod/core --json body -q .body | head -80
 
 ## 2. Pull the FULL survivor list (the issue shows only top 50)
 
-Each shard uploads `mutation-report-<shard>` containing `mutation.json`:
+Shards are split into parts (`scripts/mutation-plan.mjs`); each part uploads
+`mutation-report-<shard>--NN` (single-part shards: `mutation-report-<shard>`)
+containing `mutation.json`. A large file can be split across adjacent parts
+by line range, so pull every part of the shard:
 
 ```bash
 cd $(mktemp -d)
-gh run download <RUN_ID> --repo sleepypod/core -n mutation-report-<shard>
-python3 <repo>/.claude/skills/mutation-hitlist/survivors.py mutation.json <fileBasename>
+gh run download <RUN_ID> --repo sleepypod/core -p 'mutation-report-<shard>*'
+for f in */mutation.json; do
+  python3 <repo>/.claude/skills/mutation-hitlist/survivors.py "$f" <fileBasename> 2>/dev/null
+done
 ```
 
-Shard names: `hardware-lib`, `homekit`, `hooks`, `server`,
-`services-scheduler`, `streaming` (see the matrix in mutation.yml).
+Shard names: `biometrics`, `db`, `hardware-lib`, `homekit`, `hooks`, `server`,
+`services-scheduler`, `streaming` (see `SHARDS` in scripts/mutation-plan.mjs).
 
 ## 3. Branch and verify staleness
 
@@ -88,8 +93,8 @@ Then let CI produce the mutation numbers:
   input set to the target file glob (blank = all shard defaults).
 - **Weekly**: the Saturday 06:00 UTC schedule refreshes issue #591's baseline.
 
-Pull the run's `mutation-report-<shard>` artifact and re-run `survivors.py`
-on its `mutation.json` for the post-change survivor list.
+Pull the run's `mutation-report-<shard>*` artifacts and re-run `survivors.py`
+on each part's `mutation.json` for the post-change survivor list.
 
 ## 7. Report and ship
 
