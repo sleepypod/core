@@ -377,7 +377,7 @@ function CapSignal({ samples, params, now }: { samples: CapSample[], params: unk
   if (samples.length < 2) return <Waiting label="waiting for capacitance…" />
 
   if (!cal) {
-    // Legacy capSense (Pod 3) or no calibration yet: raw reading, no band.
+    // No calibration yet: raw reading, no band.
     const vals = samples.map(s => s.values[0]).filter(v => Number.isFinite(v))
     const lo = Math.min(...vals)
     const hi = Math.max(...vals)
@@ -389,7 +389,7 @@ function CapSignal({ samples, params, now }: { samples: CapSample[], params: unk
         window={META.capacitance.window}
         yMin={lo - pad}
         yMax={hi + pad}
-        caption="raw reading · no capSense2 baseline"
+        caption="raw reading · not calibrated"
         readout={(t) => {
           const s = nearestBy(samples, t)
           return s ? fmtCompact(s.values[0]) : null

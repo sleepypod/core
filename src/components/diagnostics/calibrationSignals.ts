@@ -67,7 +67,7 @@ export function peakToPeak(samples: ReadonlyArray<number>): number | null {
   return hi - lo
 }
 
-// ── Capacitance (capSense2) ──────────────────────────────────────────────────
+// ── Capacitance (capSense2, and capSense from NATS firmware) ─────────────────
 
 const CAP_CHANNELS = ['A', 'B', 'C'] as const
 export type CapChannel = (typeof CAP_CHANNELS)[number]
@@ -82,16 +82,23 @@ export interface CapBaseline {
   refMean: number
 }
 
-/** capSense2 baseline, or null for legacy capSense (Pod 3) and malformed params. */
+/** The calibrator names capSense channels out/cen/in; they map onto the A/B/C zones. */
+const CAPSENSE_KEYS: Record<CapChannel, string> = { A: 'out', B: 'cen', C: 'in' }
+
+/**
+ * Capacitance baseline, or null for a missing or malformed profile. capSense
+ * profiles (Pod 3, and every pod on NATS firmware) have no reference pair, and
+ * their six-slot frames never carry one, so refMean goes unused for them.
+ */
 export function parseCapParams(p: Params): CapBaseline | null {
-  if (p?.format !== 'capSense2') return null
+  if (p?.format !== 'capSense2' && p?.format !== 'capSense') return null
   const channels = obj(p.channels)
   const threshold = num(p.threshold)
   if (!channels || threshold == null) return null
   const means = {} as Record<CapChannel, number>
   const stds = {} as Record<CapChannel, number>
   for (const ch of CAP_CHANNELS) {
-    const c = obj(channels[ch])
+    const c = obj(channels[p.format === 'capSense' ? CAPSENSE_KEYS[ch] : ch])
     const mean = num(c?.mean)
     const std = num(c?.std)
     if (mean == null || std == null) return null
@@ -111,7 +118,7 @@ export interface CapDeviation extends Record<CapChannel, number> {
  * compensation, as src/lib/occupancy.ts and the sleep detector compute it.
  */
 export function capDeviation(values: ReadonlyArray<number>, cal: CapBaseline): CapDeviation | null {
-  if (values.length < 6 || values.slice(0, 6).some(v => v === SENTINEL)) return null
+  if (values.length < 6 || values.slice(0, 6).some(v => v === SENTINEL || !Number.isFinite(v))) return null
   const pair = (i: number) => (values[i] + values[i + 1]) / 2
   const refDelta = values.length >= 8 && values[6] !== SENTINEL && values[7] !== SENTINEL ? pair(6) - cal.refMean : 0
   const A = pair(0) - refDelta - cal.means.A
