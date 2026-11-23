@@ -76,6 +76,8 @@ jobs:
         run: git fetch --tags --force --prune --prune-tags origin
 
       - name: Semantic Release
+        # Run the lockfile's semantic-release; dlx fetches the latest, which
+        # can require a newer Node than .node-version.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pnpm dlx semantic-release
+        run: pnpm exec semantic-release
