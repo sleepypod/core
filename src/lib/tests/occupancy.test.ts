@@ -61,7 +61,7 @@ vi.mock('@/src/streaming/piezoStream', () => ({
   getLatestCapSenseSnapshot: () => snapshot,
 }))
 
-import { classify, getOccupancy, PERSON_MIN_ZONES } from '../occupancy'
+import { classify, getOccupancy, LEVEL_EXIT_FRACTION, PERSON_MIN_ZONES } from '../occupancy'
 
 const FIXED_NOW = 1_778_910_000_000
 const BASELINE_CAL = {
@@ -257,6 +257,69 @@ describe('getOccupancy', () => {
       expect(right.available).toBe(true)
       expect(right.level.active).toBe(false)
       expect(right.occupied).toBe(false)
+    })
+
+    describe('level decides when it can be read', () => {
+      // Discord report: right side empty, left occupied. Right level read
+      // [6.57, -6.23, 5.67] over baseline (sum 6 vs 300), yet movement peaked
+      // at 1000 and the other sleeper's vitals showed up on the right piezo.
+      const CAL = { format: 'capSense', threshold: 300, channels: { out: { mean: 1553.43, std: 5 }, cen: { mean: 1553.23, std: 5 }, in: { mean: 1917.33, std: 5 } } }
+      const pod3Frame = (rise: number): LatestCapSenseSnapshot => {
+        const out = 1553.43 + rise
+        const empty = [1553.43, 1553.43, 1553.23, 1553.23, 1917.33, 1917.33]
+        return {
+          type: 'capSense',
+          ts: Math.floor(FIXED_NOW / 1000),
+          receivedAtMs: FIXED_NOW - 500,
+          left: empty,
+          right: [out, out, 1553.23, 1553.23, 1917.33, 1917.33],
+        } as LatestCapSenseSnapshot
+      }
+
+      it('keeps an empty side empty despite movement and the other sleeper\'s vitals', () => {
+        movementRows = [{ peak: 1000 }]
+        vitalsRows = [{ timestamp: new Date(FIXED_NOW - 30_000), heartRate: 73.9, breathingRate: 19.08 }]
+        calRows = [{ parameters: CAL }]
+        snapshot = {
+          type: 'capSense',
+          ts: Math.floor(FIXED_NOW / 1000),
+          receivedAtMs: FIXED_NOW - 500,
+          left: [1553.43, 1553.43, 1553.23, 1553.23, 1917.33, 1917.33],
+          right: [1560, 1560, 1547, 1547, 1923, 1923],
+        } as LatestCapSenseSnapshot
+        const right = getOccupancy('right')
+        expect(right.available).toBe(true)
+        expect(right.movement.active).toBe(true)
+        expect(right.vitals.humanRange).toBe(true)
+        expect(right.level.deviation).toBeCloseTo(6.01, 1)
+        expect(right.occupied).toBe(false)
+        expect(right.classification).toBe('none')
+      })
+
+      it('lets recent movement hold a sleeper whose rise sits inside the exit band', () => {
+        movementRows = [{ peak: 120 }]
+        calRows = [{ parameters: CAL }]
+        snapshot = pod3Frame(200)
+        const right = getOccupancy('right')
+        expect(right.level.active).toBe(false)
+        expect(right.occupied).toBe(true)
+      })
+
+      it('reads the same rise as empty without movement', () => {
+        movementRows = [{ peak: 0 }]
+        calRows = [{ parameters: CAL }]
+        snapshot = pod3Frame(200)
+        expect(getOccupancy('right').occupied).toBe(false)
+      })
+
+      it('treats the exit band as strict greater-than', () => {
+        movementRows = [{ peak: 120 }]
+        calRows = [{ parameters: CAL }]
+        snapshot = pod3Frame(300 * LEVEL_EXIT_FRACTION)
+        expect(getOccupancy('right').occupied).toBe(false)
+        snapshot = pod3Frame(300 * LEVEL_EXIT_FRACTION + 0.01)
+        expect(getOccupancy('right').occupied).toBe(true)
+      })
     })
 
     it('ignores ref compensation and capSense2 profiles for Pod 3 frames', () => {
@@ -494,9 +557,11 @@ describe('getOccupancy — classification', () => {
 
   it('classifies movement with an evaluable but single-zone level as light', () => {
     movementRows = [{ peak: 350 }]
-    // Quiet level: zones 0 — a pet pacing on the bed edge.
-    snapshot = makeFrame('left', [14.5, 14.4, 13.7, 13.6, 19.4, 19.2, 1.157, 1.157])
+    // A pet pacing on the bed edge: one zone rises 4 (sum inside the exit
+    // band, 3..6), so movement holds occupancy and the load reads as light.
+    snapshot = makeFrame('left', [18.45, 18.45, 13.65, 13.65, 19.3, 19.3, 1.157, 1.157])
     const r = getOccupancy('left')
+    expect(r.level.zones).toBe(1)
     expect(r.occupied).toBe(true)
     expect(r.classification).toBe('light')
   })

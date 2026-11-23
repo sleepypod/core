@@ -2,7 +2,7 @@
  * Virtual occupancy sensor — single source of truth shared by the HomeKit
  * OccupancySensor accessory and the web-app PresenceCard.
  *
- * Combines two signals via OR:
+ * Combines two signals:
  *
  *   1. Movement signal (catches an active occupant).
  *      `MAX(movement.total_movement)` over the last MOVEMENT_WINDOW_MS,
@@ -15,14 +15,20 @@
  *      Mirrors the Python sleep-detector's per-sample presence check.
  *
  * Movement alone is blind to a person who is lying perfectly still; level
- * alone is blind to brief presence events that don't sustain a baseline
- * deviation. The OR closes both gaps.
+ * alone can drop a light sleeper whose rise sits just under the threshold.
+ * When the level signal can be evaluated it decides: above the threshold is
+ * occupied, and recent movement only holds occupancy while the rise stays
+ * above the exit band (LEVEL_EXIT_FRACTION of the threshold, the sleep
+ * detector's exit). Movement alone decides only when level can't be read.
+ * Otherwise movement from the last fifteen minutes, or the other sleeper's
+ * movement, kept an empty side "in bed".
  *
  * On top of `occupied`, `classification` separates a person from a light load
  * (a pet, a laptop, a folded duvet). A person spans head, torso and legs, so
  * at least two of the three capSense2 zones deviate; a pet concentrates on one.
  * Human-range vitals from the piezo processor upgrade an ambiguous load to a
- * person but never downgrade one — vitals drop out whenever the sleeper moves,
+ * person but never make an empty side occupied (the other sleeper's heartbeat
+ * reaches both piezo sensors), and never downgrade one — vitals drop out whenever the sleeper moves,
  * and a missing reading must not read as "not a person". Consumers that act on
  * presence (auto-on) fire only on `person`; consumers that act on absence
  * (auto-off) treat `light` as empty.
@@ -52,6 +58,8 @@ const HUMAN_BR_MIN = 8
 const HUMAN_BR_MAX = 22
 /** Zones a load must light (of head/torso/legs) to classify as a person. */
 export const PERSON_MIN_ZONES = 2
+/** Matches PRESENCE_EXIT_FRACTION in modules/sleep-detector/main.py. */
+export const LEVEL_EXIT_FRACTION = 0.5
 
 export interface MovementSignal {
   active: boolean
@@ -123,7 +131,7 @@ export function getOccupancy(side: Side): OccupancyResult {
   const movementSignal = readMovementSignal(side)
   const levelSignal = readLevelSignal(side)
   const vitalsSignal = readVitalsSignal(side)
-  const occupied = movementSignal.active || levelSignal.active
+  const occupied = isOccupied(movementSignal, levelSignal)
   return {
     occupied,
     movement: movementSignal,
@@ -132,6 +140,13 @@ export function getOccupancy(side: Side): OccupancyResult {
     classification: classify(occupied, levelSignal, vitalsSignal),
     available: levelSignal.deviation !== null,
   }
+}
+
+/** Level decides when it can be read; see the header for the exit band. */
+export function isOccupied(movement: MovementSignal, level: LevelSignal): boolean {
+  if (level.deviation === null || level.threshold === null) return movement.active
+  if (level.active) return true
+  return movement.active && level.deviation > level.threshold * LEVEL_EXIT_FRACTION
 }
 
 /** See `OccupancyClassification`. Vitals only ever upgrade to `person`. */
