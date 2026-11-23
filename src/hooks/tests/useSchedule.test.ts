@@ -1458,7 +1458,7 @@ it('getCurveForDay splits days with the same set points by end action', () => {
 })
 
 describe('useSchedule — #591 survivors (run 44913797057)', () => {
-  it('deleteCurve clears notes only for the single schedule side (kills ArrayDeclaration L60)', async () => {
+  it('deleteCurve clears notes only for the single schedule side (kills NoCoverage ArrayDeclaration L60)', async () => {
     // An independent-zone editor collapses activeSides to [singleScheduleSide];
     // an emptied array would drop every notes reset from the batch.
     sideMock.state.primarySide = 'left'
@@ -1476,6 +1476,32 @@ describe('useSchedule — #591 survivors (run 44913797057)', () => {
     expect(trpcMock.batchMutate.mock.calls[0][0]).toEqual({
       deletes: { temperature: [7], power: [] },
       notes: [{ side: 'right', dayOfWeek: 'monday', notes: null }],
+    })
+  })
+
+  it('deleteCurve follows activeSides changes after mount (kills ArrayDeclaration L60 useMemo deps)', async () => {
+    trpcMock.overrides.allLeft = {
+      temperature: [{ id: 1, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    trpcMock.overrides.allRight = {
+      temperature: [{ id: 2, dayOfWeek: 'monday', enabled: true }],
+      power: [],
+      alarm: [],
+    }
+    const { result, rerender } = renderHook(() => useSchedule())
+    sideMock.state.activeSides = ['left', 'right']
+    rerender()
+    await act(async () => {
+      await result.current.deleteCurve(['monday'])
+    })
+    expect(trpcMock.batchMutate.mock.calls[0][0]).toEqual({
+      deletes: { temperature: [1, 2], power: [] },
+      notes: [
+        { side: 'left', dayOfWeek: 'monday', notes: null },
+        { side: 'right', dayOfWeek: 'monday', notes: null },
+      ],
     })
   })
 
