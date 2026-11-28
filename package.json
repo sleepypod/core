@@ -158,7 +158,7 @@
     },
     "overrides": {
       "dbus-next>usocket": "-",
-      "@babel/runtime": "7.29.14"
+      "@babel/runtime": "7.29.15"
     }
   }
 }
